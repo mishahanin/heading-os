@@ -1,0 +1,19 @@
+{
+  "id": "crm-log-no-contact",
+  "description": "A conversation with no linked CRM contact is refused - the finalizer must not invent a contact.",
+  "outcome": {
+    "type": "crm_log",
+    "conv_id": "conv-fixture-003",
+    "conversations": [
+      {
+        "id": "conv-fixture-003",
+        "topic": "Unsolicited inbound",
+        "latest_datetime": "2026-06-02T11:00:00",
+        "crm_context": {}
+      }
+    ],
+    "create_contacts": [],
+    "expect_ok": false,
+    "expect_error": "no CRM contact linked to this conversation"
+  }
+}

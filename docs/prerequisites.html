@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prerequisites &amp; install — HEADING OS</title>
+<meta name="description" content="From-scratch install and configuration for HEADING OS: system requirements, Python toolchain, .env, Ollama, Brave, git hooks, and the data overlay.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><span class="mark">H</span> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html" class="active">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+  <h1>Prerequisites &amp; install</h1>
+  <p class="page-meta">A from-scratch install and configuration reference. Every command is taken from the repository's own scripts and docs. Replace placeholders like <code>&lt;org&gt;</code>, <code>&lt;engine&gt;</code>, and <code>your.email@example.com</code> with your own values.</p>
+
+  <p class="lede">Budget roughly 60–90 minutes for a first install. The canonical path uses <code>uv</code> for the Python toolchain; a <code>venv</code> + <code>pip</code> fallback is documented at the end.</p>
+
+  <h2>1. System &amp; OS</h2>
+  <p>HEADING OS runs inside a Linux userland. Three supported shapes:</p>
+  <ul>
+    <li><strong>Windows 11 + WSL2 (Ubuntu)</strong> — the reference platform; all docs assume it.</li>
+    <li><strong>macOS 13+</strong> — supported (VPN and browser steps are GUI-only).</li>
+    <li><strong>Native Linux</strong> — supported.</li>
+  </ul>
+  <p><strong>Python version.</strong> <code>pyproject.toml</code> declares <code>requires-python = "&gt;=3.11"</code>, so <strong>Python 3.11 or newer</strong> is the floor. <code>uv</code> installs a conforming Python for you — a system Python is not required.</p>
+
+  <div class="callout note">
+    <span class="ttl">WSL-only constraint (Windows installs)</span>
+    Once inside WSL, keep all work WSL-native — never invoke PowerShell or <code>cmd.exe</code> to work around a Linux problem. Keep all repositories on the Linux filesystem (<code>~/...</code>), <strong>never on <code>/mnt/c</code></strong>: the Windows mount is far slower for git/Python and has permission quirks. A <code>PS C:\&gt;</code> prompt means you are in PowerShell; enter Ubuntu with <code>wsl -d Ubuntu</code>.
+  </div>
+
+  <h4>Windows-only WSL bootstrap (one time, Administrator PowerShell)</h4>
+  <pre><code>wsl --install        # reboot when prompted; create a Linux user + password on first launch</code></pre>
+  <p>If WSL already exists this reports "distribution already exists" — skip it, then run <code>wsl -d Ubuntu</code>.</p>
+
+  <h2>2. Python toolchain</h2>
+  <p><code>pyproject.toml</code> is the source of truth for dependencies; <code>uv.lock</code> hash-pins the transitive set. <strong>Use <code>uv</code>, not system <code>pip</code></strong> — recent Ubuntu ships only <code>python3</code> with no <code>pip</code>, by design. Every script runs as <code>uv run python scripts/...</code>.</p>
+
+  <h4>System packages + toolchain (inside Ubuntu / macOS / Linux)</h4>
+  <pre><code># system packages
+sudo apt update &amp;&amp; sudo apt install -y build-essential curl git ca-certificates gh
+
+# Node via nvm (needed for the Claude CLI)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+export NVM_DIR="$HOME/.nvm" &amp;&amp; . "$NVM_DIR/nvm.sh"
+nvm install --lts
+
+# uv (Python manager — installs Python for you)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv --version
+
+# Claude CLI
+npm install -g @anthropic-ai/claude-code
+which claude    # must resolve under ~/.nvm/..., NOT /mnt/c/...</code></pre>
+
+  <h4>Authenticate inside Linux (Windows logins do not carry into WSL)</h4>
+  <pre><code>gh auth login     # GitHub.com -> HTTPS -> Yes -> Login with a web browser
+claude            # pick a theme, then "Claude account with subscription"</code></pre>
+
+  <h4>Install dependencies (canonical path)</h4>
+  <pre><code>cd &lt;engine&gt;
+uv sync               # Python + all dependencies into the project environment</code></pre>
+
+  <p>Runtime stack of note (exact pins in <code>pyproject.toml</code>): <code>anthropic</code>, <code>exchangelib</code> (Exchange mail), <code>Telethon</code> (Telegram), <code>playwright</code>, <code>weasyprint</code> + <code>liteparse</code> + <code>markitdown</code> (documents/PDF), the Google API clients, <code>fastapi</code> + <code>uvicorn</code> + <code>watchdog</code> + <code>apscheduler</code> (bridge daemon), plus <code>firecrawl-py</code>, <code>youtube-transcript-api</code>, <code>yt-dlp</code>, <code>replicate</code>, <code>openai</code>, <code>google-genai</code>, <code>langfuse</code>. Dev tooling: <code>pytest</code>, <code>bandit</code>, <code>ruff</code>, <code>pre-commit</code>, <code>detect-secrets</code>, <code>pip-audit</code>.</p>
+
+  <h2>3. <code>.env</code> configuration</h2>
+  <p>Create your env file from the template at the engine root — it is gitignored and never committed:</p>
+  <pre><code>cd &lt;engine&gt;
+cp .env.example .env</code></pre>
+  <p>Every variable, with purpose. Feature-gated variables are optional — the feature simply stays dark until the key is set.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Variable</th><th>Purpose</th><th>Required?</th></tr></thead>
+    <tbody>
+      <tr><td><code>ANTHROPIC_API_KEY</code></td><td>Claude API key (alternative to a subscription login via the Claude CLI).</td><td>One of the two</td></tr>
+      <tr><td><code>GH_TOKEN</code></td><td>GitHub token used for all <code>git push</code> / backup auth. Without it, backups cannot authenticate.</td><td>Required for backup</td></tr>
+      <tr><td><code>HEADING_OS_DATA</code></td><td>Absolute path to the data overlay. Only needed if the sibling <code>.heading-os-data</code> is not auto-discovered.</td><td>Optional</td></tr>
+      <tr><td><code>HEADING_OS_TZ</code></td><td>IANA timezone for all timestamps, calendar, and daemon scheduling. Engine default is UTC.</td><td>Recommended</td></tr>
+      <tr><td><code>OLLAMA_API_KEY</code></td><td>Auth for Ollama <em>cloud</em> models. Local embeddings do not need it.</td><td>Optional</td></tr>
+      <tr><td><code>EXCHANGE_EMAIL</code> / <code>_PASSWORD</code> / <code>_SERVER</code> / <code>_USERNAME</code> / <code>_AUTH_TYPE</code> / <code>_TIMEZONE</code></td><td>On-prem Microsoft Exchange mailbox (email + calendar skills).</td><td>Optional*</td></tr>
+      <tr><td><code>TELEGRAM_API_ID</code> / <code>_API_HASH</code> / <code>_PHONE</code></td><td>Telegram client credentials (<code>/telegram</code>, <code>/viraid</code>).</td><td>Optional*</td></tr>
+      <tr><td><code>PERPLEXITY_API_KEY</code></td><td>Perplexity — deep-research web acquisition.</td><td>Optional</td></tr>
+      <tr><td><code>TAVILY_API_KEY</code> / <code>BRAVE_API_KEY</code></td><td>Web search (Tavily primary, Brave Search fallback) for <code>/osint</code>.</td><td>Optional</td></tr>
+      <tr><td><code>FIRECRAWL_API_KEY</code></td><td>Firecrawl web scraping.</td><td>Optional</td></tr>
+      <tr><td><code>CONTEXT7_API_KEY</code></td><td>Context7 library-docs lookups.</td><td>Optional</td></tr>
+      <tr><td><code>REPLICATE_API_TOKEN</code></td><td>Replicate image generation (<code>/flux-image</code>, <code>/design</code>).</td><td>Optional</td></tr>
+      <tr><td><code>DEHASHED_*</code> / <code>HIBP_API_KEY</code> / <code>HUNTER_API_KEY</code> / <code>VIRUSTOTAL_API_KEY</code></td><td>OSINT data sources.</td><td>Optional</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>* Feature-gated: the matching skill stays inactive until the credentials are present.</p>
+  <div class="callout danger">
+    <span class="ttl">Never commit secrets</span>
+    All credentials live only in the gitignored <code>.env</code> (or a password manager). The commit hooks and an unbypassable push-time content scan are designed to block secrets, but the first line of defense is you. Never pass <code>git commit --no-verify</code>.
+  </div>
+
+  <h2>4. Ollama — local semantic recall</h2>
+  <p>Ollama is a local LLM runtime used for on-machine embeddings that power the workspace's <a href="memory-odin.html">semantic recall and memory index</a>. Zero API cost; nothing leaves the machine on the local path.</p>
+  <p><strong>Model used and why.</strong> <code>config/memory-index.yaml</code> sets <code>model: bge-m3</code> — a multilingual (1024-dim) embedding model used by <code>scripts/memory-index.py</code> and the <code>/recall</code> skill (hybrid dense <code>bge-m3</code> cosine + BM25 lexical). It is embeddings-only, not a chat model.</p>
+  <pre><code># install ollama (official installer)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# pull the embedding model used by recall / memory-index
+ollama pull bge-m3
+
+# (optional) a cloud reasoning model for /council + /deep-research-advance
+ollama pull kimi-k2.6:cloud     # auth via OLLAMA_API_KEY in the engine .env</code></pre>
+  <div class="callout warn">
+    <span class="ttl">Cloud-model privacy rule</span>
+    Never route private data (CRM, the ODIN brain, the data repo) through any <code>:cloud</code> model — those prompts leave the machine. The third-party clouds are treated as one privacy tier; cloud is for non-sensitive work only.
+  </div>
+  <div class="callout note">
+    <span class="ttl">First memory-index build is slow — and that is expected</span>
+    A full <code>memory-index.py build</code> embeds the whole corpus through <code>bge-m3</code> and takes roughly <strong>85 minutes on CPU</strong> (~7,300 chunks at ~0.7s each). It is <strong>not a hang</strong> — it commits per file with live <code>+ path [NN%]</code> progress and is <strong>resumable</strong>; later runs are incremental and fast. Run it with a long/no timeout, ideally in the background. A GPU host cuts the time sharply but is not required.
+    <pre><code>cd &lt;engine&gt;
+uv run python scripts/memory-index.py build      # ~85 min first run, resumable</code></pre>
+  </div>
+
+  <h2>5. Brave — the automation browser</h2>
+  <p>A dedicated <strong>Brave</strong> browser with a separate <strong>ClaudeCode</strong> profile is the canonical browser for all workspace browser work: CDP-driven automation (<code>scripts/browser.py</code> attaches over CDP), cookie extraction (<code>scripts/utils/chromium_cookies.py</code>), <code>yt-dlp --cookies-from-browser brave:ClaudeCode</code>, and the <code>/setup-browser-cookies</code> skill.</p>
+  <p><strong>Why a dedicated profile, not your personal browser.</strong> The automation never uses your personal browser, and never asks you to log in from it — keeping the assistant's authenticated sessions isolated from your own. <strong>Why CDP-attach:</strong> launching Brave under Playwright's persistent-context mode is unstable (the controlled tab closes immediately); attaching over CDP to an externally launched browser is stable. Never call <code>browser.close()</code> on a CDP-attached session — it kills the whole browser.</p>
+  <pre><code># Brave via its official apt repo (Linux/WSL)
+sudo apt install brave-browser
+which brave-browser     # /usr/bin/brave-browser</code></pre>
+  <p>Brave is machine-local — not carried by the repos. Reinstall after every fresh clone or relocation (same class as plugins and gitignored credentials).</p>
+
+  <h4>WSL "open URL" routing (Windows installs)</h4>
+  <p>WSL has no working default browser, and a WSL-native Brave window under WSLg is unreliable for OAuth logins. Route URL opens to the Windows browser via <code>wslview</code> (user-level, no sudo):</p>
+  <pre><code>xdg-settings set default-web-browser wslview.desktop
+xdg-mime default wslview.desktop x-scheme-handler/http x-scheme-handler/https</code></pre>
+  <p>This makes Claude Code MCP / connector OAuth logins hand off cleanly to the Windows browser. The canonical <em>automation</em> browser stays the CDP-driven Brave (no visible window).</p>
+  <div class="callout warn">
+    <span class="ttl">Playwright MCP gotcha (WSL)</span>
+    If you wire the Playwright <strong>MCP server</strong>, it must launch via an <strong>absolute Linux Node + <code>cli.js</code></strong> path, never <code>npx</code> — on WSL <code>npx</code>/<code>node</code> on PATH resolve to the Windows install and the JSON-RPC stdio dies on <code>initialize</code>. (The local <code>/playwright</code> skill uses the Python CDP path and is unaffected.) See <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>.
+  </div>
+
+  <h2>6. VPN preflight (browsing skills)</h2>
+  <p>A runtime gate (<code>.claude/rules/vpn-preflight.md</code>) fires before browsing skills that hit services blacklisting datacenter IPs — YouTube transcripts (<code>/yt-pulse</code>), Google/LinkedIn scraping, some OSINT sources. Datacenter exits (e.g. Mullvad) get blocked; a residential-friendly exit like Proton passes. On Linux the gate can switch directly:</p>
+  <pre><code>protonvpn-cli connect --cc NL     # residential-friendly exit for YouTube/Google
+protonvpn-cli status</code></pre>
+  <p>On Windows/macOS you switch manually in the GUI. This is a runtime gate, not an install step — it exists so users of browsing skills understand why a run pauses.</p>
+
+  <h2>7. Git hooks / pre-commit (per clone)</h2>
+  <p><code>.git/hooks</code> is machine-local and not cloned, so the commit-time secret gate must be armed once per fresh clone:</p>
+  <pre><code>cd &lt;engine&gt;
+pre-commit install           # writes into .git/hooks; run once per clone
+pre-commit run --all-files   # optional: run the whole suite immediately
+uv run python scripts/install-hooks.py --check   # verify the framework is the active manager</code></pre>
+  <p>The hooks enforce <code>detect-secrets</code>, <code>bandit</code>, <code>ruff</code> security rules, standard checks, a workspace secret scanner, a real-entity/PII content guard, the engine/data leak guards, and a <code>pip-audit</code> CVE scan on dependency changes.</p>
+  <div class="callout danger">
+    <span class="ttl">The commit hook is a warning; the push wall is the wall</span>
+    <code>git commit --no-verify</code> skips every commit hook — <strong>never pass it</strong>. The authoritative, unbypassable gate is the push-time content scan in <code>scripts/push-all.py</code> (pure code, no skip flag, scans both repos before anything leaves the machine).
+  </div>
+
+  <h2>8. Plugins (reinstall per clone path)</h2>
+  <p>Claude Code plugins are <em>enabled</em> in <code>.claude/settings.json</code> (travels with git), but the <em>installs</em> are tracked per project path (machine-local, never synced). After any clone or relocation you get "enabled but not installed" until you reinstall under the new path:</p>
+  <pre><code>cd &lt;engine&gt;
+claude plugin marketplace add anthropics/claude-plugins-official
+claude plugin install superpowers@claude-plugins-official --scope project
+claude plugin install skill-creator@claude-plugins-official --scope project
+claude plugin install claude-md-management@claude-plugins-official --scope project
+claude plugin install frontend-design@claude-plugins-official --scope project</code></pre>
+  <div class="callout warn">
+    <span class="ttl">Gotcha</span>
+    Never use <code>@latest</code>. The form is always <code>&lt;plugin&gt;@&lt;marketplace&gt;</code> (e.g. <code>@claude-plugins-official</code>) — <code>plugin@latest</code> makes Claude look for a marketplace named "latest" and fail. List marketplaces with <code>claude plugin marketplace list</code>.
+  </div>
+  <p>See <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a> for the full inventory.</p>
+
+  <h2>9. The data overlay (two-part topology)</h2>
+  <p>The engine is <strong>code only</strong> and resolves a separate <strong>private data repository</strong> at runtime. They sit as <strong>siblings</strong> under one parent so the engine auto-discovers the data sibling:</p>
+  <pre><code>~/ai/claude-workspaces/
+├── .heading-os/            ← engine (code; eventually public)
+├── .heading-os-data/       ← your data (CRM, knowledge, outputs, context — writable)
+└── .heading-os-corporate/  ← corporate content (optional; populated by sync-corporate.py)</code></pre>
+  <p>On a clone without a data overlay, the engine runs on its defaults and <code>*.example.*</code> templates — features needing data stay dark; nothing breaks. If auto-discovery fails, set <code>HEADING_OS_DATA=/abs/path/.heading-os-data</code> in <code>.env</code>.</p>
+
+  <h4>Create your own data repo (solo deploy, one command)</h4>
+  <pre><code>cd &lt;engine&gt;
+uv run python scripts/create-data-repo.py    # creates the repo + prints the HEADING_OS_DATA wiring line</code></pre>
+
+  <h4>Clone existing repos (managed / migration)</h4>
+  <pre><code>cd ~/ai/claude-workspaces
+git clone https://github.com/&lt;org&gt;/heading-os.git .heading-os
+git clone https://github.com/&lt;org&gt;/heading-os-data-&lt;slug&gt;.git .heading-os-data
+git clone https://github.com/&lt;org&gt;/heading-os-corporate.git .heading-os-corporate   # optional</code></pre>
+
+  <h4>Backup (human-gated, with [0 0] verification + pre-push secret scan)</h4>
+  <pre><code>uv run python scripts/push-all.py            # commit + push
+uv run python scripts/push-all.py --dry-run  # preview only</code></pre>
+  <p>See <a href="data-structure.html">Data overlay structure</a> for the full layout.</p>
+
+  <h2>First-run verification</h2>
+  <pre><code>cd &lt;engine&gt;
+uv run python scripts/workspace-health.py
+uv run python -c "from scripts.utils.paths import get_data_root; print(get_data_root())"   # prints your data path
+claude        # trust the engine folder, then:
+/prime</code></pre>
+
+  <h2>Appendix — venv + pip fallback</h2>
+  <p>The classic route works where <code>uv</code> is unavailable. Note that on stock Ubuntu without <code>pip</code> it will not work out of the box; prefer <code>uv sync</code>.</p>
+  <pre><code>python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt          # production deps
+pip install -r requirements-dev.txt      # dev tooling
+pytest -q                                # verify the suite</code></pre>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

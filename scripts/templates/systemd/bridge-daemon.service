@@ -1,0 +1,23 @@
+[Unit]
+Description=31C bridge daemon (living-interface FastAPI dashboard)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} scripts/bridge-daemon.py --start
+Restart=on-failure
+RestartSec=5
+# stdout/stderr go to journald, not to bridge.log. The daemon's own Python
+# logging handler already writes structured logs to .daemon-state/bridge.log;
+# adding systemd's append-on-write doubles I/O against the same path. On a
+# WSL2 9P /mnt/c mount this contention freezes the daemon in uninterruptible
+# sleep (verified 2026-05-23). View daemon logs via:
+#   journalctl --user -u bridge-daemon.service -f   (early startup + crashes)
+#   tail -f .daemon-state/bridge.log                 (steady-state app logs)
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

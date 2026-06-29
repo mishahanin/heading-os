@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Versioned pre-push gate. Installed into .git/hooks/pre-push by
+# `python scripts/install-git-hooks.py`. Runs the regression test gate;
+# a non-zero result blocks the push. Never bypass with --no-verify.
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+if [ -x "$ROOT/.venv/bin/python" ]; then
+    PY="$ROOT/.venv/bin/python"
+else
+    PY="python3"
+fi
+exec "$PY" "$ROOT/scripts/run-tests.py"

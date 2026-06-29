@@ -1,0 +1,47 @@
+[
+  {
+    "id": 101,
+    "sender_id": 5001,
+    "sender_name": "User1",
+    "text": "Lorem ipsum, normal message one.",
+    "date": "2026-04-19T08:00:00+04:00",
+    "chat_id": -100111111,
+    "chat_title": "TestChat1"
+  },
+  {
+    "id": 102,
+    "sender_id": 5002,
+    "sender_name": "User2",
+    "text": "URGENT: production is down, need immediate action",
+    "date": "2026-04-19T09:00:00+04:00",
+    "chat_id": -100111111,
+    "chat_title": "TestChat1"
+  },
+  {
+    "id": 103,
+    "sender_id": 5003,
+    "sender_name": "User3",
+    "text": "just saying hi",
+    "date": "2026-04-19T09:30:00+04:00",
+    "chat_id": -100222222,
+    "chat_title": "TestChat2"
+  },
+  {
+    "id": 104,
+    "sender_id": 5004,
+    "sender_name": "User4",
+    "text": "CRITICAL issue with deployment - rollback now",
+    "date": "2026-04-19T10:00:00+04:00",
+    "chat_id": -100222222,
+    "chat_title": "TestChat2"
+  },
+  {
+    "id": 105,
+    "sender_id": 5005,
+    "sender_name": "User5",
+    "text": "Lorem ipsum message number five",
+    "date": "2026-04-19T10:30:00+04:00",
+    "chat_id": -100111111,
+    "chat_title": "TestChat1"
+  }
+]

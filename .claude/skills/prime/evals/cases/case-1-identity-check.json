@@ -1,0 +1,10 @@
+{
+  "id": "case-1-identity-check",
+  "description": "Confirms /prime reads .workspace-identity.json first to determine workspace type (CEO vs exec) before loading anything else.",
+  "input": "What is the first thing /prime does when invoked?",
+  "checks": {
+    "must_mention": [".workspace-identity.json"],
+    "min_words": 30,
+    "hidden_chars_clean": true
+  }
+}

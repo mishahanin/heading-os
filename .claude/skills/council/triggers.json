@@ -1,0 +1,20 @@
+[
+  { "query": "get me a second opinion on this go-to-market call", "should_trigger": true },
+  { "query": "consult the council on this pricing decision", "should_trigger": true },
+  { "query": "what would Gemini and Grok say about this positioning", "should_trigger": true },
+  { "query": "stress-test this draft with Gemini and Grok", "should_trigger": true },
+  { "query": "council vote on whether to take the term sheet", "should_trigger": true },
+  { "query": "I want independent views from the other models on this", "should_trigger": true },
+  { "query": "second opinion on my market-entry logic", "should_trigger": true },
+  { "query": "what would Kimi say about this deal structure", "should_trigger": true },
+  { "query": "stress-test with Kimi", "should_trigger": true },
+  { "query": "run the council with Kimi only", "should_trigger": true },
+
+  { "query": "think through this decision step by step", "should_trigger": false },
+  { "query": "what does Odin think about this", "should_trigger": false },
+  { "query": "investigate this competitor", "should_trigger": false },
+  { "query": "draft a LinkedIn post", "should_trigger": false },
+  { "query": "give the devil's advocate critique of my plan", "should_trigger": false },
+  { "query": "fact-check these numbers", "should_trigger": false },
+  { "query": "prepare for the partner meeting", "should_trigger": false }
+]

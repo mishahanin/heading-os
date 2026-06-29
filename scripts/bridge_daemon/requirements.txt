@@ -1,0 +1,19 @@
+# Bridge daemon - Python dependencies (Phase 1)
+# Self-contained dep file so the daemon can be installed without
+# touching the main workspace requirements.txt.
+#
+# Install: python -m pip install -r scripts/bridge_daemon/requirements.txt
+# CVE scan: python -m pip_audit --requirement scripts/bridge_daemon/requirements.txt
+
+# fastapi bumped to 0.136.3 (F-H4 CVE fix: CVE-2025-54121, CVE-2025-62727)
+fastapi==0.136.3
+# firecrawl-py pinned per F-H3 to prevent silent version drift
+firecrawl-py==4.28.2
+uvicorn[standard]==0.48.0
+watchdog==6.0.0
+apscheduler==3.11.2
+httpx==0.28.1
+
+# PyYAML is shared with the main workspace at 6.0.3; do not pin
+# a different version here. If you need to bump it, bump it in
+# requirements.txt at the workspace root.

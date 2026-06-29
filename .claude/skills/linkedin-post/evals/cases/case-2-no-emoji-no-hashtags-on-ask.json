@@ -1,0 +1,12 @@
+{
+  "id": "case-2-no-emoji-no-hashtags-on-ask",
+  "description": "Confirms the skill respects the explicit no-emoji rule in NEVER and continues to provide hashtags as a separate section (not inline).",
+  "input": "Draft a short LinkedIn post (around 150 words) about the difference between Deep Packet Inspection and Deep Packet Intelligence.",
+  "checks": {
+    "must_mention": ["Deep Packet"],
+    "must_not_mention": ["🚀", "💡", "🔥", "✨", "thrilled", "excited to"],
+    "min_words": 80,
+    "max_words": 350,
+    "hidden_chars_clean": true
+  }
+}

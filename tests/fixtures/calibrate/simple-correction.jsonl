@@ -1,0 +1,5 @@
+{"type":"user","timestamp":"2026-05-13T08:42:11Z","message":{"role":"user","content":"draft a linkedin post about DPI sovereignty"}}
+{"type":"assistant","timestamp":"2026-05-13T08:42:30Z","message":{"role":"assistant","content":"Here is a draft - three paragraphs on DPI sovereignty..."}}
+{"type":"user","timestamp":"2026-05-13T08:42:55Z","message":{"role":"user","content":"stop using em-dashes in my drafts, never use them"}}
+{"type":"assistant","timestamp":"2026-05-13T08:43:10Z","message":{"role":"assistant","content":"Understood. Revised draft without em-dashes..."}}
+{"type":"system","timestamp":"2026-05-13T08:43:15Z","content":"Hidden character scan: clean"}

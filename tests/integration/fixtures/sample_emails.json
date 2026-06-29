@@ -1,0 +1,47 @@
+[
+  {
+    "message_id": "email-001",
+    "subject": "TEST-SUBJECT-01 - Quarterly review",
+    "sender": "alice@example.com",
+    "body_preview": "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+    "received": "2026-04-19T08:00:00+04:00",
+    "is_read": false,
+    "importance": "normal"
+  },
+  {
+    "message_id": "email-002",
+    "subject": "TEST-SUBJECT-02 - URGENT: server down",
+    "sender": "vip@example.com",
+    "body_preview": "The production system is unresponsive. Please investigate immediately.",
+    "received": "2026-04-19T09:15:00+04:00",
+    "is_read": false,
+    "importance": "high"
+  },
+  {
+    "message_id": "email-003",
+    "subject": "TEST-SUBJECT-03 - Weekly newsletter",
+    "sender": "newsletter@example.com",
+    "body_preview": "Lorem ipsum newsletter content here.",
+    "received": "2026-04-19T10:00:00+04:00",
+    "is_read": false,
+    "importance": "low"
+  },
+  {
+    "message_id": "email-004",
+    "subject": "TEST-SUBJECT-04 - FYI update",
+    "sender": "bob@example.com",
+    "body_preview": "Just a heads-up on the schedule change.",
+    "received": "2026-04-19T10:30:00+04:00",
+    "is_read": false,
+    "importance": "normal"
+  },
+  {
+    "message_id": "email-005",
+    "subject": "TEST-SUBJECT-05 - Invitation",
+    "sender": "calendar@trusted.example.com",
+    "body_preview": "You are invited to a meeting.",
+    "received": "2026-04-19T11:00:00+04:00",
+    "is_read": false,
+    "importance": "normal"
+  }
+]

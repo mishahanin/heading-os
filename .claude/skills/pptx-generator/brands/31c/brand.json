@@ -1,0 +1,32 @@
+{
+  "name": "31 Concept",
+  "description": "Sovereign deep packet intelligence platform - dark, bold, authoritative with blue-purple and orange accents",
+
+  "colors": {
+    "background": "000000",
+    "background_alt": "0A0A14",
+    "text": "FFFFFF",
+    "text_secondary": "B0B0C0",
+    "accent": "5B5FFF",
+    "accent_secondary": "FF8C00",
+    "accent_tertiary": "8B8FCC",
+    "code_bg": "0D0D15",
+    "card_bg": "12122A",
+    "card_bg_alt": "1A1A35"
+  },
+
+  "fonts": {
+    "heading": "GT Standard M Medium",
+    "body": "GT Standard M Light",
+    "display": "GT Standard L Light",
+    "accent_display": "31C Horizontal T03 Clarity",
+    "code": "JetBrains Mono",
+    "_note": "GT Standard is the primary text font. 31C TypeFace (Clarity weight) is used ONLY for numbered markers and short display text. See reference/31c-typeface-usage.md"
+  },
+
+  "assets": {
+    "logo": "assets/31C_Logo_White_Color.png",
+    "logo_dark": null,
+    "icon": null
+  }
+}

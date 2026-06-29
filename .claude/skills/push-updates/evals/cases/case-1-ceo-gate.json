@@ -1,0 +1,11 @@
+{
+  "id": "case-1-ceo-gate",
+  "description": "Confirms /push-updates announces the CEO-only identity check before running anything.",
+  "input": "Run push-updates and sync everything to all executives.",
+  "checks": {
+    "must_mention": [".workspace-identity.json", "admin"],
+    "must_not_mention": ["thrilled to"],
+    "min_words": 60,
+    "hidden_chars_clean": true
+  }
+}

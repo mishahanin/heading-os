@@ -1,0 +1,22 @@
+{
+  "id": "letter-render-missing-fields",
+  "description": "An incomplete letter dict (SUBJECT dropped, BODY_HTML blank) is reported as missing exactly those fields.",
+  "outcome": {
+    "type": "doctype_render",
+    "doctype": "letter",
+    "expect_missing": ["BODY_HTML", "SUBJECT"],
+    "data": {
+      "SENDER_NAME": "Misha Hanin",
+      "SENDER_TITLE": "Founder & CEO, 31 Concept",
+      "SENDER_EMAIL": "ceo@31c.io",
+      "SENDER_PHONE": "+15550100100 50 000 0000",
+      "RECIPIENT_NAME": "Dr. Lena Hart",
+      "RECIPIENT_TITLE": "Director General",
+      "RECIPIENT_ORG": "Meridian Authority",
+      "DATE": "2026-06-06",
+      "REF_ID": "31C-LTR-2026-0017",
+      "SALUTATION": "Dear Dr. Hart,",
+      "BODY_HTML": "   "
+    }
+  }
+}

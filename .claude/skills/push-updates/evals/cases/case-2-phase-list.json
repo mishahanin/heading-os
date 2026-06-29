@@ -1,0 +1,11 @@
+{
+  "id": "case-2-phase-list",
+  "description": "Confirms /push-updates lists its sequential phases (commit, classify, publish, BUILD, push, aggregate, sync) when asked to describe the workflow.",
+  "input": "Walk me through every step push-updates executes, in order.",
+  "checks": {
+    "must_mention": ["classify", "BUILD", "corporate"],
+    "must_not_mention": ["thrilled to"],
+    "min_words": 100,
+    "hidden_chars_clean": true
+  }
+}

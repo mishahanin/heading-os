@@ -1,0 +1,32 @@
+[
+  {
+    "subject": "TEST-MEETING-01 - Weekly sync",
+    "sender": "calendar@trusted.example.com",
+    "start_iso": "2026-04-20T10:00:00+04:00",
+    "end_iso": "2026-04-20T11:00:00+04:00",
+    "has_required_attendees": true,
+    "required_count": 3,
+    "optional_count": 0,
+    "body_preview": "Regular weekly sync meeting"
+  },
+  {
+    "subject": "TEST-MEETING-02 - Product review",
+    "sender": "calendar@example.com",
+    "start_iso": "2026-04-21T14:00:00+04:00",
+    "end_iso": "2026-04-21T15:30:00+04:00",
+    "has_required_attendees": true,
+    "required_count": 5,
+    "optional_count": 2,
+    "body_preview": "Product roadmap review"
+  },
+  {
+    "subject": "TEST-MEETING-03 - Invalid times",
+    "sender": "calendar@example.com",
+    "start_iso": "INVALID",
+    "end_iso": "INVALID",
+    "has_required_attendees": false,
+    "required_count": 0,
+    "optional_count": 0,
+    "body_preview": "Meeting with bad datetime for testing duration calc fallback"
+  }
+]

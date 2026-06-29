@@ -1,0 +1,17 @@
+[
+  { "query": "show my action queue", "should_trigger": true },
+  { "query": "what drafts are waiting to send", "should_trigger": true },
+  { "query": "approve the first one in the queue", "should_trigger": true },
+  { "query": "send that drafted email from the queue", "should_trigger": true },
+  { "query": "retry that failed send", "should_trigger": true },
+  { "query": "dismiss the second queued card", "should_trigger": true },
+  { "query": "review the pending drafts and let me approve them", "should_trigger": true },
+  { "query": "show the action queue", "should_trigger": true },
+  { "query": "what's overdue across the workspace", "should_trigger": false },
+  { "query": "draft cold-contact nudges for overdue contacts", "should_trigger": false },
+  { "query": "triage my inbox", "should_trigger": false },
+  { "query": "what should I do next", "should_trigger": false },
+  { "query": "check my CRM health", "should_trigger": false },
+  { "query": "back up the workspace", "should_trigger": false },
+  { "query": "draft a new email to a partner", "should_trigger": false }
+]

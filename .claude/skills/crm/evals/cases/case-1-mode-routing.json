@@ -1,0 +1,10 @@
+{
+  "id": "case-1-mode-routing",
+  "description": "Confirms /crm names its five operational modes (add, log, radar, find, update) when describing capabilities.",
+  "input": "What operations can /crm perform on contacts?",
+  "checks": {
+    "must_mention": ["add", "log", "radar", "find", "update"],
+    "min_words": 50,
+    "hidden_chars_clean": true
+  }
+}

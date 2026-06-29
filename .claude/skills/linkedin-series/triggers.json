@@ -1,0 +1,14 @@
+[
+  {"query": "linkedin series on sovereign dpi for the next month", "should_trigger": true},
+  {"query": "content series about odun one capabilities", "should_trigger": true},
+  {"query": "plan posts for the week about the trade show", "should_trigger": true},
+  {"query": "3 posts this week about the ai native transformation", "should_trigger": true},
+  {"query": "plan and draft posts about our five principles", "should_trigger": true},
+  {"query": "weekly linkedin content for next week", "should_trigger": true},
+  {"query": "draft a linkedin post about the regional keynote", "should_trigger": false},
+  {"query": "write a single post about data sovereignty", "should_trigger": false},
+  {"query": "content strategy for q3 investor relations", "should_trigger": false},
+  {"query": "instagram content ideas for this week", "should_trigger": false},
+  {"query": "twitter series about dpi plus", "should_trigger": false},
+  {"query": "what should I post on linkedin today", "should_trigger": false}
+]

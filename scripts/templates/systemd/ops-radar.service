@@ -1,0 +1,17 @@
+[Unit]
+Description=31C ops-radar (manual-actions + silent-health detector -> Telegram)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/ops-radar-notify.py
+# TZ pins the radar's date math (backup age, review days-since) to the configured
+# timezone regardless of the host. The installer substitutes {{TZ}} from
+# HEADING_OS_TZ (default UTC). journald avoids a log path on a /mnt/c 9P mount.
+# NOTE: deliberately NO SuccessExitStatus=1 -- ops-radar-notify.py always exits 0,
+# so any non-zero exit is a true failure that must surface as `failed`.
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

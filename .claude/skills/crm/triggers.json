@@ -1,0 +1,16 @@
+[
+  { "query": "crm add this new contact", "should_trigger": true },
+  { "query": "log this interaction in the CRM", "should_trigger": true },
+  { "query": "crm radar — who should I reconnect with", "should_trigger": true },
+  { "query": "find this person in the CRM", "should_trigger": true },
+  { "query": "check contact health for my key relationships", "should_trigger": true },
+  { "query": "update the CRM record for Sara", "should_trigger": true },
+
+  { "query": "look up this contact's phone number in Google Contacts", "should_trigger": false },
+  { "query": "draft a follow-up email to this contact", "should_trigger": false },
+  { "query": "investigate this person's background", "should_trigger": false },
+  { "query": "process viraid", "should_trigger": false },
+  { "query": "prepare for my meeting with this contact", "should_trigger": false },
+  { "query": "send a telegram to this person", "should_trigger": false },
+  { "query": "process my inbox", "should_trigger": false }
+]

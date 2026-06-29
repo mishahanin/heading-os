@@ -1,0 +1,11 @@
+Geist + Geist Mono
+Copyright (c) 2023 Vercel Inc.
+Licensed under the SIL Open Font License, Version 1.1.
+https://github.com/vercel/geist-font/blob/main/LICENSE.TXT
+
+woff2 subsets fetched from Fontsource (latin subset, all weights 300-700
+for Geist; 400-700 for Geist Mono) on 2026-05-18 via cdn.jsdelivr.net.
+
+Files in this directory:
+  geist-{300,400,500,600,700}.woff2
+  geist-mono-{400,500,600,700}.woff2

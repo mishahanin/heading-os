@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HEADING OS — Documentation</title>
+<meta name="description" content="HEADING OS — an operations engine for an AI executive assistant. Setup, daemons, skills, MCP, plugins, and memory.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><span class="mark">H</span> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html" class="active">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+  <section class="hero">
+    <h1>HEADING OS documentation</h1>
+    <p class="sub">HEADING OS is an operations engine for an AI executive assistant — a library of skills, always-on rules, automation scripts, and daemons that let Claude Code act as a strategic assistant across sessions. This repository is the <strong>engine</strong>: code only, no private data.</p>
+    <div class="badge-row">
+      <span class="badge">Claude Code</span>
+      <span class="badge">Python 3.11+</span>
+      <span class="badge">WSL2 · Linux · macOS</span>
+      <span class="badge">Apache-2.0</span>
+      <span class="badge">Engine / data separation</span>
+    </div>
+  </section>
+
+  <p class="lede">New here? Start with <a href="prerequisites.html">Prerequisites &amp; install</a> to stand up a working clone, then explore the operate and reference guides below.</p>
+
+  <h2>Guides</h2>
+  <div class="cards">
+    <a class="card" href="prerequisites.html">
+      <span class="num">01</span>
+      <h3>Prerequisites &amp; install</h3>
+      <p>System requirements, the Python toolchain (uv / venv), the full <code>.env</code>, Ollama + models, the Brave automation browser, git hooks, and the data overlay.</p>
+    </a>
+    <a class="card" href="daemons.html">
+      <span class="num">02</span>
+      <h3>Daemons &amp; scheduled tasks</h3>
+      <p>Install and manage every long-running daemon (bridge, sync-exchange, sentinel, fireside, eval-drift, watchdog) and every scheduled task and timer.</p>
+    </a>
+    <a class="card" href="skills-mcp-plugins.html">
+      <span class="num">03</span>
+      <h3>Skills, MCP &amp; plugins</h3>
+      <p>The full skill catalog by category, the MCP servers (Playwright, Pencil, Google connectors) and how to register them, and the Claude Code plugins.</p>
+    </a>
+    <a class="card" href="memory-odin.html">
+      <span class="num">04</span>
+      <h3>Memory &amp; ODIN</h3>
+      <p>How all six memory mechanisms work — auto-memory, semantic recall, the ODIN brain, the knowledge base, threads, and the maintenance passes — and how to operate ODIN.</p>
+    </a>
+    <a class="card" href="data-structure.html">
+      <span class="num">05</span>
+      <h3>Data overlay structure</h3>
+      <p>An annotated template of the private <code>.heading-os-data</code> repository and the engine / data separation principle that keeps the engine code-only.</p>
+    </a>
+    <a class="card" href="DEPLOYMENT.html">
+      <span class="num">+</span>
+      <h3>Full deployment guide</h3>
+      <p>The canonical end-to-end install walkthrough, plus the one-page <a href="QUICKSTART.html">Quickstart</a>.</p>
+    </a>
+  </div>
+
+  <h2>The mental model</h2>
+  <p>HEADING OS splits one operator workspace into two git repositories:</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Layer</th><th>Holds</th><th>Visibility</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Engine</strong> (<code>.heading-os</code>)</td><td>Code only — skills, rules, scripts, daemons, config templates, docs.</td><td>Shareable, eventually public.</td></tr>
+      <tr><td><strong>Data overlay</strong> (<code>.heading-os-data</code>)</td><td>All real data + every generated artifact — CRM, knowledge, context, threads, plans, outputs.</td><td>Private forever.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Routing between the two is declared in <code>config/routing-map.yaml</code> and resolved at runtime by the data-root seam in <code>scripts/utils/workspace.py</code>. A mechanical guard refuses to commit data-class files into the engine, so the split cannot drift. On a public clone the data overlay is simply absent and the engine runs on its defaults and <code>*.example.*</code> templates.</p>
+
+  <div class="callout note">
+    <span class="ttl">Built by</span>
+    HEADING OS is built and maintained by Misha Hanin / 31 Concept (31C) and shared as an open framework. See <a href="https://github.com/mishahanin/heading-os">the repository</a> for source, license, and contribution guidelines.
+  </div>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept.</p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

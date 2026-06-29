@@ -1,0 +1,123 @@
+{
+  "last_run": {
+    "timestamp": "2026-05-15T00:52:16",
+    "model": "claude-sonnet-4-6",
+    "passed_total": 15,
+    "check_total": 15,
+    "cases": [
+      {
+        "id": "case-1-voss-elements",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 46,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 1163,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 44.7
+      },
+      {
+        "id": "case-2-talking-points",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 35,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1163
+        },
+        "elapsed_seconds": 41.43
+      },
+      {
+        "id": "case-3-31c-terminology",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 45,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1163
+        },
+        "elapsed_seconds": 43.52
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-05-15T00:44:54",
+    "model": "claude-sonnet-4-6",
+    "passed_total": 14,
+    "check_total": 19,
+    "cases": [
+      {
+        "id": "case-1-voss-elements",
+        "passed": 4,
+        "total": 7,
+        "failures": [
+          {
+            "check": "must_mention['Sara']",
+            "passed": false,
+            "detail": "missing 'Sara'"
+          },
+          {
+            "check": "must_mention['Nimbus']",
+            "passed": false,
+            "detail": "missing 'Nimbus'"
+          },
+          {
+            "check": "must_mention['question']",
+            "passed": false,
+            "detail": "missing 'question'"
+          }
+        ],
+        "usage": {
+          "input_tokens": 46,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 1163,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 43.89
+      },
+      {
+        "id": "case-2-talking-points",
+        "passed": 4,
+        "total": 6,
+        "failures": [
+          {
+            "check": "must_mention['Harbor']",
+            "passed": false,
+            "detail": "missing 'Harbor'"
+          },
+          {
+            "check": "must_mention['objective']",
+            "passed": false,
+            "detail": "missing 'objective'"
+          }
+        ],
+        "usage": {
+          "input_tokens": 35,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1163
+        },
+        "elapsed_seconds": 46.44
+      },
+      {
+        "id": "case-3-31c-terminology",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 45,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1163
+        },
+        "elapsed_seconds": 43.62
+      }
+    ]
+  }
+}

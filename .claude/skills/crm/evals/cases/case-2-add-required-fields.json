@@ -1,0 +1,11 @@
+{
+  "id": "case-2-add-required-fields",
+  "description": "Confirms /crm asks for required fields when adding a contact - doesn't silently invent data.",
+  "input": "crm add a new contact",
+  "checks": {
+    "must_mention": ["name", "email"],
+    "must_not_mention": ["thrilled to"],
+    "min_words": 30,
+    "hidden_chars_clean": true
+  }
+}

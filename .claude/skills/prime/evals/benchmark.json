@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-05-15T00:46:37",
+    "model": "claude-sonnet-4-6",
+    "passed_total": 11,
+    "check_total": 11,
+    "cases": [
+      {
+        "id": "case-1-identity-check",
+        "passed": 3,
+        "total": 3,
+        "failures": [],
+        "usage": {
+          "input_tokens": 18,
+          "output_tokens": 48,
+          "cache_creation_input_tokens": 2605,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 2.23
+      },
+      {
+        "id": "case-2-parallel-health",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 18,
+          "output_tokens": 705,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2605
+        },
+        "elapsed_seconds": 10.6
+      },
+      {
+        "id": "case-3-handoff-resume",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 26,
+          "output_tokens": 525,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2605
+        },
+        "elapsed_seconds": 8.76
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-05-15T00:46:37",
+    "model": "claude-sonnet-4-6",
+    "passed_total": 11,
+    "check_total": 11,
+    "cases": [
+      {
+        "id": "case-1-identity-check",
+        "passed": 3,
+        "total": 3,
+        "failures": [],
+        "usage": {
+          "input_tokens": 18,
+          "output_tokens": 48,
+          "cache_creation_input_tokens": 2605,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 2.23
+      },
+      {
+        "id": "case-2-parallel-health",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 18,
+          "output_tokens": 705,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2605
+        },
+        "elapsed_seconds": 10.6
+      },
+      {
+        "id": "case-3-handoff-resume",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 26,
+          "output_tokens": 525,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2605
+        },
+        "elapsed_seconds": 8.76
+      }
+    ]
+  }
+}

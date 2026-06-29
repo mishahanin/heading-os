@@ -1,0 +1,16 @@
+[
+  { "query": "draft a LinkedIn post about data sovereignty", "should_trigger": true },
+  { "query": "write a post on what MWC taught us", "should_trigger": true },
+  { "query": "LinkedIn post announcing the new partnership", "should_trigger": true },
+  { "query": "help me write a post about the DPI category", "should_trigger": true },
+  { "query": "a single LinkedIn post on the sovereignty-vs-compliance tension", "should_trigger": true },
+  { "query": "draft something for LinkedIn about our line-rate demo", "should_trigger": true },
+
+  { "query": "plan a series of 4 LinkedIn posts for launch week", "should_trigger": false },
+  { "query": "I published this on LinkedIn, log it", "should_trigger": false },
+  { "query": "write a formal letter to the regulator", "should_trigger": false },
+  { "query": "draft a Tribe message for Monday", "should_trigger": false },
+  { "query": "create a keynote deck for the conference", "should_trigger": false },
+  { "query": "draft an email to the investor", "should_trigger": false },
+  { "query": "write a commercial proposal", "should_trigger": false }
+]

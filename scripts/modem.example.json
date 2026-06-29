@@ -1,0 +1,5 @@
+{
+  "_comment": "EXAMPLE travel-router device identity. The engine ships this generic template; the real device identity is private DATA at <data-root>/config/modem.json (resolved via get_data_config_dir()). tac = 8-digit Type Allocation Code of the device class you want the modem to report; factory_imei = your device's original 15-digit IMEI (the revert target). Replace with your own values.",
+  "tac": "00000000",
+  "factory_imei": "000000000000000"
+}

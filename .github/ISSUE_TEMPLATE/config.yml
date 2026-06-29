@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/mishahanin/heading-os/security/advisories/new
+    about: Please report vulnerabilities privately, not as a public issue. See SECURITY.md.
+  - name: Setup help
+    url: https://github.com/mishahanin/heading-os/blob/main/docs/SETUP-GUIDE.md
+    about: The zero-to-running setup guide answers most installation questions.

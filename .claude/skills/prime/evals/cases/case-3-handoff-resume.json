@@ -1,0 +1,10 @@
+{
+  "id": "case-3-handoff-resume",
+  "description": "Confirms /prime checks for a previous-session handoff file and asks whether to resume or start fresh.",
+  "input": "What does /prime do if outputs/operations/handoff.md exists from a previous session?",
+  "checks": {
+    "must_mention": ["resume", "handoff"],
+    "min_words": 50,
+    "hidden_chars_clean": true
+  }
+}

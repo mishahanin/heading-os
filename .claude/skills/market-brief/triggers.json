@@ -1,0 +1,17 @@
+[
+  { "query": "what's the market for DPI in Southeast Asia", "should_trigger": true },
+  { "query": "give me a sector overview of telco security", "should_trigger": true },
+  { "query": "TAM for deep packet intelligence in the GCC", "should_trigger": true },
+  { "query": "regional analysis of the African telecom market", "should_trigger": true },
+  { "query": "market intel on sovereign cyber spending", "should_trigger": true },
+  { "query": "how big is the market for lawful intercept", "should_trigger": true },
+  { "query": "market size for network analytics in MENA", "should_trigger": true },
+
+  { "query": "how does a competing vendor compare to us", "should_trigger": false },
+  { "query": "investigate this specific operator", "should_trigger": false },
+  { "query": "give me a global geopolitical brief", "should_trigger": false },
+  { "query": "competitor analysis on the legacy incumbent", "should_trigger": false },
+  { "query": "who runs procurement at this ministry", "should_trigger": false },
+  { "query": "draft a market-positioning LinkedIn post", "should_trigger": false },
+  { "query": "prepare me for the investor call", "should_trigger": false }
+]

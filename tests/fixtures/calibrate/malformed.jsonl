@@ -1,0 +1,7 @@
+{"type":"user","timestamp":"2026-05-13T10:00:00Z","message":{"role":"user","content":"hello"}}
+{"type":"assistant","timestamp":"2026-05-13T10:00:05Z","message":{"role":"assistant","content":"hi"}}
+this is not valid json at all
+{"type":"user","timestamp":"2026-05-13T10:00:10Z","message":{"role":"user","content":"second turn"}}
+{malformed: "missing quotes"}
+{"type":"assistant","timestamp":"2026-05-13T10:00:15Z","message":{"role":"assistant","content":"reply"}}
+{"type":"user","timestamp":"2026-05-13T10:00:20Z","message":{"role":"user","content":"third turn"}}

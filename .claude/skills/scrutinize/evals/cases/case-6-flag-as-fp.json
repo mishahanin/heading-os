@@ -1,0 +1,12 @@
+{
+  "id": "case-6-flag-as-fp",
+  "description": "Confirms /scrutinize v2.0 supports the flag-as-fp approval command, that flagged false positives are appended to outputs/operations/scrutiny/_fp_log.jsonl via scripts/scrutinize-flag-fp.py, and that the aggregator refreshes _fp_aggregate.md with FP rate per severity, target type, and confidence band.",
+  "input": "What does the flag-as-fp command do in /scrutinize, and where does the data go?",
+  "checks": {
+    "must_mention": ["flag-as-fp", "false positive", "scrutinize-flag-fp.py", "scrutinize-fp-aggregate.py", "confidence", "severity"],
+    "must_not_mention": ["does not exist", "not yet supported"],
+    "min_words": 80,
+    "max_words": 600,
+    "hidden_chars_clean": true
+  }
+}

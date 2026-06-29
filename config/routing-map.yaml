@@ -1,0 +1,153 @@
+# 3-destination routing for the HEADING OS engine/data separation.
+# Resolution: most-specific (longest) matching key wins; else `default`.
+# Destinations:
+#   engine    -> .heading-os        (code, shareable, eventually public)
+#   private   -> .heading-os-data   (CEO private data, never shared)
+#   corporate -> heading-os-corporate      (shared DOWN to execs, not public)
+#
+# This is the SINGLE classification input (HEADING OS step 7, 2026-06-14): it
+# replaced config/classification.json, which has been removed. The two-value
+# exec-sync label (corporate vs ceo-only) is now a collapse of these three:
+# private -> ceo-only; corporate -> corporate; engine -> corporate. The KEY
+# transform vs. the old model: code dirs that were "corporate" (shared to execs)
+# become `engine` (shared to everyone), because code is not data.
+version: 1
+default: engine
+rules:
+  # --- private: CEO data overlay ---
+  # crm/ defaults private (CEO relationship data); the shareable carve-outs
+  # (config.md, aliases.md, address-book/) win by specificity below. This
+  # fail-closes README.md and any future stray crm/ file out of public.
+  "crm/": private
+  "crm/contacts/": private
+  "knowledge/": private
+  "outputs/": private
+  "threads/": private
+  # context/ is CEO operating context (people, pipeline, personal-info, current-data,
+  # partners, customers, hiring, friends, archive/...). Dir-level private so NO context
+  # file falls through to engine; the two shareable ones are corporate carve-outs below.
+  "context/": private
+  "plans/": private
+  "templates/": private
+  # _archive/ is historical CEO content (old migrations + the personal book project
+  # under _archive/books/), never live engine functionality. Fail-closed to private.
+  "_archive/": private
+  # personal/ is the legacy exec two-layer tree (personal context/crm/outputs/reference).
+  # The new model has NO personal/ dir (an exec's private data lives in the data
+  # overlay heading-os-data-{slug}), but a legacy-shaped exec clone can still hold
+  # one. Fail-closed so exec PII can never default to engine and slip past the
+  # engine-tree-clean guard. No-op on the CEO workspace (no personal/ dir).
+  "personal/": private
+  "datastore/books/": private
+  "datastore/investment/ceo-only/": private
+  "datastore/content/linkedin-archive/": private
+  "datastore/operations/tribe/fireside-state/": private
+  "datastore/operations/eval-drift/": private
+  "datastore/operations/service-mirror/": private    # read-only laptop mirror of the service host's daemon state
+  # --- decisions (Task 7 reconciliation): per-instance config + CEO-only
+  #     sensitive files that would otherwise DEFAULT to 'engine' and ship in a
+  #     public clone. Routed private to fail closed. ---
+  ".claude/settings.local.json": private    # decision: per-instance permission/hook config; each clone owns its own
+  # Claude Code per-machine runtime state: session transcripts (.jsonl) + the
+  # CEO's auto-memory (personal facts, friends, projects, threads). Pure private
+  # CEO data — same class as crm/ and threads/, belongs in the data overlay, NEVER
+  # the public engine. Fail-closed wholesale so no future memory file or
+  # transcript can leak via the engine default. (2026-06-13 CEO audit: caught a
+  # personal auto-memory file shipping in the engine.)
+  ".claude/projects/": private
+  "config/x-pulse-accounts.yaml": private    # decision: CEO's monitored-account list; engine ships an EXAMPLE instead
+  # 2026-06-13 CEO audit: these config files carry real identity / contacts / deal
+  # intelligence and must never ship in a public engine. Engine ships examples at cutover.
+  "config/exec-registry.json": private       # full executive roster: names, @31c.io/@odinix.com emails, repos, github users
+  "config/admin.json": private               # per-instance admin identity (slugs, org, corporate repo)
+  "config/email-triage-rules.yaml": private  # real internal sender addresses + deal-keyword overrides
+  "config/service-manifest.json": private     # this instance's service-host publish allowlist (integration topology + tribe roster path)
+  "config/sentinel_config.yaml": private       # real VIP-sender list (real partners + internal contacts); data-config (engine ships scripts/sentinel_config.example.yaml)
+  "config/fireside-schedule.json": private     # real Tribe speaker roster (54 names) + cycle dates; data-config (engine ships scripts/fireside-schedule.example.json)
+  "config/bootcamp-org-chart.json": private    # real org chart (50+ names/titles) + internal mailboxes; data-config (engine ships scripts/bootcamp-org-chart.example.json)
+  "config/exec-meeting-attendees.json": private # real exec attendee roster; data-config (engine ships scripts/exec-meeting-attendees.example.json)
+  "config/modem.json": private                 # CEO travel-router device identity (TAC + factory IMEI); data-config (engine ships scripts/modem.example.json)
+  "config/service-host.json": private          # managed service-host VM topology (vm repo path, fireside unit name, state-dir layout); data-config (engine ships scripts/service-host.example.json). The VM host ADDRESS is a secret and stays in .env (SERVICE_VM_HOST).
+  "config/content-denylist.yaml": private    # curated real-entity denylist for the content gate (PII); data-config (engine ships scripts/content-denylist.example.yaml)
+  # --- decontaminated CODE -> engine (HEADING OS, 2026-06-14, NO EXCEPTIONS) ---
+  # The one-off generators (bootcamp-roster, md-to-docx-*,
+  # gen-exec-meeting-docx, crm_migrate), the Tribe fireside subsystem code +
+  # tests (fireside-bot[-daemon], fireside_webhook, setup-fireside-healthchecks,
+  # fireside-pulse, requirements-fireside, the systemd template, test_fireside_*),
+  # the service-host CLIENT/management scripts (publish-service, pull-service-state,
+  # inbox-pulse-report + its test), the CRM-coupled tests (test_crm_migration,
+  # test_viraid_counterpart), and scripts/archive + .claude/skills/archive were ALL
+  # DECONTAMINATED: every real identity, roster, topology literal, codename, and the
+  # dead-code entity references were moved OUT of the code into the private data
+  # overlay (the config/*.json data-config files above + synthetic test fixtures),
+  # and the code now resolves them via get_data_*_dir() / resolve_config_with_example().
+  # With the data gone the code is generic and ships as engine via the default — no
+  # private rule needed. Per CEO "Чистый Движок, никаких исключений": code -> engine,
+  # instance values -> private data.
+  # deploy/ is the SEPARATE service-host VM's OWN deployment software (its systemd
+  # units, watchdog, pull script). Per CEO 2026-06-14: the VM is its own entity, NOT
+  # part of the workspace — the workspace only MANAGES it (via the client scripts
+  # above, now engine). The VM's deployment is not workspace engine functionality and
+  # never ships public or to execs. Fail-closed to private.
+  "deploy/": private
+  "docs/CEO-ADMIN-GUIDE.md": private          # decision: CEO-only admin procedures (provisioning, revocation)
+  "docs/CEO-ADMIN-GUIDE.html": private
+  "docs/security/REMEDIATION-REPORT.md": private  # decision: security remediation report
+  # docs/superpowers/ is the CEO's internal design/plan/spec archive. It names real
+  # customers (e.g. telecom RFIs), strategy, security posture, and sensitive projects.
+  # Fail-closed to private wholesale: a public engine never ships the design history.
+  # Generic specs can be cherry-promoted later; the DEFAULT must be private (2026-06-13 CEO audit).
+  "docs/superpowers/": private
+  "docs/security/": private                   # security posture / findings — never public
+  # USAGE-GUIDE (CEO-instance worked-examples, saturated with real deals/financials)
+  # was retired 2026-06-27; its generic replacement is the usage section of the
+  # Executive Handbook (docs/GETTING-STARTED.md). No rule needed — the file is gone.
+  "datastore/INDEX.md": private               # decision: indexes private datastore content (datastore/ else corporate)
+  # 2026-06-26 CEO decision: competitive/market intelligence and investor materials
+  # are CEO-only, not shared down to the exec fleet. Longest-prefix carve-outs out of
+  # the broader `datastore/: corporate` rule below.
+  "datastore/intelligence/": private          # competitor/industry/market-reference intel — CEO-only
+  "datastore/investment/": private            # investor decks + financial materials — CEO-only
+  "reference/workspace-overview.md": private  # decision: live catalogue of this CEO instance's internals
+  # 2026-06-13 CEO audit: CEO strategic + personal reference content. Real partners
+  # (PartnerCo, AllianceCo, DistributorCo), market-entry strategy, traction/financials,
+  # geopolitical analysis, and personal/exec voice IP. Engine ships generic templates at cutover.
+  "reference/billion-growth-playbook.md": private    # full growth strategy: partners, market entry, Series A/B
+  "reference/dpi-market-intelligence.md": private     # market intelligence + competitive positioning
+  "reference/geopolitical-landscape.md": private      # CEO geopolitical analysis
+  "reference/polymarket-coverage.md": private          # CEO coverage analysis
+  "reference/ceo-calendar-policy.md": private          # CEO personal calendar policy
+  "reference/ceo-operating-rhythm.md": private         # CEO personal operating rhythm
+  "reference/misha-voice.md": private                  # CEO personal voice IP + "what Misha never says"
+  "reference/exec-voice.md": private               # exec personal voice IP (generic name; real exec voice files route here)
+  "reference/search-domains.md": private               # CEO research-targeting config: names the priority regions + curated regional news domains; engine ships a generic example
+  "c.bat": private                             # CEO machine-local launcher; not needed in the engine clone
+  "reference/email-signature.html": private    # CEO's real signature: personal phone (reveals geo) + contact; engine ships an example at cutover
+  # (Odin cadence timer/installer/templates were ceo-only private until the CEO
+  #  decision "Odin code -> engine" (2026-06-14). Their only CEO signal was a
+  #  hardcoded Asia/Dubai timezone; that is now externalized to HEADING_OS_TZ
+  #  (installer substitutes {{TZ}} at install time), so the templates carry no
+  #  geo and ship in the public engine via the default. The BRAIN CONTENT
+  #  (knowledge/odin-brain/) stays private under the knowledge/ rule.)
+  # modem-tune: changes the reported IMEI on a GL.iNet GL-XE300 travel router over
+  # SSH. CEO decision 2026-06-14 (NO EXCEPTIONS): the modem-tune CODE (script + skill)
+  # ships as engine like all other code; ONLY the device identity is private DATA —
+  # `config/modem.json` (TAC + factory IMEI, routed private above) and the IMEI ledger
+  # under outputs/ (private). So scripts/modem-tune.py and .claude/skills/modem-tune/
+  # fall through to the engine default; no private rule here. (The skill's design spec
+  # under docs/superpowers/ is private as design history, like every other spec.)
+  # --- corporate: shared down to execs (content, not code) ---
+  "corporate/": corporate              # daemon base config etc.; named corporate, never public
+  # Executive Handbook: 31C-branded exec onboarding+usage. Routed corporate (2026-06-27,
+  # Option B) so it publishes to heading-os-corporate and reaches execs via .corporate-repo,
+  # instead of shipping in the public engine clone. The engine-public copy was removed.
+  "docs/GETTING-STARTED.md": corporate
+  "docs/GETTING-STARTED.html": corporate
+  "datastore/": corporate
+  "knowledge/shared/": corporate
+  "context/business-info.md": corporate
+  "context/strategy.md": corporate
+  "crm/config.md": corporate
+  "crm/aliases.md": corporate
+  "crm/address-book/": corporate
+  # everything else (.claude/, scripts/, docs/, config/, reference/, tests/) -> engine (default)

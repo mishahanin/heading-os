@@ -1,0 +1,16 @@
+[
+  { "query": "draft an MOU with this systems integrator", "should_trigger": true },
+  { "query": "write a letter of intent for the JV", "should_trigger": true },
+  { "query": "we need a memorandum of understanding with PartnerCo", "should_trigger": true },
+  { "query": "create a term sheet defining the partnership", "should_trigger": true },
+  { "query": "draft a partnership agreement laying out mutual obligations", "should_trigger": true },
+  { "query": "LOI for the channel partner in [a market]", "should_trigger": true },
+
+  { "query": "write a commercial proposal with pricing", "should_trigger": false },
+  { "query": "respond to this tender", "should_trigger": false },
+  { "query": "draft a letter of introduction to the partner", "should_trigger": false },
+  { "query": "write a sales offer for this operator", "should_trigger": false },
+  { "query": "draft a LinkedIn post about the partnership", "should_trigger": false },
+  { "query": "prepare for the partnership negotiation meeting", "should_trigger": false },
+  { "query": "add the partner contact to the CRM", "should_trigger": false }
+]

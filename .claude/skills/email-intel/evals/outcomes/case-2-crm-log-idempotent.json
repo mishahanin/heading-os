@@ -1,0 +1,21 @@
+{
+  "id": "crm-log-idempotent",
+  "description": "A second log_to_crm on the same conversation is rejected - no double-log entry on the contact.",
+  "outcome": {
+    "type": "crm_log",
+    "conv_id": "conv-fixture-002",
+    "conversations": [
+      {
+        "id": "conv-fixture-002",
+        "topic": "Follow-up on pilot",
+        "latest_datetime": "2026-06-03T14:00:00",
+        "crm_context": {"contact_slug": "meridian-customer"}
+      }
+    ],
+    "create_contacts": ["meridian-customer"],
+    "expect_ok": true,
+    "expected_slug": "meridian-customer",
+    "expected_date": "2026-06-03",
+    "expect_idempotent": true
+  }
+}

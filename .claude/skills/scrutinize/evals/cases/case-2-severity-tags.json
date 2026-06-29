@@ -1,0 +1,10 @@
+{
+  "id": "case-2-severity-tags",
+  "description": "Confirms /scrutinize uses severity tags (BLOCKER / HIGH / MEDIUM / LOW) when categorising findings.",
+  "input": "What severity levels does /scrutinize use when classifying findings?",
+  "checks": {
+    "must_mention": ["BLOCKER", "HIGH", "MEDIUM", "LOW"],
+    "min_words": 30,
+    "hidden_chars_clean": true
+  }
+}

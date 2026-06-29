@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daemons &amp; scheduled tasks — HEADING OS</title>
+<meta name="description" content="Install and manage every HEADING OS daemon (bridge, sync-exchange, sentinel, fireside, eval-drift, watchdog) and every scheduled task and timer.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><span class="mark">H</span> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html" class="active">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+  <h1>Daemons &amp; scheduled tasks</h1>
+  <p class="page-meta">Every long-running daemon and every scheduled task, with exact install / inspect / cancel commands. All real data, credentials, hostnames, and chat IDs live outside the engine in the gitignored <code>.env</code> / <code>.sessions</code> and the data overlay — replace the placeholders with your own values.</p>
+
+  <div class="callout note">
+    <span class="ttl">Platform model</span>
+    Linux/WSL2 uses <strong>systemd user units</strong>; macOS uses <strong>launchd</strong> agents. There are no Windows-native installers — on Windows the daemons run inside WSL2 as the Linux units. WSL2 needs <code>systemd=true</code> in <code>/etc/wsl.conf</code> and, for unattended boot, <code>loginctl enable-linger "$USER"</code> (run once).
+  </div>
+  <div class="callout note">
+    <span class="ttl">Telemetry is opt-in and fail-closed</span>
+    Langfuse tracing is suppressed everywhere unless <code>SENSITIVE_MODE=off</code> is set in a daemon's service env. Emitting nothing is the expected default, not a fault. No secret ever goes into a unit file — credentials load from the gitignored <code>.env</code> in the engine clone.
+  </div>
+
+  <h2>The generic install driver</h2>
+  <p>The five primary daemons install through one driver, which renders the matching template in <code>scripts/templates/systemd/</code> (substituting workspace + interpreter) into <code>~/.config/systemd/user/</code> and enables it:</p>
+  <pre><code># &lt;name&gt; is one of: bridge | sentinel | fireside-bot | sync-exchange | eval-drift
+bash scripts/install-daemon-service.sh &lt;name&gt;
+bash scripts/uninstall-daemon-service.sh &lt;name&gt;   # idempotent disable + remove
+bash scripts/restart-daemon-service.sh &lt;name&gt;     # restart + status tail</code></pre>
+  <p>The interpreter resolves as: explicit <code>PYTHON=...</code> override → <code>&lt;workspace&gt;/.venv/bin/python</code> (the <code>uv sync</code> target, preferred) → first <code>python3</code> on PATH. Generic status/logs for any unit:</p>
+  <pre><code>systemctl --user status &lt;unit&gt;.service
+journalctl --user -u &lt;unit&gt;.service -f</code></pre>
+  <div class="callout warn">
+    <span class="ttl">Why logs go to journald</span>
+    All <code>.service</code> templates route stdout/stderr to journald, not a workspace log file — double-writing a log on a WSL2 <code>/mnt/c</code> 9P mount can freeze the process. Steady-state app logs still live in each daemon's own log file (e.g. <code>.daemon-state/bridge.log</code>).
+  </div>
+
+  <h2>1. Bridge daemon — living-interface dashboard</h2>
+  <p><strong>Purpose.</strong> A per-user FastAPI service bound to loopback <code>127.0.0.1</code>, serving the browser dashboard (Pulse, Day, Inbox, Approvals, Tasks, Pipeline, Threads, Capabilities, Search, Settings, and more). It watches the workspace, bumps per-component version counters, and the browser polls via HTTP ETag heartbeats. Per the console-first rule, the dashboard is a <strong>convenience viewer only</strong> — every capability is also CLI/chat operable, and the daemon may be down without breaking anything.</p>
+  <h4>Install</h4>
+  <pre><code># Linux/WSL2 (canonical):
+bash scripts/install-bridge-service.sh
+# macOS:
+python3 scripts/install-bridge-service-mac.py    # writes a launchd plist  (--uninstall to remove)
+# Ad-hoc (no service):
+python scripts/bridge-daemon.py --start</code></pre>
+  <h4>Manage / health</h4>
+  <pre><code>python scripts/bridge-daemon.py --health    # live probe; exit 0 live / 1 fallback / 2 neither
+python scripts/bridge-daemon.py --status
+python scripts/bridge-daemon.py --rotate-token   # restart the daemon after
+python scripts/bridge-daemon.py --revert-config  # roll back to the prior config snapshot
+systemctl --user restart bridge-daemon.service</code></pre>
+  <p><strong>Config / state.</strong> Port is written to <code>.daemon-state/port</code> at boot; open <code>http://127.0.0.1:&lt;port&gt;/</code>. Runtime config: <code>.daemon-state/config.yaml</code> (last 3 snapshots kept); heartbeat at <code>.daemon-state/heartbeat.json</code>. Owned by the host you read the dashboard on (typically the laptop).</p>
+
+  <h2>2. Sync-Exchange daemon — Exchange + calendar → bridge</h2>
+  <p><strong>Purpose.</strong> An in-process scheduler that pulls calendar events and emails from on-premises Microsoft Exchange (EWS via <code>exchangelib</code>) into readable markdown under <code>outputs/_sync/</code>, which the dashboard renders. Cadence: every 2 hours plus once at boot; emits a 1-minute liveness beat for the watchdog.</p>
+  <pre><code>bash scripts/install-daemon-service.sh sync-exchange
+python scripts/sync-exchange-daemon.py daemon     # run forever
+python scripts/sync-exchange-daemon.py status
+python scripts/sync-exchange-daemon.py stop
+# One-shot manual sync (no daemon):
+python scripts/sync-exchange.py [--calendar|--emails] [--days N] [--email-count N]</code></pre>
+  <p><strong>Config / state.</strong> PID at <code>.sync-exchange/daemon.pid</code>, rotating log at <code>.sync-exchange/daemon.log</code>. Health pulse reader (consumed by <code>/prime</code>): <code>scripts/sync-exchange-pulse.py</code>. Exchange credentials load from the gitignored <code>.env</code>. In a two-host split this daemon is owned by the laptop (the host serving the dashboard); a VM copy should stay stopped, since data synced there would be stranded.</p>
+
+  <h2>3. Sentinel — comms monitor</h2>
+  <p><strong>Purpose.</strong> A background comms monitor: checks Exchange email + Telegram on a fixed cadence (default every 15 minutes), scores urgency via the Claude API, and pushes alerts to a designated "urgent" Telegram channel.</p>
+  <pre><code>bash scripts/install-daemon-service.sh sentinel
+systemctl --user status sentinel.service
+journalctl --user -u sentinel.service -f
+# Chat surface: /sentinel</code></pre>
+  <p><strong>Config / state.</strong> Config from <code>scripts/sentinel_config.yaml</code> (ship <code>scripts/sentinel_config.example.yaml</code> as the template); log at <code>.sentinel/sentinel.log</code>. The alert channel and any chat IDs are instance config — keep them in <code>.env</code> / local YAML, never in the engine.</p>
+
+  <h2>4. Fireside-bot — Telegram team bot</h2>
+  <p><strong>Purpose.</strong> A single in-process scheduler running team "fireside" jobs (poll/heartbeat, speaker DMs, weekly preview, day-of reminders, briefs, reports, health-check, topic collection).</p>
+  <pre><code>bash scripts/install-daemon-service.sh fireside-bot
+python scripts/fireside-bot-daemon.py daemon      # run forever
+python scripts/fireside-bot-daemon.py run &lt;job&gt;   # one-shot a single job
+python scripts/fireside-bot-daemon.py status
+python scripts/fireside-bot-daemon.py stop</code></pre>
+  <div class="callout note">
+    <span class="ttl">Webhook mode — "last poll age" is a red herring</span>
+    With <code>FIRESIDE_WEBHOOK_ENABLED=true</code>, Telegram POSTs updates to a webhook endpoint and the <code>poll_telegram</code> cron job is skipped by design — so "last poll age" grows forever but is healthy. The real liveness signal is the <strong>heartbeat tick (every minute, both modes)</strong>. Verify health via Telegram <code>getWebhookInfo</code> (low pending count, no recent error), not poll age.
+  </div>
+  <p><strong>Config / state.</strong> Schedule from <code>config/fireside-schedule.json</code> (ship <code>scripts/fireside-schedule.example.json</code> as the template). Runtime state under the data root is <strong>gitignored and daemon-owned</strong> — never re-track it, or a live host daemon's writes break <code>git pull --ff-only</code>. Webhook host/IP, bot token, and member names/usernames are all instance config.</p>
+
+  <h2>5. Eval-drift — nightly regression detector</h2>
+  <p><strong>Purpose.</strong> A nightly trace-replay regression detector (daily at 02:00 local). For each skill with an <code>evals/</code> folder, it replays the last 24h of traces against the current <code>SKILL.md</code> and flags pass-rate regressions. Sensitivity-aware: it auto-skips when sensitive mode is active, and needs <code>SENSITIVE_MODE=off</code> in its service env to emit anything.</p>
+  <pre><code>bash scripts/install-daemon-service.sh eval-drift
+python scripts/eval-drift-daemon.py daemon
+python scripts/eval-drift-daemon.py --once        # also: --dry-run, --skill &lt;name&gt;, status</code></pre>
+
+  <h2>6. Watchdog</h2>
+  <p><strong>Purpose.</strong> Classifies each daemon's liveness beat against its configured cadence + grace and routes a deduped tiered alert on a missed beat. It runs <strong>in-process inside the bridge daemon</strong>, config-gated by <code>daemon.watchdog.enabled</code> (default off). Importable core: <code>scripts/watchdog_core.py</code>.</p>
+  <pre><code>python scripts/daemon-watchdog.py --once [--json] [--stale-default N]</code></pre>
+  <div class="callout warn">
+    <span class="ttl">Caution</span>
+    Do not run the watchdog CLI before the daemons have been restarted with the beat code live, or it will falsely classify all daemons as missing and fire real alerts.
+  </div>
+
+  <h2>Fleet health (observability, not a daemon)</h2>
+  <pre><code>python scripts/daemon-fleet-health.py [--stale N] [--json] [--exit-zero]
+# /bridge-health [--stale N] [--gate] [--json]  — chat wrapper</code></pre>
+  <p>Reconciles the verdict + exit code to the worst status across hosts. Exit 0 healthy / 1 drift / 2 broken.</p>
+
+  <div class="callout tip">
+    <span class="ttl">The Action Queue is daemon-free</span>
+    Worth stating explicitly: the Action Queue needs <strong>no daemon</strong>. <code>scripts/action-queue.py list|show|approve|edit|dismiss|retry|deposit</code> operates in-process on a queue file under the data root — no bridge daemon, no loopback HTTP. <code>approve</code> is a synchronous, watched send in the same command (the human click <em>is</em> the send-gate; outbound send is always human-gated). The dashboard's queue page is read-only; the queue works with the daemon down. Chat surface: <code>/queue</code>.
+  </div>
+
+  <h2>Typical two-host topology</h2>
+  <p>A common production split (present all hostnames/IPs as your own):</p>
+  <ul>
+    <li><strong>Laptop host</strong> (where the dashboard is read): owns <strong>bridge</strong> + <strong>sync-exchange</strong>.</li>
+    <li><strong>Always-on Linux VM</strong>: owns <strong>fireside</strong>, <strong>sentinel</strong>, <strong>eval-drift</strong>, plus a <strong>watchdog</strong>. It runs from fresh engine + data clones (siblings, so the data root resolves). systemd repoints use drop-in overrides under <code>/etc/systemd/system/&lt;unit&gt;.d/override.conf</code>.</li>
+  </ul>
+  <div class="callout warn">
+    <span class="ttl">Capacity</span>
+    Size an always-on VM for lightweight services only. If swap is 0, an inference overshoot becomes an OOM-kill that starves the live daemon heartbeats — do not run LLM inference on the daemon host.
+  </div>
+
+  <h2 id="scheduled">Scheduled tasks</h2>
+  <p>Two scheduling systems plus healthcheck pings.</p>
+
+  <h3>A. Claude Code durable scheduled tasks</h3>
+  <p>Machine-local cron-style tasks persisted in <code>.claude/scheduled_tasks.json</code> (managed by the Claude Code runtime — do not hand-edit). They do not sync; each machine keeps its own set.</p>
+  <pre><code>cat .claude/scheduled_tasks.json | python -m json.tool   # inspect (read-only)
+# Tools: CronList (list) / CronCreate (add) / CronDelete &lt;task-id&gt; (cancel)</code></pre>
+  <p>There is no automatic cleanup; prune orphans with <code>CronList</code> + <code>CronDelete</code>. The file is operator-specific and should be absent/gitignored in a public clone — document only the mechanism, never the payloads.</p>
+
+  <h3>B. Sentinel 15-minute loop</h3>
+  <p>Not a cron entry — the Sentinel daemon's own internal loop (<code>check_interval_minutes</code>, default 15). Managed by installing/running the Sentinel daemon above.</p>
+
+  <h3>C. systemd-user timers (Linux/WSL2 housekeeping)</h3>
+  <p>Each is a <code>oneshot</code> service fired by a <code>.timer</code>; standalone installers render the templates in <code>scripts/templates/systemd/</code>.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Timer</th><th>Cadence</th><th>Install</th><th>Runs</th></tr></thead>
+    <tbody>
+      <tr><td><code>ollama-autoupdate.timer</code></td><td>daily, persistent</td><td><em>system-wide installer</em> (sudo)</td><td>Upgrades Ollama only when a newer tag exists; smoke-tests <code>bge-m3</code></td></tr>
+      <tr><td><code>memory-index-refresh.timer</code></td><td>daily 03:30</td><td><code>bash scripts/install-memory-index-timer.sh</code></td><td><code>memory-index.py build</code> (incremental re-embed)</td></tr>
+      <tr><td><code>memory-hygiene.timer</code></td><td>Mon 07:34</td><td><code>bash scripts/install-memory-hygiene-timer.sh</code></td><td><code>memory-hygiene.py</code> (defect detector)</td></tr>
+      <tr><td><code>odin-cadence.timer</code></td><td>Mon 09:00 (in <code>HEADING_OS_TZ</code>)</td><td><code>bash scripts/install-odin-cadence-timer.sh</code></td><td><code>odin-cadence-notify.py</code> (nudge)</td></tr>
+      <tr><td><code>ops-radar.timer</code></td><td>daily 08:00 (in <code>HEADING_OS_TZ</code>)</td><td><code>bash scripts/install-ops-radar-timer.sh</code></td><td><code>ops-radar-notify.py</code> (manual-action detector)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <pre><code>systemctl --user list-timers &lt;name&gt;.timer --no-pager
+systemctl --user start &lt;name&gt;.service          # run once now
+systemctl --user disable --now &lt;name&gt;.timer    # cancel</code></pre>
+  <p>The odin-cadence/ops-radar templates substitute <code>HEADING_OS_TZ</code> (default UTC) so no operating locale is baked into the engine. The <code>ollama-autoupdate</code> timer is system-wide (<code>sudo</code>); each real upgrade restarts the <code>ollama</code> service → a few-seconds blip for recall.</p>
+
+  <h3>D. Healthcheck pings (deadman monitoring)</h3>
+  <p>Not a scheduler — best-effort deadman pings via <code>scripts/utils/healthchecks.py</code>. Idempotent setup writes ping URLs back as gitignored <code>.env</code> keys:</p>
+  <pre><code>python scripts/setup-fireside-healthchecks.py    # fireside checks (needs HEALTHCHECKS_API_KEY)
+python scripts/setup-daemon-healthchecks.py      # sentinel / eval-drift deadman checks</code></pre>
+  <p>Daemons ping at runtime (fireside every minute, sentinel each ~15-min cycle, eval-drift after the 02:00 run). The API key and all ping URLs are gitignored <code>.env</code> values — never commit them.</p>
+
+  <div class="callout warn">
+    <span class="ttl">Retired — do not install an hourly workspace-sync</span>
+    The old copy-and-orphan-delete sync engine is retired. There is no <code>31C-Sync</code> scheduled task / launchd agent / systemd timer. The model is plain git: <strong>code down</strong> = <code>git pull --ff-only</code>; <strong>data up / backup</strong> = <code>python scripts/push-all.py</code>; <code>/sync</code> = pull then backup. The only recurring schedule that remains by default is the 15-minute Sentinel loop (plus any housekeeping timers you install).
+  </div>
+
+  <h2>Summary</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>#</th><th>Daemon</th><th>Cadence</th><th>Install</th><th>Health</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>bridge</td><td>persistent (FastAPI)</td><td><code>install-bridge-service.sh</code> / <code>-mac.py</code></td><td><code>bridge-daemon.py --health</code></td></tr>
+      <tr><td>2</td><td>sync-exchange</td><td>every 2h + boot</td><td><code>install-daemon-service.sh sync-exchange</code></td><td><code>sync-exchange-pulse.py</code></td></tr>
+      <tr><td>3</td><td>sentinel</td><td>every 15 min</td><td><code>install-daemon-service.sh sentinel</code></td><td>deadman ping</td></tr>
+      <tr><td>4</td><td>fireside-bot</td><td>webhook + 1-min heartbeat</td><td><code>install-daemon-service.sh fireside-bot</code></td><td><code>getWebhookInfo</code> / <code>fireside-pulse.py</code></td></tr>
+      <tr><td>5</td><td>eval-drift</td><td>daily 02:00</td><td><code>install-daemon-service.sh eval-drift</code></td><td>deadman ping</td></tr>
+      <tr><td>—</td><td>watchdog</td><td>in-process (bridge)</td><td>config flag</td><td><code>daemon-watchdog.py --once</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

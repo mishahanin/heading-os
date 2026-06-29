@@ -1,0 +1,15 @@
+HEADING OS — engine
+Copyright 2026 Misha Hanin / 31 Concept (31C)
+
+This product is licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License in the LICENSE file at the root of this
+repository or at http://www.apache.org/licenses/LICENSE-2.0
+
+HEADING OS, ODUN.ONE, TrustONE, and the 31 Concept name and marks are trademarks
+of 31 Concept. The Apache License does not grant permission to use these marks
+except as required for reasonable and customary use in describing the origin of
+the work (see Section 6 of the License).
+
+This repository is the ENGINE — code only. It is designed to operate against a
+separate, private data repository that it never contains. See README.md and
+docs/SETUP-GUIDE.md for the architecture.

@@ -1,0 +1,16 @@
+[
+  { "query": "write a commercial proposal for this telco", "should_trigger": true },
+  { "query": "draft a sales proposal with pricing and modules", "should_trigger": true },
+  { "query": "put together a partnership proposal with commercial terms", "should_trigger": true },
+  { "query": "I need an offer document for the [a market] deal", "should_trigger": true },
+  { "query": "build a proposal showing module activation and pricing", "should_trigger": true },
+  { "query": "commercial proposal for the GCC operator", "should_trigger": true },
+
+  { "query": "draft an MOU defining our mutual obligations", "should_trigger": false },
+  { "query": "respond to this government RFP", "should_trigger": false },
+  { "query": "write a formal letter of introduction, no pricing", "should_trigger": false },
+  { "query": "create a term sheet for the JV", "should_trigger": false },
+  { "query": "draft a LinkedIn post about the deal", "should_trigger": false },
+  { "query": "prepare me for the proposal review meeting", "should_trigger": false },
+  { "query": "build an investor pitch deck", "should_trigger": false }
+]

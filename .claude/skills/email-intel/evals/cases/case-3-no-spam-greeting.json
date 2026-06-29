@@ -1,0 +1,10 @@
+{
+  "id": "case-3-no-spam-greeting",
+  "description": "Confirms /email-intel does not start with AI-spam openers when describing its workflow - voice compliance carry-over.",
+  "input": "Walk me through how /email-intel works in one paragraph.",
+  "checks": {
+    "must_not_mention": ["thrilled to", "excited to", "Hi there!", "in today's rapidly evolving"],
+    "min_words": 40,
+    "hidden_chars_clean": true
+  }
+}

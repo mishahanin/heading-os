@@ -68,7 +68,16 @@ dev = [
     "pre-commit==4.6.0",
     "detect-secrets==1.5.0",
     "pip-audit==2.10.1",
+    "pytest-xdist==3.8.0",
 ]
+
+[tool.uv]
+# Security floor on a transitive dep: msgpack < 1.2.1 carries GHSA-6v7p-g79w-8964
+# (DoS on Unpacker reuse with untrusted input). msgpack arrives via
+# pip-audit -> cachecontrol -> msgpack, so it is not a direct dependency; a plain
+# lock bump is fragile (any re-resolve reverts it — exactly what happened when
+# pytest-xdist was added 2026-06-30). This constraint floors it durably.
+constraint-dependencies = ["msgpack>=1.2.1"]
 
 [tool.bandit]
 severity = "medium"

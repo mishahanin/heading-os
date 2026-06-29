@@ -1,0 +1,17 @@
+[Unit]
+Description=31C associative-memory index refresh (incremental re-embed of changed notes)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+# Incremental build (NOT --force): re-embeds only notes whose mtime changed and
+# prunes deleted/denied paths, so the "hippocampus" (.memory-index/index.db)
+# stays in parity with the "neocortex" (the git-tracked note layers). A day's
+# delta is a handful of files -> seconds. ollama (bge-m3) must be up; if it is
+# down the build commits what it embedded and exits non-zero (journald records
+# it) and the next fire resumes -- no corruption, no partial-dim rows.
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/memory-index.py build
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

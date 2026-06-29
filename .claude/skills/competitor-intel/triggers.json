@@ -1,0 +1,17 @@
+[
+  { "query": "how does a competitor compare to ODUN.ONE", "should_trigger": true },
+  { "query": "competitor analysis on a state-aligned vendor", "should_trigger": true },
+  { "query": "competitive landscape for DPI vendors", "should_trigger": true },
+  { "query": "what's our competitive advantage vs a state-aligned vendor's DPI division", "should_trigger": true },
+  { "query": "analyze this competing vendor's product line", "should_trigger": true },
+  { "query": "pull a competitor's latest quarterly earnings and what they mean for us", "should_trigger": true },
+  { "query": "how do we stack up against a competitor head to head", "should_trigger": true },
+
+  { "query": "who is the CEO of a competitor personally", "should_trigger": false },
+  { "query": "what's the total addressable market for DPI", "should_trigger": false },
+  { "query": "investigate this company's leadership team", "should_trigger": false },
+  { "query": "draft a proposal for this telco", "should_trigger": false },
+  { "query": "give me a regional market overview of the Gulf", "should_trigger": false },
+  { "query": "validate these competitor claims against sources", "should_trigger": false },
+  { "query": "prepare for my meeting with the competitor rep", "should_trigger": false }
+]

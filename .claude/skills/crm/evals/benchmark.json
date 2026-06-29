@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-05-15T00:41:39",
+    "model": "claude-sonnet-4-6",
+    "passed_total": 15,
+    "check_total": 15,
+    "cases": [
+      {
+        "id": "case-1-mode-routing",
+        "passed": 7,
+        "total": 7,
+        "failures": [],
+        "usage": {
+          "input_tokens": 16,
+          "output_tokens": 395,
+          "cache_creation_input_tokens": 2058,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 7.69
+      },
+      {
+        "id": "case-2-add-required-fields",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 623,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2058
+        },
+        "elapsed_seconds": 10.93
+      },
+      {
+        "id": "case-3-radar-tiering",
+        "passed": 3,
+        "total": 3,
+        "failures": [],
+        "usage": {
+          "input_tokens": 19,
+          "output_tokens": 835,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2058
+        },
+        "elapsed_seconds": 14.7
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-05-15T00:41:39",
+    "model": "claude-sonnet-4-6",
+    "passed_total": 15,
+    "check_total": 15,
+    "cases": [
+      {
+        "id": "case-1-mode-routing",
+        "passed": 7,
+        "total": 7,
+        "failures": [],
+        "usage": {
+          "input_tokens": 16,
+          "output_tokens": 395,
+          "cache_creation_input_tokens": 2058,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 7.69
+      },
+      {
+        "id": "case-2-add-required-fields",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 623,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2058
+        },
+        "elapsed_seconds": 10.93
+      },
+      {
+        "id": "case-3-radar-tiering",
+        "passed": 3,
+        "total": 3,
+        "failures": [],
+        "usage": {
+          "input_tokens": 19,
+          "output_tokens": 835,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 2058
+        },
+        "elapsed_seconds": 14.7
+      }
+    ]
+  }
+}

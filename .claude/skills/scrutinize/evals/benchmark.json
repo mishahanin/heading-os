@@ -1,0 +1,191 @@
+{
+  "last_run": {
+    "timestamp": "2026-05-27T17:19:34",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 69,
+    "check_total": 73,
+    "cases": [
+      {
+        "id": "case-1-viia-structure",
+        "passed": 6,
+        "total": 7,
+        "failures": [
+          {
+            "check": "must_mention['Improve']",
+            "passed": false,
+            "detail": "missing 'Improve'"
+          }
+        ],
+        "usage": {
+          "input_tokens": 23,
+          "output_tokens": 1266,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 6509
+        },
+        "elapsed_seconds": 16.37
+      },
+      {
+        "id": "case-2-severity-tags",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 529,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 6509
+        },
+        "elapsed_seconds": 7.34
+      },
+      {
+        "id": "case-3-batched-approval",
+        "passed": 4,
+        "total": 5,
+        "failures": [
+          {
+            "check": "must_mention['blocks']",
+            "passed": false,
+            "detail": "missing 'blocks'"
+          }
+        ],
+        "usage": {
+          "input_tokens": 27,
+          "output_tokens": 353,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 6509
+        },
+        "elapsed_seconds": 5.01
+      },
+      {
+        "id": "case-4-disprove-step",
+        "passed": 14,
+        "total": 14,
+        "failures": [],
+        "usage": {
+          "input_tokens": 32,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 6509
+        },
+        "elapsed_seconds": 23.88
+      },
+      {
+        "id": "case-5-confidence-score",
+        "passed": 10,
+        "total": 11,
+        "failures": [
+          {
+            "check": "max_words<=600",
+            "passed": false,
+            "detail": "got 984"
+          }
+        ],
+        "usage": {
+          "input_tokens": 27,
+          "output_tokens": 1875,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 6509
+        },
+        "elapsed_seconds": 23.22
+      },
+      {
+        "id": "case-6-flag-as-fp",
+        "passed": 11,
+        "total": 11,
+        "failures": [],
+        "usage": {
+          "input_tokens": 29,
+          "output_tokens": 862,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 6509
+        },
+        "elapsed_seconds": 10.3
+      },
+      {
+        "id": "case-7-trajectory-target",
+        "passed": 9,
+        "total": 10,
+        "failures": [
+          {
+            "check": "must_mention['tool call']",
+            "passed": false,
+            "detail": "missing 'tool call'"
+          }
+        ],
+        "usage": {
+          "input_tokens": 31,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 6509
+        },
+        "elapsed_seconds": 23.15
+      },
+      {
+        "id": "case-8-deterministic-audit",
+        "passed": 9,
+        "total": 9,
+        "failures": [],
+        "usage": {
+          "input_tokens": 32,
+          "output_tokens": 620,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 6509
+        },
+        "elapsed_seconds": 9.54
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-05-15T00:48:16",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 17,
+    "check_total": 18,
+    "cases": [
+      {
+        "id": "case-1-viia-structure",
+        "passed": 7,
+        "total": 7,
+        "failures": [],
+        "usage": {
+          "input_tokens": 4071,
+          "output_tokens": 1128,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 14.3
+      },
+      {
+        "id": "case-2-severity-tags",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 4068,
+          "output_tokens": 458,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.91
+      },
+      {
+        "id": "case-3-batched-approval",
+        "passed": 4,
+        "total": 5,
+        "failures": [
+          {
+            "check": "must_mention['blocks']",
+            "passed": false,
+            "detail": "missing 'blocks'"
+          }
+        ],
+        "usage": {
+          "input_tokens": 4075,
+          "output_tokens": 331,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.07
+      }
+    ]
+  }
+}

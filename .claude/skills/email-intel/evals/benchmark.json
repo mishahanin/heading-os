@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-05-15T00:42:17",
+    "model": "claude-sonnet-4-6",
+    "passed_total": 21,
+    "check_total": 21,
+    "cases": [
+      {
+        "id": "case-1-category-schema",
+        "passed": 8,
+        "total": 8,
+        "failures": [],
+        "usage": {
+          "input_tokens": 30,
+          "output_tokens": 1037,
+          "cache_creation_input_tokens": 3431,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 19.86
+      },
+      {
+        "id": "case-2-approval-gate",
+        "passed": 7,
+        "total": 7,
+        "failures": [],
+        "usage": {
+          "input_tokens": 31,
+          "output_tokens": 307,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 3431
+        },
+        "elapsed_seconds": 8.65
+      },
+      {
+        "id": "case-3-no-spam-greeting",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 19,
+          "output_tokens": 307,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 3431
+        },
+        "elapsed_seconds": 8.89
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-05-15T00:42:17",
+    "model": "claude-sonnet-4-6",
+    "passed_total": 21,
+    "check_total": 21,
+    "cases": [
+      {
+        "id": "case-1-category-schema",
+        "passed": 8,
+        "total": 8,
+        "failures": [],
+        "usage": {
+          "input_tokens": 30,
+          "output_tokens": 1037,
+          "cache_creation_input_tokens": 3431,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 19.86
+      },
+      {
+        "id": "case-2-approval-gate",
+        "passed": 7,
+        "total": 7,
+        "failures": [],
+        "usage": {
+          "input_tokens": 31,
+          "output_tokens": 307,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 3431
+        },
+        "elapsed_seconds": 8.65
+      },
+      {
+        "id": "case-3-no-spam-greeting",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 19,
+          "output_tokens": 307,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 3431
+        },
+        "elapsed_seconds": 8.89
+      }
+    ]
+  }
+}

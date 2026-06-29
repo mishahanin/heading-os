@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emergency Procedures</title>
+<style>
+  /* 31C documentation — LIGHT theme.
+     Mirrors the token names of the former dark theme so the shared HTML shell in
+     scripts/regenerate-docs-html.py renders unchanged; only the values differ.
+     Palette matches the approved light setup-guide builder (palatinate accent on
+     white, orange signature reserved for hero corner). */
+  :root {
+    --bg-primary: #f4f6fb;
+    --bg-secondary: #eef2f9;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f4f7fc;
+    --bg-code: #f6f8fc;
+    --border-color: #e3e8f2;
+    --border-strong: #ccd5e6;
+    --text-primary: #1c2433;
+    --text-secondary: #475067;
+    --text-muted: #79839a;
+    --accent-blue: #2456d6;
+    --accent-deep: #163d9e;
+    --accent-purple: #6d3fc4;
+    --accent-cyan: #0e7a96;
+    --accent-green: #157a4a;
+    --accent-amber: #9a6a00;
+    --accent-orange: #d9772b;
+    --accent-red: #c0392b;
+    --gradient-header: linear-gradient(135deg, #2456d6 0%, #6d3fc4 100%);
+    --gradient-subtle: linear-gradient(135deg, rgba(36,86,214,0.06) 0%, rgba(109,63,196,0.06) 100%);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 4px 20px rgba(20,30,60,0.08);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'GT Standard', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.7;
+    padding: 2rem;
+  }
+
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .header {
+    position: relative;
+    background: var(--gradient-header);
+    border-radius: var(--radius);
+    padding: 3rem 2.5rem;
+    margin-bottom: 2rem;
+    text-align: center;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .header::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 52px;
+    height: 60px;
+    background: var(--accent-orange);
+  }
+
+  .header h1 {
+    font-size: 2.2rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.02em;
+  }
+
+  .header p {
+    color: rgba(255,255,255,0.9);
+    font-size: 1.1rem;
+  }
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-top: 3px solid var(--accent-blue);
+    border-radius: var(--radius);
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+    box-shadow: var(--shadow);
+  }
+
+  .card h2 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-bottom: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text-primary);
+  }
+
+  .card h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--accent-cyan);
+    margin: 1.5rem 0 0.8rem 0;
+  }
+
+  .card h3:first-of-type {
+    margin-top: 0.5rem;
+  }
+
+  .card > p {
+    color: var(--text-secondary);
+    margin-bottom: 0.8rem;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .badge-blue { background: rgba(36,86,214,0.12); color: var(--accent-blue); }
+  .badge-purple { background: rgba(109,63,196,0.12); color: var(--accent-purple); }
+  .badge-green { background: rgba(21,122,74,0.12); color: var(--accent-green); }
+  .badge-amber { background: rgba(154,106,0,0.12); color: var(--accent-amber); }
+  .badge-red { background: rgba(192,57,43,0.12); color: var(--accent-red); }
+
+  .section-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+  }
+
+  .icon-setup { background: rgba(36,86,214,0.12); color: var(--accent-blue); }
+  .icon-clone { background: rgba(14,122,150,0.12); color: var(--accent-cyan); }
+  .icon-key { background: rgba(154,106,0,0.12); color: var(--accent-amber); }
+  .icon-start { background: rgba(21,122,74,0.12); color: var(--accent-green); }
+  .icon-daily { background: rgba(109,63,196,0.12); color: var(--accent-purple); }
+  .icon-sync { background: rgba(14,122,150,0.12); color: var(--accent-cyan); }
+  .icon-rules { background: rgba(192,57,43,0.12); color: var(--accent-red); }
+  .icon-help { background: rgba(154,106,0,0.12); color: var(--accent-amber); }
+  .icon-arch { background: rgba(36,86,214,0.12); color: var(--accent-blue); }
+  .icon-skills { background: rgba(109,63,196,0.12); color: var(--accent-purple); }
+
+  ol, ul {
+    padding-left: 1.5rem;
+    margin: 0.5rem 0;
+  }
+
+  li {
+    margin-bottom: 0.4rem;
+    color: var(--text-secondary);
+  }
+
+  li strong {
+    color: var(--text-primary);
+  }
+
+  code {
+    background: rgba(36,86,214,0.08);
+    color: var(--accent-deep);
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.88em;
+  }
+
+  pre {
+    background: var(--bg-code);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    margin: 0.8rem 0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+  }
+
+  pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.8rem 0;
+    font-size: 0.92rem;
+  }
+
+  th {
+    text-align: left;
+    padding: 0.7rem 1rem;
+    background: rgba(36,86,214,0.07);
+    color: var(--accent-blue);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border-strong);
+  }
+
+  td {
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-secondary);
+  }
+
+  td:first-child {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  tr:nth-child(even) td {
+    background: rgba(36,86,214,0.025);
+  }
+
+  tr:hover td {
+    background: rgba(36,86,214,0.05);
+  }
+
+  .skill-category {
+    margin-top: 1.5rem;
+  }
+
+  .skill-category:first-of-type {
+    margin-top: 0.5rem;
+  }
+
+  .skill-category h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .skill-category .cat-badge {
+    display: inline-block;
+    padding: 0.12rem 0.55rem;
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .cat-crm { background: rgba(21,122,74,0.12); color: var(--accent-green); }
+  .cat-intel { background: rgba(36,86,214,0.12); color: var(--accent-blue); }
+  .cat-meeting { background: rgba(109,63,196,0.12); color: var(--accent-purple); }
+  .cat-comms { background: rgba(14,122,150,0.12); color: var(--accent-cyan); }
+  .cat-strategy { background: rgba(154,106,0,0.12); color: var(--accent-amber); }
+  .cat-knowledge { background: rgba(109,63,196,0.12); color: var(--accent-purple); }
+  .cat-negotiation { background: rgba(192,57,43,0.12); color: var(--accent-red); }
+  .cat-workspace { background: rgba(36,86,214,0.12); color: var(--accent-blue); }
+  .cat-media { background: rgba(14,122,150,0.12); color: var(--accent-cyan); }
+  .cat-ceo { background: rgba(154,106,0,0.12); color: var(--accent-amber); }
+
+  .step-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--gradient-header);
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-right: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .step {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 0.8rem 1rem;
+    background: var(--gradient-subtle);
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--accent-blue);
+  }
+
+  .step-content {
+    flex: 1;
+  }
+
+  .step-content p {
+    margin-bottom: 0.3rem;
+  }
+
+  .callout {
+    background: rgba(154,106,0,0.07);
+    border: 1px solid rgba(154,106,0,0.25);
+    border-left-width: 4px;
+    border-radius: var(--radius-sm);
+    padding: 1rem 1.2rem;
+    margin: 1rem 0;
+    color: #7a5400;
+    font-size: 0.92rem;
+  }
+
+  .callout-red {
+    background: rgba(192,57,43,0.06);
+    border-color: rgba(192,57,43,0.3);
+    color: #9a2c20;
+  }
+
+  .callout-green {
+    background: rgba(21,122,74,0.06);
+    border-color: rgba(21,122,74,0.3);
+    color: #0f5d38;
+  }
+
+  .callout-blue {
+    background: rgba(36,86,214,0.06);
+    border-color: rgba(36,86,214,0.3);
+    color: var(--accent-deep);
+  }
+
+  .architecture-box {
+    background: var(--bg-code);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 1.5rem;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.85rem;
+    line-height: 1.8;
+    color: var(--text-secondary);
+    text-align: center;
+    margin: 1rem 0;
+  }
+
+  .architecture-box .highlight {
+    color: var(--accent-blue);
+    font-weight: 600;
+  }
+
+  .architecture-box .arrow {
+    color: var(--accent-purple);
+  }
+
+  .architecture-box .label {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+  }
+
+  .platform-section {
+    margin-bottom: 1rem;
+  }
+
+  .platform-label {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+  }
+
+  .platform-win { background: rgba(36,86,214,0.12); color: var(--accent-blue); }
+  .platform-mac { background: rgba(109,63,196,0.12); color: var(--accent-purple); }
+
+  .footer {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+
+  @media print {
+    body { background: #fff; color: #1a1a1a; padding: 1rem; }
+    .card { border: 1px solid #ddd; box-shadow: none; background: #fff; }
+    .header { background: #2456d6; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    .header::before { background: #d9772b; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    pre { background: #f5f5f7; border: 1px solid #ddd; color: #222; }
+    code { background: #eef0ff; color: #2456d6; }
+    th { background: #eef2fc; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    td, li { color: #444; }
+    tr:nth-child(even) td { background: #f8f9fb; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    .cat-badge, .platform-label, .badge { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  }
+
+  @media (max-width: 640px) {
+    body { padding: 1rem; }
+    .header { padding: 2rem 1.5rem; }
+    .header h1 { font-size: 1.6rem; }
+    .card { padding: 1.2rem; }
+    table { font-size: 0.82rem; }
+    th, td { padding: 0.4rem 0.6rem; }
+  }
+
+
+/* Regen-specific overrides for generic markdown-rendered content */
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.doc-header {
+  padding: 3rem 2.5rem 2rem;
+  border-radius: var(--radius);
+  background: var(--gradient-subtle);
+  border: 1px solid var(--border-color);
+  margin-bottom: 2rem;
+}
+.doc-header h1 {
+  font-size: 2.25rem;
+  margin: 0;
+  background: var(--gradient-header);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.doc-body {
+  padding: 2rem 2.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+}
+.doc-body h1, .doc-body h2, .doc-body h3, .doc-body h4 {
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  color: var(--text-primary);
+}
+.doc-body h1:first-child { margin-top: 0; }
+.doc-body h1 { font-size: 1.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; }
+.doc-body h2 { font-size: 1.4rem; color: var(--accent-blue); }
+.doc-body h3 { font-size: 1.15rem; color: var(--accent-cyan); }
+.doc-body h4 { font-size: 1rem; color: var(--accent-purple); }
+.doc-body p, .doc-body li { line-height: 1.7; }
+.doc-body p { margin: 0.75rem 0; }
+.doc-body ul, .doc-body ol { margin: 0.75rem 0 0.75rem 1.5rem; }
+.doc-body a { color: var(--accent-blue); text-decoration: none; }
+.doc-body a:hover { color: var(--accent-cyan); text-decoration: underline; }
+.doc-body code {
+  background: var(--bg-secondary);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 0.9em;
+  color: var(--accent-deep);
+}
+.doc-body pre {
+  background: var(--bg-secondary);
+  padding: 1rem 1.25rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+.doc-body pre code {
+  background: transparent;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+.doc-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.doc-body th, .doc-body td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+.doc-body th {
+  background: var(--bg-card-hover);
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+.doc-body tr:last-child td { border-bottom: none; }
+.doc-body blockquote {
+  border-left: 3px solid var(--accent-blue);
+  padding: 0.5rem 1rem;
+  margin: 1rem 0;
+  background: var(--gradient-subtle);
+  color: var(--text-secondary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.doc-body hr {
+  border: none;
+  height: 1px;
+  background: var(--border-color);
+  margin: 2rem 0;
+}
+.doc-footer {
+  text-align: center;
+  padding: 2rem 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+/* Syntax highlighting (codehilite) -- minimal readable palette */
+.codehilite .k, .codehilite .kn { color: var(--accent-purple); }
+.codehilite .s, .codehilite .s1, .codehilite .s2 { color: var(--accent-green); }
+.codehilite .c, .codehilite .c1 { color: var(--text-muted); font-style: italic; }
+.codehilite .nb { color: var(--accent-cyan); }
+.codehilite .mi, .codehilite .mf { color: var(--accent-amber); }
+</style>
+</head>
+<body>
+<div class="container">
+<header class="doc-header">
+<h1>Emergency Procedures</h1>
+<p style="color: var(--text-secondary); margin-top: 0.5rem;">&gt; What to do when the normal sync/push/update chain is broken. For routine operations, see GETTING-STARTED.md (execs) or CEO-ADMIN-GUIDE.md (CEO).</p>
+</header>
+<main class="doc-body">
+<!-- version: 1.2.0 | last-updated: 2026-06-26 -->
+
+<blockquote>
+<p>What to do when the normal sync/push/update chain is broken. For routine operations, see <code>GETTING-STARTED.md</code> (execs) or <code>CEO-ADMIN-GUIDE.md</code> (CEO).</p>
+</blockquote>
+<hr />
+<h2 id="scenario-1-corporate-repo-inaccessible-github-outage-credentials-revoked-repo-deleted">Scenario 1: Corporate repo inaccessible (GitHub outage, credentials revoked, repo deleted)</h2>
+<p><strong>Exec-side symptoms:</strong> <code>/sync</code> (or a manual <code>git pull</code> on your clones) starts failing with <code>git pull</code> / auth errors. Your engine clone and <code>corporate/</code> content stop receiving updates. (There is no scheduled sync job anymore &ndash; sync is the manual <code>git pull</code> wrapped by <code>/sync</code>.)</p>
+<p><strong>What you keep:</strong>
+- Everything in <code>personal/</code> (your CRM, knowledge notes, local plans, outputs)
+- The last-pulled copy of <code>corporate/</code> content from before the outage (your local clone)
+- All <code>.claude/skills/</code> and <code>.claude/rules/</code> (these live in your engine clone, so you hold the last good version)</p>
+<p><strong>What to do:</strong></p>
+<ol>
+<li>Don&rsquo;t panic. Your workspace remains fully operational on the last pulled state. Only new CEO-pushed updates will be missing.</li>
+<li>Stop retrying <code>/sync</code> &ndash; it will keep erroring until access is restored. There is no scheduled job to disable; nothing is alarming in the background.</li>
+<li>Contact CEO via the non-workspace channel (Telegram, personal phone). Do not assume Slack/email works if CEO infra is implicated.</li>
+<li>Wait for CEO confirmation of restoration, then run <code>/sync</code> once to catch up.</li>
+</ol>
+<p><strong>Do NOT:</strong>
+- Try to push your own changes &ldquo;to help.&rdquo; Only the CEO publishes to the corporate repo.
+- Clone a replacement copy from a third party. The canonical repo URL is set by the CEO; a wrong URL silently corrupts the trust chain.
+- Modify files inside <code>corporate/</code>. They will be overwritten the moment sync resumes.</p>
+<hr />
+<h2 id="scenario-2-ceo-workspace-unavailable-ceo-machine-compromised-corrupted-offline-for-extended-period">Scenario 2: CEO workspace unavailable (CEO machine compromised, corrupted, offline for extended period)</h2>
+<p><strong>Fleet-side symptoms:</strong> BUILD.json stops advancing. No new pushes from CEO for &gt;1 week despite normal CEO activity.</p>
+<p><strong>Exec autonomy during outage:</strong>
+- Continue operating from local <code>corporate/</code> snapshot. All skills work.
+- Personal CRM, knowledge notes, local outputs all function normally.
+- <code>/backup</code> still works (<code>push-all.py</code> pushes your data repo to your own GitHub).
+- <code>/sync</code> still works for the data-up backup (your CRM rides your private <code>heading-os-data-{slug}</code> repo).</p>
+<p><strong>Bridge mode:</strong> If the CEO designates a Deputy Admin in advance (via <code>config/admin.json</code> role field), the deputy can:
+- Run <code>/publish-corporate</code> from their own workspace (requires they hold GitHub push rights)
+- Issue temporary policy updates via an emergency branch, clearly marked <code>emergency-{date}</code>
+- Never override classification boundaries; all deputy pushes must still pass <code>sanitize-check.py</code></p>
+<p><strong>Do NOT:</strong>
+- Elect an unofficial deputy. Admin authority flows from <code>config/admin.json</code>, not from group consensus.
+- Push directly to the corporate repo without explicit admin role.
+- Attempt credential recovery on the CEO&rsquo;s behalf.</p>
+<hr />
+<h2 id="scenario-3-credentials-leaked-api-key-session-token-or-password-exposed-in-a-commit">Scenario 3: Credentials leaked (API key, session token, or password exposed in a commit)</h2>
+<p><strong>Who this applies to:</strong> CEO and every exec equally.</p>
+<p><strong>Immediate action (within 30 minutes of discovery):</strong></p>
+<ol>
+<li><strong>Rotate the credential first, scrub history second.</strong> In that order.
+   - API key: regenerate in the provider&rsquo;s console, update <code>.env</code> locally, confirm scripts work
+   - Password: change in the source-of-truth system (password manager + provider), confirm access
+   - OAuth/session token: invalidate via provider admin panel, re-auth</li>
+<li>Notify CEO via Telegram (non-compromised channel). Include: which credential, where it leaked, rotation status.</li>
+<li>Only after rotation: remove from git history. For a single commit:
+   <div class="highlight"><pre><span></span><code>git reset --hard HEAD~1  # if local only and no one has pulled
+</code></pre></div>
+   For already-pushed commits, use <code>git filter-repo</code> with the expression list per <code>.claude/rules/security.md</code>.</li>
+<li>Force-push: <code>git push --force origin main</code> (CEO approves this explicitly for the affected repo only).</li>
+<li>Document the incident in <code>outputs/operations/security/YYYY-MM-DD-{slug}.md</code>.</li>
+</ol>
+<p><strong>Post-incident:</strong>
+- Add the leaked term to <code>.secrets.baseline</code> known patterns to prevent recurrence.
+- Review commit history for adjacent exposures (often one leak means others).</p>
+<hr />
+<h2 id="scenario-4-sentinel-schedule-not-firing">Scenario 4: Sentinel schedule not firing</h2>
+<blockquote>
+<p>The hourly <strong>sync</strong> schedule was retired &ndash; code/content sync is now a manual <code>git pull</code> (wrapped by <code>/sync</code>), so there is no sync task to fail. The only scheduled task is the 15-min Sentinel comms monitor. This scenario covers Sentinel.</p>
+</blockquote>
+<p><strong>Windows symptoms:</strong> Task Scheduler shows <code>31C-Sentinel-{slug}</code> with <code>Last Run Result: 0x1</code> or <code>0x8007010B</code>. Logs at <code>.sync/logs/sentinel-check-task.log</code> empty or stale.</p>
+<p><strong>macOS symptoms:</strong> <code>launchctl list | grep 31c</code> shows the Sentinel agent, but <code>.sync/logs/</code> has no recent entries.</p>
+<p><strong>Recovery:</strong></p>
+<ol>
+<li>Manually run <code>/sentinel</code> (or <code>python scripts/sentinel.py --check</code>) once and confirm it completes end-to-end.</li>
+<li>Check the scheduled task command matches the current Python interpreter path:
+   - Windows: <code>schtasks /Query /TN "31C-Sentinel-{slug}" /V /FO LIST</code> and look at <code>Task To Run</code>
+   - macOS: <code>cat ~/Library/LaunchAgents/io.31c.sentinel.{slug}.plist</code></li>
+<li>If the path is stale (e.g., after Python upgrade), reinstall via <code>scripts/setup.py --reinstall-schedule</code>.</li>
+<li>If still failing, run <code>python scripts/utils/schedule.py</code> directly to see the diagnostic output.</li>
+</ol>
+<blockquote>
+<p>Reminder: to refresh corporate content or engine code, just run <code>/sync</code> (a plain <code>git pull</code>) &ndash; there is no sync schedule to repair.</p>
+</blockquote>
+<hr />
+<h2 id="scenario-5-secret-leaked-and-committed-already-on-github">Scenario 5: Secret leaked and committed (already on GitHub)</h2>
+<p>Do both:</p>
+<ol>
+<li>Execute Scenario 3 above (rotate + scrub + force-push).</li>
+<li><strong>Assume the secret is compromised.</strong> GitHub caches, forks, and archive services (archive.org) may have the exposed version indefinitely. Scrubbing history from the repo does not remove it from those surfaces.</li>
+<li>Monitor the credential&rsquo;s provider for anomalous usage for 30 days.</li>
+<li>If the credential grants write access to customer data, treat as a security incident per <code>docs/security/SECURITY-CONSTITUTION.md</code> and notify affected parties.</li>
+</ol>
+<hr />
+<h2 id="scenario-6-bridge-daemon-dead-dashboard-stale-sync-pill-red">Scenario 6: Bridge daemon dead (dashboard stale, sync-pill red)</h2>
+<p>Symptoms: browser dashboard at <code>http://127.0.0.1:&lt;port&gt;/</code> is unreachable, sync-pill is red, or <code>/bridge-health</code> reports <code>stale</code>/<code>missing</code> for your workspace.</p>
+<ol>
+<li>Probe the local daemon:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/bridge-daemon.py<span class="w"> </span>--health
+</code></pre></div>
+<ul>
+<li>Exit 0: daemon reachable, the dashboard pinned to a stale tab is the only issue - reload the browser.</li>
+<li>Exit 1: daemon dead but <code>.daemon-state/heartbeat.json</code> survived; the script prints the last-known state from disk.</li>
+<li>Exit 2: daemon never started, no on-disk state either.</li>
+</ul>
+<ol start="2">
+<li>
+<p>Restart the daemon:
+   - <strong>Windows:</strong> <code>&amp; scripts\launch-bridge-daemon.bat</code>
+   - <strong>macOS:</strong> <code>launchctl kickstart -k gui/$UID/com.31c.bridge-daemon</code></p>
+</li>
+<li>
+<p>If restart fails repeatedly, tail the log to find the crash cause:</p>
+</li>
+</ol>
+<div class="highlight"><pre><span></span><code>tail<span class="w"> </span>-100<span class="w"> </span>.daemon-state/bridge.log
+</code></pre></div>
+<ol start="4">
+<li>If the log shows <code>config snapshot failed</code> or <code>config reconcile failed</code> warnings, the <code>corporate/daemon/config.yaml</code> may be malformed. Roll back:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/bridge-daemon.py<span class="w"> </span>--revert-config
+<span class="c1"># then restart</span>
+</code></pre></div>
+<ol start="5">
+<li>If none of the above clears it, escalate to the CEO via the contact hierarchy below.</li>
+</ol>
+<hr />
+<h2 id="scenario-7-auth-token-lost-or-compromised-on-bridge-daemon">Scenario 7: Auth token lost or compromised on bridge daemon</h2>
+<p>Symptoms: dashboard returns 401 on every page, or you suspect another local process read <code>.daemon-state/token</code>.</p>
+<ol>
+<li>Rotate the token immediately:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/bridge-daemon.py<span class="w"> </span>--rotate-token
+</code></pre></div>
+<p>This rewrites <code>.daemon-state/token</code> with a fresh random nonce. <strong>The running daemon still holds the OLD token in memory</strong> - you must restart for the new token to take effect.</p>
+<ol start="2">
+<li>
+<p>Restart the daemon per Scenario 6 step 2.</p>
+</li>
+<li>
+<p>Reload the dashboard. The browser&rsquo;s <code>/_bootstrap</code> call refreshes its in-memory bearer token from the new file.</p>
+</li>
+<li>
+<p>If the leak was via a committed <code>.env</code> or git history, treat as Scenario 3 (general credential leak) - rotate every adjacent credential on the same machine.</p>
+</li>
+</ol>
+<hr />
+<h2 id="scenario-8-bad-corporatedaemonconfigyaml-push-breaks-the-whole-fleet">Scenario 8: Bad <code>corporate/daemon/config.yaml</code> push breaks the whole fleet</h2>
+<p>Symptoms: after a CEO <code>/push-updates</code>, multiple execs report <code>error</code> or daemons in crash-loop. <code>daemon-fleet-health.py</code> shows red rows across the fleet.</p>
+<p>CEO-side recovery:</p>
+<ol>
+<li>Revert the corporate repo:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>../31c-corporate
+git<span class="w"> </span>log<span class="w"> </span>--<span class="w"> </span>daemon/config.yaml<span class="w">  </span><span class="c1"># find the last-good commit</span>
+git<span class="w"> </span>revert<span class="w"> </span>&lt;bad-commit-hash&gt;
+git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>main
+</code></pre></div>
+<ol start="2">
+<li>
+<p>Each exec&rsquo;s daemon will pick up the revert on its next 60-second reconciliation tick (Phase B reconciliation tick from spec 3.6). Worst case: until the exec&rsquo;s next manual <code>git pull</code> (<code>/sync</code>) brings the reverted config down, plus 60s for the daemon tick.</p>
+</li>
+<li>
+<p>For execs that need immediate recovery (before next sync), they can run:</p>
+</li>
+</ol>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/bridge-daemon.py<span class="w"> </span>--revert-config
+</code></pre></div>
+<p>This restores the most-recent prior snapshot from <code>.daemon-state/config-history/</code> to <code>.daemon-state/config.yaml</code> (per-user override). Daemon must be restarted to apply.</p>
+<ol start="4">
+<li>
+<p>Verify recovery via <code>python scripts/daemon-fleet-health.py</code> - fleet should return to all-green within 5 minutes of step 1.</p>
+</li>
+<li>
+<p>Do NOT push another corporate config change until the root cause is identified. Re-pushing the bad config (even by accident) restarts the crisis.</p>
+</li>
+</ol>
+<hr />
+<h2 id="contact-hierarchy-for-emergencies">Contact Hierarchy for Emergencies</h2>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th>When to use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Telegram direct to CEO</td>
+<td>Primary escalation path for all above scenarios</td>
+</tr>
+<tr>
+<td>Personal phone (SMS/call)</td>
+<td>If Telegram is part of the compromise</td>
+</tr>
+<tr>
+<td>Exec-to-exec via Telegram group</td>
+<td>For coordinating exec-side response during extended CEO outage</td>
+</tr>
+<tr>
+<td>Email to misha.hanin@31c.io</td>
+<td>Last resort; assume monitored and non-urgent</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="do-not-list-applies-to-all-scenarios">Do-Not List (applies to all scenarios)</h2>
+<ul>
+<li>Never post credentials, even partially, in any chat channel or commit.</li>
+<li>Never share screenshots of <code>.env</code> or <code>.sessions/</code> contents.</li>
+<li>Never attempt to &ldquo;just quickly&rdquo; bypass a safety gate (pre-commit hook, classification check, sanitize-check, VPN pre-flight) without CEO approval.</li>
+<li>Never modify <code>corporate/</code> on an exec workspace.</li>
+<li>Never push to the corporate repo from an exec workspace.</li>
+<li>Never disable the sync schedule permanently - only as a temporary response to a known outage.</li>
+</ul>
+<p>For routine workflow: <code>GETTING-STARTED.md</code>. For admin procedures: <code>CEO-ADMIN-GUIDE.md</code>. For deeper security policy: <code>docs/security/SECURITY-CONSTITUTION.md</code>.</p>
+</main>
+<footer class="doc-footer">
+Generated from <code>EMERGENCY-PROCEDURES.md</code> via <code>scripts/regenerate-docs-html.py</code>
+</footer>
+</div>
+</body>
+</html>

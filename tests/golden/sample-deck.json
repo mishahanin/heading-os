@@ -1,0 +1,20 @@
+{
+  "section_count": 14,
+  "description": "Structural baseline for sample-deck.md. 7 layouts x 2 modes.",
+  "sections": [
+    {"index": 0, "classes": ["title", "dark"], "has_footer": false, "has_page_number": false},
+    {"index": 1, "classes": ["title", "light"], "has_footer": false, "has_page_number": false},
+    {"index": 2, "classes": ["content", "dark"], "has_footer": true, "has_page_number": true},
+    {"index": 3, "classes": ["content", "light"], "has_footer": true, "has_page_number": true},
+    {"index": 4, "classes": ["two-column", "dark"], "has_footer": true, "has_page_number": true},
+    {"index": 5, "classes": ["two-column", "light"], "has_footer": true, "has_page_number": true},
+    {"index": 6, "classes": ["quote", "dark"], "has_footer": true, "has_page_number": true},
+    {"index": 7, "classes": ["quote", "light"], "has_footer": true, "has_page_number": true},
+    {"index": 8, "classes": ["stats", "dark"], "has_footer": true, "has_page_number": true},
+    {"index": 9, "classes": ["stats", "light"], "has_footer": true, "has_page_number": true},
+    {"index": 10, "classes": ["section-break"], "has_footer": false, "has_page_number": false},
+    {"index": 11, "classes": ["section-break"], "has_footer": false, "has_page_number": false},
+    {"index": 12, "classes": ["closing", "dark"], "has_footer": false, "has_page_number": false},
+    {"index": 13, "classes": ["closing", "light"], "has_footer": false, "has_page_number": false}
+  ]
+}

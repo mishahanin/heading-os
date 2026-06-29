@@ -1,0 +1,227 @@
+# Setup wizard question bank (authoritative)
+# Schema: see docs/superpowers/specs/2026-04-24-setup-wizard-design.md §4
+# IDs are immutable once shipped. Adding questions is safe; removing is not.
+
+# ──────────────────────────────────────────────────────────────
+# Public audience (pristine HEADING OS clones)
+# ──────────────────────────────────────────────────────────────
+
+- id: company_full_name
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "What's your company's full legal name?"
+  example: "31 Concept (or Acme Corporation, Stripe, Inc.)"
+  target:
+    placeholder: "{COMPANY_FULL}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: company_short_name
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "Your company's short name (one or two words you use in conversation)."
+  example: "31 Concept (or Acme, Stripe, OpenAI)"
+  target:
+    placeholder: "{COMPANY}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: company_domain
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "Your company's email/web domain."
+  example: "31c.io (or acme.com, stripe.com)"
+  target:
+    placeholder: "{COMPANY_DOMAIN}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: company_timezone
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "Your primary operating timezone (IANA format)."
+  example: "UTC (or America/New_York, Europe/London, Asia/Singapore)"
+  help: "Find yours at https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+  target:
+    placeholder: "{TIMEZONE}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: company_hq_cities
+  audience: [public]
+  type: list
+  required: false
+  prompt: "Cities where your company has significant presence (1-3, comma-separated)."
+  example: "New York, London, Tokyo"
+  target:
+    placeholders: ["{HQ_CITY_1}", "{HQ_CITY_2}", "{HQ_CITY_3}"]
+    files: ["**/*.md"]
+
+- id: ceo_full_name
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "Your full name (the person using this workspace)."
+  example: "Jane Doe"
+  target:
+    placeholder: "{CEO_NAME}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: ceo_title
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "Your title."
+  example: "Founder & CEO (or Chief Executive, Managing Director)"
+  target:
+    placeholder: "{CEO_TITLE}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: ceo_email
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "Your primary work email."
+  example: "jane@acme.com"
+  target:
+    placeholder: "{CEO_EMAIL}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: product_name
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "Your flagship product or platform name."
+  example: "ODUN.ONE (or Stripe, AcmePlatform)"
+  target:
+    placeholder: "{PRODUCT}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: product_tagline
+  audience: [public]
+  type: placeholder
+  required: false
+  prompt: "Your product tagline (short, memorable)."
+  example: "From Deep Packet Inspection to Deep Packet Intelligence"
+  target:
+    placeholder: "{PRODUCT_TAGLINE}"
+    files: ["**/*.md", "config.yaml"]
+
+- id: product_modules
+  audience: [public]
+  type: list
+  required: false
+  prompt: "Your product's main modules or product lines (up to 4, comma-separated)."
+  example: "Core, Edge, Gateway, Analytics"
+  target:
+    placeholders: ["{MODULE_1}", "{MODULE_2}", "{MODULE_3}", "{MODULE_4}"]
+    files: ["**/*.md"]
+
+- id: team_name
+  audience: [public]
+  type: placeholder
+  required: true
+  prompt: "What do you call your team? (Tribe, Team, Crew, Squad...)"
+  example: "Tribe (or Team, Crew, Squad)"
+  target:
+    placeholder: "{TEAM_NAME}"
+    files: ["**/*.md"]
+
+- id: core_values
+  audience: [public]
+  type: list
+  required: false
+  prompt: "Your company's core values (3-5, comma-separated)."
+  example: "Proof over PoC, Partnership for Life, Integrity, Deliver Under Pressure, Data Sovereignty"
+  target:
+    placeholders: ["{VALUE_1}", "{VALUE_2}", "{VALUE_3}", "{VALUE_4}", "{VALUE_5}"]
+    files: ["**/*.md"]
+
+- id: ceo_voice
+  audience: [public, exec]
+  type: rich
+  required: true
+  prompt: "In 2-3 sentences: how do you write? Formal or casual? Short or long? Any words or phrases you hate? Any you lean on?"
+  example: "Direct, no fluff. Short sentences. I never use 'synergy' or 'leverage'. I use 'the Tribe' not 'the team'. I write like I talk."
+  help: "I'll expand your answer into a full voice brief. You'll review and approve before anything is saved."
+  target:
+    template: "config/wizard-templates/ceo-voice.md.tmpl"
+    output: "reference/ceo-voice.md"
+    output_exec: "personal/reference/voice.md"
+
+- id: personal_info
+  audience: [public, exec]
+  type: rich
+  required: true
+  prompt: "Tell me about yourself in 2-3 sentences. Background, what you care about, what you're building."
+  example: "30 years in networking. I care about data sovereignty. Building ODUN.ONE because existing DPI tools surveil instead of protect."
+  target:
+    template: "config/wizard-templates/personal-info.md.tmpl"
+    output: "context/personal-info.md"
+    output_exec: "personal/context/personal-info.md"
+
+- id: business_info
+  audience: [public]
+  type: rich
+  required: true
+  prompt: "In 2-3 sentences: what does your company actually do? Who are your customers? What's the one-line pitch?"
+  example: "We build sovereign deep packet intelligence. Our customers are telcos and national cyber agencies. Tagline: DPI+ for nations who want control, not surveillance."
+  target:
+    template: "config/wizard-templates/business-info.md.tmpl"
+    output: "context/business-info.md"
+
+- id: calendar_policy
+  audience: [public, exec]
+  type: rich
+  required: false
+  prompt: "Any scheduling rules? (Default meeting length, preferred hours, timezones, default video-call link, etc.)"
+  example: "30-min default, 15-min buffer, prefer 09:00-17:00 local, no meetings Friday afternoon."
+  target:
+    template: "config/wizard-templates/calendar-policy.md.tmpl"
+    output: "reference/calendar-policy.md"
+    output_exec: "personal/reference/calendar-policy.md"
+
+- id: anthropic_api_key
+  audience: [public, exec]
+  type: secret
+  required: true
+  prompt: "Paste your Anthropic API key. You can get one by signing in at <https://console.anthropic.com/> and visiting Settings -> API Keys."
+  example: "(starts with the standard Anthropic key prefix; yours will be longer)"
+  help: "Stored in .env on your machine only. Never committed to git, never logged."
+  target:
+    env_var: "ANTHROPIC_API_KEY"
+
+# ──────────────────────────────────────────────────────────────
+# Exec audience (31C exec workspaces - personal layer only)
+# Corporate-layer answers arrive via corporate sync.
+# ──────────────────────────────────────────────────────────────
+
+- id: exec_full_name
+  audience: [exec]
+  type: placeholder
+  required: true
+  prompt: "Your full name."
+  example: "Sam Carter"
+  target:
+    placeholder: "{EXEC_NAME}"
+    files: ["personal/**/*.md"]
+
+- id: exec_role
+  audience: [exec]
+  type: placeholder
+  required: true
+  prompt: "Your role at 31C."
+  example: "Chief Scientist (or Chief Operating Officer, VP Sales)"
+  target:
+    placeholder: "{EXEC_ROLE}"
+    files: ["personal/**/*.md"]
+
+- id: exec_email
+  audience: [exec]
+  type: placeholder
+  required: true
+  prompt: "Your 31C email."
+  example: "bob@31c.io"
+  target:
+    placeholder: "{EXEC_EMAIL}"
+    files: ["personal/**/*.md"]

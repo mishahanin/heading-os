@@ -1,0 +1,10 @@
+{
+  "id": "case-1-structure",
+  "description": "Confirms /proposal describes its four-page locked structure (cover, opening + opportunity, solution + proof, commercial + next steps).",
+  "input": "What is the locked structure of a 31C proposal document?",
+  "checks": {
+    "must_mention": ["cover", "solution", "commercial"],
+    "min_words": 80,
+    "hidden_chars_clean": true
+  }
+}

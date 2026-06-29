@@ -1,0 +1,10 @@
+{
+  "id": "case-2-parallel-health",
+  "description": "Confirms /prime mentions parallel health checks (CRM, knowledge, memory, email-intel, threads archive-scan, daemons) rather than describing serial loads.",
+  "input": "List the health checks /prime runs during a session boot.",
+  "checks": {
+    "must_mention": ["CRM", "parallel"],
+    "min_words": 60,
+    "hidden_chars_clean": true
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "case-1-category-schema",
+  "description": "Confirms /email-intel outputs the five-category digest schema (CRM action, task, pipeline update, knowledge capture, relationship signal) when asked for the daily digest format.",
+  "input": "Describe the digest format you would produce for today's email intelligence run. What categories does each conversation get sorted into?",
+  "checks": {
+    "must_mention": ["CRM", "task", "pipeline", "knowledge", "signal"],
+    "must_not_mention": ["I'll need access first"],
+    "min_words": 80,
+    "hidden_chars_clean": true
+  }
+}

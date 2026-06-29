@@ -1,0 +1,12 @@
+{
+  "id": "case-1-sovereign-dpi",
+  "description": "Hard-core 31C theme - sovereign DPI. Tests that the skill stays in Misha's voice on its native subject and avoids banned AI openers.",
+  "input": "Draft a medium-length LinkedIn post about why telco operators in the GCC need sovereign deep packet intelligence rather than foreign-vendor DPI.",
+  "checks": {
+    "must_mention": ["DPI", "sovereign"],
+    "must_not_mention": ["thrilled to announce", "excited to share", "in today's rapidly evolving"],
+    "min_words": 200,
+    "max_words": 450,
+    "hidden_chars_clean": true
+  }
+}

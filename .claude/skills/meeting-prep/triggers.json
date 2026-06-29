@@ -1,0 +1,16 @@
+[
+  { "query": "meeting prep for Sara Okonkwo from Nimbus", "should_trigger": true },
+  { "query": "prepare for my meeting with the ExampleTelco team", "should_trigger": true },
+  { "query": "briefing for the call with this minister", "should_trigger": true },
+  { "query": "get me ready for the partner meeting with PartnerCo", "should_trigger": true },
+  { "query": "prep notes for my sit-down with the investor", "should_trigger": true },
+  { "query": "I'm meeting this prospect tomorrow, prepare me", "should_trigger": true },
+
+  { "query": "prepare for the internal team sync", "should_trigger": false },
+  { "query": "give me a generic market briefing", "should_trigger": false },
+  { "query": "investigate this person's background only", "should_trigger": false },
+  { "query": "show me today's dashboard", "should_trigger": false },
+  { "query": "draft a follow-up after the meeting", "should_trigger": false },
+  { "query": "write a proposal for this deal", "should_trigger": false },
+  { "query": "update the CRM after my call", "should_trigger": false }
+]

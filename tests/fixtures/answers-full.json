@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "audience": "public",
+  "started_at": "2026-04-24T09:00:00+04:00",
+  "last_updated": "2026-04-24T09:15:00+04:00",
+  "applied_at": null,
+  "answers": {
+    "company_full_name": {"value": "Acme Corporation", "status": "answered", "answered_at": "2026-04-24T09:01:00+04:00"},
+    "company_short_name": {"value": "Acme", "status": "answered", "answered_at": "2026-04-24T09:01:30+04:00"},
+    "company_domain": {"value": "acme.com", "status": "answered", "answered_at": "2026-04-24T09:02:00+04:00"},
+    "company_timezone": {"value": "America/New_York", "status": "answered", "answered_at": "2026-04-24T09:02:30+04:00"},
+    "ceo_full_name": {"value": "Jane Doe", "status": "answered", "answered_at": "2026-04-24T09:03:00+04:00"},
+    "ceo_title": {"value": "Founder & CEO", "status": "answered", "answered_at": "2026-04-24T09:03:30+04:00"},
+    "ceo_email": {"value": "jane@acme.com", "status": "answered", "answered_at": "2026-04-24T09:04:00+04:00"},
+    "product_name": {"value": "AcmePlatform", "status": "answered", "answered_at": "2026-04-24T09:04:30+04:00"},
+    "team_name": {"value": "Team", "status": "answered", "answered_at": "2026-04-24T09:05:00+04:00"},
+    "ceo_voice": {
+      "value": "Direct, concise.",
+      "draft": "Jane writes in a direct, concise style with minimal adjectives.",
+      "draft_approved": true,
+      "status": "answered",
+      "answered_at": "2026-04-24T09:06:00+04:00"
+    },
+    "personal_info": {
+      "value": "20 years in SaaS.",
+      "draft": "Jane Doe has 20 years of experience building SaaS products.",
+      "draft_approved": true,
+      "status": "answered",
+      "answered_at": "2026-04-24T09:07:00+04:00"
+    },
+    "business_info": {
+      "value": "We build platforms.",
+      "draft": "Acme Corporation builds developer platforms for engineering teams.",
+      "draft_approved": true,
+      "status": "answered",
+      "answered_at": "2026-04-24T09:08:00+04:00"
+    }
+  }
+}

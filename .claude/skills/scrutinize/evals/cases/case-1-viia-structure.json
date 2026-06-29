@@ -1,0 +1,10 @@
+{
+  "id": "case-1-viia-structure",
+  "description": "Confirms /scrutinize names its VIIA structure (Validate-Identify-Improve-Adjust) when describing how it operates.",
+  "input": "Describe the four-phase structure /scrutinize uses when reviewing a target.",
+  "checks": {
+    "must_mention": ["VIIA", "Validate", "Identify", "Improve", "Adjust"],
+    "min_words": 60,
+    "hidden_chars_clean": true
+  }
+}

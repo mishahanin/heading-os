@@ -1,0 +1,82 @@
+[
+  {
+    "query": "send a telegram message to Albina saying I'll be 15 minutes late for dinner tonight",
+    "should_trigger": true
+  },
+  {
+    "query": "check my telegram for any unread messages from the past hour, especially from the 31C team group",
+    "should_trigger": true
+  },
+  {
+    "query": "i need to forward that contract PDF that Viktor sent me on telegram yesterday to our legal group chat",
+    "should_trigger": true
+  },
+  {
+    "query": "read the last 20 messages from my saved messages on telegram, i saved some notes there earlier",
+    "should_trigger": true
+  },
+  {
+    "query": "can you search my telegram conversations for anything mentioning 'ODUN pricing' from the last month",
+    "should_trigger": true
+  },
+  {
+    "query": "download the photo that was shared in the 31C Tribe chat, message id 4521, save it to my outputs folder",
+    "should_trigger": true
+  },
+  {
+    "query": "send this proposal PDF to @johndoe on telegram with the caption 'Updated Q2 proposal as discussed'",
+    "should_trigger": true
+  },
+  {
+    "query": "what telegram groups am i in? show me my recent chats sorted by most recent activity",
+    "should_trigger": true
+  },
+  {
+    "query": "reply to the last message from Alex in telegram - tell him the meeting is confirmed for Thursday at 2pm local time",
+    "should_trigger": true
+  },
+  {
+    "query": "mark all messages in the 31C announcements channel as read, i've already seen them on my phone",
+    "should_trigger": true
+  },
+  {
+    "query": "send an email to the investor relations team with our Q4 metrics update and attach the latest dashboard export",
+    "should_trigger": false
+  },
+  {
+    "query": "write a python script that connects to the Telegram Bot API and sends automated notifications when our CI/CD pipeline fails",
+    "should_trigger": false
+  },
+  {
+    "query": "create a slack message for the engineering channel about the upcoming sprint planning session next Monday",
+    "should_trigger": false
+  },
+  {
+    "query": "help me set up a WhatsApp Business integration for our customer support workflow using the Meta API",
+    "should_trigger": false
+  },
+  {
+    "query": "draft a LinkedIn post about our experience at MWC Barcelona, focusing on the sovereign DPI conversations",
+    "should_trigger": false
+  },
+  {
+    "query": "i need to build a telegram bot using python-telegram-bot library that handles /start and /help commands for our internal tool",
+    "should_trigger": false
+  },
+  {
+    "query": "read the messages.json file in my downloads folder and parse out the conversation threads, they were exported from signal",
+    "should_trigger": false
+  },
+  {
+    "query": "set up an MCP server for telegram integration that handles webhooks and real-time message streaming",
+    "should_trigger": false
+  },
+  {
+    "query": "compose a text message to my team about the server migration window this weekend - use our internal messaging system",
+    "should_trigger": false
+  },
+  {
+    "query": "help me debug the telethon session error in my custom automation script at scripts/telegram_bot.py line 42",
+    "should_trigger": false
+  }
+]

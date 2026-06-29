@@ -1,0 +1,19 @@
+[Unit]
+Description=31C Exchange + Calendar sync daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} scripts/sync-exchange-daemon.py daemon
+Restart=on-failure
+RestartSec=10
+# See bridge-daemon.service for rationale: journald avoids double-writing the
+# daemon's log path on a /mnt/c 9P mount, which can freeze the process in
+# uninterruptible sleep.
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

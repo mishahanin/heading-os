@@ -1,0 +1,17 @@
+{
+  "id": "official-render-missing-fields",
+  "description": "An incomplete official-document dict (PLACE dropped, ISSUER_TITLE blank) is reported as missing exactly those fields.",
+  "outcome": {
+    "type": "doctype_render",
+    "doctype": "official",
+    "expect_missing": ["ISSUER_TITLE", "PLACE"],
+    "data": {
+      "CLASS": "Board Resolution",
+      "REF_ID": "31C-RES-2026-0003",
+      "DATE": "2026-06-06",
+      "ISSUER_NAME": "Misha Hanin",
+      "ISSUER_TITLE": "",
+      "SUBJECT": "Authorization to execute sovereign-deployment agreements"
+    }
+  }
+}

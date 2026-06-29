@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-05-15T00:47:10",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 16,
+    "check_total": 16,
+    "cases": [
+      {
+        "id": "case-1-structure",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1260,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 22.34
+      },
+      {
+        "id": "case-2-voss-pricing",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1267,
+          "output_tokens": 402,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 4.51
+      },
+      {
+        "id": "case-3-brand-terminology",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1274,
+          "output_tokens": 434,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.59
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-05-15T00:47:10",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 16,
+    "check_total": 16,
+    "cases": [
+      {
+        "id": "case-1-structure",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1260,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 22.34
+      },
+      {
+        "id": "case-2-voss-pricing",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1267,
+          "output_tokens": 402,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 4.51
+      },
+      {
+        "id": "case-3-brand-terminology",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1274,
+          "output_tokens": 434,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.59
+      }
+    ]
+  }
+}

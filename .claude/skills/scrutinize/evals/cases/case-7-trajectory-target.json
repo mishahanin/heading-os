@@ -1,0 +1,12 @@
+{
+  "id": "case-7-trajectory-target",
+  "description": "Confirms /scrutinize v2.1 recognises trajectory:<run_id> as a valid target type, reads the JSONL artefact at outputs/operations/implement/_trajectory_<run_id>.jsonl, and dispatches the trajectory VIIA lens that prioritises deterministic tool-call records over rationale prose.",
+  "input": "Walk me through how /scrutinize handles a trajectory target. What does it read, and what subchecks apply?",
+  "checks": {
+    "must_mention": ["_trajectory_", ".jsonl", "outputs/operations/implement", "lens", "tool call"],
+    "must_not_mention": ["target type does not exist", "trajectory is not supported"],
+    "min_words": 80,
+    "max_words": 1200,
+    "hidden_chars_clean": true
+  }
+}

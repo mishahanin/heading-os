@@ -1,0 +1,34 @@
+{
+  "id": "partnership-render-missing-fields",
+  "description": "An incomplete partnership dict (CLAUSES empty, GOVERNANCE_HTML dropped) is reported as missing exactly those fields.",
+  "outcome": {
+    "type": "doctype_render",
+    "doctype": "partnership",
+    "expect_missing": ["CLAUSES", "GOVERNANCE_HTML"],
+    "data": {
+      "SUBTYPE": "MOU",
+      "SUBJECT": "Memorandum of Understanding - sovereign DPI+ collaboration",
+      "REF_ID": "31C-MOU-2026-0009",
+      "EFFECTIVE_DATE": "2026-06-06",
+      "TERM": "24 months",
+      "PARTY_A_NAME": "31 Concept FZ-LLC",
+      "PARTY_A_SHORT": "31C",
+      "PARTY_A_ENTITY_TYPE": "Free Zone Company",
+      "PARTY_A_JURISDICTION": "Sample City, Country",
+      "PARTY_A_ADDRESS": "Tech Park, Sample City, Country",
+      "PARTY_A_SIGNATORY_NAME": "Misha Hanin",
+      "PARTY_A_SIGNATORY_TITLE": "Founder & CEO",
+      "PARTY_B_NAME": "Meridian Holdings Ltd",
+      "PARTY_B_SHORT": "Meridian",
+      "PARTY_B_ENTITY_TYPE": "Private Limited Company",
+      "PARTY_B_JURISDICTION": "Republic of Estonia",
+      "PARTY_B_ADDRESS": "Tartu mnt 10, Tallinn, Estonia",
+      "PARTY_B_SIGNATORY_NAME": "Karl Tamm",
+      "PARTY_B_SIGNATORY_TITLE": "Managing Director",
+      "PURPOSE_HTML": "<p>The parties intend to collaborate.</p>",
+      "SCOPE_HTML": "<p>Joint technical evaluation.</p>",
+      "GOVERNANCE_HTML": "",
+      "CLAUSES": []
+    }
+  }
+}

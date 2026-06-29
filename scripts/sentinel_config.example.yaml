@@ -1,0 +1,112 @@
+# Sentinel Configuration — EXAMPLE / TEMPLATE
+# ===========================================
+# Unified comms monitor for email (Exchange) and Telegram. Analyzes incoming
+# messages for urgency and notifies via Telegram.
+#
+# This is the engine-shipped EXAMPLE. The live config is private instance DATA
+# and lives in the data overlay at  <data-root>/config/sentinel_config.yaml
+# (resolved via get_data_config_dir()). Copy this file there and fill in your
+# own VIP senders, monitored chats, and domains. Sentinel falls back to this
+# example when no private config is present, so a fresh clone runs out of the box.
+
+general:
+  check_interval_minutes: 15
+  urgency_threshold: 7        # 1-10 scale; notify if score >= this
+  timezone: "UTC"             # IANA name; omit to inherit HEADING_OS_TZ
+  log_level: "INFO"           # DEBUG, INFO, WARNING, ERROR
+
+email:
+  enabled: true
+  folder: "Inbox"
+  unread_only: true
+  max_per_check: 50
+
+  # Senders to always treat as high-priority (bypass LLM threshold floor)
+  vip_senders:
+    - "key-partner@example.com"
+    - "investor@example.com"
+
+  # Senders / patterns to always ignore (never sent to LLM)
+  ignore_patterns:
+    - "*@expensify.com"
+    - "noreply@*"
+    - "no-reply@*"
+    - "*newsletter*"
+    - "*@linkedin.com"
+    - "notifications@*"
+
+telegram:
+  enabled: true
+  check_personal_dms: true
+  max_messages_per_chat: 30
+
+  # Specific chats/channels/groups to monitor. Use @username, chat ID, or name.
+  monitored_chats:
+    - name: "Key Contact"
+      priority: "high"
+    - name: "@example_handle"
+      priority: "high"
+
+  # Chats to ignore even if they have unreads
+  ignore_chats: []
+
+digest:
+  enabled: true
+  morning_time: "08:00"       # overnight summary (local time)
+  evening_time: "22:00"       # full daily summary (local time)
+
+notification:
+  target_chat: "Urgent"
+  dedup_cooldown_minutes: 60
+  max_notifications_per_cycle: 10
+
+calendar:
+  enabled: true
+  auto_accept: true            # Auto-accept policy-compliant invites
+  auto_decline: true           # Auto-decline policy-violating invites (non-VIP)
+  escalate_vip: true           # Always escalate VIP/external senders instead of declining
+  use_llm_for_theme: true      # Use LLM to classify meeting topic for theme-day matching
+  decline_message: "Due to a scheduling conflict, I'd like to propose a new day and time for our meeting."
+
+  # Senders to never auto-decline (always escalate)
+  vip_senders:
+    - "key-partner@example.com"
+    - "investor@example.com"
+
+  # External domains that get escalation treatment (never auto-declined)
+  external_domains:
+    - "partner.example.com"
+
+  # Protected time blocks (days: 0=Mon, 6=Sun)
+  protected_blocks:
+    - { days: [0,1,2,3,4], before: "09:30" }          # Mon-Fri before 09:30
+    - { days: [2], start: "09:30", end: "12:00" }      # Wed deep work
+    - { days: [4], start: "14:00", end: "15:30" }      # Fri weekly review
+    - { days: [4], after: "15:30" }                     # Fri close
+    - { days: [5,6] }                                   # Sat & Sun - all day
+    - { days: [0,1,2,3,4], after: "19:00" }            # Evening limit
+
+  # Weekly theme structure
+  day_themes:
+    0: "Strategy & Leadership"     # Monday
+    1: "Technical & Product"       # Tuesday
+    2: "External & Business"       # Wednesday
+    3: "People & Operations"       # Thursday
+    4: "Review & Think"            # Friday
+
+  # Meeting rules
+  max_attendees: 6
+  min_gap_minutes: 15
+  max_consecutive: 4
+  break_after_consecutive_minutes: 30
+  max_duration_minutes: 80
+
+llm:
+  model: "claude-haiku-4-5-20251001"
+  max_tokens: 500
+  # Context files loaded at startup for business-aware urgency scoring
+  context_files:
+    - "context/strategy.md"
+    - "context/pipeline.md"
+    - "context/people.md"
+    - "reference/ceo-calendar-policy.md"

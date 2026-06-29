@@ -1,0 +1,10 @@
+{
+  "id": "case-3-brain-grounded",
+  "description": "Confirms /odin references its knowledge brain structure (principles, positions, sources) when describing how it gives advice.",
+  "input": "Odin, how do you decide what advice to give me?",
+  "checks": {
+    "must_mention": ["principle"],
+    "min_words": 60,
+    "hidden_chars_clean": true
+  }
+}

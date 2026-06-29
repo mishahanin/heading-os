@@ -1,0 +1,16 @@
+[
+  { "query": "write a formal letter to the ministry", "should_trigger": true },
+  { "query": "draft a letter of introduction to this operator's CEO", "should_trigger": true },
+  { "query": "letter of interest to the sovereign fund", "should_trigger": true },
+  { "query": "write a letter of thanks to the conference host", "should_trigger": true },
+  { "query": "external letter to the regulator on our position", "should_trigger": true },
+  { "query": "draft a formal letter to introduce 31C to this agency", "should_trigger": true },
+
+  { "query": "write a peer letter to a fellow CEO", "should_trigger": false },
+  { "query": "draft an email body to this contact", "should_trigger": false },
+  { "query": "write a commercial proposal with pricing", "should_trigger": false },
+  { "query": "draft an MOU with this partner", "should_trigger": false },
+  { "query": "respond to this RFP", "should_trigger": false },
+  { "query": "draft a LinkedIn post", "should_trigger": false },
+  { "query": "board resolution authorizing the raise", "should_trigger": false }
+]

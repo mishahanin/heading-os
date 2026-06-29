@@ -1,0 +1,11 @@
+{
+  "id": "case-2-talking-points",
+  "description": "Confirms /meeting-prep produces concrete talking points and objectives, not generic prep advice.",
+  "input": "Meeting prep for an investor call with Harbor Capital, scoping a Series A. 30 minutes, video call, first conversation.",
+  "checks": {
+    "must_mention": ["Series A"],
+    "must_not_mention": ["thrilled to"],
+    "min_words": 200,
+    "hidden_chars_clean": true
+  }
+}

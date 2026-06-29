@@ -1,0 +1,17 @@
+[
+  { "query": "investigate the leadership of ExampleTelco", "should_trigger": true },
+  { "query": "dig into this company before our call", "should_trigger": true },
+  { "query": "background on Sara Okonkwo at Nimbus", "should_trigger": true },
+  { "query": "run due diligence on this potential partner", "should_trigger": true },
+  { "query": "who is the CTO of PartnerCo", "should_trigger": true },
+  { "query": "build me a dossier on this fund", "should_trigger": true },
+  { "query": "intelligence on this telco operator", "should_trigger": true },
+
+  { "query": "validate this claim against our datastore", "should_trigger": false },
+  { "query": "how does a competitor compare to ODUN.ONE", "should_trigger": false },
+  { "query": "what's the market size for DPI in a region", "should_trigger": false },
+  { "query": "give me a global geopolitical brief", "should_trigger": false },
+  { "query": "pull this competitor's latest quarterly earnings", "should_trigger": false },
+  { "query": "draft a LinkedIn post about sovereignty", "should_trigger": false },
+  { "query": "prepare me for the board meeting tomorrow", "should_trigger": false }
+]

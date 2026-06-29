@@ -1,0 +1,17 @@
+[
+  {"query": "pre-implementation gate", "should_trigger": true},
+  {"query": "gate before we implement", "should_trigger": true},
+  {"query": "run pre-impl before implementing", "should_trigger": true},
+  {"query": "are we ready to implement?", "should_trigger": true},
+  {"query": "before we give the agent implement", "should_trigger": true},
+  {"query": "pre implementation check on this plan", "should_trigger": true},
+  {"query": "stress test this plan before building", "should_trigger": true},
+  {"query": "do a devil check before we implement", "should_trigger": true},
+  {"query": "investigate ExampleTelco", "should_trigger": false},
+  {"query": "draft email to Ahmed", "should_trigger": false},
+  {"query": "implement this feature", "should_trigger": false},
+  {"query": "create a plan for the new dashboard", "should_trigger": false},
+  {"query": "run devil on my proposal", "should_trigger": false},
+  {"query": "second opinion on this architecture", "should_trigger": false},
+  {"query": "write a test for this function", "should_trigger": false}
+]

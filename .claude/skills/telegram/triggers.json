@@ -1,0 +1,16 @@
+[
+  { "query": "check telegram", "should_trigger": true },
+  { "query": "send a telegram to Alex", "should_trigger": true },
+  { "query": "read my telegram messages", "should_trigger": true },
+  { "query": "what's new on telegram", "should_trigger": true },
+  { "query": "message this person on telegram", "should_trigger": true },
+  { "query": "any unread telegram chats I should see", "should_trigger": true },
+
+  { "query": "process viraid", "should_trigger": false },
+  { "query": "check viraid channels", "should_trigger": false },
+  { "query": "process my email inbox", "should_trigger": false },
+  { "query": "draft an email to this contact", "should_trigger": false },
+  { "query": "add this person to the CRM", "should_trigger": false },
+  { "query": "what came in across all comms this morning", "should_trigger": false },
+  { "query": "send a follow-up after the meeting", "should_trigger": false }
+]

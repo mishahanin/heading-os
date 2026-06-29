@@ -1,0 +1,30 @@
+{
+  "id": "proposal-render-missing-fields",
+  "description": "An incomplete proposal dict (PRICING_LINES empty, SOLUTION_HTML dropped) is reported as missing exactly those fields.",
+  "outcome": {
+    "type": "doctype_render",
+    "doctype": "proposal",
+    "expect_missing": ["PRICING_LINES", "SOLUTION_HTML"],
+    "data": {
+      "SENDER_NAME": "Misha Hanin",
+      "SENDER_TITLE": "Founder & CEO, 31 Concept",
+      "SENDER_EMAIL": "ceo@31c.io",
+      "SENDER_PHONE": "+15550100100 50 000 0000",
+      "RECIPIENT_NAME": "Jordan Avery",
+      "RECIPIENT_TITLE": "Chief Technology Officer",
+      "RECIPIENT_ORG": "Northwind Systems",
+      "RECIPIENT_COUNTRY": "United Arab Emirates",
+      "SUBJECT": "ODUN.ONE deep packet intelligence - commercial proposal",
+      "LEDE": "A sovereign DPI+ platform proposal for Northwind Systems.",
+      "DATE": "2026-06-06",
+      "REF_ID": "31C-PROP-2026-0042",
+      "EXECUTIVE_OPENING_HTML": "<p>Thank you for the productive sessions.</p>",
+      "OPPORTUNITY_HTML": "<p>Line-rate classification without decryption.</p>",
+      "SOLUTION_HTML": "",
+      "PROOF_HTML": "<p>Three sovereign operators run ODUN.ONE today.</p>",
+      "COMMERCIAL_INTRO_HTML": "<p>The structure below is modular.</p>",
+      "NEXT_STEPS_HTML": "<p>Proof of Value within 30 days.</p>",
+      "PRICING_LINES": []
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "case-3-31c-relevance",
+  "description": "Confirms /osint output orients findings toward 31C business relevance - the skill exists to feed strategic decisions, not just produce neutral encyclopedia entries.",
+  "input": "Investigate the legacy incumbent. I want to understand the competitive landscape they're leaving behind.",
+  "checks": {
+    "must_mention": ["the legacy incumbent", "31C"],
+    "must_not_mention": ["thrilled", "excited", "in today's rapidly evolving"],
+    "min_words": 150,
+    "hidden_chars_clean": true
+  }
+}

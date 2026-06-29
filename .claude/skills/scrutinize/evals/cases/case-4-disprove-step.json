@@ -1,0 +1,12 @@
+{
+  "id": "case-4-disprove-step",
+  "description": "Confirms /scrutinize v2.0 describes the Phase 2.5 adversarial refutation layer that filters false positives before findings reach the approval block, and explains that BLOCKER and HIGH findings additionally go through a two-agent debate.",
+  "input": "Walk me through Phase 2.5 of /scrutinize. What happens between Identify and the Approval Block?",
+  "checks": {
+    "must_mention": ["Phase 2.5", "refutation", "BLOCKER", "HIGH", "debate", "Advocate", "Skeptic", "Meta-Judge", "REFUTED"],
+    "must_not_mention": ["Phase 2.5 does not exist", "no refutation"],
+    "min_words": 120,
+    "max_words": 1200,
+    "hidden_chars_clean": true
+  }
+}

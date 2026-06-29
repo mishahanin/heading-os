@@ -1,0 +1,56 @@
+# LLM fallback configuration - Track A (failover) of the LLM-fit logging project.
+# See plans/2026-05-24-llm-fit-logging-three-tracks.md.
+#
+# Maps Anthropic model tier to an ordered fallback chain. When the primary
+# (Anthropic) call fails with a retriable error (5xx, 429, timeout, connection
+# reset), llm_fallback.call_anthropic_with_fallback() cascades through the
+# named vendors using the existing council wrappers (gemini-consult.py,
+# grok-consult.py) imported as libraries (NOT subprocess).
+#
+# Permanent errors (401/403 auth fail, 400 bad request) are NOT retried -
+# fallback would just waste budget on a request the next vendor would also
+# reject.
+#
+# Tier resolution: caller passes the full Anthropic model string (e.g.
+# "claude-haiku-4-5-20251001"). Module derives tier by substring match:
+#   "haiku"  -> haiku
+#   "sonnet" -> sonnet
+#   "opus"   -> opus
+#
+# Vendor strings are case-sensitive identifiers expected by llm_fallback:
+#   gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite -> consult_gemini()
+#   grok-4, grok-4-fast                                     -> consult_grok()
+#
+# Cross-vendor model choice is informed by Artificial Analysis benchmarks
+# (Intelligence Index v4.0, snapshot 2026-05-24). Re-check when AA publishes
+# a new Index version or when a tier gains a materially-better non-Anthropic peer.
+
+tiers:
+  haiku:
+    chain:
+      - vendor: gemini
+        model: gemini-2.5-flash-lite
+      - vendor: grok
+        model: grok-4-fast
+  sonnet:
+    chain:
+      - vendor: gemini
+        model: gemini-2.5-pro
+      - vendor: grok
+        model: grok-4
+  opus:
+    chain:
+      # No frontier-tier non-Anthropic peer in 2026-05; substitute capable
+      # models. Quality compromise is the explicit tradeoff vs full outage.
+      - vendor: gemini
+        model: gemini-2.5-pro
+      - vendor: grok
+        model: grok-4
+
+# Errors that trigger fallback (retriable). Other errors re-raise immediately.
+# Class names match the anthropic Python SDK exception hierarchy.
+retriable_anthropic_errors:
+  - APIConnectionError
+  - APITimeoutError
+  - RateLimitError       # 429 - transient capacity, fallback vendor may not be throttled
+  - InternalServerError  # 5xx

@@ -1,0 +1,13 @@
+# Customization defaults for /osint (pilot).
+# This is layer 1 (skill defaults). Team overrides live in
+# config/skill-custom/osint.toml; personal overrides in
+# config/skill-custom/osint.user.toml (gitignored).
+# Resolve with: python scripts/resolve_customization.py --skill .claude/skills/osint
+# Layout + merge rules: config/skill-custom/README.md
+#
+# Recognised keys (all optional; the skill honours them if present):
+#   activation_steps_prepend = ["..."]  # extra steps to run before Phase 0 context loading
+#   persistent_facts         = ["..."]  # facts to always honour
+#   output_path              = "..."    # override the default outputs/intel/osint/ location
+
+[workflow]

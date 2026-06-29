@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data overlay structure — HEADING OS</title>
+<meta name="description" content="An annotated template of the private .heading-os-data repository and the engine / data separation principle that keeps the engine code-only.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><span class="mark">H</span> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html" class="active">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+  <h1>Data overlay structure</h1>
+  <p class="page-meta">An annotated template of the private <code>.heading-os-data</code> repository — the partner of the engine (code-only) clone. Everything below is a generic structure a new operator recreates; no real private content is shown.</p>
+
+  <h2>Engine / data separation</h2>
+  <p>HEADING OS splits one operator workspace into two git repositories:</p>
+  <ul>
+    <li><strong>Engine</strong> (<code>.heading-os</code>) — <strong>code only</strong>: skills, rules, scripts, daemons, config templates, docs. Shareable, eventually public. No real data, secrets, or PII.</li>
+    <li><strong>Data overlay</strong> (<code>.heading-os-data</code>, documented here) — <strong>all real data plus every generated artifact</strong>: CRM, knowledge, context, threads, plans, outputs, datastore. Private forever.</li>
+  </ul>
+  <p>Routing between the two is declared once in the engine's <code>config/routing-map.yaml</code> and resolved at runtime by the <strong>data-root seam</strong> in <code>scripts/utils/workspace.py</code>. Code never joins an engine root to a data directory — it calls helpers (<code>get_data_root()</code>, <code>get_outputs_dir()</code>, <code>get_crm_contacts_dir()</code>, <code>get_knowledge_dir()</code>, …) that all resolve <strong>under the data overlay</strong>. A guard test plus a pre-commit hook forbid the bypass, so new data always lands here, never in the engine clone.</p>
+  <p>Routing has three destinations: <strong>engine</strong> (code, public), <strong>private</strong> (operator-only data — this overlay's default for real data), and <strong>corporate</strong> (content shared down to a fleet of executives). The map default is <code>engine</code>, so code-ish paths fall through to shareable; every real-data directory carries an explicit <code>private</code> rule to fail closed.</p>
+
+  <h2>Annotated directory tree</h2>
+  <pre><code>.heading-os-data/
+├── crm/                          # Personal CRM — relationship data (PRIVATE)
+│   ├── contacts/                 #   one markdown file per contact: contacts/&lt;contact&gt;.md
+│   ├── address-book/             #   lightweight contact directory (CORPORATE carve-out)
+│   └── aggregated/               #   fleet-aggregated CRM rollups
+│   #   config.md, aliases.md at root = CORPORATE carve-outs
+│
+├── knowledge/                    # Second brain / knowledge base (PRIVATE by default)
+│   ├── odin-brain/               #   curated advisor brain (PRIVATE)
+│   │   ├── principles/           #     distilled operating principles
+│   │   ├── positions/            #     committed stances
+│   │   ├── sources/              #     ingested source notes
+│   │   ├── episodes/             #     logged "things that happened"
+│   │   └── conflicts/            #     flagged contradictions
+│   ├── shared/                   #   knowledge shared down to execs (CORPORATE)
+│   └── technology/               #   technical notes
+│
+├── context/                      # Operator operating context (PRIVATE)
+│   #   personal-info, business-info*, strategy*, people, pipeline, current-data
+│   #   (* = CORPORATE carve-outs)
+│
+├── threads/                      # Operational thread registry — ongoing situations (PRIVATE)
+│   ├── business/                 #   business threads: &lt;date&gt;-&lt;slug&gt;.md
+│   └── archive/                  #   closed threads
+│
+├── plans/                        # Active implementation plans (PRIVATE)
+│   └── archive/                  #   completed/superseded plans, by year
+│
+├── outputs/                      # EVERY generated artifact lands here (PRIVATE)
+│   ├── deliverables/             #   finished documents (letters, proposals)
+│   ├── documents/                #   rendered corporate docs by sender
+│   ├── operations/               #   workspace state, dashboards, audits, handoffs
+│   ├── intel/                    #   OSINT / intelligence briefs
+│   ├── content/                  #   LinkedIn, social content drafts
+│   ├── email-drafts/             #   outbound drafts awaiting approval
+│   ├── _sync/                    #   calendar/comms sync artifacts (one file/day)
+│   └── browser/, clipboard/      #   browser cache, captured clipboard images
+│
+├── datastore/                    # Source-of-truth original documents (CORPORATE by default)
+│   ├── products/                 #   product materials (datasheets, decks)
+│   ├── brand/                    #   design system: logos, fonts, templates, examples
+│   ├── events/                   #   event contact DBs and schedules
+│   ├── intelligence/             #   competitor/market intel (PRIVATE — operator-only)
+│   └── investment/               #   investor decks + financials (PRIVATE — operator-only)
+│
+├── auto-memory/                  # Persistent file-backed memory (PRIVATE)
+│   #   MEMORY.md = index; one file per durable memory
+│
+├── admin/                        # Fleet administration (PRIVATE — operator/admin only)
+│   ├── provision/                #   exec-provisioning tooling + generated packets
+│   #   executives.json = the fleet roster
+│
+├── reference/                    # Operator reference content (mostly PRIVATE)
+│   #   workspace-overview, voice files, operating policy, market/strategy reference
+│   #   (engine ships generic *.example.* templates for shareable ones)
+│
+├── config/                       # Per-instance config (PRIVATE)
+│   #   real identity / rosters / topology; engine ships *.example.* counterparts
+│
+├── corporate/                    # Fleet-shared daemon/base config (CORPORATE)
+│
+├── docs/                         # Operator-internal docs (mostly PRIVATE)
+│   ├── superpowers/              #   internal design/plan/spec archive
+│   └── security/                 #   security posture / findings
+│
+├── templates/                    # Operator content templates (PRIVATE)
+├── _archive/                     # Historical / retired content (PRIVATE)
+│
+└── .claude/                      # Per-machine runtime state (PRIVATE)
+    └── projects/                 #   session transcripts (.jsonl)
+    #   plus .memory-index/ (gitignored, rebuildable — never pushed)</code></pre>
+
+  <h2>Top-level directories</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Directory</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>crm/</code></td><td>Personal CRM. <code>contacts/</code> holds one file per relationship; <code>address-book/</code>, <code>config.md</code>, <code>aliases.md</code> are lighter shareable directory/config.</td></tr>
+      <tr><td><code>knowledge/</code></td><td>The second brain. <code>odin-brain/</code> is the curated advisor brain; <code>shared/</code> is fleet-shareable.</td></tr>
+      <tr><td><code>context/</code></td><td>The operator's operating context: who they are, the business, strategy, key people, pipeline, current metrics.</td></tr>
+      <tr><td><code>threads/</code></td><td>Operational registry of ongoing situations, opened / logged / closed as work in flight.</td></tr>
+      <tr><td><code>plans/</code></td><td>Active implementation plans; completed plans move to <code>archive/</code>, never deleted.</td></tr>
+      <tr><td><code>outputs/</code></td><td>Every artifact the assistant generates — the single sink for generated work, organized by type.</td></tr>
+      <tr><td><code>datastore/</code></td><td>Authoritative original documents (PDFs, decks, contracts) used as source-of-truth for factual claims.</td></tr>
+      <tr><td><code>auto-memory/</code></td><td>Persistent cross-session memory: the <code>MEMORY.md</code> index plus one file per durable observation.</td></tr>
+      <tr><td><code>admin/</code></td><td>Fleet administration: the executive roster, provisioning tooling, admin guides.</td></tr>
+      <tr><td><code>reference/</code></td><td>Operator reference content: workspace catalogue, voice files, operating rhythm, market/strategy reference.</td></tr>
+      <tr><td><code>config/</code></td><td>Per-instance configuration carrying real identity, rosters, and topology (the engine ships <code>*.example.*</code> stand-ins).</td></tr>
+      <tr><td><code>corporate/</code></td><td>Base daemon/config content shared down to an executive fleet.</td></tr>
+      <tr><td><code>docs/</code></td><td>Operator-internal documentation: design/spec archive and security posture.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Privacy classification</h2>
+  <p>Per the engine's classification rule, every path resolves to one of three routing destinations:</p>
+  <ul>
+    <li><strong>PRIVATE (operator-only — never shared):</strong> <code>crm/contacts/</code>, <code>knowledge/</code> (incl. <code>odin-brain/</code>), <code>context/</code>, <code>threads/</code>, <code>plans/</code>, <code>outputs/</code>, <code>auto-memory/</code>, <code>admin/</code>, <code>templates/</code>, <code>_archive/</code>; <code>docs/superpowers/</code>, <code>docs/security/</code>; <code>config/</code> and most of <code>reference/</code>; within datastore, <code>intelligence/</code> and <code>investment/</code>.</li>
+    <li><strong>CORPORATE (shared down to a fleet, not public):</strong> <code>corporate/</code>, <code>datastore/</code> (general default), <code>knowledge/shared/</code>, and named carve-outs (<code>context/business-info.md</code>, <code>context/strategy.md</code>, <code>crm/config.md</code>, <code>crm/aliases.md</code>, <code>crm/address-book/</code>).</li>
+    <li><strong>ENGINE (code, public):</strong> lives in the <em>other</em> repo (<code>.heading-os</code>), not this overlay. The routing default of <code>engine</code> means anything unmatched is treated as shareable code — which is exactly why every real-data directory above carries an explicit <code>private</code> rule, so operator data fails closed rather than leaking into the public engine.</li>
+  </ul>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

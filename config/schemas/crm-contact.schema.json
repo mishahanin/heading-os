@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://odinix.com/schemas/crm-contact.schema.json",
+  "title": "31C CRM Contact Frontmatter",
+  "description": "Back-compat shim. Accepts either the legacy contact shape OR the new relationship-record shape (see crm-relationship.schema.json). New writes should target one of the two child schemas explicitly. This file remains for tools that haven't switched yet.",
+  "type": "object",
+  "anyOf": [
+    {"required": ["name", "type", "last_touch"]},
+    {"required": ["entity_ref", "relationship_type", "last_touch", "created"]}
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Full display name (canonical English form per reference_bilingual_names memory)"
+    },
+    "company": {
+      "type": "string",
+      "description": "Current employer / affiliation. Required for prospect/customer/partner types."
+    },
+    "title": {
+      "type": "string",
+      "description": "Job title at the time of last_touch"
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Relationship classification. Drives cadence rules and CRM radar tiering. Recommended canonical values: tribe, prospect, customer, partner, investor, advisor, reseller, ecosystem, press, regulator, service-provider, personal, other. Compound values (e.g. investor-active, tribe-leadership, prospect-partner) are tolerated for legacy data but should converge on the canonical set over time."
+    },
+    "region": {
+      "type": "string",
+      "description": "Geographic region; free-form but prefer 'GCC (UAE)', 'EU (Germany)', etc."
+    },
+    "email": {
+      "type": "string",
+      "description": "Primary contact email. Leave blank rather than guessing. Empty string allowed."
+    },
+    "phone": {
+      "type": "string",
+      "description": "E.164-like format preferred. Empty string allowed when unknown."
+    },
+    "linkedin": {
+      "type": "string",
+      "description": "LinkedIn URL or in/<slug> path"
+    },
+    "telegram": {
+      "type": "string",
+      "description": "Telegram handle without leading @"
+    },
+    "cadence": {
+      "oneOf": [
+        {"type": "integer", "minimum": 0, "maximum": 365},
+        {"type": "string", "enum": [""]}
+      ],
+      "description": "Days between intentional touches. 0 = no cadence tracking (tribe members per feedback_crm_cadence_exceptions). 7/14/30/60/90 are common. Empty string accepted as legacy 'no cadence set' marker."
+    },
+    "last_touch": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO date YYYY-MM-DD of most recent meaningful interaction"
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO date YYYY-MM-DD when this contact file was first created"
+    },
+    "source": {
+      "type": "string",
+      "description": "How the contact entered the network (event, introduction by, cold reach, etc.)"
+    },
+    "owner": {
+      "type": "string",
+      "description": "Which executive owns this relationship. Defaults to CEO when missing. Used by aggregate-crm.py for multi-owner overlap detection."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "dormant", "lost", "won", "blocked", "off-limits"],
+      "description": "Pipeline-adjacent relationship status. Distinct from pipeline.md deal stage."
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Free-form tags for radar filtering (e.g. ['mwc-2026', 'sovereign-dpi', 'priority'])"
+    },
+    "entity_ref": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Slug of the address book entity. MUST match an existing crm/address-book/{slug}.md file. Dangling refs surface as 'needs entity link' in the radar."
+    },
+    "relationship_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "This executive's relationship classification. Drives cadence rules. Canonical: tribe, tribe-leadership, prospect, customer, partner, partner-active, investor-active, investor-passive, shareholder, reseller, government, media, advisor, ecosystem, vendor, inactive."
+    },
+    "pipeline_company": {
+      "type": "string",
+      "description": "OPTIONAL. Free-text company name used for pipeline.md cross-reference. Falls back to address_book.employer when absent. Aliases handled by crm/aliases.md."
+    },
+    "radar_freeze_until": {
+      "type": "string",
+      "description": "OPTIONAL. ISO date or empty string. /crm next skips this contact until the date passes. Must be edited by CEO to unfreeze."
+    },
+    "relevant_principles": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "OPTIONAL, CEO-workspace only. Odin principle slugs (filenames in knowledge/odin-brain/principles/) relevant to this relationship, derived from relationship_type + pipeline stage by scripts/odin-principles.py. Read by /meeting-prep and /deal-strategy for inline citation. Absent on exec workspaces (no Odin brain)."
+    }
+  }
+}

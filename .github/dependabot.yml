@@ -1,0 +1,56 @@
+# Dependabot — automated dependency CVE alerts + update PRs.
+# Activates once the engine repo is public (or with GitHub Advanced Security on a
+# private repo). Complements the local pip-audit pre-commit hook: pip-audit is the
+# point-in-time gate at commit time; Dependabot is the continuous watch that opens
+# a PR the moment a new CVE lands on a pinned dependency.
+#
+# Schema: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+version: 2
+
+updates:
+  # Root Python deps: requirements.txt, requirements-dev.txt, pyproject.toml.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    # Collapse minor/patch bumps into one PR per run to cut review noise; majors
+    # (potential breaking changes) still come as individual PRs.
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Bridge daemon's own requirements.
+  - package-ecosystem: "pip"
+    directory: "/scripts/bridge_daemon"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Fireside subsystem requirements (scripts/requirements-fireside.txt).
+  - package-ecosystem: "pip"
+    directory: "/scripts"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"

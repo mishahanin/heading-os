@@ -1,0 +1,13 @@
+# Customization defaults for /linkedin-post (pilot).
+# This is layer 1 (skill defaults). Team overrides live in
+# config/skill-custom/linkedin-post.toml; personal overrides in
+# config/skill-custom/linkedin-post.user.toml (gitignored).
+# Resolve with: python scripts/resolve_customization.py --skill .claude/skills/linkedin-post
+# Layout + merge rules: config/skill-custom/README.md
+#
+# Recognised keys (all optional; the skill honours them if present):
+#   activation_steps_prepend = ["..."]  # extra steps to run before drafting
+#   persistent_facts         = ["..."]  # facts to always honour (e.g. default length, recurring narrative)
+#   output_path              = "..."    # override the default save location
+
+[workflow]

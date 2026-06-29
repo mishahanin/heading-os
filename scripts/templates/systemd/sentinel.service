@@ -1,0 +1,19 @@
+[Unit]
+Description=31C Sentinel - unified comms monitor (Exchange + Telegram)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} scripts/sentinel.py
+Restart=on-failure
+RestartSec=15
+# stdout/stderr to journald, not the workspace log. The daemon's Python logging
+# already writes structured logs to .sentinel/sentinel.log. Doubling the writes
+# via systemd append-on-write causes I/O stalls on a /mnt/c 9P mount.
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

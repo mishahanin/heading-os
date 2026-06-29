@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "tiers": {
+    "email_send": {"tier": "gated", "reason": "irreversible outbound send"},
+    "note": {"tier": "autonomous", "reason": "no-op disposition"},
+    "pipeline_update": {"tier": "notify", "reason": "reversible, undo via disposition log"},
+    "alert": {"tier": "autonomous", "reason": "read-only surfaced notice"},
+    "crm_write": {"tier": "notify", "reason": "reversible state edit — CRM contact update, undoable via prev_value"},
+    "knowledge_write": {"tier": "notify", "reason": "reversible state edit — knowledge note write, undoable"},
+    "task_create": {"tier": "notify", "reason": "reversible state edit — task creation, undoable by deletion"}
+  },
+  "send_capable": ["email_send", "telegram_send"]
+}

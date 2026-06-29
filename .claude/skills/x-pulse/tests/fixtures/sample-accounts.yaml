@@ -1,0 +1,15 @@
+categories:
+  peer_ceos:
+    description: "Test category - peer CEOs"
+    handles:
+      - techfounder
+      - founder_two
+
+  dpi_competitors:
+    description: "Test category - DPI competitors"
+    handles:
+      - acmenetworks
+
+  empty_bucket:
+    description: "Should be filtered out"
+    handles: []

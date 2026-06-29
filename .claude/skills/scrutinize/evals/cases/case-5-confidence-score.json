@@ -1,0 +1,12 @@
+{
+  "id": "case-5-confidence-score",
+  "description": "Confirms /scrutinize v2.0 emits a 0-100 confidence score on every finding and hides findings below the default threshold of 75 from the approval block.",
+  "input": "How does /scrutinize score its confidence on a finding, and what does the default threshold do?",
+  "checks": {
+    "must_mention": ["confidence", "threshold", "75", "approval block", "hidden", "include-low-confidence"],
+    "must_not_mention": ["confidence is not scored", "no threshold"],
+    "min_words": 80,
+    "max_words": 600,
+    "hidden_chars_clean": true
+  }
+}

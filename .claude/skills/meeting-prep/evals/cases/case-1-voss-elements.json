@@ -1,0 +1,11 @@
+{
+  "id": "case-1-voss-elements",
+  "description": "Confirms /meeting-prep brief includes Voss tactical elements - calibrated questions and accusation audit - per the always-on voss rule overlay.",
+  "input": "Prepare me for a meeting with Sara Okonkwo, head of Nimbus (national cybersecurity agency), on Tuesday. Purpose: partnership discussion around sovereign DPI deployment.",
+  "checks": {
+    "must_mention": ["partnership"],
+    "must_not_mention": ["thrilled", "excited"],
+    "min_words": 200,
+    "hidden_chars_clean": true
+  }
+}

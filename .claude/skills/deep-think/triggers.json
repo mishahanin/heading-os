@@ -1,0 +1,17 @@
+[
+  { "query": "think through whether we should enter [a new market] direct or via a partner", "should_trigger": true },
+  { "query": "break this decision down for me", "should_trigger": true },
+  { "query": "reason through the tradeoffs of open-sourcing the SDK", "should_trigger": true },
+  { "query": "what are we missing on this pricing call", "should_trigger": true },
+  { "query": "analyze this carefully before I commit", "should_trigger": true },
+  { "query": "help me think about the sequencing of these two deals", "should_trigger": true },
+  { "query": "think step by step about this market-entry risk", "should_trigger": true },
+
+  { "query": "what time is the meeting tomorrow", "should_trigger": false },
+  { "query": "draft a follow-up email to Sara", "should_trigger": false },
+  { "query": "get a second opinion from Gemini and Grok on this", "should_trigger": false },
+  { "query": "investigate this company's background", "should_trigger": false },
+  { "query": "translate this message to Russian", "should_trigger": false },
+  { "query": "update the CRM with this contact", "should_trigger": false },
+  { "query": "what would Odin say about this", "should_trigger": false }
+]

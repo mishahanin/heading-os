@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly 31C memory hygiene scan (Monday 07:34, host local)
+
+[Timer]
+# Weekly cadence. The host runs on Asia/Dubai (+04); OnCalendar uses system
+# local time, so this fires Monday 07:34 Dubai - after the 06:30 cold-sweep,
+# before the working day. The :34 minute (not :30) avoids the round-mark pileup.
+# Persistent=true runs a missed Monday on next boot, covering the
+# machine-was-off case without a separate OnBootSec trigger.
+OnCalendar=Mon *-*-* 07:34:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

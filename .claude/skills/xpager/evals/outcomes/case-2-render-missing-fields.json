@@ -1,0 +1,30 @@
+{
+  "id": "xpager-render-missing-fields",
+  "description": "An incomplete xPager dict (STATS empty, TAGLINE dropped) is reported as missing exactly those fields.",
+  "outcome": {
+    "type": "doctype_render",
+    "doctype": "xpager",
+    "expect_missing": ["STATS", "TAGLINE"],
+    "data": {
+      "PRODUCT_NAME": "ODUN.ONE",
+      "PRODUCT_BASE": "ODUN",
+      "PRODUCT_SUFFIX": "ONE",
+      "DATE": "2026-06-06",
+      "STATS": [],
+      "CAPABILITY_HEADLINE": "Sovereign deep packet intelligence",
+      "CAPABILITY_SUB": "Classification without decryption.",
+      "CAPABILITIES": [
+        {"title": "Encrypted-traffic intelligence", "body": "Classify without decryption."}
+      ],
+      "PROOF_HEADLINE": "Proven in production",
+      "PROOF_SUB": "Deployed by sovereign operators.",
+      "PROOF_POINTS": [
+        {"title": "Three national operators", "body": "Running ODUN.ONE today."}
+      ],
+      "CONTACT_NAME": "Misha Hanin",
+      "CONTACT_TITLE": "Founder & CEO, 31 Concept",
+      "CONTACT_EMAIL": "ceo@31c.io",
+      "CONTACT_PHONE": "+15550100100 50 000 0000"
+    }
+  }
+}

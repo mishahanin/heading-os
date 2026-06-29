@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-05-15T00:47:50",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 17,
+    "check_total": 17,
+    "cases": [
+      {
+        "id": "case-1-ceo-gate",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1754,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 17.22
+      },
+      {
+        "id": "case-2-phase-list",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1757,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 16.4
+      },
+      {
+        "id": "case-3-corporate-classification",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1764,
+          "output_tokens": 504,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.88
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-05-15T00:47:50",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 17,
+    "check_total": 17,
+    "cases": [
+      {
+        "id": "case-1-ceo-gate",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1754,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 17.22
+      },
+      {
+        "id": "case-2-phase-list",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1757,
+          "output_tokens": 2000,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 16.4
+      },
+      {
+        "id": "case-3-corporate-classification",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1764,
+          "output_tokens": 504,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.88
+      }
+    ]
+  }
+}

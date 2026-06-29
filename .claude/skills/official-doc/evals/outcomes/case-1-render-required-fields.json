@@ -1,0 +1,18 @@
+{
+  "id": "official-render-required-fields",
+  "description": "A complete official-document data dict (all 7 required fields) passes field-presence validation.",
+  "outcome": {
+    "type": "doctype_render",
+    "doctype": "official",
+    "expect_missing": [],
+    "data": {
+      "CLASS": "Board Resolution",
+      "REF_ID": "31C-RES-2026-0003",
+      "DATE": "2026-06-06",
+      "PLACE": "Sample City, Country",
+      "ISSUER_NAME": "Misha Hanin",
+      "ISSUER_TITLE": "Founder & CEO, 31 Concept",
+      "SUBJECT": "Authorization to execute sovereign-deployment agreements"
+    }
+  }
+}

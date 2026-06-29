@@ -1,0 +1,56 @@
+name: Bug report
+description: Something behaves differently than the docs say
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please remove any secrets, tokens, or personal data from logs and output before pasting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you observe, and what did you expect instead?
+      placeholder: I ran X and saw Y; I expected Z.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands or actions, in order.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output / logs
+      description: Paste the relevant output. Secrets removed.
+      render: shell
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "Windows 11 + WSL2 Ubuntu 24.04 / macOS 14 / Ubuntu 24.04"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.11.x (output of: python --version)"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a duplicate
+          required: true
+        - label: I removed all secrets and personal data from the output above
+          required: true

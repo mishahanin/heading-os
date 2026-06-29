@@ -1,0 +1,16 @@
+[
+  { "query": "process my inbox", "should_trigger": true },
+  { "query": "give me an email digest", "should_trigger": true },
+  { "query": "triage the emails that came in today", "should_trigger": true },
+  { "query": "summarize my unread email", "should_trigger": true },
+  { "query": "run email intelligence on my inbox", "should_trigger": true },
+  { "query": "what's important in my email backlog", "should_trigger": true },
+
+  { "query": "draft an email to Sara about the demo", "should_trigger": false },
+  { "query": "reply to this email from the investor", "should_trigger": false },
+  { "query": "check telegram", "should_trigger": false },
+  { "query": "follow up with the Nimbus contact", "should_trigger": false },
+  { "query": "write a letter of introduction to the minister", "should_trigger": false },
+  { "query": "process viraid", "should_trigger": false },
+  { "query": "add this person to the CRM", "should_trigger": false }
+]

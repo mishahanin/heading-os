@@ -1,0 +1,13 @@
+# Customization defaults for /deep-think (pilot).
+# This is layer 1 (skill defaults). Team overrides live in
+# config/skill-custom/deep-think.toml; personal overrides in
+# config/skill-custom/deep-think.user.toml (gitignored).
+# Resolve with: python scripts/resolve_customization.py --skill .claude/skills/deep-think
+# Layout + merge rules: config/skill-custom/README.md
+#
+# Recognised keys (all optional; the skill honours them if present):
+#   activation_steps_prepend = ["..."]  # extra steps to run before the default flow
+#   persistent_facts         = ["..."]  # facts to always honour (e.g. default depth, currency)
+#   output_path              = "..."    # override the default save location
+
+[workflow]

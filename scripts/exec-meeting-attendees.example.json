@@ -1,0 +1,13 @@
+{
+  "_comment": "EXAMPLE executive-meeting attendee roster. The engine ships this generic template; the real roster is private DATA at <data-root>/config/exec-meeting-attendees.json (resolved via get_data_config_dir()). Each entry is [role, name].",
+  "attendees": [
+    ["CEO", "Example CEO"],
+    ["CFO", "Example CFO"],
+    ["CTO", "Example CTO"],
+    ["Business Development & Sales", "Example BD Lead"],
+    ["VP R&D / Product", "Example VP Product"],
+    ["Chief AI Strategy / Innovation", "Example AI Lead"],
+    ["COO / Operations", "Example COO"],
+    ["Special Guest (if needed)", "—"]
+  ]
+}

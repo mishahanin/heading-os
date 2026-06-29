@@ -1,0 +1,10 @@
+{
+  "id": "case-3-radar-tiering",
+  "description": "Confirms /crm radar mode uses health tiering (RED / YELLOW / GREEN or equivalent overdue/approaching/healthy) when surfacing relationship status.",
+  "input": "Explain how /crm radar surfaces contacts that need attention.",
+  "checks": {
+    "must_mention": ["overdue"],
+    "min_words": 50,
+    "hidden_chars_clean": true
+  }
+}

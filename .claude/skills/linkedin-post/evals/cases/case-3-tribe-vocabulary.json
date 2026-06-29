@@ -1,0 +1,12 @@
+{
+  "id": "case-3-tribe-vocabulary",
+  "description": "Confirms the skill stays in 31C terminology - uses 'Tribe' (not 'team'), references ODUN.ONE correctly, avoids generic corporate vocabulary.",
+  "input": "Draft a LinkedIn post about scaling a deep-tech startup team. Use specific examples from how 31C has structured its engineering and sales group.",
+  "checks": {
+    "must_mention": ["Tribe"],
+    "must_not_mention": ["the team", "our team is", "our family", "synergize", "in today's rapidly evolving"],
+    "min_words": 150,
+    "max_words": 450,
+    "hidden_chars_clean": true
+  }
+}

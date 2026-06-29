@@ -1,0 +1,149 @@
+# Associative-memory index config / Конфиг ассоциативной памяти
+#
+# Drives scripts/memory-index.py: which layers to embed, the local embedder,
+# the salience threshold, and the air-gap denylist.
+# Задаёт scripts/memory-index.py: какие слои индексировать, локальный эмбеддер,
+# порог релевантности и воздушный зазор (denylist).
+#
+# The index lives at .memory-index/ (gitignored, rebuildable -- "hippocampus",
+# not source of truth). Индекс в .memory-index/ (gitignored, пересобираемый).
+
+# Local embedder (ollama). bge-m3 is multilingual (RU/EN), 1024-dim.
+# Локальный эмбеддер. host вынесен сюда => будущий VM-офлоад = смена строки.
+model: bge-m3
+host: "http://localhost:11434"
+
+# Salience threshold: hits cluster 0.56-0.61, empty 0.49-0.53 (tested on Odin).
+# Порог релевантности (тест на мозге Один: попадания 0.56-0.61, пустота 0.49-0.53).
+threshold: 0.55
+
+# Max ranked hits returned by query. / Макс. число ранжированных попаданий.
+top_k: 8
+
+# R7 ranking: after the RRF candidate set is built, reorder by a weighted blend
+# of semantic relevance (cosine), recency, and importance. Ship defaults per
+# the plan; tune from observed recall. / Ранжирование R7: пересортировка
+# кандидатов по смеси релевантности, свежести и важности.
+rank_weights:
+  semantic: 0.60       # cosine relevance
+  recency: 0.20        # exponential decay (half-life below); status:evergreen floors at ~0.7
+  importance: 0.20     # confidence high/medium/low -> 1.0/0.7/0.4; episodes biased down
+recency_decay: exponential
+recency_halflife_days: 180
+
+# R8 PageRank associative recall: optional enrichment over the wiki-links graph.
+# Personalised PageRank seeds from the query's matching entities, then propagates
+# importance along [[wiki-links]] -- surfacing multi-hop associations that
+# similarity search alone misses (HippoRAG). Disabled by default; /odin recall
+# activates it. Pure-Python (scripts/odin_pagerank.py), no new dependency.
+pagerank:
+  enabled: false                 # set true to activate PPR recall enrichment
+  convergence_threshold: 1.0e-6  # power-iteration stopping criterion
+  max_iterations: 100            # safeguard iteration cap
+  mode: "r7+ppr"                # ppr | r7+ppr | hybrid
+  blend_weights:                 # used in r7+ppr and hybrid modes
+    relevance: 0.50              # lexical/semantic relevance component
+    pagerank: 0.50               # graph-proximity (PPR) component
+  seed_threshold: 0.45           # min match score to seed PPR (broadens seed set)
+
+# Layers to index -- allowlist of globs, each tagged with a layer label.
+# Workspace-wide recall (2026-06-11): the four original BUSINESS layers plus the
+# rest of the workspace's meaningful prose (content) and a separate `code`
+# collection (skills, rules). Allowlist subtrees keep caches, _sync/, browser/,
+# state.json and binaries out by construction; only *.md is indexed (binary
+# source-of-truth enters via its *-extract.md companion). The whole index is
+# ceo-only and never synced. Order matters: the FIRST layer to claim a path
+# keeps it (so odin-brain stays in `odin`, not the broader `knowledge` layer).
+# Слои для индекса -- allowlist glob с меткой слоя. Recall по всему workspace:
+# 4 исходных бизнес-слоя + остальная осмысленная проза (content) + отдельная
+# коллекция `code` (скиллы, правила). Весь индекс ceo-only, не синкается.
+layers:
+  - layer: odin
+    # Episodes (lived evidence, dated) join the brain layer for recall. They are
+    # tagged ntype=episode, so consult still ranks them below positions -- the
+    # trust gradient is applied downstream in synthesis, not in this recall index.
+    glob: "knowledge/odin-brain/{principles,positions,sources,episodes}/*.md"
+  - layer: thread
+    glob: "threads/business/*.md"
+  - layer: crm
+    glob: "crm/contacts/*.md"   # ceo-only business CRM, indexed on purpose (Decision 6)
+  - layer: linkedin
+    glob: "datastore/content/linkedin-archive/**/*.md"  # Misha's published posts/articles (public, ceo-only). Recall layer only -- NOT distilled into Odin's brain (that is a separate curated pass).
+  # --- content collection (workspace-wide prose) ---
+  - layer: context
+    glob: "context/*.md"        # strategy, people, pipeline, personal-info (ceo-only, local)
+  - layer: reference
+    glob: "reference/**/*.md"
+  - layer: plans
+    glob: "plans/**/*.md"       # active + archive
+  - layer: outputs
+    # Allowlisted deliverable subtrees only -- excludes browser/, _sync/, caches,
+    # state.json, clipboard, and any non-.md by construction.
+    glob: "outputs/{intel,deliverables,negotiations,research,operations,content}/**/*.md"
+  - layer: knowledge
+    glob: "knowledge/**/*.md"   # general /zk notes; odin-brain already claimed by `odin` above (first-claim)
+  - layer: datastore-extract
+    glob: "datastore/**/*-extract.md"  # markdown companions of binary source-of-truth docs
+  - layer: memory
+    glob: "auto-memory/*.md"  # canonical data auto-memory (kept in sync with the native harness store by .claude/hooks/memory-reconcile.py)
+  # --- code collection (the machinery, queried separately) ---
+  - layer: skill
+    glob: ".claude/skills/**/SKILL.md"
+  - layer: rule
+    glob: ".claude/rules/*.md"
+
+# Collections -- named groups of layers for `query --collection`. `content` is the
+# default (what we know / decided); `code` is the machinery (how skills/rules work),
+# kept out of the default result set so the two registers don't mix. `all` = both.
+# Коллекции -- именованные группы слоёв для `query --collection`.
+#
+# TWO PHYSICAL STORES (2026-06-16): the `content` collection builds from the DATA
+# root into .memory-index/index.db; the `code` collection (skill/rule) builds from
+# the ENGINE root into .memory-index-code/index.db (inside the engine clone). Each
+# artifact on its own side of the engine/data seam -- no cross-seam join, engine
+# self-sufficient for code search, no public-code rows in the private data repo.
+# `build` fills both; `query` opens the store(s) the collection needs (`all` pools
+# both and fuses once). Both stores are gitignored, rebuildable caches.
+collections:
+  content: [odin, thread, crm, linkedin, context, reference, plans, outputs, knowledge, datastore-extract, memory]
+  code: [skill, rule]
+
+# Chunking (2026-06-11): long documents are split into overlapping chunks, each
+# embedded as its own row (id = path for chunk 0, path#N for the rest), so content
+# buried past the first window is recallable. Only long-form layers are chunked;
+# short/atomic layers (crm, memory, odin, linkedin, context, skill, rule) stay
+# one-row. max_chunks caps cost on giant extract tables. Query dedups to the best
+# chunk per file. / Чанкинг: длинные доки бьются на перекрывающиеся куски.
+chunk:
+  enabled_layers: [datastore-extract, outputs, reference, plans, knowledge, thread]
+  max_chars: 700        # target chunk size (characters)
+  overlap: 120          # characters carried between consecutive chunks
+  max_chunks: 12        # hard cap per file (bounds cost on huge extracts)
+
+# Session-start injection (2026-06-11, point 4): the "injection leg". When ON, the
+# memory-inject.py SessionStart hook reads index METADATA only (no ollama, no
+# embedding) and injects a capped salience snapshot of recent/important memory
+# into the first turn. Salience = status:evergreen first, then most-recent. The
+# `memory` layer is excluded (MEMORY.md is already injected by the memory system).
+# Default OFF -- opt-in, so it can never silently bloat context. / Инъекция памяти
+# на старте сессии. По умолчанию ВЫКЛ.
+inject:
+  enabled: true           # opt-in; flip to true to activate the snapshot
+  max_tokens: 1300        # hard cap (~chars/4) on the injected block
+  layers: [thread, odin, context]   # never 'memory' (already injected elsewhere)
+  quota: {thread: 4, odin: 4, context: 4}   # per-layer slot guarantee; without it, top_k splits evenly across layers
+  top_k: 12               # fallback total when no quota map is set
+
+# Air-gap. Two classes never touch the index:
+#   deny_prefixes -- path starts with any of these (the vault).
+#   deny_segments -- any path segment equals one of these (personal branches).
+# Воздушный зазор. Два класса никогда не попадают в индекс:
+#   deny_prefixes -- путь начинается с любого (vault).
+#   deny_segments -- любой сегмент пути равен одному из них (личные ветки).
+# NB: crm/contacts/ is flat with no `personal` segment, so it is NOT excluded
+#     -- that is intentional (business CRM belongs in recall). A future
+#     personal CRM must live under a `personal` segment to be air-gapped.
+deny_prefixes:
+  - "_secure/"
+deny_segments:
+  - "personal"

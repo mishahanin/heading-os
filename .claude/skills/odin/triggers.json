@@ -1,0 +1,16 @@
+[
+  {"query": "ask Odin what he thinks about our positioning", "should_trigger": true},
+  {"query": "what would Odin say about the ExampleCorp deal", "should_trigger": true},
+  {"query": "Odin log — we just signed the mou with ExampleCorp", "should_trigger": true},
+  {"query": "odin teach me how the five principles apply here", "should_trigger": true},
+  {"query": "odin recall what we know about Jane", "should_trigger": true},
+  {"query": "compile the brain", "should_trigger": true},
+  {"query": "log this episode — alice introduced us to bob", "should_trigger": true},
+  {"query": "skill-proposal based on this principle", "should_trigger": true},
+  {"query": "think through the implications of this pricing", "should_trigger": false},
+  {"query": "add a note about the meeting in Abu Dhabi", "should_trigger": false},
+  {"query": "research exampletelco and their leadership", "should_trigger": false},
+  {"query": "what would Gemini say about our positioning", "should_trigger": false},
+  {"query": "second opinion on the deal strategy", "should_trigger": false},
+  {"query": "council vote on whether to proceed", "should_trigger": false}
+]

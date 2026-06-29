@@ -1,0 +1,14 @@
+[
+  {"query": "deep-research-advance the EU AI Act enforcement timeline", "should_trigger": true},
+  {"query": "run advanced deep research on the global DPI vendor landscape", "should_trigger": true},
+  {"query": "deep research with verification on subsea cable geopolitics", "should_trigger": true},
+  {"query": "do a thorough fact-checked report on sovereign cloud regulation in the GCC", "should_trigger": true},
+  {"query": "advanced deep research: state of post-quantum crypto standards", "should_trigger": true},
+  {"query": "deep-research-advance trends in lawful intercept legislation", "should_trigger": true},
+  {"query": "what do we know about ExampleTelco from our own notes", "should_trigger": false},
+  {"query": "recall where we decided the Q3 pricing", "should_trigger": false},
+  {"query": "investigate this person's background for a meeting", "should_trigger": false},
+  {"query": "quick lookup: what's ExampleCorp's headquarters city", "should_trigger": false},
+  {"query": "what would Odin say about this partnership", "should_trigger": false},
+  {"query": "summarize my inbox this morning", "should_trigger": false}
+]

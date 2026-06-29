@@ -1,0 +1,17 @@
+[
+  { "query": "what should I do now", "should_trigger": true },
+  { "query": "what's next", "should_trigger": true },
+  { "query": "where were we", "should_trigger": true },
+  { "query": "what's the logical next step", "should_trigger": true },
+  { "query": "recommend my next move", "should_trigger": true },
+  { "query": "I just finished the osint brief, now what", "should_trigger": true },
+  { "query": "I'm at a lull, what should I pick up", "should_trigger": true },
+
+  { "query": "prime the workspace", "should_trigger": false },
+  { "query": "load my full context", "should_trigger": false },
+  { "query": "how are we doing, run a state check", "should_trigger": false },
+  { "query": "give me the morning dashboard", "should_trigger": false },
+  { "query": "do the weekly review", "should_trigger": false },
+  { "query": "what's on my calendar tomorrow", "should_trigger": false },
+  { "query": "check what's new across my comms", "should_trigger": false }
+]

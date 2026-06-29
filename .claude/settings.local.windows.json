@@ -1,0 +1,173 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude doctor:*)",
+      "Bash(claude --version)",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(curl:*)",
+      "Bash(cd:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(set -e)",
+      "Bash(mullvad relay *)",
+      "Bash(mullvad connect *)",
+      "Bash(python scripts/perplexity-research.py:*)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Read(//c/ai/claude-workspaces/**)",
+      "Read(//c/Users/*/.claude/**)",
+      "WebSearch",
+      "WebFetch(domain:worldmonitor.app)",
+      "WebFetch(domain:tech.worldmonitor.app)",
+      "WebFetch(domain:finance.worldmonitor.app)",
+      "WebFetch(domain:www.worldmonitor.app)",
+      "WebFetch(domain:github.com)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='session-start.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='bridge-hook.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\" session-start",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "compact|clear|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='checkpoint-inject.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='bridge-hook.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\" session-end",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='bridge-hook.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\" stop",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='checkpoint-offer.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='checkpoint-save.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;from pathlib import Path;p=next((str(d/'.claude'/'hooks'/'_dispatch.py') for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/'_dispatch.py').is_file()),None);p and runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;from pathlib import Path;p=next((str(d/'.claude'/'hooks'/'_dispatch.py') for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/'_dispatch.py').is_file()),None);p and runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;from pathlib import Path;p=next((str(d/'.claude'/'hooks'/'_dispatch.py') for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/'_dispatch.py').is_file()),None);p and runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='post-write-sanitize.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='sync-docs.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 10,
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='prompt-guard.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 2,
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='context-monitor.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='checkpoint-statusline.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\""
+  }
+}

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory &amp; ODIN — HEADING OS</title>
+<meta name="description" content="How all six memory mechanisms in HEADING OS work — auto-memory, semantic recall, the ODIN brain, the knowledge base, threads, and the maintenance passes — and how to operate ODIN.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><span class="mark">H</span> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html" class="active">Memory &amp; ODIN</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+  <h1>Memory &amp; ODIN</h1>
+  <p class="page-meta">HEADING OS does not have "a memory." It has <strong>six distinct mechanisms</strong>, each tuned to a different shape of recall, plus ODIN — a curated, opinionated long-term brain. All storage resolves under the private <a href="data-structure.html">data overlay</a> via the data-root seam; the engine never holds real data.</p>
+
+  <h2>The mental model</h2>
+  <p>Auto-memory is sticky notes that always load; the memory-index is associative recall that finds things by meaning; ODIN is a curated, opinionated long-term brain; the knowledge base is a second brain of atomic notes; threads are live operational state; and dream / memory-hygiene are the maintenance crew.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>#</th><th>Mechanism</th><th>What it is</th><th>Auto-loaded?</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><strong>Auto-memory</strong></td><td>One-fact-per-file persistent facts + a <code>MEMORY.md</code> index</td><td>Yes — index injected every session</td></tr>
+      <tr><td>2</td><td><strong>Semantic recall / memory-index</strong></td><td>Local hybrid (dense + BM25) associative index</td><td>No — invoked via <code>/recall</code></td></tr>
+      <tr><td>3</td><td><strong>ODIN brain</strong></td><td>Curated principles, positions, episodes, sources</td><td>No — invoked via <code>/odin</code></td></tr>
+      <tr><td>4</td><td><strong>Knowledge base / ZK</strong></td><td>Zettelkasten second brain of atomic notes</td><td>No — invoked via <code>/zk</code></td></tr>
+      <tr><td>5</td><td><strong>Threads</strong></td><td>Operational registry of ongoing situations</td><td>Active-thread list injected each session</td></tr>
+      <tr><td>6</td><td><strong>Dream + memory-hygiene</strong></td><td>Consolidation and rot-detection passes</td><td>No — invoked via <code>/dream</code>, <code>/memory-hygiene</code></td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>How they relate.</strong> The memory-index (2) is the connective tissue: it indexes <em>across</em> auto-memory, the ODIN brain, threads, CRM, context, reference, plans, knowledge, and deliverable outputs, so <code>/recall</code> answers by meaning over everything. ODIN's own <code>recall</code> mode is a <strong>brain-scoped</strong> slice of the same engine. Dream (6) consolidates auto-memory (1); memory-hygiene (6) audits both auto-memory and the ODIN brain.</p>
+
+  <h2>1. Auto-memory — file-based persistent facts</h2>
+  <p>The always-on cross-session memory. Each durable fact is a <strong>single Markdown file</strong> with YAML frontmatter, and a flat index (<code>MEMORY.md</code>) lists every fact as a one-line pointer. The index is injected into context at the start of every session, so the assistant orients on prior learnings without reading any file body until it needs the detail.</p>
+  <p><strong>Where it lives:</strong> <code>&lt;data-root&gt;/auto-memory/</code>, indexed by <code>auto-memory/MEMORY.md</code> (pointers only, kept under a line budget).</p>
+  <pre><code>---
+name: console-first-no-web-dependency
+description: "One-line description — specific enough to judge relevance"
+metadata:
+  type: feedback        # user | feedback | project | reference
+---
+
+The fact, in prose. For feedback/project facts, follow with
+**Why:** and **How to apply:** lines.</code></pre>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Type</th><th>Holds</th></tr></thead>
+    <tbody>
+      <tr><td><strong>user</strong></td><td>Facts about the operator — role, preferences, identity, how they want to be addressed.</td></tr>
+      <tr><td><strong>feedback</strong></td><td>Standing guidance on <em>how to do the work</em> — corrections and confirmed-good practices.</td></tr>
+      <tr><td><strong>project</strong></td><td>Ongoing work, decisions, deadlines, infrastructure state.</td></tr>
+      <tr><td><strong>reference</strong></td><td>Pointers to external systems and resources.</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>What NOT to store:</strong> code patterns / architecture (derivable by reading the project), git history (authoritative on its own), one-off debugging fixes (the fix is in the code), anything already in a <code>CLAUDE.md</code>, and ephemeral task detail. Memory is for what you cannot re-derive. Fact bodies carry an age banner — memories are point-in-time observations, not live state.</p>
+
+  <h2>2. Semantic recall / memory-index — associative memory</h2>
+  <p>A <strong>local, zero-API-cost associative-memory index</strong> (<code>scripts/memory-index.py</code>) that finds notes by <em>meaning</em> — including cross-lingual — where grep finds only exact words. Recall is <strong>hybrid</strong>: a dense channel (embedding cosine similarity via the local <code>bge-m3</code> model through Ollama) fused with a sparse channel (SQLite FTS5 BM25) using Reciprocal Rank Fusion, then re-ranked by a weighted blend of relevance, recency, and importance.</p>
+  <p>It is the "hippocampus": a <strong>rebuildable cache, never the source of truth</strong>. The notes ("neocortex") stay in git; the index is gitignored.</p>
+  <ul>
+    <li><strong>Content store:</strong> <code>.memory-index/index.db</code> (under the data root) — the private content layers.</li>
+    <li><strong>Code store:</strong> <code>.memory-index-code/index.db</code> (under the engine root) — a separate store for the <code>code</code> collection (skills, rules), keeping each collection's paths relative to its own side of the seam.</li>
+  </ul>
+  <p><strong>Air-gap is structural:</strong> denied paths (the <code>_secure/</code> prefix and any <code>personal</code> path segment) are never read, so they can never be retrieved — enforced in code, not just config.</p>
+  <div class="callout note">
+    <span class="ttl">First build is slow — and that is normal</span>
+    A full <code>memory-index.py build</code> takes ~85 minutes on CPU (~7,300 chunks at ~0.7s each). It commits per file with <code>+ path [NN%]</code> progress and <strong>resumes</strong> if interrupted; later runs are incremental and fast. A daily refresh timer keeps both stores current.
+  </div>
+  <h4>Recall in practice (<code>/recall</code>)</h4>
+  <pre><code>uv run python scripts/memory-index.py build                          # refresh (incremental)
+uv run python scripts/memory-index.py query "&lt;question&gt;" --json       # default --collection content
+#   --collection code   skills/rules     --collection all   both      --layer NAME   pin one layer</code></pre>
+  <p>The <code>/recall</code> skill reads the top cited files and composes an answer grounded <strong>only</strong> in what those files say, citing each claim by file path. If the engine reports a <strong>gap</strong> (nothing above the salience threshold), <code>/recall</code> says so plainly — <em>"not in memory"</em> — and never pads or answers from general knowledge.</p>
+  <p>Use <code>/recall</code> for workspace-wide recall; <code>/odin recall</code> for brain-scoped only; <code>Grep</code> for exact-string search; <code>/osint</code> for external/world intel (not memory).</p>
+
+  <h2>3. ODIN brain — the curated long-term advisor</h2>
+  <p>A persistent, <strong>opinionated</strong> knowledge brain that ingests books, articles, videos, and documents, extracts <strong>principles</strong>, forms <strong>positions</strong>, records <strong>episodes</strong> (things that happened), detects conflicts, and gives <strong>referenced</strong> first-person advice that prioritizes learned knowledge over general reasoning. Full operating guide below.</p>
+  <p><strong>Where it lives:</strong> <code>&lt;data-root&gt;/knowledge/odin-brain/</code> — <code>principles/</code>, <code>positions/</code>, <code>episodes/</code>, <code>sources/</code>, <code>conflicts/</code>, and a regenerated <code>INDEX.md</code> with brain stats. Every write is sanitized, then both indexes refresh (brain <code>INDEX.md</code> + the memory-index).</p>
+
+  <h2>4. Knowledge base / ZK — the second brain</h2>
+  <p>A Zettelkasten second brain over <code>&lt;data-root&gt;/knowledge/</code>: atomic notes, wiki-links, a status lifecycle, and anti-dumping discipline. Driven by <code>/zk</code> with subcommands <code>add | enrich | find | connect | distill | garden | stats | brief</code>. In a single-operator deployment, prefer ODIN / threads / auto-memory; in a multi-user fleet, executives lean on <code>/zk</code>.</p>
+
+  <h2>5. Threads — operational state as durable memory</h2>
+  <p>An operational registry of ongoing situations, each a dated Markdown file with a <code>## Log</code> of activity. Managed by <code>/thread</code> (<code>open | log | close | hold | reopen | list | find</code>). The active-thread list is injected into context each session. Lives in <code>&lt;data-root&gt;/threads/business/</code> (and a personal tree, which is operator-only and excluded from the memory-index by the <code>personal</code>-segment air-gap). Use a thread for a live, multi-step situation with an open/closed lifecycle — not a single fact (auto-memory) or a generic note (<code>/zk</code>).</p>
+
+  <h2>6. Dream + memory-hygiene — the maintenance crew</h2>
+  <p>They split cleanly: <strong><code>/dream</code> is the fixer (judgement)</strong>, <strong><code>/memory-hygiene</code> is the detector (mechanical only)</strong>.</p>
+  <ul>
+    <li><strong><code>/dream</code></strong> (explicit-invocation only) — a periodic pass over auto-memory: merges related facts, converts relative dates to absolute, fixes contradictions at the source, deletes superseded files, and keeps <code>MEMORY.md</code> under budget. Runs a mandatory security gate (no secrets ever enter memory) and a docs-validation step, and respects <code>managed-by</code> sections like <code>## Active Threads</code>.</li>
+    <li><strong><code>/memory-hygiene</code></strong> — runs <code>scripts/memory-hygiene.py</code> across auto-memory + the ODIN brain, flagging only mechanically-verifiable rot (dangling references, orphan files, an over-budget index). It <strong>never mutates memory</strong> — it hands the worklist to <code>/dream</code>.</li>
+  </ul>
+
+  <h2>Working with ODIN</h2>
+  <p>ODIN is a persistent AI advisor <em>with his own knowledge brain</em>. He forms opinions, defends them, and challenges weak thinking. Every consult answer is <strong>referenced</strong> (each claim links to its brain origin) and <strong>prioritizes learned knowledge</strong> over general reasoning.</p>
+  <div class="callout note">
+    <span class="ttl">Trigger discipline</span>
+    ODIN triggers only on "Odin" as a <strong>proper name or form of address</strong> — <code>/odin</code>, "ask Odin", "what would Odin say". He must not trigger on <em>odin</em> used as the numeral "one" in other-language phrasing.
+  </div>
+
+  <h3>The principle / position / episode model</h3>
+  <p>ODIN's knowledge is a three-tier ladder plus its raw inputs:</p>
+  <ul>
+    <li><strong>Source</strong> — external material he ingested. The evidence base.</li>
+    <li><strong>Principle</strong> — one atomic belief, with a <code>confidence</code> (high/medium/low), an <code>## Application</code>, and <code>## Boundaries</code>. Extracted from sources or taught directly.</li>
+    <li><strong>Position</strong> — a committed <em>stance</em> synthesized from multiple principles, with a <code>revisit_when</code> condition and <code>## Known Weaknesses</code>.</li>
+    <li><strong>Episode</strong> — dated <em>lived evidence</em> of something that happened. It has <em>no</em> confidence (it is a happening, not a conviction), sits below principles and positions, and never overrides them; it only becomes a belief by maturing into a principle through <code>reflect</code>, with explicit human confirmation.</li>
+  </ul>
+  <p>Conflicts are a fifth file type recording a direct contradiction for the human to resolve — ODIN never resolves a conflict silently. The ladder: <strong>episodes graduate into principles; principles cluster into positions.</strong> Notes are never deleted when superseded — temporal-validity fields mark history instead.</p>
+
+  <h3>The 9 modes</h3>
+  <p>Invoke as <code>/odin [mode] [source-or-question]</code>. With no arguments, ODIN shows a mode menu.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Mode</th><th>What it does</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td><strong>learn</strong></td><td>Full absorption of an external source — extracts/updates principles, cross-references the brain, classifies relationships, updates positions.</td><td><code>/odin learn https://youtube.com/watch?v=...</code></td></tr>
+      <tr><td><strong>consult</strong> <em>(default)</em></td><td>Advice grounded in the brain with inline references, a mandatory Challenge section, a Sources table, and a brain-audit footer. Offers writeback to save a new synthesis.</td><td><code>/odin consult Should we pursue this deal?</code></td></tr>
+      <tr><td><strong>recall</strong></td><td>Direct inventory query of what the brain holds — sources, principles, positions, episodes, conflicts, and gaps. Read-only w.r.t. the brain.</td><td><code>/odin recall antifragility</code></td></tr>
+      <tr><td><strong>reflect</strong></td><td>ODIN reviews his own brain for growth: clusters episodes into maturation candidates, finds orphan principles and stale positions. Graduation is human-confirmed.</td><td><code>/odin reflect</code></td></tr>
+      <tr><td><strong>teach</strong></td><td>You teach ODIN directly from experience — no external source. Writes a principle, flags any conflict with existing knowledge.</td><td><code>/odin teach In this market, speed beats perfection</code></td></tr>
+      <tr><td><strong>log</strong></td><td>Record an <strong>episode</strong> — a dated thing that happened. No confidence; light capture, not analysis. Matures later via <code>reflect</code>.</td><td><code>/odin log Their CTO pushed back hard on on-prem pricing</code></td></tr>
+      <tr><td><strong>collect</strong></td><td>On-demand, air-gapped scan of a business-only allowlist for dated happenings you forgot to log. De-dupes, presents candidates, per-candidate human approval, then writes through <code>log</code>. Never scheduled.</td><td><code>/odin collect --since 2026-05-19</code></td></tr>
+      <tr><td><strong>compile</strong></td><td>Unified linting across the brain and the ZK knowledge base — cross-links, contradictions, gaps, temporal-validity errors.</td><td><code>/odin compile</code></td></tr>
+      <tr><td><strong>skill-proposal</strong></td><td>Turn a reflection-derived how-to principle into a <em>proposed</em> checklist step inside a target skill — emits a unified diff for you to apply. Never edits a skill file itself.</td><td><code>/odin skill-proposal turn &lt;principle&gt; into a step in /proposal</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>ODIN's non-negotiable rules</h3>
+  <ol>
+    <li><strong>Knowledge priority is sacred</strong> — brain knowledge always comes before general reasoning.</li>
+    <li><strong>Challenge is mandatory</strong> on every consult — no exceptions.</li>
+    <li><strong>Never resolve conflicts silently</strong> — report and wait for human direction.</li>
+    <li><strong>Source everything; first person always</strong> ("I think", not "based on analysis").</li>
+    <li><strong>Honest about gaps</strong> — if the brain is empty, say so and offer to learn.</li>
+    <li><strong>All writes stay inside <code>knowledge/odin-brain/</code></strong>, are sanitized, and refresh both indexes.</li>
+    <li><strong>The <code>collect</code> air-gap runs in code first</strong> — the personal/secure boundary is enforced before any text reaches the model, never delegated to it.</li>
+  </ol>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

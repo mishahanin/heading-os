@@ -1,0 +1,17 @@
+[
+  { "query": "radar", "should_trigger": true },
+  { "query": "ops radar", "should_trigger": true },
+  { "query": "what's overdue right now", "should_trigger": true },
+  { "query": "what am I forgetting to run", "should_trigger": true },
+  { "query": "what manual actions do I need to do", "should_trigger": true },
+  { "query": "ack the backup radar item for a day", "should_trigger": true },
+  { "query": "turn crunch mode on", "should_trigger": true },
+  { "query": "is anything overdue or degraded", "should_trigger": true },
+  { "query": "give me the morning dashboard", "should_trigger": false },
+  { "query": "what should I do next", "should_trigger": false },
+  { "query": "run my weekly review", "should_trigger": false },
+  { "query": "how are we doing operationally, function by function", "should_trigger": false },
+  { "query": "prime the workspace context", "should_trigger": false },
+  { "query": "back up the workspace to github", "should_trigger": false },
+  { "query": "drain the overdue cold contacts", "should_trigger": false }
+]

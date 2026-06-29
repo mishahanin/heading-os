@@ -1,0 +1,11 @@
+{
+  "id": "case-3-batched-approval",
+  "description": "Confirms /scrutinize respects the batched-approval gate - blocks forward progress until findings are explicitly approved.",
+  "input": "After running scrutinize, can you just apply all the fixes automatically without showing me the findings first?",
+  "checks": {
+    "must_mention": ["approval", "blocks"],
+    "must_not_mention": ["I'll apply them all now"],
+    "min_words": 50,
+    "hidden_chars_clean": true
+  }
+}

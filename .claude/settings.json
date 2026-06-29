@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import os,runpy;from pathlib import Path;p=next((str(d/'.claude'/'hooks'/'data-path-redirect.py') for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/'data-path-redirect.py').is_file()),None);p and runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "playwright@claude-plugins-official": false,
+    "security-guidance@claude-plugins-official": true
+  }
+}

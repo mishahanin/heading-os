@@ -1,0 +1,235 @@
+/* 31C Brand System - Injectable CSS
+   Consumed by: scripts/design-studio.py
+   Source of truth: .claude/skills/pptx-generator/brands/31c/brand.json
+   Brand authority: datastore/products/odun-one/presentations/31C - ODUN.ONE Product Presentation (Master, 12-Apr-2026).pptx
+   Font usage guide: reference/31c-typeface-usage.md
+   Last Updated: 2026-04-09
+
+   TWO MODES:
+   - Dark mode (:root default) - covers, section dividers, hero/cinematic slides, dashboards
+   - Light mode (.light-mode or [data-mode="light"]) - content slides, data slides, corporate documents
+
+   SIGNATURE ELEMENTS (both modes):
+   - Orange corner block: top-left, 56x68px, #F5922B, no border-radius
+   - 31C logo: bottom-left (blue on light, blue on dark)
+   - Copyright footer: bottom-right "© 2025-2026 / 31 Concept 31C.io / Proprietary & Confidential"
+   - Blue accent squares: small floating #5B5FFF squares on cinematic/dark slides
+   - Blue top border on cards: 3-4px solid #5B5FFF
+
+   WHEN TO USE WHICH MODE:
+   - Corporate documents (org charts, data slides, proposals, reports) -> LIGHT MODE
+   - Cover slides, section dividers, hero imagery, dashboards -> DARK MODE
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400&display=swap');
+
+/* GT Standard - primary corporate font (Medium for headings, Light for body) */
+@font-face {
+  font-family: 'GT Standard';
+  src: url('../../../datastore/brand/fonts/GT Standard/GT-Standard-L-Standard-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GT Standard';
+  src: url('../../../datastore/brand/fonts/GT Standard/GT-Standard-L-Standard-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 31C TypeFace - display/accent font for numbered markers and hero text ONLY */
+@font-face {
+  font-family: '31C Horizontal T03 Clarity';
+  src: url('../../../datastore/brand/fonts/31C_TypeFace/31C-Horizontal/Web/31CHorizontalT03-Clarity.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* === DARK MODE (default) === */
+:root {
+  --bg: #000000;
+  --bg-alt: #0A0A14;
+  --bg-content: #EEECEA;
+  --text: #FFFFFF;
+  --text-secondary: #B0B0C0;
+  --text-dark: #1A1A1A;
+  --text-mid: #555555;
+  --text-light: #999999;
+  --accent: #5B5FFF;
+  --accent-secondary: #FF8C00;
+  --accent-tertiary: #8B8FCC;
+  --orange: #F5922B;
+  --card-bg: #12122A;
+  --card-bg-alt: #1A1A35;
+  --card-bg-light: #FFFFFF;
+  --code-bg: #0D0D15;
+  --shadow-light: 0 2px 16px rgba(0,0,0,0.06);
+  --font-heading: 'GT Standard', 'Inter', sans-serif;
+  --font-body: 'GT Standard', 'Inter', sans-serif;
+  --font-display: '31C Horizontal T03 Clarity', sans-serif;
+  --font-code: 'JetBrains Mono', monospace;
+}
+
+/* === LIGHT MODE (corporate documents, content slides, data slides) === */
+.light-mode, [data-mode="light"] {
+  --bg: #EEECEA;
+  --bg-alt: #E5E3E0;
+  --text: #1A1A1A;
+  --text-secondary: #555555;
+  --card-bg: #FFFFFF;
+  --card-bg-alt: #F5F5F3;
+  --code-bg: #F0F0EE;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Typography scale - GT Standard primary, Inter fallback */
+h1 { font-family: var(--font-heading); font-weight: 500; font-size: 30px; line-height: 1.2; color: var(--text); }
+h2 { font-family: var(--font-heading); font-weight: 500; font-size: 24px; line-height: 1.3; color: var(--text); }
+h3 { font-family: var(--font-heading); font-weight: 500; font-size: 20px; line-height: 1.4; color: var(--text); }
+p  { font-family: var(--font-body); font-weight: 300; font-size: 16px; line-height: 1.6; color: var(--text); }
+small, .caption { font-size: 14px; font-weight: 300; line-height: 1.5; color: var(--text-secondary); }
+.display { font-family: var(--font-heading); font-weight: 500; font-size: 48px; line-height: 1.1; }
+
+/* 31C TypeFace - use ONLY for numbered markers and short display text.
+   Never for headings, body text, labels, or readable prose.
+   See reference/31c-typeface-usage.md for full rules. */
+.step-number, .list-marker {
+  font-family: var(--font-display);
+  font-weight: normal;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.step-number { font-size: 36px; color: var(--accent); }
+.step-number.lg { font-size: 48px; }
+.step-number.sm { font-size: 24px; }
+.step-number.orange { color: var(--accent-secondary); }
+.hero-display {
+  font-family: var(--font-display);
+  font-weight: normal;
+  font-size: 120px;
+  line-height: 1;
+}
+
+/* Accent utilities */
+.accent { color: var(--accent); }
+.accent-secondary { color: var(--accent-secondary); }
+.accent-tertiary { color: var(--accent-tertiary); }
+.text-secondary { color: var(--text-secondary); }
+
+/* Surface utilities */
+.card {
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 24px;
+}
+.card-alt {
+  background: var(--card-bg-alt);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+/* Code blocks */
+code, pre {
+  font-family: var(--font-code);
+  font-size: 14px;
+  background: var(--code-bg);
+  border-radius: 6px;
+}
+code { padding: 2px 6px; }
+pre { padding: 16px; overflow-x: auto; }
+
+/* Layout utilities */
+.container {
+  width: 100%;
+  height: 100%;
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.row { display: flex; gap: 24px; }
+.col { flex: 1; }
+.center { text-align: center; align-items: center; justify-content: center; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+
+/* ===== 31C SIGNATURE ELEMENTS ===== */
+
+/* Orange corner block - MUST appear on every slide/page, top-left, no border-radius */
+.orange-block {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56px;
+  height: 68px;
+  background: var(--orange);
+}
+
+/* Blue accent squares - floating on dark/cinematic slides */
+.accent-square {
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  position: absolute;
+}
+
+.pixel-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  opacity: 0.6;
+  position: absolute;
+}
+
+/* Card with blue top border - standard content card */
+.card-branded {
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 24px;
+  border-top: 4px solid var(--accent);
+  box-shadow: var(--shadow-light);
+}
+
+/* Footer - 31C logo left, copyright right */
+.footer {
+  position: absolute;
+  bottom: 16px;
+  left: 48px;
+  right: 48px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+.footer .logo img {
+  height: 24px;
+  opacity: 0.45;
+}
+.footer .copy {
+  font-size: 9px;
+  font-weight: 300;
+  color: var(--text-secondary);
+  text-align: right;
+  line-height: 1.5;
+}

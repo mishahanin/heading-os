@@ -1,0 +1,223 @@
+# Pre-commit hook configuration
+# Install: pip install pre-commit && pre-commit install
+# Run all: pre-commit run --all-files
+# Note: Runs alongside the existing custom .git/hooks/pre-commit (secret-scanner.py)
+
+repos:
+  # Secret scanning - catches credentials before they enter git
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        # Excludes for known structural false positives:
+        # - Bridge daemon runtime queue: every kind:conversation entry
+        #   carries an opaque Exchange ConversationId (high-entropy base64)
+        #   that is not a credential. Machine-written JSON, never hand-edited.
+        # - Marp-rendered HTML decks: embed GT Standard fonts as base64
+        #   woff2 data URIs. Structural artifact of marp --html-self-contained,
+        #   not a credential. Pattern covers all rendered HTML output under
+        #   outputs/operations/tribe-bootcamp/, outputs/operations/keynotes/,
+        #   and outputs/content/partner-enablement/.
+        exclude: |
+          (?x)^(
+            outputs/operations/bridge/critical-items\.jsonl|
+            outputs/operations/tribe-bootcamp/.*\.html|
+            outputs/operations/keynotes/.*\.html|
+            outputs/content/partner-enablement/.*\.html
+          )$
+
+  # Python security static analysis
+  - repo: https://github.com/PyCQA/bandit
+    rev: '1.7.8'
+    hooks:
+      - id: bandit
+        args: ['-c', 'pyproject.toml', '--severity-level', 'medium']
+        files: '\.py$'
+
+  # Python linting with security rules (S=bandit-equivalent only for pre-commit gate)
+  # Full rule set (S,B,A,C4,DTZ,T10,PIE,SIM,ERA) available via: ruff check --config pyproject.toml
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      - id: ruff
+        args: ['--select', 'S', '--ignore', 'S101,S105,S310,S603,S607']
+
+  # Standard pre-commit checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: debug-statements
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # _secure/ commit guard -- the vault was removed in Plan 5; this is retained
+  # as cheap defence-in-depth so any stray `_secure/` path can never be committed.
+  - repo: local
+    hooks:
+      - id: vault-guard
+        name: Block stray _secure/ paths from commits
+        entry: python3 -c "import sys; leaked=[f for f in sys.argv[1:] if '_secure/' in f.replace(chr(92),'/')]; (print('BLOCKED - vault files staged for commit') or [print(f'  {f}') for f in leaked] or sys.exit(1)) if leaked else sys.exit(0)"
+        language: system
+        pass_filenames: true
+
+  # Runtime-state guard -- blocks scratch and scheduler runtime files from commits
+  - repo: local
+    hooks:
+      - id: runtime-state-guard
+        name: Block runtime state (.tmp/, scheduled_tasks.*) from commits
+        entry: python3 -c "import sys; pats=['.tmp/', '.claude/scheduled_tasks.json', '.claude/scheduled_tasks.lock']; leaked=[f for f in sys.argv[1:] if any(p in f.replace(chr(92),'/') for p in pats)]; (print('BLOCKED - runtime state staged for commit (add to .gitignore, unstage, retry)') or [print(f'  {f}') for f in leaked] or sys.exit(1)) if leaked else sys.exit(0)"
+        language: system
+        pass_filenames: true
+
+  # Sentinel integration tests -- run ONLY when sentinel.py or tests/integration/ are staged
+  # (smart trigger per CEO decision 2026-04-19; avoids 10s slowdown on unrelated commits)
+  - repo: local
+    hooks:
+      - id: sentinel-integration-tests
+        name: Run sentinel integration tests (smart trigger)
+        entry: python3 scripts/run-integration-tests.py --quiet --no-cov
+        language: system
+        files: '^(scripts/sentinel\.py|tests/integration/)'
+        pass_filenames: false
+
+  # Skill-router sync -- enforces that every local skill has a matching router entry.
+  # Closes documentation drift gap from the 2026-05-14 workspace deep audit (P0.2c).
+  - repo: local
+    hooks:
+      - id: skill-router-sync
+        name: Verify every .claude/skills/*/SKILL.md has a matching skill-router.md entry
+        entry: python3 scripts/check-skill-router-sync.py --quiet
+        language: system
+        files: '^\.claude/(skills/.*/SKILL\.md|rules/skill-router\.md)$'
+        pass_filenames: false
+
+  # CRM schema enforcement -- closes P2.4 from the 2026-05-14 workspace deep audit.
+  # Blocks commits that introduce malformed CRM contact frontmatter (missing name/type/
+  # last_touch, invalid YAML, bad date format). Permissive on phone/email/type quality -
+  # those are flagged by crm-health.py but don't block commits.
+  - repo: local
+    hooks:
+      - id: crm-schema-validate
+        name: Validate CRM contact frontmatter against config/schemas/crm-contact.schema.json
+        entry: python3 scripts/validate-crm-schema.py --quiet
+        language: system
+        files: '^crm/contacts/.*\.md$'
+        pass_filenames: false
+
+  # Adversarial suite validation -- closes P1.4 from the 2026-05-17 workspace deep audit.
+  # Runs --dry-run only (no API calls) when an attack JSON changes, to catch malformed
+  # fixtures before they enter the suite. The full live run (with API costs) is reserved
+  # for manual invocation and CI.
+  - repo: local
+    hooks:
+      - id: adversarial-suite-validate
+        name: Validate adversarial prompt-injection fixtures (dry-run)
+        entry: python3 tests/security/prompt-injection/run-adversarial-suite.py --dry-run --quiet
+        language: system
+        files: '^tests/security/prompt-injection/(attacks/.*\.json|run-adversarial-suite\.py)$'
+        pass_filenames: false
+
+  # CVE scan on dependency changes -- closes P1.8 from the 2026-05-17 workspace deep audit.
+  # Runs pip-audit ONLY when requirements*.txt is staged. Strict mode -- any HIGH/CRITICAL
+  # CVE blocks the commit. Skips silently if pip_audit isn't installed (graceful degrade
+  # rather than block commits on machines that haven't pip-installed requirements-dev.txt).
+  - repo: local
+    hooks:
+      - id: pip-audit-cve
+        name: Scan requirements.txt for known CVEs (pip-audit)
+        entry: python3 -c "import importlib.util, subprocess, sys; spec = importlib.util.find_spec('pip_audit'); sys.exit(0) if spec is None else sys.exit(subprocess.run([sys.executable, '-m', 'pip_audit', '--requirement', 'requirements.txt', '--strict'], capture_output=False).returncode)"
+        language: system
+        files: '^(requirements\.txt|requirements-dev\.txt)$'
+        pass_filenames: false
+
+  # 31C custom secret scanner -- workspace-specific credential patterns (see
+  # scripts/secret-scanner.py and .claude/rules/security.md). Runs alongside the
+  # detect-secrets framework hook above; the two are complementary, not redundant.
+  # Folded in from the former .git/hooks/pre-commit.legacy on 2026-05-31 after a
+  # hijacked core.hooksPath was found bypassing all pre-commit hooks.
+  - repo: local
+    hooks:
+      - id: secret-scanner-31c
+        name: 31C secret scanner (workspace credential patterns)
+        entry: python3 scripts/secret-scanner.py
+        language: system
+        pass_filenames: true
+
+  # Engine content-leak gate -- the CONTENT sibling of the routing guards. Blocks a
+  # commit that embeds a real entity (person slug/name, handle, e-mail, Telegram ID,
+  # or curated company/event token) in an engine-routed file. The denylist is built
+  # in memory from the private DATA overlay; absent overlay -> no-op (public clone).
+  # Added 2026-06-28 after the public-readiness audit found real PII inside
+  # engine-routed code that every routing layer waved through. The push wall
+  # (scripts/push-all.py engine_content_scan) is the unbypassable backstop; this is
+  # the early catch. Suppress a true false positive inline: `content-guard: ok ...`.
+  - repo: local
+    hooks:
+      - id: content-guard-31c
+        name: Block real-entity content (PII/real names) in engine-routed files
+        entry: python3 scripts/content-guard.py --quiet --files
+        language: system
+        pass_filenames: true
+
+  # HEADING OS engine/data leak guard (spec Section 6). Built first so every
+  # later migration phase runs under it. The staged guard is inert until
+  # HEADING_OS_ENGINE_REPO=1 (set only in the .heading-os repo), so it is a
+  # no-op on ceo-main where data files are still legitimately tracked.
+  - repo: local
+    hooks:
+      - id: leak-guard-paths
+        name: HEADING OS leak guard (no hardcoded data paths in engine code)
+        entry: python3 scripts/leak-guard.py check-paths --files
+        language: system
+        files: '\.(py|sh)$'
+      - id: leak-guard-staged
+        name: HEADING OS leak guard (no private/corporate content in engine repo)
+        entry: python3 scripts/leak-guard.py check-staged --files
+        language: system
+        pass_filenames: true
+
+  # Data-root seam guard -- fails the commit if any code joins an engine/workspace
+  # root to a DATA dir (get_workspace_root() / "outputs", WORKSPACE_ROOT / "crm",
+  # workspace_root / "threads", ...). Those bypass the data-root seam and misroute
+  # private data into the engine clone. The fix is always a get_*_dir() helper.
+  # Enforces "engine clean, all data in the data root" for ALL new code. Scans the
+  # whole scripts/ + .claude/ tree (cheap, ~0.5s), so it runs regardless of which
+  # files are staged.
+  - repo: local
+    hooks:
+      - id: data-root-bypass-guard
+        name: HEADING OS data-root guard (no data dir joined to an engine root)
+        entry: python3 -m pytest tests/test_data_root_no_bypass.py -q
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Engine-tree-clean guard -- the runtime complement to the static data-root guard
+  # above. Fails the commit if the engine clone itself carries any file routing
+  # private/corporate (filter via get_routing_destination, robust to engine
+  # carve-outs). Catches a data artifact landing in the engine regardless of HOW it
+  # got there (script, SKILL Bash, plugin) -- the belt to the regex guard's braces.
+  - repo: local
+    hooks:
+      - id: engine-tree-clean
+        name: HEADING OS engine-tree-clean (no data artifact in the engine clone)
+        entry: python3 -m pytest tests/test_engine_tree_clean.py -q
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # SKILL bash-path audit -- advisory baseline ratchet. Fails only when a SKILL.md
+  # gains a NEW bash line passing a bare data-class path to a script (the
+  # data-path-redirect hook does not cover Bash). Existing illustrative template
+  # paths are frozen as a baseline in the scanner; no churn on them.
+  - repo: local
+    hooks:
+      - id: skill-bash-paths
+        name: HEADING OS SKILL bash-path audit (no new bare data-path misroute)
+        entry: python3 scripts/audit-skill-bash-paths.py --check
+        language: system
+        pass_filenames: false
+        always_run: true

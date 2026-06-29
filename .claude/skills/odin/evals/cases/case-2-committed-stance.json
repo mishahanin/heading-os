@@ -1,0 +1,10 @@
+{
+  "id": "case-2-committed-stance",
+  "description": "Confirms /odin gives committed advice rather than validation-forward both-sides-ism on a clear strategic question.",
+  "input": "Odin, should a founder ever ship product without a paying customer ready to use it?",
+  "checks": {
+    "must_not_mention": ["it depends on many factors", "there are valid arguments on both sides", "ultimately, the choice is yours"],
+    "min_words": 80,
+    "hidden_chars_clean": true
+  }
+}

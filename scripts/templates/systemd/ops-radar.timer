@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily 31C ops-radar detector (08:00, configured timezone)
+
+[Timer]
+# Daily 08:00 in the configured timezone. The installer substitutes {{TZ}} from
+# HEADING_OS_TZ (default UTC); the trailing timezone pins the fire even when the
+# host's local timezone differs (systemd >= 252). Persistent=true catches a fire
+# missed because the host was off, running it on next boot. The radar is
+# exception-driven: it runs daily but pushes ONLY when something is due, so a
+# daily cadence catches a Tuesday backup-debt or auto-heal failure within a day.
+OnCalendar=*-*-* 08:00:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

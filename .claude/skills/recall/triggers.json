@@ -1,0 +1,18 @@
+[
+  { "query": "recall what we decided about the Acme RFP", "should_trigger": true },
+  { "query": "what do we know about Globex Systems", "should_trigger": true },
+  { "query": "where did we decide on the valuation path", "should_trigger": true },
+  { "query": "search my memory for the telco engagement", "should_trigger": true },
+  { "query": "have we touched anything on a channel reseller before", "should_trigger": true },
+  { "query": "find what we said about partner enablement pricing", "should_trigger": true },
+  { "query": "surface any past notes on Pat Nolan", "should_trigger": true },
+  { "query": "what's in memory about the the bootcamp deck", "should_trigger": true },
+  { "query": "ask Odin what he thinks about this deal", "should_trigger": false },
+  { "query": "odin recall episodes about the MWC meetings", "should_trigger": false },
+  { "query": "investigate ExampleTelco and build a dossier", "should_trigger": false },
+  { "query": "who is the new CISO at du", "should_trigger": false },
+  { "query": "add a note about today's call to the knowledge base", "should_trigger": false },
+  { "query": "grep the scripts for the string send_capable", "should_trigger": false },
+  { "query": "draft an email to Alice about the open fronts", "should_trigger": false },
+  { "query": "what should I do next", "should_trigger": false }
+]

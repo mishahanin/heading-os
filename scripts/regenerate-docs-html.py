@@ -211,6 +211,86 @@ Generated from <code>{source_name}</code> via <code>scripts/regenerate-docs-html
 """
 
 
+# ---------------------------------------------------------------------------
+# Docs-site shell: the public GitHub Pages site (docs/*.html) shares ONE light
+# stylesheet (assets/docs.css) and ONE sidebar nav with the hand-authored pages
+# (index, prerequisites, daemons, ...), so navigation is identical and present on
+# every page. Markdown-generated site pages (DEPLOYMENT, QUICKSTART, EMERGENCY)
+# render through SITE_SHELL; non-site docs (templates/, CEO guides) keep the
+# portable self-contained HTML_SHELL above.
+# ---------------------------------------------------------------------------
+SITE_DIR = ROOT / "docs"
+SITE_NAV_GROUPS = [
+    ("Get started", [
+        ("index.html", "Overview"),
+        ("prerequisites.html", "Prerequisites &amp; install"),
+        ("DEPLOYMENT.html", "Full deployment guide"),
+        ("QUICKSTART.html", "Quickstart"),
+    ]),
+    ("Operate", [
+        ("daemons.html", "Daemons &amp; scheduled tasks"),
+        ("skills-mcp-plugins.html", "Skills, MCP &amp; plugins"),
+        ("memory-odin.html", "Memory &amp; ODIN"),
+    ]),
+    ("Reference", [
+        ("data-structure.html", "Data overlay structure"),
+        ("https://github.com/mishahanin/heading-os", "GitHub repository"),
+    ]),
+]
+
+
+def _site_nav(active: str) -> str:
+    groups = []
+    for label, links in SITE_NAV_GROUPS:
+        items = []
+        for href, text in links:
+            active_cls = ' class="active"' if href == active else ""
+            items.append(f'      <a href="{href}"{active_cls}>{text}</a>')
+        groups.append(
+            f'    <div class="nav-group">\n      <div class="label">{label}</div>\n'
+            + "\n".join(items)
+            + "\n    </div>"
+        )
+    return "\n".join(groups)
+
+
+SITE_SHELL = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<meta name="description" content="{subtitle_attr}">
+<link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.png" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+{nav}
+  </div>
+</aside>
+<main class="content">
+  <h1>{display_title}</h1>
+  {subtitle_block}
+  {body}
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>
+"""
+
+
 def load_css() -> str:
     if not CSS_PATH.exists():
         print(f"ERROR: CSS template missing: {CSS_PATH}", file=sys.stderr)
@@ -271,15 +351,30 @@ def regenerate(md_path: Path, quiet: bool = False) -> bool:
     body_md = strip_first_h1(md_text)
     body_html = md_to_html(body_md)
 
-    css = load_css()
-    full_html = HTML_SHELL.format(
-        title=html_stdlib.escape(display_title),
-        display_title=html_stdlib.escape(display_title),
-        subtitle=html_stdlib.escape(subtitle) if subtitle else "",
-        css=css,
-        body=body_html,
-        source_name=html_stdlib.escape(md_path.name),
-    )
+    if md_path.parent == SITE_DIR:
+        # Public docs-site page: shared sidebar + assets/docs.css (light).
+        subtitle_block = (
+            f'<p class="page-meta">{html_stdlib.escape(subtitle)}</p>' if subtitle else ""
+        )
+        full_html = SITE_SHELL.format(
+            title=html_stdlib.escape(display_title),
+            subtitle_attr=html_stdlib.escape(subtitle) if subtitle else "",
+            display_title=html_stdlib.escape(display_title),
+            subtitle_block=subtitle_block,
+            nav=_site_nav(html_path.name),
+            body=body_html,
+        )
+    else:
+        # Portable self-contained guide (templates/, CEO guides): inline theme.
+        css = load_css()
+        full_html = HTML_SHELL.format(
+            title=html_stdlib.escape(display_title),
+            display_title=html_stdlib.escape(display_title),
+            subtitle=html_stdlib.escape(subtitle) if subtitle else "",
+            css=css,
+            body=body_html,
+            source_name=html_stdlib.escape(md_path.name),
+        )
 
     html_path.write_text(full_html, encoding="utf-8")
     if not quiet:

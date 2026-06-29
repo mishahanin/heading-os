@@ -29,7 +29,7 @@ dependencies = [
     "liteparse==2.0.0",
     "markitdown[pdf,docx,pptx,xlsx,outlook]==0.1.6",
     "markdown==3.10.2",
-    "pymdown-extensions==10.21.3",
+    "pymdown-extensions==11.0",
     "requests==2.34.2",
     "playwright==1.60.0",
     "greenlet==3.5.1",

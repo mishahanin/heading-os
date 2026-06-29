@@ -261,7 +261,7 @@ SITE_SHELL = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
 <meta name="description" content="{subtitle_attr}">
-<link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -270,7 +270,7 @@ SITE_SHELL = """<!DOCTYPE html>
 <body>
 <div class="layout">
 <aside class="sidebar">
-  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.png" alt=""> HEADING OS</a>
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
   <p class="tagline">Operations engine for an AI executive assistant</p>
   <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
   <div class="nav-body" id="navbody">

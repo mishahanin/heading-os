@@ -186,7 +186,7 @@ lxml==6.1.1
     #   markitdown
     #   python-docx
     #   python-pptx
-magika==0.6.3
+magika==1.0.3
     # via markitdown
 mammoth==1.11.0
     # via markitdown

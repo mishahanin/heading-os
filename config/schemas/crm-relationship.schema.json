@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://odinix.com/schemas/crm-relationship.schema.json",
+  "title": "31C CRM Relationship Record (per-executive)",
+  "description": "Per-executive view of a relationship with an address-book entity. Lives at crm/contacts/{slug}.md (CEO) or personal/crm/contacts/{slug}.md (exec). Holds cadence, last_touch, interaction log, commitments - NOT biographical facts (those live in the address book at entity_ref).",
+  "type": "object",
+  "required": ["entity_ref", "relationship_type", "last_touch", "created"],
+  "additionalProperties": true,
+  "properties": {
+    "entity_ref": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Slug of the address book entity. MUST match an existing crm/address-book/{slug}.md file. Dangling refs surface as 'needs entity link' in the radar."
+    },
+    "relationship_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "This executive's relationship classification. Drives cadence rules. Canonical: tribe, tribe-leadership, prospect, customer, partner, partner-active, investor-active, investor-passive, shareholder, reseller, government, media, advisor, ecosystem, vendor, inactive."
+    },
+    "last_touch": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO date YYYY-MM-DD of most recent meaningful interaction from THIS executive."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO date YYYY-MM-DD when this relationship record was first created."
+    },
+    "cadence": {
+      "oneOf": [
+        {"type": "integer", "minimum": 0, "maximum": 365},
+        {"type": "string", "enum": [""]}
+      ],
+      "description": "OPTIONAL per-executive cadence override in days. 0 = no cadence tracking. Empty string accepted as legacy marker. If absent, stage-aware default applies (Phase 2)."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "dormant", "lost", "won", "blocked", "off-limits"],
+      "description": "OPTIONAL. Defaults to 'active'. Dormant contacts are excluded from radar."
+    },
+    "source": {
+      "type": "string",
+      "description": "OPTIONAL. How this executive acquired the relationship (free-text)."
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "pipeline_company": {
+      "type": "string",
+      "description": "OPTIONAL. Free-text company name used for pipeline.md cross-reference. Falls back to address_book.employer when absent. Aliases handled by crm/aliases.md."
+    },
+    "radar_freeze_until": {
+      "type": "string",
+      "description": "OPTIONAL. ISO date or empty string. /crm next skips this contact until the date passes. Must be edited by CEO to unfreeze."
+    },
+    "owner": {
+      "type": "string",
+      "description": "AUTO-INJECTED by sync. Slug of the executive who owns this relationship record. Never set manually."
+    }
+  }
+}

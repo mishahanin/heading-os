@@ -1,0 +1,47 @@
+# ============================================================
+# Sentinel -- CEO Comms Monitor (systemd service)
+# ============================================================
+# Install (substitute @WORKSPACE_ROOT@ at install time, never hand-edit literals):
+#   WS="$(cd "$(dirname reference/sentinel.service)/.." && pwd)"   # or your clone root
+#   WORKSPACE_ROOT="$(python3 "$WS/scripts/utils/paths.py")"
+#   sed "s#@WORKSPACE_ROOT@#${WORKSPACE_ROOT}#g" reference/sentinel.service \
+#     | sudo tee /etc/systemd/system/sentinel.service >/dev/null
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable sentinel
+#   sudo systemctl start sentinel
+#
+#   (@WORKSPACE_ROOT@ resolves via scripts/utils/paths.py: $WORKSPACE_ROOT env
+#    override -> CLAUDE.md + .claude marker walk -> structural fallback. The baked
+#    Environment=WORKSPACE_ROOT below keeps that override authoritative at runtime.)
+#
+# Manage:
+#   sudo systemctl status sentinel        # check if running
+#   sudo systemctl restart sentinel       # restart
+#   sudo systemctl stop sentinel          # stop
+#   sudo journalctl -u sentinel -f        # live logs (Ctrl+C to stop)
+#   sudo journalctl -u sentinel --since today  # today's logs
+# ============================================================
+
+[Unit]
+Description=Sentinel -- CEO Comms Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=@WORKSPACE_ROOT@
+Environment=WORKSPACE_ROOT=@WORKSPACE_ROOT@
+Environment=PATH=@WORKSPACE_ROOT@/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@WORKSPACE_ROOT@/.venv/bin/python3 @WORKSPACE_ROOT@/scripts/sentinel.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits (prevent runaway processes)
+MemoryMax=512M
+CPUQuota=25%
+
+[Install]
+WantedBy=multi-user.target

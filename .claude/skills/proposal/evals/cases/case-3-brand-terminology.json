@@ -1,0 +1,11 @@
+{
+  "id": "case-3-brand-terminology",
+  "description": "Confirms /proposal uses 31C-locked terminology - 'ODUN.ONE' for the product, 'DPI+' for the category, never legal suffix '31 Concept GmbH'.",
+  "input": "Draft the executive opening of a proposal for a partnership with a Middle East telco operator. Reference the 31C product and category.",
+  "checks": {
+    "must_mention": ["ODUN.ONE"],
+    "must_not_mention": ["31 Concept GmbH", "Thirty One Concept"],
+    "min_words": 100,
+    "hidden_chars_clean": true
+  }
+}

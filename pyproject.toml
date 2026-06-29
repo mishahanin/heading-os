@@ -1,0 +1,123 @@
+# pyproject.toml -- HEADING OS engine: package management + tool configuration.
+# Source of truth for dependencies. uv.lock hash-pins the transitive set.
+# requirements.txt is a GENERATED export (`uv export`) for legacy consumers.
+# See docs/security/DEPENDENCY-POLICY.md for dependency management rules.
+
+[project]
+name = "heading-os-engine"
+version = "0.1.0"
+description = "The operating system an executive runs their company from, built on Claude Code — this repository is the engine (code only; it resolves a separate private data repository at runtime)."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Misha Hanin", email = "misha.hanin@odinix.com" }]
+keywords = ["claude-code", "ai-agent", "workspace", "automation", "security", "heading-os"]
+requires-python = ">=3.11"
+dependencies = [
+    "exchangelib==5.6.0",
+    "Telethon==1.43.2",
+    "anthropic==0.109.2",
+    "google-api-python-client==2.196.0",
+    "google-auth==2.53.0",
+    "google-auth-oauthlib==1.4.0",
+    "google-auth-httplib2==0.4.0",
+    "python-docx==1.2.0",
+    "python-pptx==1.0.2",
+    "openpyxl==3.1.5",
+    "xlsxwriter==3.2.9",
+    "weasyprint==69.0",
+    "liteparse==2.0.0",
+    "markitdown[pdf,docx,pptx,xlsx,outlook]==0.1.6",
+    "markdown==3.10.2",
+    "pymdown-extensions==10.21.3",
+    "requests==2.34.2",
+    "playwright==1.60.0",
+    "greenlet==3.5.1",
+    "Pillow==12.2.0",
+    "replicate==1.0.7",
+    "google-genai==2.8.0",
+    "openai==2.41.1",
+    "youtube-transcript-api==1.2.4",
+    "yt-dlp==2026.6.9",
+    "apify-client==3.0.2",
+    "python-dotenv==1.2.2",
+    "lxml==6.1.1",
+    "langfuse==4.6.1",
+    "fastapi==0.136.3",
+    "uvicorn[standard]==0.48.0",
+    "watchdog==6.0.0",
+    "apscheduler==3.11.2",
+    "pyyaml==6.0.3",
+    "httpx==0.28.1",
+    "firecrawl-py==4.28.2",   # added per F-H4; never silently missing again
+]
+
+[project.urls]
+Homepage = "https://github.com/mishahanin/heading-os"
+Repository = "https://github.com/mishahanin/heading-os"
+Documentation = "https://mishahanin.github.io/heading-os/"
+Issues = "https://github.com/mishahanin/heading-os/issues"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.0",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "bandit==1.9.4",
+    "ruff==0.15.17",
+    "pre-commit==4.6.0",
+    "detect-secrets==1.5.0",
+    "pip-audit==2.10.1",
+]
+
+[tool.bandit]
+severity = "medium"
+confidence = "medium"
+exclude_dirs = ["tests"]
+# B310: urllib urlopen audit for file:/custom schemes. Our scripts call hardcoded
+# https API endpoints (Telegram, etc.) via f-string literals, never user-controlled
+# schemes. The pre-commit ruff gate already ignores the identical rule (S310), so
+# skipping B310 here keeps the two security gates consistent.
+skips = ["B310"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# Security-focused rule selection:
+# S = flake8-bandit (security), B = flake8-bugbear, A = flake8-builtins
+# C4 = flake8-comprehensions, DTZ = flake8-datetimez, T10 = flake8-debugger
+# PIE = flake8-pie, SIM = flake8-simplify, ERA = eradicate (commented code)
+select = ["S", "B", "A", "C4", "DTZ", "T10", "PIE", "SIM", "ERA"]
+ignore = [
+    "S101",    # assert used (we use assert in tests)
+    "S603",    # subprocess call - check for untrusted input (too noisy for our use)
+    "S607",    # starting a process with a partial executable path
+    "ERA001",  # commented out code (too aggressive)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S106"]  # Allow assert and hardcoded passwords in tests
+"scripts/secret-scanner.py" = ["S105"]  # Allow hardcoded password patterns
+".claude/hooks/prevent-secrets.py" = ["S105"]  # Allow hardcoded password patterns
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = "--strict-markers"
+markers = [
+    "integration: integration tests (mocked external services)",
+    "slow: tests that take >5 seconds",
+    "acceptance: A+ sign-off gates; excluded from the per-push run (run explicitly in Phase 4)",
+]
+
+[tool.coverage.run]
+source = ["scripts"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true

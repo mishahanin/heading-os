@@ -1,0 +1,629 @@
+/* @theme 31c */
+
+/*
+ * 31 Concept - MARP Presentation Theme
+ * Dual-mode (dark/light) with 7 core layouts
+ * Brand-aligned with .claude/skills/pptx-generator/brands/31c/brand.json
+ *
+ * Font placeholder {FONTS_DIR} is substituted by marp-render.py at render time.
+ *
+ * Color cross-reference (brand.json canonical values):
+ *   background:       #000000   |  accent:           #5B5FFF
+ *   background_alt:   #0A0A14   |  accent_secondary:  #FF8C00
+ *   text:             #FFFFFF   |  accent_tertiary:   #8B8FCC
+ *   text_secondary:   #B0B0C0   |  card_bg:          #12122A
+ *   code_bg:          #0D0D15   |  card_bg_alt:      #1A1A35
+ */
+
+/* ================================================================
+   1. Font Faces
+   ================================================================ */
+
+@font-face {
+  font-family: 'GT Standard M';
+  src: url('{FONTS_DIR}/GT-Standard-M-Standard-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'GT Standard M';
+  src: url('{FONTS_DIR}/GT-Standard-M-Standard-Medium-Oblique.woff2') format('woff2');
+  font-weight: 500;
+  font-style: oblique;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'GT Standard M';
+  src: url('{FONTS_DIR}/GT-Standard-M-Standard-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'GT Standard M';
+  src: url('{FONTS_DIR}/GT-Standard-M-Standard-Light-Oblique.woff2') format('woff2');
+  font-weight: 300;
+  font-style: oblique;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'GT Standard S';
+  src: url('{FONTS_DIR}/GT-Standard-S-Standard-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: '31C Horizontal';
+  src: url('{FONTS_DIR}/31CHorizontalT03-Clarity.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ================================================================
+   2. CSS Custom Properties (Design Tokens)
+   ================================================================ */
+
+:root {
+  --bg: #000000;
+  --bg-alt: #0A0A14;
+  --fg: #FFFFFF;
+  --fg-muted: #8B8FCC;
+  --accent-primary: #5B5FFF;
+  --accent-secondary: #FF8C00;
+  --card-bg: #12122A;
+  --card-border: none;
+  --rule: #232340;
+  --code-bg: #0A0A14;
+  --corner-color: #FF8C00;
+  --corner-width: 4.4%;
+  --corner-height: 9.4%;
+  --font-heading: 'GT Standard M', Inter, 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'GT Standard M', Inter, 'Segoe UI', system-ui, sans-serif;
+  --font-caption: 'GT Standard M', Inter, 'Segoe UI', system-ui, sans-serif;
+  --font-display: '31C Horizontal', 'GT Standard M', Inter, system-ui, sans-serif;
+  --font-code: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+/* ================================================================
+   3. Base Section Styles
+   ================================================================ */
+
+section {
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 20px;
+  line-height: 1.5;
+  letter-spacing: 0;
+  padding: 60px 70px;
+  width: 1280px;
+  height: 720px;
+  background-color: var(--bg);
+  color: var(--fg);
+  justify-content: flex-start;
+}
+
+section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--corner-width);
+  height: var(--corner-height);
+  background: var(--corner-color);
+  z-index: 10;
+}
+
+section.no-corner::before,
+section[class*="no-corner"]::before {
+  display: none;
+}
+
+/* ================================================================
+   4. Typography
+   ================================================================ */
+
+section h1 {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: 48px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px 0;
+  color: var(--fg);
+}
+
+section h2 {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: 32px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin: 0 0 16px 0;
+  color: var(--fg);
+}
+
+section h3 {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: 22px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin: 0 0 12px 0;
+  color: var(--fg);
+}
+
+section p { margin: 0 0 12px 0; }
+section ul, section ol { margin: 0 0 12px 0; padding-left: 1.5em; }
+section li { margin-bottom: 6px; }
+section strong { font-weight: 500; }
+section em { font-style: oblique; }
+section a { color: var(--accent-primary); text-decoration: none; }
+section a:hover { text-decoration: underline; }
+
+section.content h1,
+section.two-column h1 {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 24px;
+}
+
+/* ================================================================
+   5. Code Blocks
+   ================================================================ */
+
+section pre {
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 16px 20px;
+  font-family: var(--font-code);
+  font-size: 18px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+section code {
+  font-family: var(--font-code);
+  font-size: 18px;
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+section pre code { background: transparent; padding: 0; }
+
+/* ================================================================
+   6. Tables
+   ================================================================ */
+
+section table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 18px;
+  margin: 16px 0;
+}
+
+section table th {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  text-align: left;
+  padding: 10px 12px;
+  border-top: 2px solid var(--accent-primary);
+  border-bottom: 1px solid var(--rule);
+}
+
+section table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+section table tr:nth-child(even) td {
+  background: var(--bg-alt);
+}
+
+/* ================================================================
+   7. Blockquotes
+   ================================================================ */
+
+section blockquote {
+  border-left: 4px solid var(--accent-primary);
+  margin: 16px 0;
+  padding: 8px 20px;
+  background: var(--bg-alt);
+  border-radius: 0 8px 8px 0;
+  font-style: oblique;
+  color: var(--fg-muted);
+}
+
+section blockquote strong { color: var(--fg); }
+
+/* ================================================================
+   8. Cards
+   ================================================================ */
+
+section .card {
+  background: var(--card-bg);
+  border-top: 3px solid var(--accent-primary);
+  border-radius: 0 0 8px 8px;
+  padding: 20px 24px;
+  margin: 12px 0;
+}
+
+/* ================================================================
+   9. Footer & Page Number
+   ================================================================ */
+
+section::after {
+  font-family: var(--font-caption);
+  font-weight: 300;
+  font-size: 14px;
+  color: var(--fg-muted);
+}
+
+header, footer {
+  font-family: var(--font-caption);
+  font-weight: 300;
+  font-size: 14px;
+  color: var(--fg-muted);
+}
+
+footer {
+  position: absolute;
+  bottom: 24px;
+  left: 70px;
+}
+
+section.no-footer footer { display: none; }
+
+/* ================================================================
+   10. Dark Mode (default)
+   ================================================================ */
+
+section.dark,
+section:not(.light) {
+  --bg: #000000;
+  --bg-alt: #0A0A14;
+  --fg: #FFFFFF;
+  --fg-muted: #8B8FCC;
+  --accent-primary: #5B5FFF;
+  --accent-secondary: #FF8C00;
+  --card-bg: #12122A;
+  --card-border: none;
+  --rule: #232340;
+  --code-bg: #0A0A14;
+  background-color: var(--bg);
+  color: var(--fg);
+}
+
+/* ================================================================
+   11. Light Mode
+   ================================================================ */
+
+section.light {
+  --bg: #EEECEA;
+  --bg-alt: #FFFFFF;
+  --fg: #1A1A1A;
+  --fg-muted: #6B6B6B;
+  --accent-primary: #5B5FFF;
+  --accent-secondary: #F5922B;
+  --card-bg: #FFFFFF;
+  --card-border: 1px solid #D8D4D0;
+  --rule: #D8D4D0;
+  --code-bg: #F2F0ED;
+  background-color: var(--bg);
+  color: var(--fg);
+}
+
+section.light .card { border: var(--card-border); }
+
+/* ================================================================
+   12. Layout: Title (Cover)
+   ================================================================ */
+
+section.title {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 60px 70px 80px;
+}
+
+section.title h1 {
+  font-size: 80px;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  margin: 0 0 16px 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+section.title h2 {
+  font-size: 24px;
+  font-weight: 300;
+  color: var(--fg-muted);
+  margin: 0 0 32px 0;
+}
+
+section.title p {
+  font-size: 16px;
+  color: var(--fg-muted);
+}
+
+section.title footer { display: none; }
+section.title::after { content: none; }
+
+/* ================================================================
+   13. Layout: Content (Default Body)
+   ================================================================ */
+
+section.content {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+/* ================================================================
+   14. Layout: Two-Column
+   ================================================================ */
+
+section.two-column {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 0 40px;
+  align-items: start;
+}
+
+section.two-column h1 { grid-column: 1 / -1; }
+
+/* ================================================================
+   15. Layout: Quote
+   ================================================================ */
+
+section.quote {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 80px 100px;
+}
+
+section.quote::after { content: none; }
+
+section.quote blockquote {
+  border-left: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font-size: 52px;
+  font-weight: 500;
+  font-style: normal;
+  letter-spacing: -0.022em;
+  line-height: 1.16;
+  color: var(--fg);
+  position: relative;
+  max-width: 1040px;
+}
+
+section.quote blockquote p {
+  margin: 0 0 16px 0;
+}
+
+section.quote blockquote p:not(:first-child) {
+  font-size: 52px;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  color: var(--fg);
+  margin-top: 0;
+  font-style: normal;
+}
+
+section.quote blockquote.attribution p:last-child {
+  font-size: 20px;
+  font-weight: 300;
+  letter-spacing: 0;
+  color: var(--fg-muted);
+  margin-top: 28px;
+  font-style: normal;
+}
+
+/* ================================================================
+   16. Layout: Stats
+   ================================================================ */
+
+section.stats {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+section.stats h1 {
+  font-family: var(--font-display);
+  font-size: 140px;
+  font-weight: normal;
+  color: var(--accent-secondary);
+  line-height: 1;
+  margin: 0 0 8px 0;
+  border-bottom: none;
+  padding-bottom: 0;
+  letter-spacing: -0.02em;
+}
+
+section.stats h2 {
+  font-size: 24px;
+  font-weight: 300;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+section.stats p {
+  font-size: 20px;
+  color: var(--fg-muted);
+  margin-top: 32px;
+}
+
+/* ================================================================
+   16b. Layout: Stats-Photo (asymmetric, photo right + text left panel)
+   ================================================================ */
+
+section.stats-photo {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  text-align: left;
+  padding: 60px 50px 60px 70px;
+}
+
+section.stats-photo h1 {
+  font-family: var(--font-display);
+  font-size: 56px;
+  font-weight: normal;
+  color: var(--accent-secondary);
+  line-height: 0.95;
+  margin: 0 0 24px 0;
+  border-bottom: none;
+  padding-bottom: 0;
+  letter-spacing: -0.015em;
+  max-width: 100%;
+}
+
+section.stats-photo h2 {
+  font-family: var(--font-heading);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 1.3;
+  margin: 0 0 24px 0;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+section.stats-photo p {
+  font-family: var(--font-body);
+  font-size: 17px;
+  font-weight: 300;
+  color: var(--fg);
+  line-height: 1.55;
+  margin: 0 0 16px 0;
+  max-width: 100%;
+}
+
+section.stats-photo p:last-of-type {
+  font-size: 13px;
+  color: var(--fg-muted);
+  letter-spacing: 0.02em;
+  margin-top: 28px;
+  margin-bottom: 0;
+  line-height: 1.5;
+  font-style: normal;
+}
+
+/* ================================================================
+   17. Layout: Section Break
+   ================================================================ */
+
+section.section-break {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  --bg: #000000;
+  --fg: #FFFFFF;
+  --fg-muted: #8B8FCC;
+  background-color: var(--bg);
+  color: var(--fg);
+}
+
+section.section-break::before { display: none; }
+
+section.section-break h1 {
+  font-size: 88px;
+  font-weight: 500;
+  line-height: 1.02;
+  letter-spacing: -0.028em;
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+section.section-break h2 {
+  font-family: var(--font-display);
+  font-size: 48px;
+  font-weight: normal;
+  color: var(--accent-primary);
+  letter-spacing: 0.04em;
+  margin: 0 0 24px 0;
+}
+
+section.section-break footer { display: none; }
+section.section-break::after { content: none; }
+
+/* ================================================================
+   18. Layout: Closing
+   ================================================================ */
+
+section.closing {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+section.closing h1 {
+  font-size: 48px;
+  margin: 0 0 32px 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+section.closing p {
+  font-size: 20px;
+  color: var(--fg-muted);
+  margin: 4px 0;
+}
+
+section.closing a { color: var(--accent-primary); }
+section.closing footer { display: none; }
+section.closing::after { content: none; }
+
+/* ================================================================
+   19. Utility Classes
+   ================================================================ */
+
+.accent-square {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  background: var(--accent-primary);
+  position: absolute;
+}
+
+section img { max-width: 100%; height: auto; }
+
+section img[alt~="bg"] {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  z-index: -1;
+}
+
+section img[alt~="right"] {
+  float: right;
+  max-width: 45%;
+  margin-left: 24px;
+}
+
+section .katex { font-size: 1.1em; }

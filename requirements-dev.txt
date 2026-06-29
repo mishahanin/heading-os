@@ -1,0 +1,17 @@
+# requirements-dev.txt -- Development and tooling dependencies
+# Production uses requirements.txt with exact pins
+# See docs/security/DEPENDENCY-POLICY.md for dependency management rules
+
+# Include production dependencies
+-r requirements.txt
+
+# Testing
+pytest>=8.0,<10.0
+pytest-asyncio>=0.23,<2.0   # required by pyproject asyncio_mode=auto (sentinel hardening async tests)
+
+# Security tooling
+bandit>=1.7,<2.0
+ruff>=0.4,<1.0
+pre-commit>=3.7,<4.0
+detect-secrets>=1.4,<2.0
+pip-audit>=2.7,<3.0

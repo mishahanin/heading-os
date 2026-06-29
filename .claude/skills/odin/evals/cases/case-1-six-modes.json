@@ -1,0 +1,10 @@
+{
+  "id": "case-1-six-modes",
+  "description": "Confirms /odin names all six modes (learn, consult, reflect, recall, teach, compile) when listing capabilities.",
+  "input": "What modes does Odin support?",
+  "checks": {
+    "must_mention": ["learn", "consult", "reflect", "recall", "teach", "compile"],
+    "min_words": 50,
+    "hidden_chars_clean": true
+  }
+}

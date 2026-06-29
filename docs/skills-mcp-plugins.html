@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skills, MCP &amp; plugins — HEADING OS</title>
+<meta name="description" content="The full HEADING OS skill catalog by category, the MCP servers and how to register them, and the Claude Code plugins.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><span class="mark">H</span> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html" class="active">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+  <h1>Skills, MCP &amp; plugins</h1>
+  <p class="page-meta">The full skill catalog by category, the MCP servers and how to register them, and the Claude Code plugins. The authoritative skill registry is <code>.claude/rules/skill-router.md</code>.</p>
+
+  <h2>How skills are invoked</h2>
+  <p>A <strong>skill</strong> is a folder under <code>.claude/skills/&lt;name&gt;/SKILL.md</code> with a description, trigger phrases, and a body. You invoke a skill two ways:</p>
+  <ul>
+    <li><strong>Explicitly</strong> — type the slash command, e.g. <code>/osint Acme Corp</code>.</li>
+    <li><strong>By intent</strong> — the always-on skill router matches your natural-language message to the right skill and announces it before running.</li>
+  </ul>
+  <p>Skills marked <strong>🔒</strong> are <strong>explicit-invocation only</strong> (<code>disable-model-invocation: true</code> in frontmatter) — the model never auto-routes them; only a typed slash command fires them. This protects high-blast-radius actions (backups, audits, corporate publishing) from accidental routing.</p>
+
+  <h2>Skill catalog</h2>
+
+  <h3>Intel</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>/osint</code></td><td>Deep multi-source intelligence brief on a company, person, market, or tech — the foundation other intel skills consume.</td></tr>
+      <tr><td><code>/osint-advanced</code> 🔒</td><td>Heavier OSINT variant; never auto-triggers.</td></tr>
+      <tr><td><code>/competitor-intel</code></td><td>Competitive analysis of a named vendor versus your own product.</td></tr>
+      <tr><td><code>/market-brief</code></td><td>Market / regional / sector intelligence and TAM sizing.</td></tr>
+      <tr><td><code>/ceo-intel</code></td><td>Global / geopolitical situational-awareness brief.</td></tr>
+      <tr><td><code>/intel-briefing-newsletter</code></td><td>An externally published intelligence newsletter.</td></tr>
+      <tr><td><code>/yt-pulse</code></td><td>YouTube trend scanner + transcript deep-analysis brief.</td></tr>
+      <tr><td><code>/x-pulse</code></td><td>X / Twitter pulse and account monitoring.</td></tr>
+      <tr><td><code>/notebooklm</code></td><td>NotebookLM audio overviews / podcasts from sources.</td></tr>
+      <tr><td><code>/docparse</code></td><td>Parse PDF / DOCX / PPTX / XLSX with spatial bounding boxes + visual citations.</td></tr>
+      <tr><td><code>/deep-research-advance</code></td><td>One-shot deep web research with adversarial verification and a cited report.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Communication</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>/email-draft</code></td><td>New outbound email in the operator's voice (draft only — never auto-sends).</td></tr>
+      <tr><td><code>/email-respond</code></td><td>Reply to an existing email thread (draft only).</td></tr>
+      <tr><td><code>/email-intel</code></td><td>Daily inbox intelligence: scans mail, groups threads, proposes CRM / task actions.</td></tr>
+      <tr><td><code>/follow-up</code></td><td>Personalized follow-up email after a meeting or event.</td></tr>
+      <tr><td><code>/ceo-to-ceo</code></td><td>Peer CEO-to-CEO correspondence (draft only).</td></tr>
+      <tr><td><code>/corporate-letter</code></td><td>Branded external letter, PDF + DOCX, locked template.</td></tr>
+      <tr><td><code>/telegram</code></td><td>Live Telegram client — send / read / search / forward.</td></tr>
+      <tr><td><code>/tribe-message</code>, <code>/tribe-monday</code></td><td>Internal all-hands message; the recurring Monday cadence variant.</td></tr>
+      <tr><td><code>/translate</code></td><td>Translation between languages.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Content &amp; design</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>/linkedin-post</code>, <code>/linkedin-series</code></td><td>A single LinkedIn post; a multi-post content series plan.</td></tr>
+      <tr><td><code>/linkedin-archive</code></td><td>Files a published LinkedIn post + images into the datastore archive.</td></tr>
+      <tr><td><code>/keynote-deck</code></td><td>Conference / event speaking deck.</td></tr>
+      <tr><td><code>/image-prompt</code>, <code>/flux-image</code></td><td>A text-to-image prompt; actual image generation via Replicate.</td></tr>
+      <tr><td><code>/design</code></td><td>Design system — illustrations, mockups, social graphics, logos, infographics.</td></tr>
+      <tr><td><code>/pptx-generator</code></td><td>Editable PowerPoint decks and LinkedIn carousels.</td></tr>
+      <tr><td><code>/marp</code></td><td>Markdown-to-slides pipeline (PDF + HTML).</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>CRM</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>/crm</code></td><td>Personal CRM — add, log, radar, find, update contacts, contact health.</td></tr>
+      <tr><td><code>/viraid</code></td><td>Reads + triages a dedicated Telegram intake channel into actions.</td></tr>
+      <tr><td><code>/google-contacts</code></td><td>Google People API contact lookup / add / edit (standalone, separate from the CRM).</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Strategy</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>/deep-think</code></td><td>Structured sequential reasoning engine for hard, multi-variable calls.</td></tr>
+      <tr><td><code>/council</code></td><td>Parallel second opinions from independent third-party models.</td></tr>
+      <tr><td><code>/deal-strategy</code></td><td>Full deal strategy: positioning, pricing, objections, next steps.</td></tr>
+      <tr><td><code>/investor-pitch</code>, <code>/investor-update</code></td><td>A fundraising pitch deck; an investor / board update.</td></tr>
+      <tr><td><code>/proposal</code>, <code>/partnership-doc</code>, <code>/official-doc</code>, <code>/xpager</code>, <code>/rfp-response</code></td><td>The locked external-document templates (commercial proposal, MOU/LOI/term sheet, board resolution/notice, OnePager, RFP/tender).</td></tr>
+      <tr><td><code>/data-room</code></td><td>Investor data room + due-diligence materials.</td></tr>
+      <tr><td><code>/voss</code></td><td>Negotiation prep — tactical empathy, accusation audit, calibrated questions.</td></tr>
+      <tr><td><code>/state-check</code></td><td>Operational-state / function-health diagnostic.</td></tr>
+      <tr><td><code>/meeting-prep</code></td><td>Counterpart briefing (composes osint + voss + CRM + comms).</td></tr>
+      <tr><td><code>/odin</code></td><td>Personal AI advisor with a persistent knowledge brain — see <a href="memory-odin.html">Memory &amp; ODIN</a>.</td></tr>
+      <tr><td><code>/recall</code></td><td>Workspace-wide semantic recall over the local memory index.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Operations</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>/prime</code> 🔒</td><td>Session boot context load + parallel health checks.</td></tr>
+      <tr><td><code>/dashboard</code>, <code>/next</code>, <code>/radar</code>, <code>/queue</code></td><td>Daily brief; "what's next" recommender; overdue-action detector; the terminal-native Action Queue.</td></tr>
+      <tr><td><code>/weekly-review</code></td><td>End-of-week review.</td></tr>
+      <tr><td><code>/dream</code> 🔒, <code>/memory-hygiene</code></td><td>Memory consolidation; memory rot scan. See <a href="memory-odin.html">Memory &amp; ODIN</a>.</td></tr>
+      <tr><td><code>/backup</code> 🔒, <code>/sync</code> 🔒</td><td>Commit + push both repos; pull updates (git ff-only + corporate refresh).</td></tr>
+      <tr><td><code>/push-updates</code> 🔒, <code>/publish-corporate</code> 🔒, <code>/promote-corporate</code> 🔒, <code>/rollback-corporate</code> 🔒</td><td>Multi-user fleet publishing pipeline (corporate content down to executives).</td></tr>
+      <tr><td><code>/create-plan</code>, <code>/pre-impl</code> 🔒, <code>/implement</code></td><td>Plan → pre-implementation gate → execute.</td></tr>
+      <tr><td><code>/evaluate</code>, <code>/scrutinize</code>, <code>/validate</code>, <code>/editorial-review</code></td><td>Artifact grading; principal-level audit; fact-check; document-structure editor.</td></tr>
+      <tr><td><code>/workspace-deep-audit</code> 🔒</td><td>Full 8-section comprehensive workspace audit.</td></tr>
+      <tr><td><code>/calibrate</code> 🔒, <code>/checkpoint</code> 🔒</td><td>End-of-session self-improvement; manual session-handoff save.</td></tr>
+      <tr><td><code>/align</code> 🔒, <code>/devil</code> 🔒, <code>/burst</code> 🔒</td><td>Forced scope clarification; contrarian critique; N content variants.</td></tr>
+      <tr><td><code>/sentinel</code> 🔒, <code>/bridge-health</code> 🔒, <code>/cold-sweep</code></td><td>Comms-monitor control; daemon fleet health; CRM "red debt" drain.</td></tr>
+      <tr><td><code>/thread</code></td><td>Operational thread registry — open / log / close / find.</td></tr>
+      <tr><td><code>/playwright</code>, <code>/ast-grep</code>, <code>/context7</code>, <code>/setup-browser-cookies</code></td><td>Headless browser; structural code search; library docs; cookie import.</td></tr>
+      <tr><td><code>/skill-creator</code> 🔒, <code>/request-skill</code> 🔒, <code>/setup-wizard</code> 🔒</td><td>Author / request a skill; configure a fresh workspace.</td></tr>
+      <tr><td><code>/event-debrief</code>, <code>/interview-prep</code>, <code>/zk</code>, <code>/mullvad</code></td><td>Post-event recap; hiring framework; Zettelkasten capture; Mullvad VPN control.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>MCP servers</h2>
+  <p>The engine ships <strong>zero baked-in MCP config</strong> — all MCP servers are registered at <strong>user scope</strong> in the machine-local <code>~/.claude.json</code> (gitignored, never in either repo). A fresh clone has no MCP servers until you re-register them with <code>claude mcp add ... -s user</code>.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Server</th><th>Provides</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><strong>playwright</strong></td><td>Browser-automation MCP — navigate, click, type, snapshot, screenshot, evaluate JS, network inspection.</td><td><strong>WSL-critical:</strong> launch through a native Linux Node absolute path, never <code>npx</code> — on WSL, <code>npx</code>/<code>node</code> on PATH resolve to the Windows install and the JSON-RPC stdio does not survive the WSL↔cmd.exe boundary. Needs the bundled Chromium + headless shell and apt libs <code>libnss3 libnspr4 libasound2t64</code>.</td></tr>
+      <tr><td><strong>pencil</strong></td><td>Editor for encrypted <code>.pen</code> design files — read / generate / validate designs. <code>.pen</code> files must only be accessed via these tools.</td><td><strong>WSL interop:</strong> a native Windows <code>.exe</code> MCP server launched over WSL interop has working stdio and connects fine — unlike <code>npx</code> <code>.cmd</code> shims. New tools load on the next Claude Code restart.</td></tr>
+      <tr><td><strong>Gmail / Google Calendar / Google Drive</strong></td><td>Managed Claude-platform connectors — mail threads &amp; drafts, calendar events, Drive files.</td><td>Bound to the operator's Google account; no engine config. Gmail is draft-only by design (aligns with the human-gated send rule).</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Plugins</h2>
+  <p>Plugins are <em>enabled</em> via <code>enabledPlugins</code> in <code>.claude/settings.json</code> (travels in git) but <em>installed</em> per project path (machine-local, never synced — see <a href="prerequisites.html">Prerequisites §8</a>). All come from the <code>claude-plugins-official</code> marketplace.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Plugin</th><th>Provides</th></tr></thead>
+    <tbody>
+      <tr><td><strong>superpowers</strong> (v5.1.0)</td><td>14 process skills: brainstorming, writing-plans, executing-plans, subagent-driven-development, using-git-worktrees, test-driven-development, systematic-debugging, verification-before-completion, code-review send/receive, finishing-a-development-branch, writing-skills, using-superpowers, dispatching-parallel-agents. Bootstraps at session start via its own hook.</td></tr>
+      <tr><td><strong>skill-creator</strong></td><td>Scaffolds / improves skills. A local <code>/skill-creator</code> also exists; bare-name lookup resolves to the local skill, the namespaced form forces the plugin.</td></tr>
+      <tr><td><strong>claude-md-management</strong></td><td><code>revise-claude-md</code> and <code>claude-md-improver</code> — maintain CLAUDE.md.</td></tr>
+      <tr><td><strong>frontend-design</strong></td><td>Distinctive UI / visual-design guidance.</td></tr>
+      <tr><td><strong>security-guidance</strong></td><td>Security-guidance prompts (e.g. GitHub Actions injection warnings).</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout note">
+    <span class="ttl">Plugin skills are never auto-routed</span>
+    Plugin-namespaced skills (e.g. <code>superpowers:brainstorming</code>) require an explicit slash command, the plugin's own metadata firing it, or another skill invoking them. Local skills win on bare-name collisions; use the namespaced form to force the plugin variant.
+  </div>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

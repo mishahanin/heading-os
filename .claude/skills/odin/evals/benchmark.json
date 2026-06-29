@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-05-15T00:45:15",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 16,
+    "check_total": 16,
+    "cases": [
+      {
+        "id": "case-1-six-modes",
+        "passed": 8,
+        "total": 8,
+        "failures": [],
+        "usage": {
+          "input_tokens": 3972,
+          "output_tokens": 371,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 4.41
+      },
+      {
+        "id": "case-2-committed-stance",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 3983,
+          "output_tokens": 606,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 9.34
+      },
+      {
+        "id": "case-3-brain-grounded",
+        "passed": 3,
+        "total": 3,
+        "failures": [],
+        "usage": {
+          "input_tokens": 3978,
+          "output_tokens": 440,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 6.89
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-05-15T00:45:15",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 16,
+    "check_total": 16,
+    "cases": [
+      {
+        "id": "case-1-six-modes",
+        "passed": 8,
+        "total": 8,
+        "failures": [],
+        "usage": {
+          "input_tokens": 3972,
+          "output_tokens": 371,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 4.41
+      },
+      {
+        "id": "case-2-committed-stance",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 3983,
+          "output_tokens": 606,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 9.34
+      },
+      {
+        "id": "case-3-brain-grounded",
+        "passed": 3,
+        "total": 3,
+        "failures": [],
+        "usage": {
+          "input_tokens": 3978,
+          "output_tokens": 440,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 6.89
+      }
+    ]
+  }
+}

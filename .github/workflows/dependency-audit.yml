@@ -1,0 +1,54 @@
+# Continuous CVE watch for the full locked dependency graph.
+#
+# This is the layer that catches a CVE disclosed against an ALREADY-pinned,
+# unchanged dependency -- the common case, where the package didn't move, the
+# world's knowledge of it did. The pre-commit hook only fires when a dependency
+# file changes; Dependabot only opens PRs once the repo is public (or with GHAS).
+# This scheduled job bridges both gaps and runs today on the private repo.
+#
+# It reuses the single auditing primitive (scripts/audit-deps.py), so the gate
+# is identical at commit time and in CI: the FULL locked graph (dev + transitive),
+# not just the --no-dev requirements.txt.
+name: dependency-audit
+
+on:
+  schedule:
+    # Daily at 05:30 UTC -- fast disclosure-to-detection without waiting on a dep bump.
+    - cron: "30 5 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "uv.lock"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+      - "scripts/audit-deps.py"
+      - ".github/workflows/dependency-audit.yml"
+  pull_request:
+    paths:
+      - "uv.lock"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dev dependencies (installs pip-audit + the full lock)
+        run: uv sync --dev --frozen
+
+      - name: Audit full locked dependency graph for CVEs
+        run: uv run python scripts/audit-deps.py

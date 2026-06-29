@@ -1,0 +1,34 @@
+name: Idea or feature request
+description: Suggest a capability or a change in direction
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pull requests are accepted by invitation, so this is the right place to start. If the idea fits the direction, the maintainer will invite a PR.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The need or friction behind the idea, not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you want it to do?
+      description: How you imagine it working.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways you thought about, and why this one.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a similar idea
+          required: true

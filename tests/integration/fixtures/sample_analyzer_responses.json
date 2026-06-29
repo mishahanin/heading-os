@@ -1,0 +1,22 @@
+[
+  {
+    "text": "{\"urgency\": 3, \"reason\": \"Routine communication, no action required\"}",
+    "stop_reason": "end_turn"
+  },
+  {
+    "text": "{\"urgency\": 9, \"reason\": \"Production outage reported, immediate escalation warranted\"}",
+    "stop_reason": "end_turn"
+  },
+  {
+    "text": "{\"urgency\": 2, \"reason\": \"Informational, low priority\"}",
+    "stop_reason": "end_turn"
+  },
+  {
+    "text": "{\"urgency\": 8, \"reason\": \"Critical deployment issue needs rollback\"}",
+    "stop_reason": "end_turn"
+  },
+  {
+    "text": "{\"urgency\": 1, \"reason\": \"Casual message, no urgency\"}",
+    "stop_reason": "end_turn"
+  }
+]

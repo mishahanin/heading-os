@@ -1,0 +1,35 @@
+{
+  "id": "xpager-render-required-fields",
+  "description": "A complete xPager data dict (all 16 required fields incl. non-empty STATS/CAPABILITIES/PROOF_POINTS lists) passes field-presence validation.",
+  "outcome": {
+    "type": "doctype_render",
+    "doctype": "xpager",
+    "expect_missing": [],
+    "data": {
+      "PRODUCT_NAME": "ODUN.ONE",
+      "PRODUCT_BASE": "ODUN",
+      "PRODUCT_SUFFIX": "ONE",
+      "TAGLINE": "From Deep Packet Inspection to Deep Packet Intelligence",
+      "DATE": "2026-06-06",
+      "STATS": [
+        {"value": "40 Gbps", "label": "line-rate throughput"},
+        {"value": "99.99%", "label": "classification accuracy"}
+      ],
+      "CAPABILITY_HEADLINE": "Sovereign deep packet intelligence",
+      "CAPABILITY_SUB": "Classification without decryption, on your own hardware.",
+      "CAPABILITIES": [
+        {"title": "Encrypted-traffic intelligence", "body": "Classify encrypted flows at line rate without decryption."},
+        {"title": "On-premise sovereignty", "body": "Runs entirely inside the operator's perimeter."}
+      ],
+      "PROOF_HEADLINE": "Proven in production",
+      "PROOF_SUB": "Deployed by sovereign operators.",
+      "PROOF_POINTS": [
+        {"title": "Three national operators", "body": "Running ODUN.ONE in production today."}
+      ],
+      "CONTACT_NAME": "Misha Hanin",
+      "CONTACT_TITLE": "Founder & CEO, 31 Concept",
+      "CONTACT_EMAIL": "ceo@31c.io",
+      "CONTACT_PHONE": "+15550100100 50 000 0000"
+    }
+  }
+}

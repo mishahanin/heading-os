@@ -1,0 +1,16 @@
+[
+  { "query": "memory hygiene", "should_trigger": true },
+  { "query": "check memory health", "should_trigger": true },
+  { "query": "scan memory for defects", "should_trigger": true },
+  { "query": "is there any memory rot", "should_trigger": true },
+  { "query": "any orphan memory files or dangling superseded_by refs?", "should_trigger": true },
+  { "query": "run the memory defect check", "should_trigger": true },
+  { "query": "is MEMORY.md over budget?", "should_trigger": true },
+  { "query": "consolidate my memories", "should_trigger": false },
+  { "query": "clean up and merge duplicate memory facts", "should_trigger": false },
+  { "query": "what do we know about ExampleTelco", "should_trigger": false },
+  { "query": "recall what we decided about pricing", "should_trigger": false },
+  { "query": "how are we doing on the sales function", "should_trigger": false },
+  { "query": "give me the morning dashboard", "should_trigger": false },
+  { "query": "reflect on the Odin brain and mature stale positions", "should_trigger": false }
+]

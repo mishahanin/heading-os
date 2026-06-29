@@ -1,0 +1,10 @@
+{
+  "id": "case-2-voss-pricing",
+  "description": "Confirms /proposal applies Voss precise-number pricing - never round numbers ($347,850 not $350,000).",
+  "input": "Draft the commercial section of a proposal pricing a sales engagement at approximately three hundred fifty thousand US dollars.",
+  "checks": {
+    "must_not_mention": ["$350,000", "$350000", "$350K", "approximately"],
+    "min_words": 80,
+    "hidden_chars_clean": true
+  }
+}

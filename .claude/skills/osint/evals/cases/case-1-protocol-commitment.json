@@ -1,0 +1,11 @@
+{
+  "id": "case-1-protocol-commitment",
+  "description": "Confirms /osint announces its protocol and methodology when given a target, even with no live tools - tests skill commitment to its own phases rather than going straight to fabricated facts.",
+  "input": "Investigate ExampleTelco (UAE telecom operator) - I want a full OSINT brief.",
+  "checks": {
+    "must_mention": ["ExampleTelco", "source"],
+    "must_not_mention": ["I cannot help with that", "I don't have access"],
+    "min_words": 100,
+    "hidden_chars_clean": true
+  }
+}

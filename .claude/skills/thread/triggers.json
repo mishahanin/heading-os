@@ -1,0 +1,16 @@
+[
+  {"query": "open a thread for the acme deal", "should_trigger": true},
+  {"query": "log to the trade show follow-ups thread", "should_trigger": true},
+  {"query": "close the ExampleTelco thread", "should_trigger": true},
+  {"query": "hold the rivex thread for now", "should_trigger": true},
+  {"query": "thread list", "should_trigger": true},
+  {"query": "thread find ahmed", "should_trigger": true},
+  {"query": "show me the thread for the demo project", "should_trigger": true},
+  {"query": "reopen the sara okonkwo thread", "should_trigger": true},
+  {"query": "draft an email to alice about the proposal", "should_trigger": false},
+  {"query": "add a note about the abu dhabi meeting to the knowledge base", "should_trigger": false},
+  {"query": "log this crm interaction with ahmed", "should_trigger": false},
+  {"query": "what do we know about Jane", "should_trigger": false},
+  {"query": "recall what we said about the competitor deal", "should_trigger": false},
+  {"query": "update the pipeline for the demo project", "should_trigger": false}
+]

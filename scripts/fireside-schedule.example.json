@@ -1,0 +1,18 @@
+{
+  "_comment": "EXAMPLE fireside speaker schedule. The engine ships this generic template; the real per-instance schedule is private DATA at <data-root>/config/fireside-schedule.json (resolved via get_data_config_dir()). Copy this there and fill in your own cycle start date, themes, and speaker names. cycle_1_start_monday is an ISO date (a Monday). Each week lists Monday + Wednesday speakers.",
+  "cycle_1_start_monday": "2026-01-05",
+  "weeks": [
+    {
+      "week": 1,
+      "theme": "Best book I've read this year",
+      "mon": ["Speaker One", "Speaker Two", "Speaker Three"],
+      "wed": ["Speaker Four", "Speaker Five", "Speaker Six"]
+    },
+    {
+      "week": 2,
+      "theme": "A place I've lived (or want to live)",
+      "mon": ["Speaker Seven", "Speaker Eight", "Speaker Nine"],
+      "wed": ["Speaker Ten", "Speaker Eleven", "Speaker Twelve"]
+    }
+  ]
+}

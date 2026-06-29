@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly 31C Odin cadence reminder (Monday 09:00, configured timezone)
+
+[Timer]
+# Monday 09:00 in the configured timezone. The installer substitutes {{TZ}} from
+# HEADING_OS_TZ (default UTC); the trailing timezone pins the fire even when the
+# host's local timezone differs (systemd >= 252). Persistent=true catches a fire
+# missed because the host was off, running it on next boot.
+OnCalendar=Mon *-*-* 09:00:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

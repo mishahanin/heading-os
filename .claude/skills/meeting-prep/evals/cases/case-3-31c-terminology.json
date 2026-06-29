@@ -1,0 +1,11 @@
+{
+  "id": "case-3-31c-terminology",
+  "description": "Confirms /meeting-prep uses 31C terminology correctly - ODUN.ONE, DPI+, no banned vocabulary - when the meeting is on home ground.",
+  "input": "Prepare me for a partner update with Sam Rivera (31C Chief Architect) covering ODUN.ONE product roadmap and TrustONE integration status.",
+  "checks": {
+    "must_mention": ["Victor", "ODUN.ONE"],
+    "must_not_mention": ["31 Concept GmbH", "team meeting"],
+    "min_words": 150,
+    "hidden_chars_clean": true
+  }
+}

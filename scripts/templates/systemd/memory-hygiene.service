@@ -1,0 +1,18 @@
+[Unit]
+Description=31C memory hygiene scan (objective-defect detector over auto-memory + Odin brain)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+# Detector only - writes a dated report and NEVER mutates memory. Exit 1 means
+# objective defects were found (dangling/circular superseded_by, orphan memory
+# files, over-budget MEMORY.md); that is a signal, not a unit failure, so it is
+# declared a success status below. Only exit 2 (script error) marks the unit
+# failed. Resolution stays with /dream (human-gated). Report lands under
+# outputs/operations/memory-hygiene/.
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/memory-hygiene.py
+SuccessExitStatus=1
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

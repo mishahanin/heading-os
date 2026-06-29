@@ -1,0 +1,18 @@
+# EXAMPLE curated real-entity denylist, consumed by scripts/content-guard.py.
+#
+# The ENGINE ships this generic template; the REAL list is private DATA at
+# <data-root>/config/content-denylist.yaml and never lives in the engine.
+#
+# Person names / slugs / e-mails / handles / Telegram IDs are harvested
+# AUTOMATICALLY from the data overlay (crm/contacts/*.md, admin/executives.json,
+# config/*). This file is only for NON-person entities the harvest cannot see:
+# companies, events, codenames, competitors.
+#
+# Matching: case-insensitive, word-boundary, min length 5 for bare words; the
+# public-identity and fictional-example allowlists are always exempt. Suppress a
+# true false positive inline with `content-guard: ok <reason>`.
+companies: ["ExampleCorp", "Globex Industries"]
+events: ["Example Summit 2026"]
+codenames: ["Project Placeholder"]
+competitors: ["ExampleVendor"]
+tokens: []

@@ -1,0 +1,33 @@
+{
+  "id": "proposal-render-required-fields",
+  "description": "A complete proposal data dict (all 19 required fields incl. the six HTML blocks and a non-empty PRICING_LINES) passes field-presence validation.",
+  "outcome": {
+    "type": "doctype_render",
+    "doctype": "proposal",
+    "expect_missing": [],
+    "data": {
+      "SENDER_NAME": "Misha Hanin",
+      "SENDER_TITLE": "Founder & CEO, 31 Concept",
+      "SENDER_EMAIL": "ceo@31c.io",
+      "SENDER_PHONE": "+15550100100 50 000 0000",
+      "RECIPIENT_NAME": "Jordan Avery",
+      "RECIPIENT_TITLE": "Chief Technology Officer",
+      "RECIPIENT_ORG": "Northwind Systems",
+      "RECIPIENT_COUNTRY": "United Arab Emirates",
+      "SUBJECT": "ODUN.ONE deep packet intelligence - commercial proposal",
+      "LEDE": "A sovereign DPI+ platform proposal for Northwind Systems.",
+      "DATE": "2026-06-06",
+      "REF_ID": "31C-PROP-2026-0042",
+      "EXECUTIVE_OPENING_HTML": "<p>Thank you for the productive sessions on sovereign traffic intelligence.</p>",
+      "OPPORTUNITY_HTML": "<p>Northwind needs line-rate classification without decryption across its national backbone.</p>",
+      "SOLUTION_HTML": "<p>ODUN.ONE delivers DPI+ classification on commodity hardware, fully on-premise.</p>",
+      "PROOF_HTML": "<p>Three sovereign operators run ODUN.ONE in production today.</p>",
+      "COMMERCIAL_INTRO_HTML": "<p>The commercial structure below is modular and activation-based.</p>",
+      "NEXT_STEPS_HTML": "<p>We propose a Proof of Value within 30 days of signature.</p>",
+      "PRICING_LINES": [
+        {"label": "ODUN.ONE platform - annual license", "value": "USD 240,000"},
+        {"label": "Deployment and integration", "value": "USD 60,000"}
+      ]
+    }
+  }
+}

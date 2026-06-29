@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily 31C associative-memory index refresh (03:30, host local)
+
+[Timer]
+# Daily incremental refresh. No timezone suffix: the build does no date math, so
+# the exact wall-clock hour is cosmetic -- 03:30 is simply a low-traffic slot.
+# Persistent=true runs a missed fire on next boot, which also covers the
+# "refresh after the machine was off / rebooted" case without a separate
+# OnBootSec trigger (and avoids an immediate fire racing a manual build at
+# install time).
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+{
+  "id": "case-3-corporate-classification",
+  "description": "Confirms /push-updates respects the classification gate - only corporate-classified files propagate to exec workspaces, ceo-only never leaves ceo-main.",
+  "input": "Does push-updates send everything in my workspace to all executives, including _secure/ and personal threads?",
+  "checks": {
+    "must_mention": ["classification", "corporate"],
+    "must_not_mention": ["sends everything", "all files"],
+    "min_words": 60,
+    "hidden_chars_clean": true
+  }
+}

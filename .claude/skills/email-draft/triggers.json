@@ -1,0 +1,14 @@
+[
+  {"query": "draft email to alice about the q3 proposal", "should_trigger": true},
+  {"query": "write email to sara about the demo schedule", "should_trigger": true},
+  {"query": "email ahmed about the follow-up from the trade show", "should_trigger": true},
+  {"query": "draft an email to alice introducing the team", "should_trigger": true},
+  {"query": "write email to the partner about the partnership terms", "should_trigger": true},
+  {"query": "email sara about the meeting next tuesday", "should_trigger": true},
+  {"query": "respond to this email from the telco cto", "should_trigger": false},
+  {"query": "reply to this thread from northgate capital", "should_trigger": false},
+  {"query": "write to Ahmed as one ceo to another", "should_trigger": false},
+  {"query": "write a formal letter to northgate capital", "should_trigger": false},
+  {"query": "corporate letter of introduction to a vendor", "should_trigger": false},
+  {"query": "draft a reply to the inbound inquiry", "should_trigger": false}
+]

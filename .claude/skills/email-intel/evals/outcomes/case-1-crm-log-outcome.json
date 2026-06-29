@@ -1,0 +1,20 @@
+{
+  "id": "crm-log-outcome",
+  "description": "log_to_crm logs a linked conversation to the right contact on the right date (the email->CRM outcome: right contact got the right log).",
+  "outcome": {
+    "type": "crm_log",
+    "conv_id": "conv-fixture-001",
+    "conversations": [
+      {
+        "id": "conv-fixture-001",
+        "topic": "Renewal scope - Q3",
+        "latest_datetime": "2026-06-04T09:15:00",
+        "crm_context": {"contact_slug": "northwind-prospect"}
+      }
+    ],
+    "create_contacts": ["northwind-prospect"],
+    "expect_ok": true,
+    "expected_slug": "northwind-prospect",
+    "expected_date": "2026-06-04"
+  }
+}

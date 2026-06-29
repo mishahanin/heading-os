@@ -1,0 +1,17 @@
+[
+  { "query": "do an editorial pass on this proposal", "should_trigger": true },
+  { "query": "review the structure of this brief", "should_trigger": true },
+  { "query": "structural review of this draft before I send it", "should_trigger": true },
+  { "query": "tighten this document's structure", "should_trigger": true },
+  { "query": "is the argument arc of this investor memo right", "should_trigger": true },
+  { "query": "restructure this report, the lede is buried", "should_trigger": true },
+  { "query": "cut the redundant sections in this draft", "should_trigger": true },
+
+  { "query": "make this sound more human", "should_trigger": false },
+  { "query": "fix the typos in this paragraph", "should_trigger": false },
+  { "query": "check the rhythm and vocabulary of this post", "should_trigger": false },
+  { "query": "write a proposal for ExampleTelco", "should_trigger": false },
+  { "query": "validate these claims against the datastore", "should_trigger": false },
+  { "query": "grade the quality of this skill", "should_trigger": false },
+  { "query": "add a quick note to the knowledge base", "should_trigger": false }
+]

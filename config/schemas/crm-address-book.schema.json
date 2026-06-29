@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://odinix.com/schemas/crm-address-book.schema.json",
+  "title": "31C CRM Address Book Entity",
+  "description": "Canonical entity record at crm/address-book/{slug}.md. Single source of truth for biographical facts (name, emails, employer, LinkedIn, region). Single-writer per entity per canonical_owner policy.",
+  "type": "object",
+  "required": ["slug", "name", "canonical_email", "employer", "canonical_owner", "created"],
+  "additionalProperties": true,
+  "properties": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Stable kebab-case identifier. Never changes for the lifetime of the entity."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Canonical full display name (English form per reference_bilingual_names memory)."
+    },
+    "aliases": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Other spellings or name variants used by execs / external systems."
+    },
+    "canonical_email": {
+      "type": "string",
+      "description": "Primary email. Empty string allowed when unknown."
+    },
+    "other_emails": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Additional known email addresses. Used by auto-log entity resolver."
+    },
+    "phone": {"type": "string"},
+    "linkedin": {"type": "string"},
+    "telegram": {"type": "string"},
+    "employer": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Current employer / affiliation."
+    },
+    "employer_aliases": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Other spellings of the employer used in pipeline.md or external sources."
+    },
+    "title": {"type": "string"},
+    "region": {"type": "string"},
+    "timezone": {
+      "type": "string",
+      "description": "IANA timezone where the entity lives (e.g. Asia/Singapore)."
+    },
+    "operating_timezone": {
+      "type": "string",
+      "description": "Optional. IANA timezone of working hours if different from `timezone`."
+    },
+    "canonical_owner": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Slug of the executive who maintains this entity record. Per type-tier policy (commercial -> alex-rivera, investor/tribe -> misha-hanin, etc.)."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO date YYYY-MM-DD when this entity was first created."
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO date of most recent edit to this entity record."
+    }
+  }
+}

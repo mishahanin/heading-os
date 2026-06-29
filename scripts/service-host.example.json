@@ -1,0 +1,13 @@
+{
+  "_comment": "EXAMPLE topology for a separate service-host VM that a HEADING OS instance MANAGES from its workspace. The engine ships this generic template; the real values live as private DATA at <data-root>/config/service-host.json (resolved via get_data_config_dir()). The VM is its own entity (its deployment lives outside the engine); the workspace only runs laptop-side management/client scripts against it. Put the VM host ADDRESS in .env as SERVICE_VM_HOST (never here). Post engine/data split: daemon state lives under TWO VM roots — the engine clone (vm_engine_root) and the data overlay (vm_data_root) — so each state_dir names which root it sits under (engine|data). Replace the placeholders below with your own VM's layout.",
+  "vm_engine_root": "/home/youruser/workspaces/heading-os",
+  "vm_data_root": "/home/youruser/workspaces/.heading-os-data",
+  "fireside_unit": "fireside.service",
+  "mirror_dir": "datastore/operations/service-mirror",
+  "state_dirs": [
+    ["eval-drift", "data", "datastore/operations/eval-drift"],
+    ["fireside-state", "data", "datastore/operations/tribe/fireside-state"],
+    ["steward", "engine", "datastore/operations/steward"],
+    ["sentinel", "engine", ".sentinel"]
+  ]
+}

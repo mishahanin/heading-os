@@ -1,0 +1,27 @@
+answers:
+  company_full_name: "Acme Corporation"
+  company_short_name: "Acme"
+  company_domain: "acme.com"
+  company_timezone: "America/New_York"
+  ceo_full_name: "Jane Doe"
+  ceo_title: "Founder & CEO"
+  ceo_email: "jane@acme.com"
+  product_name: "AcmePlatform"
+  team_name: "Team"
+  ceo_voice:
+    value: "Direct, concise."
+    draft: "Jane writes in a direct, concise style."
+    draft_approved: true
+  personal_info:
+    value: "20 years in SaaS."
+    draft: "Jane has 20 years building SaaS products."
+    draft_approved: true
+  business_info:
+    value: "We build platforms."
+    draft: "Acme Corporation builds developer platforms."
+    draft_approved: true
+  anthropic_api_key: "TEST-FIXTURE-PUBLIC"  # pragma: allowlist secret
+skipped:
+  - company_hq_cities
+  - product_tagline
+  - calendar_policy

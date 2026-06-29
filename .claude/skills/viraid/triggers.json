@@ -1,0 +1,16 @@
+[
+  { "query": "process viraid", "should_trigger": true },
+  { "query": "check viraid", "should_trigger": true },
+  { "query": "run a viraid sweep", "should_trigger": true },
+  { "query": "what's new in viraid", "should_trigger": true },
+  { "query": "viraid digest please", "should_trigger": true },
+  { "query": "anything actionable in the viraid channels", "should_trigger": true },
+
+  { "query": "check my telegram messages", "should_trigger": false },
+  { "query": "send a telegram to Alex", "should_trigger": false },
+  { "query": "process my email inbox", "should_trigger": false },
+  { "query": "what came in across all my comms this morning", "should_trigger": false },
+  { "query": "add this person to the CRM", "should_trigger": false },
+  { "query": "investigate this company", "should_trigger": false },
+  { "query": "draft a LinkedIn post", "should_trigger": false }
+]

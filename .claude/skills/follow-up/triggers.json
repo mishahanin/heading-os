@@ -1,0 +1,16 @@
+[
+  { "query": "follow up with Sara after our call", "should_trigger": true },
+  { "query": "send a follow-up to the PartnerCo contact", "should_trigger": true },
+  { "query": "draft a follow-up email after yesterday's meeting", "should_trigger": true },
+  { "query": "I need to follow up with the investor who went quiet", "should_trigger": true },
+  { "query": "follow-up note to the partner we met last week", "should_trigger": true },
+  { "query": "circle back with this prospect", "should_trigger": true },
+
+  { "query": "follow up with everyone I met at MWC", "should_trigger": false },
+  { "query": "send all the post-event follow-ups", "should_trigger": false },
+  { "query": "draft a brand-new cold email to this lead", "should_trigger": false },
+  { "query": "reply to this incoming email", "should_trigger": false },
+  { "query": "process my inbox", "should_trigger": false },
+  { "query": "write a formal letter to the ministry", "should_trigger": false },
+  { "query": "log this interaction in the CRM", "should_trigger": false }
+]

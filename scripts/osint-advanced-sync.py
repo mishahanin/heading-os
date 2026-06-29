@@ -21,6 +21,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 # Workspace utilities
@@ -160,7 +161,9 @@ def check_upstream(upstream_tools, local_tools):
 
 def validate_url(url, method="web"):
     """Validate a single URL. Returns (status, detail)."""
-    if "github.com" in url and "/search" not in url:
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if (host == "github.com" or host.endswith(".github.com")) and "/search" not in parsed.path:
         return "CLI", "Repository/CLI tool -- skip HTTP check"
     try:
         req = Request(url, headers={"User-Agent": USER_AGENT})

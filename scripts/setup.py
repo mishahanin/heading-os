@@ -318,6 +318,10 @@ def step_setup_env(state: dict) -> bool:
     """)
 
     env_file.write_text(env_content, encoding="utf-8")
+    # Secrets file: restrict to owner-only (0600) on POSIX so the API key is not
+    # world-readable. Windows uses ACLs, not POSIX modes, so skip the chmod there.
+    if platform.system() != "Windows":
+        env_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
     if api_key:
         ok(".env created with API key")
     else:

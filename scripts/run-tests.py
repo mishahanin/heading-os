@@ -38,10 +38,14 @@ def build_command(acceptance: bool) -> list[str]:
     sign-off gates with no floor. The floor lives here, not in pyproject addopts,
     so single-file `pytest tests/x.py` runs are never blocked by partial coverage.
     """
+    # -n auto: distribute the regression suite across all CPU cores (pytest-xdist).
+    # The serial gate was the slow part of every engine push (~4 min); parallel
+    # collapses it to ~1 min on a multi-core box. Acceptance gates stay serial --
+    # they are few and some assert ordered, single-writer behaviour.
     base = [sys.executable, "-m", "pytest", "-q"]
     if acceptance:
         return base + ["-m", "acceptance"]
-    return base + ["-m", "not acceptance", "--cov=scripts", f"--cov-fail-under={COVERAGE_FLOOR}"]
+    return base + ["-n", "auto", "-m", "not acceptance", "--cov=scripts", f"--cov-fail-under={COVERAGE_FLOOR}"]
 
 
 def main() -> int:

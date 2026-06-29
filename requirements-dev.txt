@@ -8,6 +8,7 @@
 # Testing
 pytest>=8.0,<10.0
 pytest-asyncio>=0.23,<2.0   # required by pyproject asyncio_mode=auto (sentinel hardening async tests)
+pytest-xdist>=3.0,<4.0      # parallel test gate (-n auto) — the pre-push regression speedup
 
 # Security tooling
 bandit>=1.7,<2.0

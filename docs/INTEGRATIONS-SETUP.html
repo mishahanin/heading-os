@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Integrations &amp; credentials</title>
+<meta name="description" content="How to connect the external services HEADING OS talks to: corporate email">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html" class="active">Integrations &amp; credentials</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Integrations &amp; credentials</h1>
+  <p class="page-meta">How to connect the external services HEADING OS talks to: corporate email</p>
+  <!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+
+<p>How to connect the external services HEADING OS talks to: corporate email
+(Exchange), your personal Telegram, Google contacts, and the OSINT and web-research
+APIs. Each one lights up a set of skills and is independent. Set up only the ones you
+use; the rest of the engine runs fine without them.</p>
+<blockquote>
+<p>AI models (Ollama embeddings, the Council voices) have their own guide:
+<a href="MODELS-SETUP.html">MODELS-SETUP</a>. This page covers everything else.</p>
+</blockquote>
+<p>Every credential lives in the engine&rsquo;s gitignored <code>.env</code>; interactive sessions
+(Telegram, Google OAuth) cache tokens under the gitignored <code>.sessions/</code>. Neither is
+ever committed, and a push-time content scan blocks any credential that slips into a
+tracked file.</p>
+<hr />
+<h2 id="1-what-needs-what">1. What needs what</h2>
+<table>
+<thead>
+<tr>
+<th>Integration</th>
+<th>Lights up</th>
+<th>Credentials</th>
+<th>Where to get them</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Exchange email</td>
+<td><code>/email-intel</code>, <code>/email-draft</code>, <code>/email-respond</code>, <code>send-email.py</code>, sync-exchange daemon</td>
+<td><code>EXCHANGE_SERVER</code>, <code>EXCHANGE_EMAIL</code>, Exchange password</td>
+<td>your mail administrator</td>
+</tr>
+<tr>
+<td>Telegram (personal)</td>
+<td><code>/telegram</code>, <code>/viraid</code>, Sentinel monitor</td>
+<td><code>TELEGRAM_API_ID</code>, <code>TELEGRAM_API_HASH</code>, <code>TELEGRAM_PHONE</code></td>
+<td>my.telegram.org</td>
+</tr>
+<tr>
+<td>Google contacts</td>
+<td><code>/google-contacts</code></td>
+<td>OAuth <code>credentials.json</code></td>
+<td>Google Cloud console</td>
+</tr>
+<tr>
+<td>Web research</td>
+<td><code>/osint</code>, <code>/deep-research-advance</code>, browsing</td>
+<td><code>TAVILY_API_KEY</code>, <code>BRAVE_API_KEY</code>, <code>FIRECRAWL_API_KEY</code>, <code>PERPLEXITY_API_KEY</code></td>
+<td>per-service signup</td>
+</tr>
+<tr>
+<td>Breach / OSINT</td>
+<td><code>/osint</code>, <code>/osint-advanced</code></td>
+<td><code>DEHASHED_API_KEY</code>, <code>HIBP_API_KEY</code>, <code>HUNTER_API_KEY</code>, <code>VIRUSTOTAL_API_KEY</code></td>
+<td>per-service signup</td>
+</tr>
+<tr>
+<td>Image generation</td>
+<td><code>/flux-image</code>, <code>/design</code></td>
+<td><code>REPLICATE_API_TOKEN</code></td>
+<td>replicate.com</td>
+</tr>
+</tbody>
+</table>
+<p>The fastest way to fill <code>.env</code> interactively is the <a href="MAKE-IT-YOURS.html">setup wizard</a>:
+<code>/setup-wizard</code> walks you through these keys question by question. This page is the
+reference for doing it by hand or understanding what each one does.</p>
+<hr />
+<h2 id="2-exchange-email-the-comms-backbone">2. Exchange email (the comms backbone)</h2>
+<p>Email is the spine of the communications skills. HEADING OS connects to Exchange over
+<strong>EWS</strong> using the <code>exchangelib</code> library, with an <strong>explicit server</strong> and autodiscover
+turned off (it does not guess your endpoint). This targets an on-premises or hosted
+Exchange mailbox with delegate access.</p>
+<h3 id="21-credentials-in-env">2.1 Credentials (in <code>.env</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EXCHANGE_EMAIL</code></td>
+<td>yes</td>
+<td>the mailbox address</td>
+</tr>
+<tr>
+<td><code>EXCHANGE_PASSWORD</code></td>
+<td>yes</td>
+<td>the mailbox password (placeholder in <code>.env.example</code>)</td>
+</tr>
+<tr>
+<td><code>EXCHANGE_SERVER</code></td>
+<td>yes</td>
+<td>the EWS host: bare hostname, no <code>https://</code>, no <code>/EWS/Exchange.asmx</code></td>
+</tr>
+<tr>
+<td><code>EXCHANGE_USERNAME</code></td>
+<td>optional</td>
+<td>only if the login differs from the email (some domains use <code>DOMAIN\user</code>)</td>
+</tr>
+<tr>
+<td><code>EXCHANGE_AUTH_TYPE</code></td>
+<td>optional</td>
+<td><code>NTLM</code> (default) or <code>basic</code>, per your server</td>
+</tr>
+<tr>
+<td><code>EXCHANGE_TIMEZONE</code></td>
+<td>optional</td>
+<td>your mailbox timezone, for correct item times</td>
+</tr>
+</tbody>
+</table>
+<p><code>EXCHANGE_SERVER</code> is the bare hostname the EWS URL is built from. If you reach webmail
+at <code>https://mail.yourcompany.com/owa</code>, then <code>mail.yourcompany.com</code> is your server.
+When the login name differs from the address, set <code>EXCHANGE_USERNAME</code>; otherwise the
+email doubles as the username.</p>
+<p>If you do not know the server or auth type, ask whoever runs your mail. This is not a
+public-signup integration: the values come from your organization.</p>
+<h3 id="22-sending-mail">2.2 Sending mail</h3>
+<p><code>scripts/send-email.py</code> is the <strong>single entry point for all outbound email</strong>. It
+attaches the branded signature with inline images and is the only sanctioned way to
+send. Never call the transport any other way.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># basic</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/send-email.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--to<span class="w"> </span><span class="s2">&quot;person@example.com&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--subject<span class="w"> </span><span class="s2">&quot;Subject line&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--body<span class="w"> </span><span class="s2">&quot;&lt;p&gt;HTML body&lt;/p&gt;&quot;</span>
+
+<span class="c1"># cc / bcc, multiple recipients</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/send-email.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--to<span class="w"> </span><span class="s2">&quot;a@example.com&quot;</span><span class="w"> </span><span class="s2">&quot;b@example.com&quot;</span><span class="w"> </span>--cc<span class="w"> </span><span class="s2">&quot;c@example.com&quot;</span><span class="w"> </span>--bcc<span class="w"> </span><span class="s2">&quot;d@example.com&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--subject<span class="w"> </span><span class="s2">&quot;Subject&quot;</span><span class="w"> </span>--body<span class="w"> </span><span class="s2">&quot;&lt;p&gt;Body&lt;/p&gt;&quot;</span>
+
+<span class="c1"># threaded reply / reply-all / forward (match the original by subject or sender)</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/send-email.py<span class="w"> </span>--reply<span class="w"> </span>--match-subject<span class="w"> </span><span class="s2">&quot;31C / Globex&quot;</span><span class="w"> </span>--body<span class="w"> </span><span class="s2">&quot;&lt;p&gt;...&lt;/p&gt;&quot;</span>
+</code></pre></div>
+<p>A plain-text <code>--body</code> is auto-wrapped in HTML. Outbound is always human-gated: skills
+draft and show you the message; sending is your deliberate action.</p>
+<h3 id="23-verify">2.3 Verify</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># round-trip a message to yourself</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/send-email.py<span class="w"> </span>--to<span class="w"> </span><span class="s2">&quot;you@yourcompany.com&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--subject<span class="w"> </span><span class="s2">&quot;HEADING OS test&quot;</span><span class="w"> </span>--body<span class="w"> </span><span class="s2">&quot;It works.&quot;</span>
+</code></pre></div>
+<p>A clean send and a message in your inbox confirms the connection. The reading side
+(<code>/email-intel</code>, sync-exchange) uses the same credentials, so a successful send means
+the whole Exchange path is wired.</p>
+<h3 id="24-troubleshooting">2.4 Troubleshooting</h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause &amp; fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Auth or 401 on connect</td>
+<td>Wrong password, or wrong <code>EXCHANGE_AUTH_TYPE</code>. Try <code>basic</code> if <code>NTLM</code> fails, or the reverse. Confirm the password is current.</td>
+</tr>
+<tr>
+<td>Cannot reach the server</td>
+<td><code>EXCHANGE_SERVER</code> wrong or unreachable. Use the bare hostname, no scheme or path. Check VPN if the server is internal.</td>
+</tr>
+<tr>
+<td>Login name rejected</td>
+<td>Set <code>EXCHANGE_USERNAME</code> explicitly (some servers want <code>DOMAIN\user</code>).</td>
+</tr>
+<tr>
+<td>Wrong times on items</td>
+<td>Set <code>EXCHANGE_TIMEZONE</code> to your mailbox timezone.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-telegram-personal-client">3. Telegram (personal client)</h2>
+<p>The <code>/telegram</code> skill drives a real Telegram <strong>user</strong> account (yours), through
+Telethon. It is a one-time interactive login that caches a session; after that the
+skill reads and sends as you. (This is separate from the optional Fireside team
+<strong>bot</strong>, which uses its own bot token and is covered in <a href="daemons.html">Daemons</a>.)</p>
+<h3 id="31-get-api-credentials">3.1 Get API credentials</h3>
+<ol>
+<li>Go to <a href="https://my.telegram.org">my.telegram.org</a> and sign in with your phone.</li>
+<li>Open <strong>API development tools</strong> and create an application.</li>
+<li>Copy the <strong>api_id</strong> and <strong>api_hash</strong> into <code>.env</code>:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TELEGRAM_API_ID</code></td>
+<td>the numeric api_id from my.telegram.org</td>
+</tr>
+<tr>
+<td><code>TELEGRAM_API_HASH</code></td>
+<td>the api_hash from my.telegram.org</td>
+</tr>
+<tr>
+<td><code>TELEGRAM_PHONE</code></td>
+<td>the account&rsquo;s number, with country code (e.g. <code>+1...</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="32-authenticate-one-time">3.2 Authenticate (one time)</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># request the login code (Telegram sends it to your app)</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>.claude/skills/telegram/scripts/telegram_client.py<span class="w"> </span>setup
+
+<span class="c1"># enter the code you received</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>.claude/skills/telegram/scripts/telegram_client.py<span class="w"> </span>verify<span class="w"> </span><span class="m">12345</span>
+</code></pre></div>
+<p>If the account has two-step verification, you are prompted for the password. The
+session is stored at <code>.sessions/telegram/telegram.session</code> (gitignored). You log in
+once per machine; the skill reuses the session after that.</p>
+<h3 id="33-verify">3.3 Verify</h3>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>.claude/skills/telegram/scripts/telegram_client.py<span class="w"> </span>chats<span class="w"> </span>--limit<span class="w"> </span><span class="m">5</span>
+</code></pre></div>
+<p>A list of your recent chats means the client is authenticated. Inside a session,
+<code>/telegram</code> and <code>/viraid</code> then work directly.</p>
+<h3 id="34-troubleshooting">3.4 Troubleshooting</h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause &amp; fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>setup</code> says credentials missing</td>
+<td><code>TELEGRAM_API_ID</code> / <code>TELEGRAM_API_HASH</code> / <code>TELEGRAM_PHONE</code> not set in <code>.env</code>.</td>
+</tr>
+<tr>
+<td>Code never arrives</td>
+<td>It is delivered inside Telegram (the app), not by SMS. Check your other Telegram sessions.</td>
+</tr>
+<tr>
+<td>Session keeps re-prompting</td>
+<td>The <code>.sessions/telegram/</code> file was deleted or is unwritable. Re-run <code>setup</code> then <code>verify</code>.</td>
+</tr>
+<tr>
+<td>Datacenter-IP block on read</td>
+<td>Some networks rate-limit. See the VPN preflight note in <a href="prerequisites.html">Prerequisites</a>.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-google-contacts">4. Google contacts</h2>
+<p><code>/google-contacts</code> reads and writes your Google contacts through the People API. It is
+a standalone connector, fully separate from the workspace CRM (<code>/crm</code>). It uses
+standard Google OAuth with a desktop client.</p>
+<blockquote>
+<p>Calendar, Gmail, and Drive in a Claude Code session come through Claude&rsquo;s own
+managed connectors (configured in your Claude account), not through engine <code>.env</code>.
+This section covers only the scripted People-API integration the engine ships.</p>
+</blockquote>
+<h3 id="41-set-up-oauth">4.1 Set up OAuth</h3>
+<ol>
+<li>Go to the <a href="https://console.cloud.google.com/apis/credentials">Google Cloud console credentials page</a>.</li>
+<li>Create an <strong>OAuth 2.0 Client ID</strong> of type <strong>Desktop application</strong>.</li>
+<li>Enable the <strong>People API</strong> (APIs &amp; Services, Library, search &ldquo;People API&rdquo;).</li>
+<li>Download the credentials JSON.</li>
+<li>Place it at <code>.sessions/google/credentials.json</code>.</li>
+</ol>
+<h3 id="42-first-run">4.2 First run</h3>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/google-contacts.py<span class="w"> </span>list<span class="w"> </span>--limit<span class="w"> </span><span class="m">5</span>
+</code></pre></div>
+<p>The first run opens a browser for OAuth consent (it handles two-factor). After you
+approve, the token is cached at <code>.sessions/google/token.json</code> and subsequent runs are
+silent. Both files are gitignored.</p>
+<hr />
+<h2 id="5-osint-web-research-keys-optional">5. OSINT &amp; web-research keys (optional)</h2>
+<p>These power research and browsing. All are optional: the skills degrade to whatever
+is available and skip sources whose key is absent. Most have a free tier.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Service</th>
+<th>Used by</th>
+<th>Get it at</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TAVILY_API_KEY</code></td>
+<td>Tavily search</td>
+<td><code>/osint</code> entity resolution</td>
+<td><a href="https://tavily.com">tavily.com</a> (free: ~1,000/mo)</td>
+</tr>
+<tr>
+<td><code>BRAVE_API_KEY</code></td>
+<td>Brave Search API</td>
+<td><code>/osint</code> (Tavily fallback)</td>
+<td><a href="https://brave.com/search/api/">brave.com/search/api</a> (free: ~2,000/mo)</td>
+</tr>
+<tr>
+<td><code>FIRECRAWL_API_KEY</code></td>
+<td>Firecrawl</td>
+<td>web scraping</td>
+<td><a href="https://firecrawl.dev">firecrawl.dev</a></td>
+</tr>
+<tr>
+<td><code>PERPLEXITY_API_KEY</code></td>
+<td>Perplexity</td>
+<td><code>/deep-research-advance</code></td>
+<td><a href="https://www.perplexity.ai">perplexity.ai</a> (API settings)</td>
+</tr>
+<tr>
+<td><code>DEHASHED_API_KEY</code> (+ <code>DEHASHED_EMAIL</code>)</td>
+<td>DeHashed</td>
+<td><code>/osint-advanced</code> breach intel</td>
+<td><a href="https://dehashed.com">dehashed.com</a></td>
+</tr>
+<tr>
+<td><code>HIBP_API_KEY</code></td>
+<td>Have I Been Pwned</td>
+<td><code>/osint-advanced</code></td>
+<td><a href="https://haveibeenpwned.com/API/Key">haveibeenpwned.com/API/Key</a></td>
+</tr>
+<tr>
+<td><code>HUNTER_API_KEY</code></td>
+<td>Hunter.io</td>
+<td>email discovery</td>
+<td><a href="https://hunter.io">hunter.io</a></td>
+</tr>
+<tr>
+<td><code>VIRUSTOTAL_API_KEY</code></td>
+<td>VirusTotal</td>
+<td><code>/osint-advanced</code></td>
+<td><a href="https://www.virustotal.com">virustotal.com</a></td>
+</tr>
+<tr>
+<td><code>REPLICATE_API_TOKEN</code></td>
+<td>Replicate</td>
+<td><code>/flux-image</code>, <code>/design</code></td>
+<td><a href="https://replicate.com">replicate.com</a></td>
+</tr>
+<tr>
+<td><code>CONTEXT7_API_KEY</code></td>
+<td>Context7</td>
+<td><code>/context7</code> library docs</td>
+<td><a href="https://context7.com">context7.com</a></td>
+</tr>
+<tr>
+<td><code>GH_TOKEN</code></td>
+<td>GitHub</td>
+<td><code>push-all.py</code> backups</td>
+<td>GitHub settings (repo scope)</td>
+</tr>
+</tbody>
+</table>
+<p><code>GH_TOKEN</code> is the one non-optional key for the backup path; it is covered in
+<a href="DEPLOYMENT.html">DEPLOYMENT</a>. The rest you add as you adopt the skills that use them.</p>
+<hr />
+<h2 id="6-where-credentials-live">6. Where credentials live</h2>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Holds</th>
+<th>Committed?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.env</code> (engine root)</td>
+<td>every API key and Exchange / Telegram credential</td>
+<td>no (gitignored)</td>
+</tr>
+<tr>
+<td><code>.sessions/telegram/</code></td>
+<td>Telegram login session</td>
+<td>no (gitignored)</td>
+</tr>
+<tr>
+<td><code>.sessions/google/</code></td>
+<td>Google <code>credentials.json</code> + cached <code>token.json</code></td>
+<td>no (gitignored)</td>
+</tr>
+</tbody>
+</table>
+<p>Never paste a live credential into chat, a ticket, or a tracked file. To read a value
+locally: <code>grep KEY .env</code>. If a secret is ever exposed, treat it as compromised:
+rotate it first, then scrub. The push-time scan is the backstop, not the first line of
+defense; you are.</p>
+<hr />
+<h2 id="7-reference">7. Reference</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.env.example</code></td>
+<td>Template listing every credential the engine reads</td>
+</tr>
+<tr>
+<td><code>scripts/send-email.py</code></td>
+<td>The single outbound-email entry point (Exchange / EWS)</td>
+</tr>
+<tr>
+<td><code>scripts/inbox_pulse/exchange.py</code></td>
+<td>Exchange read-side connection helper</td>
+</tr>
+<tr>
+<td><code>.claude/skills/telegram/scripts/telegram_client.py</code></td>
+<td>Telegram user client (setup / verify / send / read)</td>
+</tr>
+<tr>
+<td><code>scripts/google-contacts.py</code></td>
+<td>Google People-API client (OAuth)</td>
+</tr>
+<tr>
+<td><code>.sessions/</code></td>
+<td>Cached interactive sessions (gitignored)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>HEADING OS · Integrations &amp; credentials · maintained by 31 Concept · see also
+<a href="MODELS-SETUP.html">MODELS-SETUP</a> for AI models and <a href="MAKE-IT-YOURS.html">MAKE-IT-YOURS</a>
+to personalize the workspace.</em></p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

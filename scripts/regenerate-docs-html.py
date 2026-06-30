@@ -226,12 +226,14 @@ SITE_NAV_GROUPS = [
         ("prerequisites.html", "Prerequisites &amp; install"),
         ("DEPLOYMENT.html", "Full deployment guide"),
         ("QUICKSTART.html", "Quickstart"),
+        ("MAKE-IT-YOURS.html", "Make it yours"),
     ]),
     ("Operate", [
         ("daemons.html", "Daemons &amp; scheduled tasks"),
         ("skills-mcp-plugins.html", "Skills, MCP &amp; plugins"),
         ("memory-odin.html", "Memory &amp; ODIN"),
-        ("MODELS-SETUP.html", "AI models &amp; integrations"),
+        ("MODELS-SETUP.html", "AI models"),
+        ("INTEGRATIONS-SETUP.html", "Integrations &amp; credentials"),
     ]),
     ("Reference", [
         ("data-structure.html", "Data overlay structure"),

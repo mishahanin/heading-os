@@ -24,13 +24,15 @@
       <a href="prerequisites.html">Prerequisites &amp; install</a>
       <a href="DEPLOYMENT.html" class="active">Full deployment guide</a>
       <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
     </div>
     <div class="nav-group">
       <div class="label">Operate</div>
       <a href="daemons.html">Daemons &amp; scheduled tasks</a>
       <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
       <a href="memory-odin.html">Memory &amp; ODIN</a>
-      <a href="MODELS-SETUP.html">AI models &amp; integrations</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
     </div>
     <div class="nav-group">
       <div class="label">Reference</div>
@@ -42,7 +44,7 @@
 <main class="content">
   <h1>HEADING OS — Deployment &amp; Setup</h1>
   <p class="page-meta">The complete, zero-to-running guide for standing up a HEADING OS workspace from a</p>
-  <!-- version: 1.1.0 | last-updated: 2026-06-30 -->
+  <!-- version: 1.2.0 | last-updated: 2026-07-01 -->
 
 <p>The complete, zero-to-running guide for standing up a HEADING OS workspace from a
 clean machine. Every command is generalized — substitute the <code>&lt;placeholders&gt;</code> for
@@ -294,6 +296,16 @@ key, configure <code>.env</code>, and verify each path) is in <strong><a href="M
 Never send private data through <code>/council</code>; <code>/deep-research-advance</code> is
 hard-scoped to public topics. Details in MODELS-SETUP.</p>
 </blockquote>
+<h3 id="other-integrations-personalization-optional">Other integrations &amp; personalization (optional)</h3>
+<p>Two more guides cover the rest:</p>
+<ul>
+<li><strong><a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP.md</a></strong> — connect Exchange email,
+  your Telegram, Google contacts, and the OSINT / web-research APIs (where to get
+  each key, how to authenticate, how to verify).</li>
+<li><strong><a href="MAKE-IT-YOURS.html">MAKE-IT-YOURS.md</a></strong> — personalize the clone: run
+  <code>/setup-wizard</code> to generate your voice, business, and personal docs, set your
+  identity, and adapt the house terminology to your own.</li>
+</ul>
 <hr />
 <h2 id="7-install-dependencies-arm-the-secret-gate">7. Install dependencies &amp; arm the secret gate</h2>
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>&lt;engine&gt;

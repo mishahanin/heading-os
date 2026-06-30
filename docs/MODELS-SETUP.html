@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI models &amp; integrations</title>
+<meta name="description" content="How to connect every AI model HEADING OS uses beyond Claude itself: the local">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html" class="active">AI models &amp; integrations</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>AI models &amp; integrations</h1>
+  <p class="page-meta">How to connect every AI model HEADING OS uses beyond Claude itself: the local</p>
+  <!-- version: 1.0.0 | last-updated: 2026-06-30 -->
+
+<p>How to connect every AI model HEADING OS uses beyond Claude itself: the local
+Ollama runtime, the <code>bge-m3</code> embedding model that powers semantic recall, and the
+three cloud reasoning models (Gemini, Grok, Kimi) behind the <code>/council</code> and
+<code>/deep-research-advance</code> skills. Follow it once when standing up a clone; return to
+the troubleshooting matrix when a model goes dark.</p>
+<blockquote>
+<p>Claude is configured during the main install (see <a href="DEPLOYMENT.html">DEPLOYMENT</a>).
+Everything on this page is <strong>optional</strong>: the engine runs without any of it. Each
+integration lights up exactly one set of capabilities, and the rest of HEADING OS
+keeps working when it is absent.</p>
+</blockquote>
+<hr />
+<h2 id="1-what-needs-what">1. What needs what</h2>
+<p>Each capability maps to one model, one transport, and one credential. If you only
+want a subset, set up only those rows.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Skill / script</th>
+<th>Model</th>
+<th>Transport</th>
+<th>Credential</th>
+<th>Where to get it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Semantic recall, memory index</td>
+<td><code>/recall</code>, <code>scripts/memory-index.py</code></td>
+<td><code>bge-m3</code></td>
+<td>local Ollama</td>
+<td>none (runs on your machine)</td>
+<td><code>ollama pull bge-m3</code></td>
+</tr>
+<tr>
+<td>Second opinion, voice 1</td>
+<td><code>/council</code> (Gemini)</td>
+<td><code>gemini-3.5-flash</code></td>
+<td>Google API</td>
+<td><code>GEMINI_API_KEY</code></td>
+<td>Google AI Studio</td>
+</tr>
+<tr>
+<td>Second opinion, voice 2</td>
+<td><code>/council</code> (Grok)</td>
+<td><code>grok-4.3</code></td>
+<td>xAI API</td>
+<td><code>XAI_API_KEY</code></td>
+<td>xAI console</td>
+</tr>
+<tr>
+<td>Second opinion, voice 3</td>
+<td><code>/council</code> (Kimi)</td>
+<td><code>kimi-k2.6:cloud</code></td>
+<td>Ollama cloud routing</td>
+<td><code>OLLAMA_API_KEY</code></td>
+<td>Ollama account</td>
+</tr>
+<tr>
+<td>Deep web research</td>
+<td><code>/deep-research-advance</code></td>
+<td><code>kimi-k2.6:cloud</code> + Perplexity</td>
+<td>Ollama cloud + Perplexity API</td>
+<td><code>OLLAMA_API_KEY</code>, <code>PERPLEXITY_API_KEY</code></td>
+<td>Ollama account, Perplexity</td>
+</tr>
+</tbody>
+</table>
+<p>Two of these ride on Ollama (the local embedder and Kimi), so install Ollama first
+if you want either. Gemini and Grok are pure cloud APIs and need no local runtime.</p>
+<p>All credentials live in the engine&rsquo;s gitignored <code>.env</code>. See <a href="#6-the-env-block">section 6</a> for
+the exact block to paste.</p>
+<hr />
+<h2 id="2-ollama-local-runtime">2. Ollama (local runtime)</h2>
+<p>Ollama is a local model server. HEADING OS uses it for two distinct jobs:</p>
+<ol>
+<li><strong>Embeddings</strong>, fully on your machine, with <code>bge-m3</code>. No data leaves the host, no
+   API key, zero cost. This is what <code>/recall</code> and the memory index run on.</li>
+<li><strong>Cloud routing</strong> for Kimi, where Ollama proxies a request to a hosted
+   <code>kimi-k2.6:cloud</code> model. Here the prompt does leave the machine (see the
+   <a href="#52-privacy-guardrail-read-before-using-cloud-voices">privacy guardrail</a>).</li>
+</ol>
+<p>You need Ollama installed and running for either. If you want neither recall nor
+Kimi, skip this whole section.</p>
+<h3 id="21-install">2.1 Install</h3>
+<p><strong>Linux / WSL2 (Ubuntu):</strong></p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://ollama.com/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh
+</code></pre></div>
+<p>The installer registers a <code>systemd</code> service that starts Ollama on boot and keeps it
+listening on <code>http://localhost:11434</code>. On WSL2 without systemd, start it by hand
+with <code>ollama serve</code> (see <a href="#23-start-and-verify">2.3</a>).</p>
+<p><strong>macOS:</strong></p>
+<p>Download the app from <a href="https://ollama.com/download">ollama.com/download</a>, or:</p>
+<div class="highlight"><pre><span></span><code>brew<span class="w"> </span>install<span class="w"> </span>ollama
+</code></pre></div>
+<p>The macOS app runs Ollama as a menu-bar service on the same <code>localhost:11434</code>.</p>
+<h3 id="22-verify-the-binary">2.2 Verify the binary</h3>
+<div class="highlight"><pre><span></span><code>ollama<span class="w"> </span>--version
+</code></pre></div>
+<p>If the command is not found, the install did not register on your <code>PATH</code>. Open a new
+shell, or add the install location (<code>/usr/local/bin</code> on most systems) to <code>PATH</code>.</p>
+<h3 id="23-start-and-verify">2.3 Start and verify</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># start the server (only needed if no systemd service is running)</span>
+ollama<span class="w"> </span>serve<span class="w"> </span><span class="p">&amp;</span>
+
+<span class="c1"># confirm it answers on the loopback port the engine expects</span>
+curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:11434/api/tags
+</code></pre></div>
+<p>A JSON response (even an empty <code>{"models":[]}</code>) means the server is up and reachable
+on the host and port the engine reads from <code>config/memory-index.yaml</code>. A connection
+refused means it is not running.</p>
+<h3 id="24-keeping-ollama-current-optional">2.4 Keeping Ollama current (optional)</h3>
+<p>New Ollama releases ship regularly. To update, rerun the install script (Linux) or
+update the app (macOS). A <code>systemd</code> timer can automate the Linux path; that is an
+operator preference and not required by HEADING OS.</p>
+<hr />
+<h2 id="3-embedding-model-bge-m3-for-recall">3. Embedding model: <code>bge-m3</code> for recall</h2>
+<p><code>/recall</code> and <code>scripts/memory-index.py</code> build a local associative-memory index over
+the workspace (Odin brain, threads, CRM, context, outputs, and more), then answer
+queries by meaning rather than exact words. The embeddings are computed locally by
+<code>bge-m3</code> through Ollama. <strong>No API key, no network, no cost.</strong></p>
+<h3 id="31-pull-the-model">3.1 Pull the model</h3>
+<div class="highlight"><pre><span></span><code>ollama<span class="w"> </span>pull<span class="w"> </span>bge-m3
+</code></pre></div>
+<p><code>bge-m3</code> is multilingual (Russian and English), 1024-dimensional, and roughly 1.2 GB
+on disk. The pull is a one-time download.</p>
+<h3 id="32-configuration">3.2 Configuration</h3>
+<p>The embedder is declared in <code>config/memory-index.yaml</code>. The two lines that matter:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bge-m3</span>
+<span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://localhost:11434&quot;</span>
+</code></pre></div>
+<p><code>host</code> is broken out deliberately: pointing it at a remote Ollama instance (for
+example a GPU box) is a single-line change. Everything else in that file tunes
+ranking, chunking, and which workspace layers get indexed; the defaults are sound.</p>
+<h3 id="33-build-and-query">3.3 Build and query</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># build (or incrementally refresh) the index. Safe to rerun; only changed files re-embed.</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/memory-index.py<span class="w"> </span>build
+
+<span class="c1"># query it directly</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/memory-index.py<span class="w"> </span>query<span class="w"> </span><span class="s2">&quot;what did we decide about pricing&quot;</span>
+
+<span class="c1"># index statistics</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/memory-index.py<span class="w"> </span>stats
+</code></pre></div>
+<p>In a Claude session, <code>/recall &lt;question&gt;</code> runs the same retrieval and answers only
+from the returned sources, with file-path citations, or reports a gap.</p>
+<p>The index lives at <code>.memory-index/</code> (gitignored, rebuildable). It is a cache, not a
+source of truth: delete it and rebuild any time.</p>
+<blockquote>
+<p><strong>First full build is slow on CPU.</strong> On a CPU-only machine a from-scratch build of
+a large workspace can take well over an hour. It commits per file and is
+resumable, so it is safe to interrupt and rerun. Incremental refreshes after that
+are fast.</p>
+</blockquote>
+<h3 id="34-when-ollama-is-down">3.4 When Ollama is down</h3>
+<p>Recall degrades gracefully. If Ollama is unreachable, a skill notes &ldquo;index not
+refreshed (ollama down)&rdquo; and continues on the already-built index; a brain write
+still lands and is reindexed on the next successful build. Nothing fails hard
+because the embedder is offline.</p>
+<hr />
+<h2 id="4-cloud-reasoning-models-for-council">4. Cloud reasoning models for <code>/council</code></h2>
+<p><code>/council</code> asks three independent models the same hard question in parallel, then
+sets their answers side by side with Claude&rsquo;s own view. It has two modes: in
+<strong>independent</strong> mode each model reasons fresh from the problem; in <strong>critique</strong> mode
+each stress-tests a draft you supply. The three voices are Gemini, Grok, and Kimi.</p>
+<p>Each voice is a separate credential and a separate <code>scripts/*-consult.py</code> wrapper.
+<code>/council</code> runs whichever voices have a key set and degrades to the others if one is
+missing or fails. To run the full council, set all three.</p>
+<h3 id="41-shared-behaviour">4.1 Shared behaviour</h3>
+<ul>
+<li>Each wrapper is a pure API wrapper: it prints the model&rsquo;s answer to stdout and
+  writes nothing to disk. The skill handles formatting and transcript persistence.</li>
+<li>Exit codes are uniform: <code>0</code> success, <code>2</code> argument or missing-key error, <code>3</code> API
+  call failed (network, rate limit, invalid model).</li>
+<li>A missing key is reported clearly at call time, for example
+  <code>GEMINI_API_KEY is missing from .env. Add it before invoking the council.</code></li>
+<li>Default models are pinned in each script&rsquo;s <code>DEFAULT_MODEL</code>; override per call with
+  <code>--model</code> on the script, or <code>--gemini-model</code> / <code>--grok-model</code> / <code>--kimi-model</code> on
+  <code>/council</code>.</li>
+</ul>
+<hr />
+<h2 id="5-the-three-council-voices">5. The three council voices</h2>
+<h3 id="51-gemini">5.1 Gemini</h3>
+<ul>
+<li><strong>Credential:</strong> <code>GEMINI_API_KEY</code></li>
+<li><strong>Where to get it:</strong> <a href="https://aistudio.google.com/apikey">Google AI Studio</a>. Sign
+  in with a Google account and create an API key. A free tier exists; heavier use
+  needs billing enabled on the associated Google Cloud project.</li>
+<li><strong>Default model:</strong> <code>gemini-3.5-flash</code></li>
+<li><strong>SDK / transport:</strong> the <code>google-genai</code> SDK (pinned in <code>pyproject.toml</code>), calling
+  Google&rsquo;s hosted API directly. No local runtime.</li>
+<li><strong>Wrapper:</strong> <code>scripts/gemini-consult.py</code></li>
+</ul>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/gemini-consult.py<span class="w"> </span>--mode<span class="w"> </span>independent<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--question<span class="w"> </span><span class="s2">&quot;Should we anchor pricing per Gbps or per module?&quot;</span>
+</code></pre></div>
+<h3 id="52-grok">5.2 Grok</h3>
+<ul>
+<li><strong>Credential:</strong> <code>XAI_API_KEY</code></li>
+<li><strong>Where to get it:</strong> the <a href="https://console.x.ai">xAI console</a>. Create an account,
+  add billing, and generate an API key. Grok&rsquo;s API is OpenAI-compatible.</li>
+<li><strong>Default model:</strong> <code>grok-4.3</code></li>
+<li><strong>SDK / transport:</strong> the <code>openai</code> SDK (pinned in <code>pyproject.toml</code>) pointed at xAI&rsquo;s
+  base URL <code>https://api.x.ai/v1</code>. No local runtime.</li>
+<li><strong>Wrapper:</strong> <code>scripts/grok-consult.py</code></li>
+</ul>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/grok-consult.py<span class="w"> </span>--mode<span class="w"> </span>independent<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--question<span class="w"> </span><span class="s2">&quot;Should we anchor pricing per Gbps or per module?&quot;</span>
+</code></pre></div>
+<h3 id="53-kimi">5.3 Kimi</h3>
+<p>Kimi is reached through Ollama&rsquo;s cloud routing rather than a direct vendor API, so
+<a href="#2-ollama-local-runtime">Ollama</a> must be installed and running.</p>
+<ul>
+<li><strong>Credential:</strong> <code>OLLAMA_API_KEY</code></li>
+<li><strong>Where to get it:</strong> your Ollama account at <a href="https://ollama.com">ollama.com</a>. Sign
+  in (<code>ollama signin</code> on the CLI, or the web app), then create an API key under your
+  account keys. <code>kimi-k2.6:cloud</code> is a hosted model that Ollama proxies for you.</li>
+<li><strong>Default model:</strong> <code>kimi-k2.6:cloud</code></li>
+<li><strong>SDK / transport:</strong> the <code>openai</code> SDK pointed at the local Ollama endpoint
+  <code>http://localhost:11434/v1</code>, which forwards to Ollama&rsquo;s cloud. Some local installs
+  accept any non-empty string as the key; the value in <code>.env</code> is sent verbatim.</li>
+<li><strong>Wrapper:</strong> <code>scripts/kimi-consult.py</code></li>
+</ul>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/kimi-consult.py<span class="w"> </span>--mode<span class="w"> </span>independent<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--question<span class="w"> </span><span class="s2">&quot;Should we anchor pricing per Gbps or per module?&quot;</span>
+</code></pre></div>
+<blockquote>
+<p><strong>Kimi is a thinking model.</strong> Its chain of thought consumes the same token budget
+as its answer, so a tiny budget can be spent entirely on reasoning and return an
+empty answer. The wrapper detects this and retries once at a higher ceiling before
+erroring. If you see an empty-answer truncation note, that retry has already run.</p>
+</blockquote>
+<h3 id="54-running-a-subset">5.4 Running a subset</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># one voice only (mutually exclusive)</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/gemini-consult.py<span class="w"> </span>...<span class="w">   </span><span class="c1"># or grok-consult / kimi-consult</span>
+
+<span class="c1"># inside /council, skip or isolate voices</span>
+/council<span class="w"> </span>--no-kimi<span class="w">   </span><span class="s2">&quot;question&quot;</span><span class="w">      </span><span class="c1"># Gemini + Grok only</span>
+/council<span class="w"> </span>--grok-only<span class="w"> </span><span class="s2">&quot;question&quot;</span><span class="w">      </span><span class="c1"># Grok alone</span>
+</code></pre></div>
+<h3 id="55-privacy-guardrail-read-before-using-cloud-voices">5.5 Privacy guardrail (read before using cloud voices)</h3>
+<p>Gemini, Grok, and Kimi are <strong>third-party clouds outside the 31C data boundary</strong>.
+Treat all three as one privacy tier. The question text and any context you pass them
+leave your machine.</p>
+<ul>
+<li>Never send private or internal data to a cloud voice: CRM contacts, pipeline data,
+  Odin brain content, mail, message history, partner names, or pricing do not belong
+  in a council question or in <code>--domains</code>.</li>
+<li><code>/council</code> can carry business context by design and runs under your judgement;
+  <code>/deep-research-advance</code> is hard-scoped to public topics and refuses private ones.
+  The embedding model (<code>bge-m3</code>) is the only fully local AI model here and is the
+  right tool when the content cannot leave the host.</li>
+</ul>
+<hr />
+<h2 id="6-deep-web-research-deep-research-advance">6. Deep web research: <code>/deep-research-advance</code></h2>
+<p><code>/deep-research-advance</code> runs a token-heavy acquisition pass over the public web with
+<strong>Perplexity</strong>, then a reasoning and verification pass with <strong>Kimi</strong>, before Claude
+audits the findings into a cited report. It needs:</p>
+<ul>
+<li><code>PERPLEXITY_API_KEY</code> from <a href="https://www.perplexity.ai">perplexity.ai</a> (API settings).</li>
+<li><code>OLLAMA_API_KEY</code> and a running Ollama (same Kimi setup as <a href="#53-kimi">5.3</a>).</li>
+</ul>
+<p>The same third-party-cloud guardrail applies, and the skill enforces it: only the
+public research question and the gathered web corpus flow to Perplexity and Kimi.
+Refuse to run it on anything private.</p>
+<hr />
+<h2 id="7-the-env-block">7. The <code>.env</code> block</h2>
+<p>Paste this into the engine&rsquo;s <code>.env</code> (copy from <code>.env.example</code> first) and fill in the
+keys you actually use. Leave a line blank or unset to keep that integration dark; the
+engine reads what is present and ignores the rest.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Local embeddings (bge-m3 for /recall): NO key needed, runs on your machine via Ollama.</span>
+
+<span class="c1"># Council voice 1: Gemini (Google AI Studio)</span>
+<span class="nv">GEMINI_API_KEY</span><span class="o">=</span>your-gemini-key-here
+
+<span class="c1"># Council voice 2: Grok (xAI console, OpenAI-compatible)</span>
+<span class="nv">XAI_API_KEY</span><span class="o">=</span>xai-your-key-here
+
+<span class="c1"># Council voice 3: Kimi, plus /deep-research-advance reasoning (Ollama cloud routing)</span>
+<span class="nv">OLLAMA_API_KEY</span><span class="o">=</span>your-ollama-cloud-key-here
+
+<span class="c1"># /deep-research-advance web acquisition (Perplexity)</span>
+<span class="nv">PERPLEXITY_API_KEY</span><span class="o">=</span>pplx-your-key-here
+</code></pre></div>
+<p>Which keys are required depends on the capability:</p>
+<table>
+<thead>
+<tr>
+<th>Want</th>
+<th>Required keys</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/recall</code> only</td>
+<td>none (just Ollama + <code>bge-m3</code>)</td>
+</tr>
+<tr>
+<td>Full <code>/council</code></td>
+<td><code>GEMINI_API_KEY</code>, <code>XAI_API_KEY</code>, <code>OLLAMA_API_KEY</code> (+ Ollama running)</td>
+</tr>
+<tr>
+<td>Partial <code>/council</code></td>
+<td>only the keys for the voices you keep</td>
+</tr>
+<tr>
+<td><code>/deep-research-advance</code></td>
+<td><code>OLLAMA_API_KEY</code>, <code>PERPLEXITY_API_KEY</code> (+ Ollama running)</td>
+</tr>
+</tbody>
+</table>
+<p>Secrets never get committed: <code>.env</code> is gitignored, and a push-time content scan
+blocks any credential that slips into a tracked file regardless. Never paste a live
+key into chat or a tracked file.</p>
+<hr />
+<h2 id="8-verify-your-setup-pre-flight">8. Verify your setup (pre-flight)</h2>
+<p>Before relying on any model, prove the path end to end.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Embeddings / recall</span>
+ollama<span class="w"> </span>pull<span class="w"> </span>bge-m3
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/memory-index.py<span class="w"> </span>build
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/memory-index.py<span class="w"> </span>query<span class="w"> </span><span class="s2">&quot;test&quot;</span>
+
+<span class="c1"># Council voices: each should print an answer and exit 0</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/gemini-consult.py<span class="w"> </span>--mode<span class="w"> </span>independent<span class="w"> </span>--question<span class="w"> </span><span class="s2">&quot;Reply with the single word OK.&quot;</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/grok-consult.py<span class="w">   </span>--mode<span class="w"> </span>independent<span class="w"> </span>--question<span class="w"> </span><span class="s2">&quot;Reply with the single word OK.&quot;</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/kimi-consult.py<span class="w">   </span>--mode<span class="w"> </span>independent<span class="w"> </span>--question<span class="w"> </span><span class="s2">&quot;Reply with the single word OK.&quot;</span>
+</code></pre></div>
+<p>An exit code of <code>2</code> means the key is missing or malformed; <code>3</code> means the key is set
+but the call failed (wrong key, no billing, network, or, for Kimi, Ollama not
+running). A printed answer and exit <code>0</code> mean the voice is live.</p>
+<hr />
+<h2 id="9-troubleshooting">9. Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause &amp; fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/recall</code> returns nothing, or &ldquo;index not refreshed (ollama down)&rdquo;</td>
+<td>Ollama is not running. <code>ollama serve &amp;</code>, then <code>curl -s http://localhost:11434/api/tags</code>.</td>
+</tr>
+<tr>
+<td><code>memory-index.py</code> errors mentioning the embed endpoint</td>
+<td><code>bge-m3</code> not pulled, or wrong host. <code>ollama pull bge-m3</code>; confirm <code>host:</code> in <code>config/memory-index.yaml</code>.</td>
+</tr>
+<tr>
+<td>First <code>memory-index build</code> runs for a very long time</td>
+<td>Expected on CPU for a large workspace. It is resumable and commits per file; let it finish or rerun.</td>
+</tr>
+<tr>
+<td><code>GEMINI_API_KEY is missing from .env</code></td>
+<td>Key absent. Add it from Google AI Studio.</td>
+</tr>
+<tr>
+<td><code>XAI_API_KEY is missing from .env</code></td>
+<td>Key absent. Add it from the xAI console.</td>
+</tr>
+<tr>
+<td><code>OLLAMA_API_KEY is missing from .env</code></td>
+<td>Key absent. Create one in your Ollama account; Kimi rides on Ollama cloud routing.</td>
+</tr>
+<tr>
+<td>Council voice exits <code>3</code> (API failed)</td>
+<td>Key set but call failed: wrong key, billing not enabled, rate limit, or (Kimi) Ollama not running.</td>
+</tr>
+<tr>
+<td>Kimi returns an empty answer / truncation note</td>
+<td>Thinking model spent the budget on reasoning. The wrapper already retried at a higher ceiling; rerun, or raise the budget.</td>
+</tr>
+<tr>
+<td>A council voice is silently absent from the result</td>
+<td>That voice has no key set, or failed. <code>/council</code> degrades to the remaining voices on purpose.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="10-reference">10. Reference</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config/memory-index.yaml</code></td>
+<td>Embedder model + host, ranking, chunking, indexed layers</td>
+</tr>
+<tr>
+<td><code>scripts/memory-index.py</code></td>
+<td>Builds and queries the local recall index (<code>bge-m3</code>)</td>
+</tr>
+<tr>
+<td><code>scripts/utils/embeddings.py</code></td>
+<td>Local embedding client over Ollama</td>
+</tr>
+<tr>
+<td><code>scripts/gemini-consult.py</code></td>
+<td>Gemini council wrapper (<code>GEMINI_API_KEY</code>)</td>
+</tr>
+<tr>
+<td><code>scripts/grok-consult.py</code></td>
+<td>Grok council wrapper (<code>XAI_API_KEY</code>)</td>
+</tr>
+<tr>
+<td><code>scripts/kimi-consult.py</code></td>
+<td>Kimi council wrapper (<code>OLLAMA_API_KEY</code>, Ollama cloud)</td>
+</tr>
+<tr>
+<td><code>scripts/utils/kimi_transport.py</code></td>
+<td>Research-only Kimi transport (no business context)</td>
+</tr>
+<tr>
+<td><code>.claude/skills/council/SKILL.md</code></td>
+<td><code>/council</code> orchestration, modes, flags, transcript</td>
+</tr>
+<tr>
+<td><code>.claude/skills/recall/SKILL.md</code></td>
+<td><code>/recall</code> retrieval and answer discipline</td>
+</tr>
+<tr>
+<td><code>.claude/skills/deep-research-advance/SKILL.md</code></td>
+<td>Deep research flow and privacy guardrail</td>
+</tr>
+<tr>
+<td><code>.env.example</code></td>
+<td>Template listing every credential the engine reads</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>HEADING OS · AI models &amp; integrations · maintained by 31 Concept · see also
+<a href="DEPLOYMENT.html">DEPLOYMENT</a> for the core install and <a href="memory-odin.html">Memory &amp; ODIN</a>
+for how recall feeds the brain.</em></p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

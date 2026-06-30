@@ -30,6 +30,7 @@
       <a href="daemons.html">Daemons &amp; scheduled tasks</a>
       <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
       <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models &amp; integrations</a>
     </div>
     <div class="nav-group">
       <div class="label">Reference</div>
@@ -41,7 +42,7 @@
 <main class="content">
   <h1>HEADING OS — Quickstart</h1>
   <p class="page-meta">The one-page version. For the full zero-to-running walk-through, see</p>
-  <!-- version: 2.0.0 | last-updated: 2026-06-27 -->
+  <!-- version: 2.1.0 | last-updated: 2026-06-30 -->
 
 <p>The one-page version. For the full zero-to-running walk-through, see
 <strong><a href="DEPLOYMENT.md">DEPLOYMENT.md</a></strong>.</p>
@@ -152,6 +153,17 @@ capability automatically.</p>
 <p><strong>Outbound is always human-gated.</strong> Email and messages are drafted and shown to you
 first. Nothing sends on its own.</p>
 </blockquote>
+<hr />
+<h2 id="optional-ai-models">Optional: AI models</h2>
+<p>A few skills use models beyond Claude, all optional:</p>
+<ul>
+<li><code>/recall</code> and the memory index run on a local <code>bge-m3</code> embedder via <strong>Ollama</strong> (no
+  key, no cost).</li>
+<li><code>/council</code> asks <strong>Gemini, Grok, and Kimi</strong> in parallel for a second opinion.</li>
+<li><code>/deep-research-advance</code> adds <strong>Perplexity + Kimi</strong> for deep web research.</li>
+</ul>
+<p>Install steps, where to get each key, and how to verify are in
+<strong><a href="MODELS-SETUP.md">MODELS-SETUP.md</a></strong>.</p>
 <hr />
 <p><em>HEADING OS · Quickstart · see <a href="DEPLOYMENT.md">DEPLOYMENT.md</a> for the full guide and
 the in-workspace <code>/prime</code> for live orientation.</em></p>

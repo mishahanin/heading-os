@@ -30,6 +30,7 @@
       <a href="daemons.html">Daemons &amp; scheduled tasks</a>
       <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
       <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models &amp; integrations</a>
     </div>
     <div class="nav-group">
       <div class="label">Reference</div>
@@ -41,7 +42,7 @@
 <main class="content">
   <h1>HEADING OS — Deployment &amp; Setup</h1>
   <p class="page-meta">The complete, zero-to-running guide for standing up a HEADING OS workspace from a</p>
-  <!-- version: 1.0.0 | last-updated: 2026-06-27 -->
+  <!-- version: 1.1.0 | last-updated: 2026-06-30 -->
 
 <p>The complete, zero-to-running guide for standing up a HEADING OS workspace from a
 clean machine. Every command is generalized — substitute the <code>&lt;placeholders&gt;</code> for
@@ -252,6 +253,47 @@ added later — those features stay dark until set.</p>
 credentials into chat, tickets, or tracked files. To read a value locally:
 <code>grep KEY &lt;engine&gt;/.env</code>.</p>
 </blockquote>
+<h3 id="ai-model-integrations-optional">AI model integrations (optional)</h3>
+<p>Claude is wired during the steps above. Three further integrations are optional and
+light up specific capabilities; the engine runs without any of them:</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Model</th>
+<th>Credential</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/recall</code>, memory index</td>
+<td><code>bge-m3</code></td>
+<td>none</td>
+<td>Local embeddings via Ollama. No key, no cost.</td>
+</tr>
+<tr>
+<td><code>/council</code></td>
+<td>Gemini, Grok, Kimi</td>
+<td><code>GEMINI_API_KEY</code>, <code>XAI_API_KEY</code>, <code>OLLAMA_API_KEY</code></td>
+<td>Three independent second-opinion voices.</td>
+</tr>
+<tr>
+<td><code>/deep-research-advance</code></td>
+<td>Kimi + Perplexity</td>
+<td><code>OLLAMA_API_KEY</code>, <code>PERPLEXITY_API_KEY</code></td>
+<td>Deep public-web research.</td>
+</tr>
+</tbody>
+</table>
+<p>Recall and Kimi both need a local <strong>Ollama</strong> runtime; Gemini and Grok are pure cloud
+APIs. The complete walk-through (install Ollama, pull <code>bge-m3</code>, where to get each
+key, configure <code>.env</code>, and verify each path) is in <strong><a href="MODELS-SETUP.html">MODELS-SETUP.md</a></strong>.</p>
+<blockquote>
+<p><strong>These models are third-party clouds</strong> (except the local <code>bge-m3</code> embedder).
+Never send private data through <code>/council</code>; <code>/deep-research-advance</code> is
+hard-scoped to public topics. Details in MODELS-SETUP.</p>
+</blockquote>
 <hr />
 <h2 id="7-install-dependencies-arm-the-secret-gate">7. Install dependencies &amp; arm the secret gate</h2>
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>&lt;engine&gt;
@@ -433,6 +475,10 @@ the engine, stop — see the troubleshooting table.</p>
 <tr>
 <td>Multi-line paste mangles (<code>^[[200~</code>)</td>
 <td>Bracketed-paste artifact. Paste commands one physical line at a time, or join with <code>&amp;&amp;</code> / <code>;</code>.</td>
+</tr>
+<tr>
+<td><code>/council</code> says a key is missing, or <code>/recall</code> returns nothing</td>
+<td>Model integration not set up. See <a href="MODELS-SETUP.html">MODELS-SETUP.md</a>: install Ollama, pull <code>bge-m3</code>, add the council keys.</td>
 </tr>
 </tbody>
 </table>

@@ -63,11 +63,15 @@ You clone the engine; you create your own private data repository ([one command]
 
 ## Quickstart
 
-The full documentation — prerequisites &amp; install, daemons &amp; scheduled tasks, the skill/MCP/plugin catalog, the AI model integrations (local Ollama embeddings, the Council models), the memory systems &amp; ODIN, and the data-overlay structure — is published as a browsable site at **[mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/)**.
+The full documentation — prerequisites &amp; install, daemons &amp; scheduled tasks, the skill/MCP/plugin catalog, the AI model integrations (local Ollama embeddings, the Council models), the service integrations (Exchange email, Telegram, Google, OSINT), workspace personalization, the memory systems &amp; ODIN, and the data-overlay structure — is published as a browsable site at **[mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/)**.
 
 The zero-to-running walk-through — WSL2, toolchain, prerequisites, Claude Code, your private data repo, and the engine wired to it — is in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** (with [docs/QUICKSTART.md](docs/QUICKSTART.md) for the short version).
 
-Connecting the optional AI models — installing **Ollama** for the local `bge-m3` embedder behind `/recall`, and wiring **Gemini, Grok, and Kimi** as the `/council` voices (where to get each key, configure `.env`, and verify) — is documented end to end in **[docs/MODELS-SETUP.md](docs/MODELS-SETUP.md)**.
+Three focused setup guides cover everything beyond the core install:
+
+- **[docs/MODELS-SETUP.md](docs/MODELS-SETUP.md)** — the AI models: installing **Ollama** for the local `bge-m3` embedder behind `/recall`, and wiring **Gemini, Grok, and Kimi** as the `/council` voices.
+- **[docs/INTEGRATIONS-SETUP.md](docs/INTEGRATIONS-SETUP.md)** — the services: **Exchange** email, **Telegram**, **Google** contacts, and the **OSINT / web-research** APIs, with where to get each key and how to verify.
+- **[docs/MAKE-IT-YOURS.md](docs/MAKE-IT-YOURS.md)** — personalizing a clone: `/setup-wizard` to generate your voice, business, and personal docs, set your identity, and adapt the house terminology to your own.
 
 The short version, once the prerequisites are in place:
 

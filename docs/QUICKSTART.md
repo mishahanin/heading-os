@@ -1,4 +1,4 @@
-<!-- version: 2.1.0 | last-updated: 2026-06-30 -->
+<!-- version: 2.2.0 | last-updated: 2026-07-01 -->
 # HEADING OS — Quickstart
 
 The one-page version. For the full zero-to-running walk-through, see
@@ -85,6 +85,10 @@ A few skills use models beyond Claude, all optional:
 
 Install steps, where to get each key, and how to verify are in
 **[MODELS-SETUP.md](MODELS-SETUP.md)**.
+
+To connect email, Telegram, Google, and the OSINT keys, see
+**[INTEGRATIONS-SETUP.md](INTEGRATIONS-SETUP.md)**. To make the workspace speak in
+your own voice and identity, see **[MAKE-IT-YOURS.md](MAKE-IT-YOURS.md)** (`/setup-wizard`).
 
 ---
 

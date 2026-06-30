@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture</title>
+<meta name="description" content="How the pieces fit. Claude Code is the agent; HEADING OS is the structure built around">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html" class="active">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Architecture</h1>
+  <p class="page-meta">How the pieces fit. Claude Code is the agent; HEADING OS is the structure built around</p>
+  <!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+
+<p>How the pieces fit. Claude Code is the agent; HEADING OS is the structure built around
+it that turns a general assistant into an operations engine with durable memory, a
+catalog of skills, and a hard line between shareable code and private data.</p>
+<p>This page is the map. Each subsystem has its own guide, linked as it appears.</p>
+<hr />
+<h2 id="1-two-repositories-one-seam">1. Two repositories, one seam</h2>
+<p>HEADING OS runs as two sibling git repositories:</p>
+<ul>
+<li>the <strong>engine</strong> (this repo): all logic, no data, shareable;</li>
+<li>your <strong>data overlay</strong> (private, yours): CRM, knowledge, outputs, threads, context.</li>
+</ul>
+<p>The engine resolves your data at runtime through a single seam, <code>get_data_root()</code>, as
+a sibling directory or via <code>HEADING_OS_DATA</code>. Every artifact a skill produces is
+written through that seam into your overlay, never into the engine tree. The
+separation is enforced mechanically, not by discipline: see the
+<strong><a href="SECURITY-MODEL.html">Security model</a></strong> and the
+<strong><a href="engine-data-segregation-contract.html">segregation contract</a></strong>, and the
+<strong><a href="data-structure.html">data overlay structure</a></strong> for what lives where.</p>
+<hr />
+<h2 id="2-what-happens-when-you-type">2. What happens when you type</h2>
+<p>A turn flows through the engine like this:</p>
+<ol>
+<li><strong>You send a message</strong> (natural language or a <code>/slash-command</code>).</li>
+<li><strong>The skill router</strong> matches intent to a skill. One clear match invokes it; several
+   plausible ones present a short menu; no match falls through to ordinary
+   conversation. Compound requests (for example &ldquo;prep me for this meeting&rdquo; with depth
+   signals) hand off to the <strong>orchestrator</strong>, which dispatches parallel read-only
+   agents and serializes any writes.</li>
+<li><strong>The skill runs</strong> in phases: load context, execute, synthesize, output.</li>
+<li><strong>Hooks guard the work.</strong> <code>PreToolUse</code> hooks can block a write before it lands
+   (secret detection, the engine/data boundary); <code>PostToolUse</code> hooks scan what was
+   written (hidden characters, injection patterns); <code>SessionStart</code> hooks prime the
+   session.</li>
+<li><strong>Outputs land in your data overlay</strong>, named by convention, and anything outbound
+   is drafted and queued, never sent on its own.</li>
+</ol>
+<hr />
+<h2 id="3-the-building-blocks">3. The building blocks</h2>
+<table>
+<thead>
+<tr>
+<th>Block</th>
+<th>What it is</th>
+<th>Guide</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Skills</strong></td>
+<td>Slash-command workflows for research, comms, content, CRM, strategy, operations</td>
+<td><a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a></td>
+</tr>
+<tr>
+<td><strong>Rules</strong></td>
+<td>Always-on or path-scoped behavior the agent follows every turn</td>
+<td><a href="EXTENDING.html">Extending the engine</a></td>
+</tr>
+<tr>
+<td><strong>Hooks</strong></td>
+<td>Pre / post / session guards that enforce the rules before a write lands</td>
+<td><a href="SECURITY-MODEL.html">Security model</a></td>
+</tr>
+<tr>
+<td><strong>Scripts &amp; daemons</strong></td>
+<td>CLI tools and optional always-on services (dashboard, mail sync, monitors)</td>
+<td><a href="daemons.html">Daemons</a></td>
+</tr>
+<tr>
+<td><strong>Memory</strong></td>
+<td>Auto-memory, semantic recall, the ODIN brain, knowledge, threads</td>
+<td><a href="memory-odin.html">Memory &amp; ODIN</a></td>
+</tr>
+<tr>
+<td><strong>Models</strong></td>
+<td>Local embeddings plus the Council voices</td>
+<td><a href="MODELS-SETUP.html">AI models</a></td>
+</tr>
+</tbody>
+</table>
+<p>The router and the orchestrator are themselves rules: the agent reads them every turn,
+which is why adding a skill means registering it with the router (see
+<a href="EXTENDING.html">Extending the engine</a>).</p>
+<hr />
+<h2 id="4-memory-state-that-outlives-a-session">4. Memory: state that outlives a session</h2>
+<p>HEADING OS does not rely on one-shot prompts. It keeps durable state in several layers,
+each with a different job: file-based <strong>auto-memory</strong> for atomic facts, a local
+<strong>semantic recall</strong> index over the whole workspace, the curated <strong>ODIN brain</strong> for
+long-term advice, the <strong>knowledge base</strong> for notes, and <strong>threads</strong> for live
+operational state. They are explained together in <strong><a href="memory-odin.html">Memory &amp; ODIN</a></strong>.
+The recall index runs on a local embedder; connecting it is in
+<strong><a href="MODELS-SETUP.html">AI models</a></strong>.</p>
+<hr />
+<h2 id="5-daemons-optional-console-first">5. Daemons: optional, console-first</h2>
+<p>Background services (a loopback dashboard, mail and calendar sync, comms monitors) are
+optional. Every capability they offer is also operable from the terminal and from
+chat: the dashboard is a convenience layer, never a dependency. A capability that only
+worked through a browser would be a defect. Install and operation are in
+<strong><a href="daemons.html">Daemons &amp; scheduled tasks</a></strong>.</p>
+<hr />
+<h2 id="6-the-control-plane">6. The control plane</h2>
+<p>Three controls are woven through everything above, not bolted on:</p>
+<ul>
+<li><strong>Engine and data stay apart</strong>, enforced by layered guards and an unbypassable
+  push-time wall.</li>
+<li><strong>Outbound send is always human-gated</strong>, through the Action Queue.</li>
+<li><strong>Secrets never reach a remote</strong>, through a commit-time warning and an authoritative
+  push-time content scan.</li>
+</ul>
+<p>All three are detailed in the <strong><a href="SECURITY-MODEL.html">Security model</a></strong>.</p>
+<hr />
+<h2 id="7-the-documentation-map">7. The documentation map</h2>
+<table>
+<thead>
+<tr>
+<th>To&hellip;</th>
+<th>Read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>stand up a clone</td>
+<td><a href="prerequisites.html">Prerequisites</a>, <a href="DEPLOYMENT.html">Deployment</a>, <a href="QUICKSTART.html">Quickstart</a></td>
+</tr>
+<tr>
+<td>make it yours</td>
+<td><a href="MAKE-IT-YOURS.html">Make it yours</a></td>
+</tr>
+<tr>
+<td>connect models</td>
+<td><a href="MODELS-SETUP.html">AI models</a></td>
+</tr>
+<tr>
+<td>connect services</td>
+<td><a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a></td>
+</tr>
+<tr>
+<td>run the background services</td>
+<td><a href="daemons.html">Daemons</a></td>
+</tr>
+<tr>
+<td>understand memory</td>
+<td><a href="memory-odin.html">Memory &amp; ODIN</a></td>
+</tr>
+<tr>
+<td>understand the data layout</td>
+<td><a href="data-structure.html">Data overlay structure</a></td>
+</tr>
+<tr>
+<td>understand the security model</td>
+<td><a href="SECURITY-MODEL.html">Security model</a></td>
+</tr>
+<tr>
+<td>build on the engine</td>
+<td><a href="EXTENDING.html">Extending the engine</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>HEADING OS · Architecture · maintained by 31 Concept · the Navigation Principle in
+software: durable state over one-shot prompts, verified completion over hopeful
+timeouts.</em></p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

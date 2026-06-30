@@ -63,7 +63,7 @@ You clone the engine; you create your own private data repository ([one command]
 
 ## Quickstart
 
-The full documentation — prerequisites &amp; install, daemons &amp; scheduled tasks, the skill/MCP/plugin catalog, the AI model integrations (local Ollama embeddings, the Council models), the service integrations (Exchange email, Telegram, Google, OSINT), workspace personalization, the memory systems &amp; ODIN, and the data-overlay structure — is published as a browsable site at **[mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/)**.
+The full documentation — prerequisites &amp; install, the architecture overview, the security model, daemons &amp; scheduled tasks, the skill/MCP/plugin catalog, the AI model integrations (local Ollama embeddings, the Council models), the service integrations (Exchange email, Telegram, Google, OSINT), workspace personalization, a guide to extending the engine, the memory systems &amp; ODIN, and the data-overlay structure — is published as a browsable site at **[mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/)**.
 
 The zero-to-running walk-through — WSL2, toolchain, prerequisites, Claude Code, your private data repo, and the engine wired to it — is in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** (with [docs/QUICKSTART.md](docs/QUICKSTART.md) for the short version).
 
@@ -109,7 +109,7 @@ claude       # then /prime
 
 ## Security
 
-Security is treated as a first-class concern, not an afterthought. The reporting policy and the full posture are in **[SECURITY.md](SECURITY.md)**; the engine ⟂ data guarantee is specified in **[docs/engine-data-segregation-contract.md](docs/engine-data-segregation-contract.md)**.
+Security is treated as a first-class concern, not an afterthought. The model is walked through end to end in **[docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md)** (the lethal-trifecta control, the engine/data layers, the send-gate, the secret gates); the reporting policy and posture summary are in **[SECURITY.md](SECURITY.md)**; the engine ⟂ data guarantee is specified in **[docs/engine-data-segregation-contract.md](docs/engine-data-segregation-contract.md)**.
 
 If you find a vulnerability, please report it privately (see SECURITY.md) rather than opening a public issue.
 

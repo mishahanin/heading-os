@@ -231,6 +231,7 @@ SITE_NAV_GROUPS = [
         ("daemons.html", "Daemons &amp; scheduled tasks"),
         ("skills-mcp-plugins.html", "Skills, MCP &amp; plugins"),
         ("memory-odin.html", "Memory &amp; ODIN"),
+        ("MODELS-SETUP.html", "AI models &amp; integrations"),
     ]),
     ("Reference", [
         ("data-structure.html", "Data overlay structure"),

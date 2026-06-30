@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-06-27 -->
+<!-- version: 1.1.0 | last-updated: 2026-06-30 -->
 # HEADING OS — Deployment & Setup
 
 The complete, zero-to-running guide for standing up a HEADING OS workspace from a
@@ -213,6 +213,25 @@ added later — those features stay dark until set.
 > credentials into chat, tickets, or tracked files. To read a value locally:
 > `grep KEY <engine>/.env`.
 
+### AI model integrations (optional)
+
+Claude is wired during the steps above. Three further integrations are optional and
+light up specific capabilities; the engine runs without any of them:
+
+| Capability | Model | Credential | Notes |
+|---|---|---|---|
+| `/recall`, memory index | `bge-m3` | none | Local embeddings via Ollama. No key, no cost. |
+| `/council` | Gemini, Grok, Kimi | `GEMINI_API_KEY`, `XAI_API_KEY`, `OLLAMA_API_KEY` | Three independent second-opinion voices. |
+| `/deep-research-advance` | Kimi + Perplexity | `OLLAMA_API_KEY`, `PERPLEXITY_API_KEY` | Deep public-web research. |
+
+Recall and Kimi both need a local **Ollama** runtime; Gemini and Grok are pure cloud
+APIs. The complete walk-through (install Ollama, pull `bge-m3`, where to get each
+key, configure `.env`, and verify each path) is in **[MODELS-SETUP.md](MODELS-SETUP.html)**.
+
+> **These models are third-party clouds** (except the local `bge-m3` embedder).
+> Never send private data through `/council`; `/deep-research-advance` is
+> hard-scoped to public topics. Details in MODELS-SETUP.
+
 ---
 
 ## 7. Install dependencies & arm the secret gate
@@ -359,6 +378,7 @@ the engine, stop — see the troubleshooting table.
 | Backup pushed into the engine and got a 403 | On a managed workspace the engine is read-only — the 403 is the safety net. Your identity `type` is likely not `exec-workspace`; fix it (§6), then back up again. |
 | `git pull --ff-only` says "divergent" | `git log origin/main..HEAD` must be empty. If a local commit misrouted data, relocate it into the overlay first. `git reset --hard origin/main` only after confirming files are safe in the overlay. |
 | Multi-line paste mangles (`^[[200~`) | Bracketed-paste artifact. Paste commands one physical line at a time, or join with `&&` / `;`. |
+| `/council` says a key is missing, or `/recall` returns nothing | Model integration not set up. See [MODELS-SETUP.md](MODELS-SETUP.html): install Ollama, pull `bge-m3`, add the council keys. |
 
 > **When in doubt, stop.** If a destination, a divergence, or an error touches data
 > location or git history, halt and capture the terminal text before acting. Never

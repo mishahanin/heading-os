@@ -1,4 +1,4 @@
-<!-- version: 2.0.0 | last-updated: 2026-06-27 -->
+<!-- version: 2.1.0 | last-updated: 2026-06-30 -->
 # HEADING OS — Quickstart
 
 The one-page version. For the full zero-to-running walk-through, see
@@ -71,6 +71,20 @@ capability automatically.
 
 > **Outbound is always human-gated.** Email and messages are drafted and shown to you
 > first. Nothing sends on its own.
+
+---
+
+## Optional: AI models
+
+A few skills use models beyond Claude, all optional:
+
+- `/recall` and the memory index run on a local `bge-m3` embedder via **Ollama** (no
+  key, no cost).
+- `/council` asks **Gemini, Grok, and Kimi** in parallel for a second opinion.
+- `/deep-research-advance` adds **Perplexity + Kimi** for deep web research.
+
+Install steps, where to get each key, and how to verify are in
+**[MODELS-SETUP.md](MODELS-SETUP.md)**.
 
 ---
 

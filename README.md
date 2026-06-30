@@ -63,9 +63,11 @@ You clone the engine; you create your own private data repository ([one command]
 
 ## Quickstart
 
-The full documentation — prerequisites &amp; install, daemons &amp; scheduled tasks, the skill/MCP/plugin catalog, the memory systems &amp; ODIN, and the data-overlay structure — is published as a browsable site at **[mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/)**.
+The full documentation — prerequisites &amp; install, daemons &amp; scheduled tasks, the skill/MCP/plugin catalog, the AI model integrations (local Ollama embeddings, the Council models), the memory systems &amp; ODIN, and the data-overlay structure — is published as a browsable site at **[mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/)**.
 
 The zero-to-running walk-through — WSL2, toolchain, prerequisites, Claude Code, your private data repo, and the engine wired to it — is in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** (with [docs/QUICKSTART.md](docs/QUICKSTART.md) for the short version).
+
+Connecting the optional AI models — installing **Ollama** for the local `bge-m3` embedder behind `/recall`, and wiring **Gemini, Grok, and Kimi** as the `/council` voices (where to get each key, configure `.env`, and verify) — is documented end to end in **[docs/MODELS-SETUP.md](docs/MODELS-SETUP.md)**.
 
 The short version, once the prerequisites are in place:
 

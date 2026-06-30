@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Make it yours</title>
+<meta name="description" content="The engine ships as one person&#x27;s working system. It carries 31 Concept&#x27;s house">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html" class="active">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Make it yours</h1>
+  <p class="page-meta">The engine ships as one person&#x27;s working system. It carries 31 Concept&#x27;s house</p>
+  <!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+
+<p>The engine ships as one person&rsquo;s working system. It carries 31 Concept&rsquo;s house
+language, an executive&rsquo;s voice, and a built-in identity. None of that is wired into
+the code: it lives in editable rules, templates, and your own private data. This page
+is how you turn a fresh clone into <em>your</em> workspace, speaking in <em>your</em> voice about
+<em>your</em> work.</p>
+<blockquote>
+<p>Credentials for the services below are in their own guides:
+<a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a> (email, Telegram, Google, OSINT) and
+<a href="MODELS-SETUP.html">MODELS-SETUP</a> (Ollama, Council models).</p>
+</blockquote>
+<hr />
+<h2 id="1-the-idea">1. The idea</h2>
+<p>HEADING OS splits <strong>shared logic</strong> from <strong>personal substance</strong>, the same way it
+splits the engine repo from your data repo:</p>
+<ul>
+<li>The <strong>engine</strong> is the machinery: skills, scripts, rules, hooks. It is the same for
+  everyone and is meant to be shared.</li>
+<li><strong>You</strong> supply the substance: who you are, what your company is, how you write,
+  which services you connect. That lives in your <code>.env</code>, your data overlay, and a few
+  editable rule and template files.</li>
+</ul>
+<p>So personalizing is not forking the code. It is filling in the substance the engine
+deliberately left as templates and defaults.</p>
+<hr />
+<h2 id="2-the-fast-path-setup-wizard">2. The fast path: <code>/setup-wizard</code></h2>
+<p>The wizard is the intended way to personalize a clone. It asks about 22 questions for
+a public HEADING OS clone, enriches your short answers into full voice, personal, and
+business documents, and captures any API keys into <code>.env</code> as it goes. It refuses to
+run on the original maintainer&rsquo;s master workspace, so it is safe on any clone.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># in a Claude Code session, from the engine</span>
+/setup-wizard
+</code></pre></div>
+<p>Per question you can type an answer, <code>skip</code> (come back later), <code>example</code> (see a sample
+answer), or <code>help</code> (what the question is for). Nothing is saved until you confirm.</p>
+<p>Check progress or resume any time:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/apply-wizard-answers.py<span class="w"> </span>--status
+</code></pre></div>
+<p>That prints a completion percentage and which answers are still pending. Re-run
+<code>/setup-wizard</code> whenever you want to edit an answer; it is idempotent.</p>
+<p>What the wizard fills, drawn from <code>config/wizard-templates/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Template</th>
+<th>Becomes</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>business-info.md.tmpl</code></td>
+<td>your business profile</td>
+<td>company, product, market, positioning</td>
+</tr>
+<tr>
+<td><code>personal-info.md.tmpl</code></td>
+<td>who you are</td>
+<td>role, background, the facts skills reference</td>
+</tr>
+<tr>
+<td><code>ceo-voice.md.tmpl</code></td>
+<td>your voice reference</td>
+<td>how you write, what you never say</td>
+</tr>
+<tr>
+<td><code>calendar-policy.md.tmpl</code></td>
+<td>your scheduling rules</td>
+<td>meeting policy, working hours</td>
+</tr>
+</tbody>
+</table>
+<p>These land in your data overlay (<code>context/</code>, <code>reference/</code>), never in the shared
+engine, so your substance stays private and your clone stays clean.</p>
+<hr />
+<h2 id="3-the-personalization-surface-by-hand">3. The personalization surface (by hand)</h2>
+<p>If you would rather edit directly, or want to know what the wizard touches, this is
+the full surface.</p>
+<h3 id="31-identity">3.1 Identity</h3>
+<p><code>.workspace-identity.json</code> at the engine root (gitignored) declares who the workspace
+belongs to. For a <strong>solo</strong> clone you can leave it absent: the engine defaults to a
+single-user master workspace. A <strong>managed</strong> (multi-person) deployment uses the
+<code>exec-workspace</code> shape covered in <a href="DEPLOYMENT.html">DEPLOYMENT</a>.</p>
+<h3 id="32-your-facts-and-voice">3.2 Your facts and voice</h3>
+<p>The documents the wizard generates are plain markdown you can keep editing:</p>
+<ul>
+<li><strong>Business and personal profile</strong> in <code>context/</code> (your company, your role, the facts
+  skills cite when they draft and research).</li>
+<li><strong>Voice reference</strong> in <code>reference/</code> (how you write). The communication skills read
+  it before drafting, so this is what makes outbound prose sound like you rather than
+  like a generic assistant.</li>
+</ul>
+<p>Both live in your private data overlay. Fill them with real specifics; the more
+concrete they are, the better every draft and brief gets.</p>
+<h3 id="33-brand-language-the-terminology-and-voice-rules">3.3 Brand language (the terminology and voice rules)</h3>
+<p>A few always-on rules in <code>.claude/rules/</code> encode the maintainer&rsquo;s house language:</p>
+<ul>
+<li><code>terminology.md</code> defines 31C-specific vocabulary (for example the &ldquo;Tribe&rdquo;, ODUN.ONE,
+  DPI+, the Navigation Principle, the Five Principles).</li>
+<li><code>voice.md</code> and <code>humanization.md</code> are the prose rules: tone discipline and the
+  write-like-a-human machinery.</li>
+</ul>
+<p>On your own clone you own these files. If you run your own brand, adapt
+<code>terminology.md</code> to your language and point the voice rules at your own voice doc. If
+you are using the engine for personal operations rather than a branded company, you
+can trim the 31C terminology. The <code>humanization.md</code> machinery is generic and worth
+keeping as is: it makes prose read as written by a person, whoever that is.</p>
+<h3 id="34-credentials">3.4 Credentials</h3>
+<p>Your API keys and service logins go in <code>.env</code> and <code>.sessions/</code>. See
+<a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a> and <a href="MODELS-SETUP.html">MODELS-SETUP</a>.
+The wizard can capture the common ones for you.</p>
+<hr />
+<h2 id="4-configuring-behavior-hooks-permissions-skills">4. Configuring behavior: hooks, permissions, skills</h2>
+<h3 id="41-two-settings-files">4.1 Two settings files</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Tracked?</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.claude/settings.json</code></td>
+<td>yes (shared)</td>
+<td>enabled plugins, shared hook wiring</td>
+</tr>
+<tr>
+<td><code>.claude/settings.local.json</code></td>
+<td>no (machine-local)</td>
+<td>your tool permissions and any local hooks</td>
+</tr>
+</tbody>
+</table>
+<p>The local file is gitignored and seeded per machine from the tracked per-OS templates
+<code>.claude/settings.local.linux.json</code> / <code>.macos.json</code> / <code>.windows.json</code>. The
+<code>.claude/settings.README.md</code> explains the split. Edit <code>settings.local.json</code> to change
+what runs without a permission prompt, or to add or remove a hook on your machine.</p>
+<h3 id="42-turning-skills-and-rules-on-or-off">4.2 Turning skills and rules on or off</h3>
+<ul>
+<li><strong>Skills</strong> are folders under <code>.claude/skills/</code>. To retire one, move it into
+  <code>.claude/skills/archive/</code> (the engine convention); it stops being routable without
+  being deleted.</li>
+<li><strong>Rules</strong> are files under <code>.claude/rules/</code> and load automatically. To change a
+  behavior (voice, classification, a guardrail), edit the rule; to stand one down,
+  move it out of the directory on your clone.</li>
+</ul>
+<p>Change rules deliberately: several encode security controls (the outbound-send gate,
+the engine/data separation, the secret guards). Adapt the brand and voice rules
+freely; leave the security ones in place.</p>
+<hr />
+<h2 id="5-what-stays">5. What stays</h2>
+<p>Two things are the engine&rsquo;s provenance, not your personalization, and should not be
+scrubbed:</p>
+<ul>
+<li><strong>Author attribution.</strong> The engine is built and maintained by Misha Hanin /
+  31 Concept. That authorship is part of the project&rsquo;s identity and stays in the
+  code, the same way any open project keeps its authors. It does not leak into your
+  outputs: those use <em>your</em> voice and <em>your</em> facts from your data overlay.</li>
+<li><strong>License and notices.</strong> <code>LICENSE</code> and <code>NOTICE</code> (Apache-2.0) govern your use. Keep
+  them.</li>
+</ul>
+<p>Making a clone yours is about your substance, not erasing the engine&rsquo;s origin.</p>
+<hr />
+<h2 id="6-verify">6. Verify</h2>
+<div class="highlight"><pre><span></span><code><span class="c1"># personalization completion</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/apply-wizard-answers.py<span class="w"> </span>--status
+
+<span class="c1"># load the workspace and see it reflect your identity</span>
+claude<span class="w">        </span><span class="c1"># then /prime</span>
+</code></pre></div>
+<p>A <code>/prime</code> that greets you by your role, cites your business profile, and routes in
+your voice means the workspace is yours.</p>
+<hr />
+<h2 id="7-reference">7. Reference</h2>
+<table>
+<thead>
+<tr>
+<th>File / path</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.claude/skills/setup-wizard/SKILL.md</code></td>
+<td>The guided personalization flow</td>
+</tr>
+<tr>
+<td><code>scripts/apply-wizard-answers.py</code></td>
+<td>Applies and reports wizard answers (<code>--status</code>)</td>
+</tr>
+<tr>
+<td><code>config/wizard-templates/</code></td>
+<td>Templates for business, personal, voice, calendar docs</td>
+</tr>
+<tr>
+<td><code>.workspace-identity.json</code></td>
+<td>Who the workspace belongs to (gitignored)</td>
+</tr>
+<tr>
+<td><code>.claude/rules/terminology.md</code></td>
+<td>House vocabulary (adapt to your brand)</td>
+</tr>
+<tr>
+<td><code>.claude/rules/voice.md</code>, <code>humanization.md</code></td>
+<td>Prose and voice rules</td>
+</tr>
+<tr>
+<td><code>.claude/settings.json</code> / <code>settings.local.json</code></td>
+<td>Plugins/hooks (shared) and permissions (local)</td>
+</tr>
+<tr>
+<td><code>.claude/settings.README.md</code></td>
+<td>How the two settings files relate</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>HEADING OS · Make it yours · maintained by 31 Concept · see also
+<a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a> and <a href="MODELS-SETUP.html">MODELS-SETUP</a> for
+the services a personalized workspace connects to.</em></p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

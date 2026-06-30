@@ -1,4 +1,4 @@
-<!-- version: 1.1.0 | last-updated: 2026-06-30 -->
+<!-- version: 1.2.0 | last-updated: 2026-07-01 -->
 # HEADING OS — Deployment & Setup
 
 The complete, zero-to-running guide for standing up a HEADING OS workspace from a
@@ -231,6 +231,17 @@ key, configure `.env`, and verify each path) is in **[MODELS-SETUP.md](MODELS-SE
 > **These models are third-party clouds** (except the local `bge-m3` embedder).
 > Never send private data through `/council`; `/deep-research-advance` is
 > hard-scoped to public topics. Details in MODELS-SETUP.
+
+### Other integrations & personalization (optional)
+
+Two more guides cover the rest:
+
+- **[INTEGRATIONS-SETUP.md](INTEGRATIONS-SETUP.html)** — connect Exchange email,
+  your Telegram, Google contacts, and the OSINT / web-research APIs (where to get
+  each key, how to authenticate, how to verify).
+- **[MAKE-IT-YOURS.md](MAKE-IT-YOURS.html)** — personalize the clone: run
+  `/setup-wizard` to generate your voice, business, and personal docs, set your
+  identity, and adapt the house terminology to your own.
 
 ---
 

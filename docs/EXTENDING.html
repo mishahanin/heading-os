@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Extending the engine</title>
+<meta name="description" content="How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="EXTENDING.html" class="active">Extending the engine</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Extending the engine</h1>
+  <p class="page-meta">How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates</p>
+  <!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+
+<p>How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
+before declaring it done. This is the developer how-to. The contribution policy (open
+an issue first; pull requests are by invitation) lives in
+<a href="https://github.com/mishahanin/heading-os/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>;
+read it before sending code.</p>
+<hr />
+<h2 id="0-dev-setup">0. Dev setup</h2>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--group<span class="w"> </span>dev<span class="w">      </span><span class="c1"># runtime + dev tools (pytest, ruff, pre-commit)</span>
+pre-commit<span class="w"> </span>install<span class="w">       </span><span class="c1"># arm the commit-time gates (once per clone)</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/run-tests.py
+</code></pre></div>
+<p>A green test run on a fresh clone means your environment is sound.</p>
+<hr />
+<h2 id="1-the-shape-of-the-engine">1. The shape of the engine</h2>
+<p>Four kinds of artifact, each with its own home and conventions:</p>
+<table>
+<thead>
+<tr>
+<th>Artifact</th>
+<th>Lives in</th>
+<th>Is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Skill</td>
+<td><code>.claude/skills/{name}/SKILL.md</code></td>
+<td>a slash-command workflow, routed from natural language</td>
+</tr>
+<tr>
+<td>Rule</td>
+<td><code>.claude/rules/*.md</code></td>
+<td>always-on or path-scoped behavior the agent follows</td>
+</tr>
+<tr>
+<td>Script</td>
+<td><code>scripts/*.py</code></td>
+<td>a CLI tool or daemon; shared code in <code>scripts/utils/</code></td>
+</tr>
+<tr>
+<td>Hook</td>
+<td>wired in <code>.claude/settings*.json</code></td>
+<td>a <code>PreToolUse</code> / <code>PostToolUse</code> / <code>SessionStart</code> guard</td>
+</tr>
+</tbody>
+</table>
+<p>Before building anything: search for an existing pattern and reuse it. The standards
+below are summarized from the engine&rsquo;s own development rules.</p>
+<hr />
+<h2 id="2-writing-a-skill">2. Writing a skill</h2>
+<p>A skill is a folder with a <code>SKILL.md</code>. The frontmatter is a contract:</p>
+<div class="highlight"><pre><span></span><code><span class="nn">---</span>
+<span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example-skill</span><span class="w">                    </span><span class="c1"># kebab-case</span>
+<span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">&gt;</span><span class="w">                          </span><span class="c1"># what it does, when to use, AND when NOT to</span>
+<span class="w">  </span><span class="no">One paragraph. Name the alternative skill for the cases this one should not handle.</span>
+<span class="nt">argument-hint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;[target]&quot;</span>
+<span class="nt">allowed-tools</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Read,</span><span class="nv"> </span><span class="s">Bash(python3:*)&quot;</span><span class="w">  </span><span class="c1"># least privilege</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">author</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Your Name</span>
+<span class="w">  </span><span class="nt">email</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">you@example.com</span>
+<span class="w">  </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1.0&quot;</span>
+<span class="nt">x-31c-orchestration</span><span class="p">:</span><span class="w">                    </span><span class="c1"># how the orchestrator may dispatch it</span>
+<span class="w">  </span><span class="nt">parallel_safe</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                  </span><span class="c1"># true | partial | false</span>
+<span class="w">  </span><span class="nt">shared_state</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span><span class="w">                      </span><span class="c1"># paths it writes to</span>
+<span class="w">  </span><span class="nt">triggers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;example</span><span class="nv"> </span><span class="s">phrase&quot;</span><span class="p p-Indicator">]</span><span class="w">          </span><span class="c1"># natural-language triggers, or []</span>
+<span class="nn">---</span>
+</code></pre></div>
+<p>Rules of the road:</p>
+<ul>
+<li><strong>Body under 500 lines.</strong> Overflow goes in a <code>references/</code> subdirectory.</li>
+<li><strong>Phased structure.</strong> Phase 0 loads context, Phase 1 executes, Phase 2 synthesizes,
+  Phase 3 outputs. Include a <code>NEVER</code> section listing prohibitions.</li>
+<li><strong>Routing-sensitive skills ship <code>triggers.json</code></strong> (6 to 10 positive and negative
+  cases) and an entry in the skill router, so a new skill cannot silently hijack
+  another&rsquo;s queries.</li>
+<li><strong>Invocation control.</strong> Add <code>disable-model-invocation: true</code> for high-blast-radius
+  skills that should fire only on an explicit slash command.</li>
+</ul>
+<p>The <code>/skill-creator</code> skill scaffolds and evaluates a new skill against these
+standards.</p>
+<hr />
+<h2 id="3-writing-a-rule">3. Writing a rule</h2>
+<p>Rules in <code>.claude/rules/</code> load automatically. A rule with no frontmatter is always
+active; a rule with a <code>paths:</code> list loads only when work touches those paths:</p>
+<div class="highlight"><pre><span></span><code><span class="nn">---</span>
+<span class="nt">paths</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;scripts/**&quot;</span>
+<span class="nn">---</span>
+</code></pre></div>
+<p>Keep rules concise and single-purpose. Several existing rules encode security controls
+(the send-gate, the engine/data separation, the secret guards); adapt brand and voice
+rules freely, but leave the security ones in place.</p>
+<hr />
+<h2 id="4-writing-a-script">4. Writing a script</h2>
+<div class="highlight"><pre><span></span><code><span class="ch">#!/usr/bin/env python3</span>
+<span class="sd">&quot;&quot;&quot;One-line purpose. Usage examples in the docstring.&quot;&quot;&quot;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">()</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">parent</span><span class="p">))</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scripts.utils.workspace</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_workspace_root</span>   <span class="c1"># reuse, don&#39;t reinvent</span>
+<span class="c1"># ... argparse CLI ...</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">main</span><span class="p">()</span>
+</code></pre></div>
+<ul>
+<li><strong>Naming.</strong> <code>kebab-case.py</code> for CLI scripts you invoke directly; <code>snake_case.py</code> for
+  anything in <code>scripts/utils/</code> or imported as a module (hyphens are illegal in Python
+  module names).</li>
+<li><strong>Reuse <code>scripts/utils/</code></strong> for workspace paths, colors, API-key loading, and <code>.env</code>
+  reads. Never hardcode paths; use <code>pathlib.Path</code> and the workspace helpers.</li>
+<li><strong>Data goes through the seam.</strong> Write artifacts via the data-root helpers
+  (<code>get_data_root()</code> / <code>get_*_dir()</code>), never into the engine tree.</li>
+<li><strong>Catch <code>HTTPError</code> before <code>URLError</code></strong> (the former is a subclass).</li>
+</ul>
+<hr />
+<h2 id="5-the-gates-before-done">5. The gates before &ldquo;done&rdquo;</h2>
+<p>Run these on anything you add or change:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/sanitize-text.py<span class="w"> </span>&lt;file&gt;<span class="w"> </span>--scan<span class="w">   </span><span class="c1"># zero hidden characters</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>py_compile<span class="w"> </span>&lt;script&gt;<span class="w">                    </span><span class="c1"># Python syntax</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/run-tests.py<span class="w">                      </span><span class="c1"># the suite</span>
+</code></pre></div>
+<p><code>ruff</code> (the linter) and the secret scan run automatically through <code>pre-commit</code>. Then:</p>
+<ul>
+<li><strong>The pre-push gate.</strong> <code>push-all.py</code> runs the full regression suite (parallelized
+  with <code>pytest-xdist</code>) before a push is allowed, plus the unbypassable secret content
+  scan. Budget time for it; do not work around it.</li>
+<li><strong>CodeQL</strong> runs on the repository for static security analysis; address what it
+  flags on a pull request.</li>
+</ul>
+<hr />
+<h2 id="6-testing-discipline">6. Testing discipline</h2>
+<p>The suite lives in <code>tests/</code> (security tests in <code>tests/security/</code>). Every behavior you
+change needs a test that exercises the real pattern through the public interface, not
+an implementation detail. Write one test, make it pass, then the next.</p>
+<p>When debugging, build a fast reproduction first: a failing test or a deterministic
+harness that makes the bug appear and disappear on demand. Do not hypothesize about a
+cause you cannot reproduce. Write the regression test before the fix, watch it fail,
+apply the fix, watch it pass.</p>
+<hr />
+<h2 id="7-restraint">7. Restraint</h2>
+<ul>
+<li><strong>Simplicity.</strong> The minimum artifact that solves the problem. No speculative
+  features, flags, or abstractions for single-use code.</li>
+<li><strong>Surgical changes.</strong> Touch only what the task requires. Do not refactor adjacent
+  code, and match the style of the file you are editing.</li>
+<li><strong>No new dependency</strong> without raising it in the issue first; pin exact versions.</li>
+<li><strong>Security and review findings override restraint.</strong> Fix an open finding in a file
+  you touch before the requested change, and say so if it widens the diff.</li>
+</ul>
+<hr />
+<h2 id="8-reference">8. Reference</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://github.com/mishahanin/heading-os/blob/main/CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a></td>
+<td>Contribution policy (issues, PR by invitation)</td>
+</tr>
+<tr>
+<td><code>scripts/run-tests.py</code></td>
+<td>The test runner</td>
+</tr>
+<tr>
+<td><code>tests/</code>, <code>tests/security/</code></td>
+<td>The regression suite</td>
+</tr>
+<tr>
+<td><code>.claude/skills/skill-creator/</code></td>
+<td>Scaffolds and evaluates a new skill</td>
+</tr>
+<tr>
+<td><code>scripts/utils/</code></td>
+<td>Shared modules to reuse</td>
+</tr>
+<tr>
+<td><code>pyproject.toml</code></td>
+<td>Pinned dependencies, ruff / pytest config</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>HEADING OS · Extending the engine · maintained by 31 Concept · see also
+<a href="ARCHITECTURE.html">Architecture</a> for how the pieces compose and
+<a href="SECURITY-MODEL.html">Security model</a> for the controls your code inherits.</em></p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

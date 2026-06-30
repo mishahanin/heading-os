@@ -236,7 +236,10 @@ SITE_NAV_GROUPS = [
         ("INTEGRATIONS-SETUP.html", "Integrations &amp; credentials"),
     ]),
     ("Reference", [
+        ("ARCHITECTURE.html", "Architecture"),
         ("data-structure.html", "Data overlay structure"),
+        ("SECURITY-MODEL.html", "Security model"),
+        ("EXTENDING.html", "Extending the engine"),
         ("https://github.com/mishahanin/heading-os", "GitHub repository"),
     ]),
 ]

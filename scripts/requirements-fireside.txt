@@ -7,9 +7,9 @@ requests==2.34.2
 idna==3.18
 charset-normalizer==3.4.7
 urllib3==2.7.0
-certifi==2026.5.20
+certifi==2026.6.17
 openpyxl==3.1.5
-telethon==1.43.2
-APScheduler==3.11.2
-tzlocal==5.3.1
+telethon==1.44.0
+APScheduler==3.11.3
+tzlocal==5.4.4
 python-dotenv==1.2.2

@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Telegram and alerts</title>
+<meta name="description" content="Connect HEADING OS to Telegram, create your own capture and alert channels, and tune">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html" class="active">Telegram &amp; alerts</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Telegram and alerts</h1>
+  <p class="page-meta">Connect HEADING OS to Telegram, create your own capture and alert channels, and tune</p>
+  <!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+
+<p>Connect HEADING OS to Telegram, create your own capture and alert channels, and tune
+what the Sentinel monitor sends you. Written for someone who has never touched an API.</p>
+<blockquote>
+<p>This page is the step-by-step. For the shorter credential reference see
+<a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a>; for where your settings live and what
+survives an update see <a href="MAKE-IT-YOURS.html">MAKE-IT-YOURS</a>.</p>
+</blockquote>
+<hr />
+<h2 id="1-the-one-idea-to-hold-first-account-vs-bot">1. The one idea to hold first: account vs bot</h2>
+<p>Telegram lets a program connect in two completely different ways, and HEADING OS uses
+both, for different jobs. Getting this straight up front saves confusion later.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><strong>Your user account</strong></th>
+<th><strong>A bot</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What it is</td>
+<td>Your own Telegram, the one you log into on your phone</td>
+<td>A separate robot account you create with @BotFather</td>
+</tr>
+<tr>
+<td>How it signs in</td>
+<td><code>api_id</code> + <code>api_hash</code> from my.telegram.org, plus your phone</td>
+<td>A bot <strong>token</strong> from @BotFather</td>
+</tr>
+<tr>
+<td>What it can do</td>
+<td>Read and send as <strong>you</strong>, in any of your chats and channels</td>
+<td>Only see chats it was explicitly added to; posts as the bot</td>
+</tr>
+<tr>
+<td>Used in HEADING OS by</td>
+<td><code>/telegram</code>, <code>/viraid</code>, the Sentinel monitor, the alert nudges</td>
+<td>The optional Fireside team daemon only</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Almost everything you care about uses your user account.</strong> Capturing notes with
+Viraid, getting urgent alerts, reading and sending messages: all of that runs through
+<em>your</em> Telegram, so it can reach <em>your</em> private channels without being added to them.</p>
+<p>You only need a bot if you run the optional Fireside team daemon. If you are setting up
+a personal workspace, you can skip the bot section entirely.</p>
+<p>The rest of this page: first wire your user account (sections 2 to 4), then create your
+channels (5 to 6), then point each feature at them (7 to 9). The bot is section 10.</p>
+<hr />
+<h2 id="2-get-your-api_id-and-api_hash-one-time-five-minutes">2. Get your <code>api_id</code> and <code>api_hash</code> (one time, five minutes)</h2>
+<p>These two values are how a program proves it may act as your account. You get them once,
+for free, from Telegram&rsquo;s own site.</p>
+<ol>
+<li>Open <strong><a href="https://my.telegram.org">my.telegram.org</a></strong> in a browser.</li>
+<li>Enter your phone number (the one your Telegram uses). Telegram sends a login code
+   <strong>inside the Telegram app</strong>, not by SMS. Type that code into the web page.</li>
+<li>Click <strong>API development tools</strong>.</li>
+<li>Fill the short form. <strong>App title</strong> and <strong>Short name</strong> can be anything (for example
+   <code>heading-os</code> and <code>headingos</code>). Platform: pick <strong>Desktop</strong>. Leave the URL blank.</li>
+<li>Click <strong>Create application</strong>. You now see two values:
+   - <strong><code>App api_id</code></strong>: a number, for example <code>12345678</code>.
+   - <strong><code>App api_hash</code></strong>: a long string of letters and numbers.</li>
+</ol>
+<p>Keep this page open for the next step. Treat the <code>api_hash</code> like a password: it is not
+something to paste into a chat or commit to a repository.</p>
+<hr />
+<h2 id="3-put-three-values-in-env">3. Put three values in <code>.env</code></h2>
+<p>Open the <code>.env</code> file at the root of your engine clone (create it from <code>.env.example</code>
+first if it is not there: <code>cp .env.example .env</code>). Find the Telegram block and fill it
+in:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># --- Telegram Client ---</span>
+<span class="nv">TELEGRAM_API_ID</span><span class="o">=</span><span class="m">12345678</span><span class="w">            </span><span class="c1"># the App api_id number from step 2</span>
+<span class="nv">TELEGRAM_API_HASH</span><span class="o">=</span>paste_your_hash_here<span class="w">   </span><span class="c1"># the App api_hash from step 2</span>
+<span class="nv">TELEGRAM_PHONE</span><span class="o">=</span>+15551234567<span class="w">         </span><span class="c1"># your number, with country code, no spaces</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>What goes here</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TELEGRAM_API_ID</code></td>
+<td>the numeric <code>api_id</code></td>
+</tr>
+<tr>
+<td><code>TELEGRAM_API_HASH</code></td>
+<td>the <code>api_hash</code> string</td>
+</tr>
+<tr>
+<td><code>TELEGRAM_PHONE</code></td>
+<td>your phone in international form, for example <code>+15551234567</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>.env</code> is gitignored, so these never leave your machine and are never part of the engine
+repository. Save the file.</p>
+<hr />
+<h2 id="4-log-in-once">4. Log in once</h2>
+<p>Now let the program sign in to Telegram as you. From the engine folder, in a terminal:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># ask Telegram to send a login code</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>.claude/skills/telegram/scripts/telegram_client.py<span class="w"> </span>setup
+</code></pre></div>
+<p>Telegram sends a code <strong>to your Telegram app</strong> (look for a message from &ldquo;Telegram&rdquo;).
+Then enter it:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># replace 12345 with the code you received</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>.claude/skills/telegram/scripts/telegram_client.py<span class="w"> </span>verify<span class="w"> </span><span class="m">12345</span>
+</code></pre></div>
+<p>If your account has two-step verification, it asks for that password too. When it
+finishes, your login is saved to <code>.sessions/telegram/telegram.session</code> (also gitignored).
+You do this <strong>once per machine</strong>; after that every feature reuses the saved login.</p>
+<p>Check it worked:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>.claude/skills/telegram/scripts/telegram_client.py<span class="w"> </span>chats<span class="w"> </span>--limit<span class="w"> </span><span class="m">5</span>
+</code></pre></div>
+<p>A list of your five most recent chats means you are connected. Inside a Claude Code
+session, <code>/telegram</code> and <code>/viraid</code> now work.</p>
+<hr />
+<h2 id="5-create-your-channels-in-the-telegram-app">5. Create your channels in the Telegram app</h2>
+<p>HEADING OS uses ordinary Telegram channels as work surfaces. You create them the normal
+way, in the Telegram app, in about a minute each. A <strong>channel</strong> where you are the only
+member is the cleanest choice: it acts as a private notepad and alert board that only you
+can see.</p>
+<p>You will typically create two:</p>
+<ul>
+<li><strong>A capture channel</strong> (the maintainer&rsquo;s is named <code>M's VIRAID</code>). You drop quick notes,
+  tasks, and reminders here from your phone during the day; Viraid reads them later and
+  files them.</li>
+<li><strong>An alerts channel</strong> (the maintainer&rsquo;s is named <code>Urgent Stuff for M</code>). This is where
+  the Sentinel monitor and the nudge scripts send you urgent items and reminders.</li>
+</ul>
+<p>To create one on <strong>phone</strong>: tap the pencil / new-message icon, choose <strong>New Channel</strong>,
+give it a name, set it <strong>Private</strong>, and skip adding members. On <strong>desktop</strong>: hamburger
+menu, <strong>New Channel</strong>, same steps.</p>
+<p>Name them whatever you like. Two of the features (Viraid) currently expect a specific
+name, so either reuse the maintainer&rsquo;s names or note section 8, which shows where to
+change the expected name.</p>
+<hr />
+<h2 id="6-find-a-channels-numeric-id">6. Find a channel&rsquo;s numeric ID</h2>
+<p>Some settings can point at a channel by its name, but the most reliable way is its
+<strong>numeric ID</strong>, a number that never changes even if you rename the channel. Channel IDs
+look like <code>-1001234567890</code> (the leading <code>-100</code> is just Telegram&rsquo;s marker for a channel or
+group).</p>
+<p>The easy way to read it, once you are logged in (section 4):</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>.claude/skills/telegram/scripts/telegram_client.py<span class="w"> </span>info<span class="w"> </span><span class="s2">&quot;Urgent Stuff for M&quot;</span>
+</code></pre></div>
+<p>That prints the channel&rsquo;s details, including its numeric ID. Copy the number (with the
+leading <code>-100</code>). You will paste it into a setting in sections 7 and 9.</p>
+<p>You can also refer to a channel by:</p>
+<ul>
+<li><strong>name</strong> in quotes, for example <code>"Urgent Stuff for M"</code> (matched loosely, so close is
+  fine);</li>
+<li><strong>@username</strong>, if you gave the channel a public username, for example <code>@my_alerts</code>;</li>
+<li><strong><code>me</code></strong>, which is your own <strong>Saved Messages</strong> (a good safe default while testing).</li>
+</ul>
+<hr />
+<h2 id="7-where-alerts-and-nudges-are-sent">7. Where alerts and nudges are sent</h2>
+<p>Two small background scripts send you reminders: the Odin cadence nudge and the ops-radar
+nudge. Each reads an optional setting in <code>.env</code> that says which channel to send to. If you
+set nothing, both fall back to <code>me</code> (your Saved Messages), which is a safe default.</p>
+<p>Add either or both of these lines to <code>.env</code> (they are optional and not in the example
+file by default):</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># where the weekly Odin nudge goes (also the fallback for ops-radar)</span>
+<span class="nv">ODIN_CADENCE_TELEGRAM_TARGET</span><span class="o">=</span>-1001234567890
+
+<span class="c1"># where ops-radar nudges go; if unset, falls back to ODIN_CADENCE_TELEGRAM_TARGET, then to &quot;me&quot;</span>
+<span class="nv">OPS_RADAR_TELEGRAM_TARGET</span><span class="o">=</span>@my_alerts
+</code></pre></div>
+<p>The value can be a numeric ID (from section 6), an <code>@username</code>, a channel name in the
+same loose-matched form, or <code>me</code>. To send both kinds of nudge to one alerts channel, just
+set <code>ODIN_CADENCE_TELEGRAM_TARGET</code> and leave the other unset.</p>
+<blockquote>
+<p>The Sentinel monitor has its <strong>own</strong> alert-channel setting, in a config file rather than
+<code>.env</code>. That is section 9.</p>
+</blockquote>
+<hr />
+<h2 id="8-how-viraid-works-and-how-to-use-your-own-channel">8. How Viraid works, and how to use your own channel</h2>
+<p><strong>Viraid</strong> is a capture inbox. During the day you send yourself quick lines in your
+capture channel: &ldquo;follow up with Alex on the ISO cert&rdquo;, &ldquo;book the dentist&rdquo;, &ldquo;read that
+DPI paper&rdquo;. Later you run <code>/viraid</code> in a Claude Code session and it:</p>
+<ol>
+<li>reads the new messages from the channel,</li>
+<li>sorts each one into a type (a task, a calendar item, a CRM note, a research item, or a
+   plain note),</li>
+<li>adds workspace context (who Alex is, whether you are free at that time),</li>
+<li>proposes what to do with each,</li>
+<li><strong>stops and waits for your yes</strong> before doing anything,</li>
+<li>once you approve, files the item and deletes the message from the channel so it stays
+   clean.</li>
+</ol>
+<p>Nothing is sent to anyone else and nothing is executed without your approval; Viraid only
+reads a channel and files things into your own workspace.</p>
+<p><strong>Pointing Viraid at your channel.</strong> The channel name is a setting, not code. Viraid reads
+<code>VIRAID_CHANNEL_NAME</code> from <code>.env</code>, and falls back to <code>M's VIRAID</code> when it is unset. So you
+have two easy choices:</p>
+<ul>
+<li><strong>Name your capture channel <code>M's VIRAID</code></strong> and set nothing. It just works.</li>
+<li><strong>Use any name you like</strong> and tell Viraid about it. Add one line to <code>.env</code>:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="nv">VIRAID_CHANNEL_NAME</span><span class="o">=</span>My<span class="w"> </span>Capture
+</code></pre></div>
+<p>The value can be the channel&rsquo;s name, its <code>@username</code>, or its numeric ID (section 6). No
+  quotes needed. Save <code>.env</code>, and the next <code>/viraid</code> reads your channel.</p>
+<p>Because <code>.env</code> is gitignored, this setting is yours and a future engine update never
+touches it (see <a href="MAKE-IT-YOURS.html#7-what-happens-when-you-update-the-engine">MAKE-IT-YOURS</a>).</p>
+<hr />
+<h2 id="9-configure-the-sentinel-monitor">9. Configure the Sentinel monitor</h2>
+<p><strong>Sentinel</strong> is an always-on background watcher. Every so often (15 minutes by default) it
+checks your email inbox and chosen Telegram chats, scores each new item for urgency with a
+quick AI pass, and sends the urgent ones to your alerts channel. It can also auto-handle
+meeting invites against your calendar rules and send you a morning and evening digest.</p>
+<h3 id="91-make-your-own-config-file">9.1 Make your own config file</h3>
+<p>Sentinel ships a template. Copy it into your private data overlay and edit the copy (never
+the template):</p>
+<div class="highlight"><pre><span></span><code>mkdir<span class="w"> </span>-p<span class="w"> </span>../.heading-os-data/config
+cp<span class="w"> </span>scripts/sentinel_config.example.yaml<span class="w"> </span>../.heading-os-data/config/sentinel_config.yaml
+</code></pre></div>
+<p>Your live config now lives at <code>.heading-os-data/config/sentinel_config.yaml</code>, in your
+private data (not in the shared engine). Open it in any text editor.</p>
+<h3 id="92-the-settings-that-matter-most">9.2 The settings that matter most</h3>
+<p>The file is grouped into sections. You do not need to touch all of them; these are the
+ones people actually change.</p>
+<p><strong>How often, and how urgent is urgent:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="nt">general</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">check_interval_minutes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15</span><span class="w">    </span><span class="c1"># how often Sentinel looks</span>
+<span class="w">  </span><span class="nt">urgency_threshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">7</span><span class="w">          </span><span class="c1"># only alert on items scoring this or higher (1 to 10)</span>
+<span class="w">  </span><span class="nt">timezone</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;UTC&quot;</span><span class="w">               </span><span class="c1"># your zone, for example &quot;Asia/Dubai&quot;</span>
+</code></pre></div>
+<p><strong>Email watching</strong> (needs the Exchange settings from
+<a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a>):</p>
+<div class="highlight"><pre><span></span><code><span class="nt">email</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">vip_senders</span><span class="p">:</span><span class="w">                  </span><span class="c1"># these always count as important</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;key-partner@example.com&quot;</span>
+<span class="w">  </span><span class="nt">ignore_patterns</span><span class="p">:</span><span class="w">              </span><span class="c1"># these are never even scored</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;noreply@*&quot;</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;*newsletter*&quot;</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;*@linkedin.com&quot;</span>
+</code></pre></div>
+<p><strong>Telegram watching:</strong> list the chats and channels Sentinel should watch (by name,
+<code>@username</code>, or numeric ID):</p>
+<div class="highlight"><pre><span></span><code><span class="nt">telegram</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">check_personal_dms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">monitored_chats</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Key</span><span class="nv"> </span><span class="s">Contact&quot;</span>
+<span class="w">      </span><span class="nt">priority</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;high&quot;</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;@some_group&quot;</span>
+<span class="w">      </span><span class="nt">priority</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;medium&quot;</span>
+</code></pre></div>
+<p><strong>Where alerts land:</strong> this is Sentinel&rsquo;s own alert-channel setting (separate from the
+<code>.env</code> ones in section 7). Point it at your alerts channel:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">notification</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">target_chat</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Urgent</span><span class="nv"> </span><span class="s">Stuff</span><span class="nv"> </span><span class="s">for</span><span class="nv"> </span><span class="s">M&quot;</span><span class="w">    </span><span class="c1"># name, @username, or numeric ID</span>
+<span class="w">  </span><span class="nt">dedup_cooldown_minutes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span><span class="w">           </span><span class="c1"># do not repeat the same alert within an hour</span>
+</code></pre></div>
+<p><strong>Daily digests:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="nt">digest</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">morning_time</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;08:00&quot;</span>
+<span class="w">  </span><span class="nt">evening_time</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;22:00&quot;</span>
+</code></pre></div>
+<p>The <code>calendar:</code> section controls automatic meeting-invite handling (auto-accept, decline,
+or escalate against protected time blocks). It is powerful but optional; leave
+<code>calendar.enabled: false</code> until you have your email working and want it.</p>
+<h3 id="93-start-stop-check">9.3 Start, stop, check</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># start it in the background</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/sentinel.py<span class="w"> </span>--daemon
+
+<span class="c1"># is it running? when did it last check? today&#39;s counts?</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/sentinel.py<span class="w"> </span>--status
+
+<span class="c1"># a single safe dry-run; alerts go to your own Saved Messages, not the real channel</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/sentinel.py<span class="w"> </span>--test
+
+<span class="c1"># stop it</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/sentinel.py<span class="w"> </span>--stop
+
+<span class="c1"># watch what it is doing</span>
+tail<span class="w"> </span>-50<span class="w"> </span>.sentinel/sentinel.log
+</code></pre></div>
+<p>Run <code>--test</code> first: it does one pass without touching your real alerts channel, so you can
+confirm the wiring before going live. After any config edit, stop and start again for the
+change to take effect.</p>
+<hr />
+<h2 id="10-optional-create-a-bot-for-fireside">10. Optional: create a bot for Fireside</h2>
+<p>Skip this section unless you run the Fireside team daemon. Fireside posts to a team channel
+as a <strong>bot</strong>, which is the right choice for something shared, since a bot has its own
+identity and only sees the chats it is added to.</p>
+<ol>
+<li>In Telegram, open a chat with <strong>@BotFather</strong> (the official bot-maker).</li>
+<li>Send <code>/newbot</code>. Answer its two questions: a display name, then a username that must end
+   in <code>bot</code> (for example <code>my_fireside_bot</code>).</li>
+<li>@BotFather replies with a <strong>token</strong>, a line like <code>123456789:AAE...</code>. Treat it like a
+   password.</li>
+<li>Put the token and your team channel in <code>.env</code> (see the Fireside section of
+   <a href="daemons.html">Daemons</a> for the exact variable names).</li>
+<li><strong>Add the bot to your team channel</strong> as an administrator, or it cannot post there. Open
+   the channel, Administrators, Add admin, search your bot&rsquo;s username, add it.</li>
+</ol>
+<p>To get the team channel&rsquo;s numeric ID, use the same <code>info</code> command from section 6 (or add
+the bot and check the daemon&rsquo;s log, which prints the chat ID it sees).</p>
+<hr />
+<h2 id="11-troubleshooting">11. Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause and fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>setup</code> says credentials missing</td>
+<td><code>TELEGRAM_API_ID</code> / <code>TELEGRAM_API_HASH</code> / <code>TELEGRAM_PHONE</code> are not set in <code>.env</code>. Recheck section 3.</td>
+</tr>
+<tr>
+<td>The login code never arrives</td>
+<td>It comes <strong>inside the Telegram app</strong>, from the &ldquo;Telegram&rdquo; account, not by SMS. Check your other logged-in Telegram sessions.</td>
+</tr>
+<tr>
+<td>It keeps asking me to log in</td>
+<td>The <code>.sessions/telegram/</code> file was deleted or cannot be written. Re-run <code>setup</code> then <code>verify</code>.</td>
+</tr>
+<tr>
+<td>Viraid reads the wrong (or no) channel</td>
+<td>The channel name in the two skill files does not match your channel. See section 8.</td>
+</tr>
+<tr>
+<td>Sentinel sends nothing</td>
+<td>Either nothing scored above <code>urgency_threshold</code>, or the daemon is not running (<code>--status</code>), or <code>target_chat</code> does not resolve. Try <code>--test</code> and read <code>.sentinel/sentinel.log</code>.</td>
+</tr>
+<tr>
+<td>Alerts go to Saved Messages instead of my channel</td>
+<td>The target is unset or unresolved, so it fell back to <code>me</code>. Set <code>ODIN_CADENCE_TELEGRAM_TARGET</code> (section 7) or <code>notification.target_chat</code> (section 9), preferably to a numeric ID.</td>
+</tr>
+<tr>
+<td>&ldquo;Datacenter IP&rdquo; block when reading</td>
+<td>Some networks rate-limit. See the VPN note in <a href="prerequisites.html">Prerequisites</a>.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="12-reference">12. Reference</h2>
+<table>
+<thead>
+<tr>
+<th>File / setting</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.env</code> <code>TELEGRAM_API_ID</code> / <code>TELEGRAM_API_HASH</code> / <code>TELEGRAM_PHONE</code></td>
+<td>Your user-account login</td>
+</tr>
+<tr>
+<td><code>.sessions/telegram/telegram.session</code></td>
+<td>Saved login (gitignored, one per machine)</td>
+</tr>
+<tr>
+<td><code>.claude/skills/telegram/scripts/telegram_client.py</code></td>
+<td>The Telegram client (<code>setup</code>, <code>verify</code>, <code>chats</code>, <code>info</code>, <code>read</code>, <code>send</code>)</td>
+</tr>
+<tr>
+<td><code>.env</code> <code>ODIN_CADENCE_TELEGRAM_TARGET</code></td>
+<td>Channel for the weekly Odin nudge (fallback: <code>me</code>)</td>
+</tr>
+<tr>
+<td><code>.env</code> <code>OPS_RADAR_TELEGRAM_TARGET</code></td>
+<td>Channel for ops-radar nudges (fallback: the Odin target, then <code>me</code>)</td>
+</tr>
+<tr>
+<td><code>.env</code> <code>VIRAID_CHANNEL_NAME</code></td>
+<td>The channel <code>/viraid</code> reads (default <code>M's VIRAID</code>)</td>
+</tr>
+<tr>
+<td><code>scripts/sentinel_config.example.yaml</code></td>
+<td>Sentinel config template (copy it, do not edit it)</td>
+</tr>
+<tr>
+<td><code>.heading-os-data/config/sentinel_config.yaml</code></td>
+<td>Your live Sentinel config (private data)</td>
+</tr>
+<tr>
+<td><code>.sentinel/sentinel.log</code></td>
+<td>Sentinel&rsquo;s activity log</td>
+</tr>
+<tr>
+<td>Fireside bot token, team chat ID</td>
+<td>In <code>.env</code>; see <a href="daemons.html">Daemons</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>HEADING OS · Telegram and alerts · maintained by 31 Concept · see also
+<a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a>, <a href="MAKE-IT-YOURS.html">MAKE-IT-YOURS</a>, and
+<a href="daemons.html">Daemons</a>.</em></p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

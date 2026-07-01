@@ -9,6 +9,19 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/docs.css">
+<style>
+  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3.cat:first-of-type { margin-top: 24px; }
+  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
+  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
+  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
+  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
+  section.skill p { margin: 8px 0; }
+  section.skill pre { margin: 10px 0; }
+  a.cmd-link { text-decoration: none; }
+  a.cmd-link code { color: var(--link); }
+  a.cmd-link:hover code { text-decoration: underline; }
+</style>
 </head>
 <body>
 <div class="layout">
@@ -57,22 +70,23 @@
   <p>Skills marked <strong>🔒</strong> are <strong>explicit-invocation only</strong> (<code>disable-model-invocation: true</code> in frontmatter) — the model never auto-routes them; only a typed slash command fires them. This protects high-blast-radius actions (backups, audits, corporate publishing) from accidental routing.</p>
 
   <h2>Skill catalog</h2>
+  <p>The tables below are the quick index. Every command is documented in full, with a usage example and customization notes, in <a href="#reference">Skill reference: every skill in detail</a> further down this page.</p>
 
   <h3>Intel</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Command</th><th>What it does</th></tr></thead>
     <tbody>
-      <tr><td><code>/osint</code></td><td>Deep multi-source intelligence brief on a company, person, market, or tech — the foundation other intel skills consume.</td></tr>
-      <tr><td><code>/osint-advanced</code> 🔒</td><td>Heavier OSINT variant; never auto-triggers.</td></tr>
-      <tr><td><code>/competitor-intel</code></td><td>Competitive analysis of a named vendor versus your own product.</td></tr>
-      <tr><td><code>/market-brief</code></td><td>Market / regional / sector intelligence and TAM sizing.</td></tr>
-      <tr><td><code>/ceo-intel</code></td><td>Global / geopolitical situational-awareness brief.</td></tr>
-      <tr><td><code>/intel-briefing-newsletter</code></td><td>An externally published intelligence newsletter.</td></tr>
-      <tr><td><code>/yt-pulse</code></td><td>YouTube trend scanner + transcript deep-analysis brief.</td></tr>
-      <tr><td><code>/x-pulse</code></td><td>X / Twitter pulse and account monitoring.</td></tr>
-      <tr><td><code>/notebooklm</code></td><td>NotebookLM audio overviews / podcasts from sources.</td></tr>
-      <tr><td><code>/docparse</code></td><td>Parse PDF / DOCX / PPTX / XLSX with spatial bounding boxes + visual citations.</td></tr>
-      <tr><td><code>/deep-research-advance</code></td><td>One-shot deep web research with adversarial verification and a cited report.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-osint"><code>/osint</code></a></td><td>Deep multi-source intelligence brief on a company, person, market, or tech — the foundation other intel skills consume.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-osint-advanced"><code>/osint-advanced</code></a> 🔒</td><td>Heavier OSINT variant; never auto-triggers.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-competitor-intel"><code>/competitor-intel</code></a></td><td>Competitive analysis of a named vendor versus your own product.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-market-brief"><code>/market-brief</code></a></td><td>Market / regional / sector intelligence and TAM sizing.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-ceo-intel"><code>/ceo-intel</code></a></td><td>Global / geopolitical situational-awareness brief.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-intel-briefing-newsletter"><code>/intel-briefing-newsletter</code></a></td><td>An externally published intelligence newsletter.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-yt-pulse"><code>/yt-pulse</code></a></td><td>YouTube trend scanner + transcript deep-analysis brief.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-x-pulse"><code>/x-pulse</code></a></td><td>X / Twitter pulse and account monitoring.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-notebooklm"><code>/notebooklm</code></a></td><td>NotebookLM audio overviews / podcasts from sources.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-docparse"><code>/docparse</code></a></td><td>Parse PDF / DOCX / PPTX / XLSX with spatial bounding boxes + visual citations.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-deep-research-advance"><code>/deep-research-advance</code></a></td><td>One-shot deep web research with adversarial verification and a cited report.</td></tr>
     </tbody>
   </table></div>
 
@@ -80,15 +94,15 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Command</th><th>What it does</th></tr></thead>
     <tbody>
-      <tr><td><code>/email-draft</code></td><td>New outbound email in the operator's voice (draft only — never auto-sends).</td></tr>
-      <tr><td><code>/email-respond</code></td><td>Reply to an existing email thread (draft only).</td></tr>
-      <tr><td><code>/email-intel</code></td><td>Daily inbox intelligence: scans mail, groups threads, proposes CRM / task actions.</td></tr>
-      <tr><td><code>/follow-up</code></td><td>Personalized follow-up email after a meeting or event.</td></tr>
-      <tr><td><code>/ceo-to-ceo</code></td><td>Peer CEO-to-CEO correspondence (draft only).</td></tr>
-      <tr><td><code>/corporate-letter</code></td><td>Branded external letter, PDF + DOCX, locked template.</td></tr>
-      <tr><td><code>/telegram</code></td><td>Live Telegram client — send / read / search / forward.</td></tr>
-      <tr><td><code>/tribe-message</code>, <code>/tribe-monday</code></td><td>Internal all-hands message; the recurring Monday cadence variant.</td></tr>
-      <tr><td><code>/translate</code></td><td>Translation between languages.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-email-draft"><code>/email-draft</code></a></td><td>New outbound email in the operator's voice (draft only — never auto-sends).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-email-respond"><code>/email-respond</code></a></td><td>Reply to an existing email thread (draft only).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-email-intel"><code>/email-intel</code></a></td><td>Daily inbox intelligence: scans mail, groups threads, proposes CRM / task actions.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-follow-up"><code>/follow-up</code></a></td><td>Personalized follow-up email after a meeting or event.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-ceo-to-ceo"><code>/ceo-to-ceo</code></a></td><td>Peer CEO-to-CEO correspondence (draft only).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-corporate-letter"><code>/corporate-letter</code></a></td><td>Branded external letter, PDF + DOCX, locked template.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-telegram"><code>/telegram</code></a></td><td>Live Telegram client — send / read / search / forward.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-tribe-message"><code>/tribe-message</code></a>, <a class="cmd-link" href="#s-tribe-monday"><code>/tribe-monday</code></a></td><td>Internal all-hands message; the recurring Monday cadence variant.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-translate"><code>/translate</code></a></td><td>Translation between languages.</td></tr>
     </tbody>
   </table></div>
 
@@ -96,13 +110,13 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Command</th><th>What it does</th></tr></thead>
     <tbody>
-      <tr><td><code>/linkedin-post</code>, <code>/linkedin-series</code></td><td>A single LinkedIn post; a multi-post content series plan.</td></tr>
-      <tr><td><code>/linkedin-archive</code></td><td>Files a published LinkedIn post + images into the datastore archive.</td></tr>
-      <tr><td><code>/keynote-deck</code></td><td>Conference / event speaking deck.</td></tr>
-      <tr><td><code>/image-prompt</code>, <code>/flux-image</code></td><td>A text-to-image prompt; actual image generation via Replicate.</td></tr>
-      <tr><td><code>/design</code></td><td>Design system — illustrations, mockups, social graphics, logos, infographics.</td></tr>
-      <tr><td><code>/pptx-generator</code></td><td>Editable PowerPoint decks and LinkedIn carousels.</td></tr>
-      <tr><td><code>/marp</code></td><td>Markdown-to-slides pipeline (PDF + HTML).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-linkedin-post"><code>/linkedin-post</code></a>, <a class="cmd-link" href="#s-linkedin-series"><code>/linkedin-series</code></a></td><td>A single LinkedIn post; a multi-post content series plan.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-linkedin-archive"><code>/linkedin-archive</code></a></td><td>Files a published LinkedIn post + images into the datastore archive.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-keynote-deck"><code>/keynote-deck</code></a></td><td>Conference / event speaking deck.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-image-prompt"><code>/image-prompt</code></a>, <a class="cmd-link" href="#s-flux-image"><code>/flux-image</code></a></td><td>A text-to-image prompt; actual image generation via Replicate.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-design"><code>/design</code></a></td><td>Design system — illustrations, mockups, social graphics, logos, infographics.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-pptx-generator"><code>/pptx-generator</code></a></td><td>Editable PowerPoint decks and LinkedIn carousels.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-marp"><code>/marp</code></a></td><td>Markdown-to-slides pipeline (PDF + HTML).</td></tr>
     </tbody>
   </table></div>
 
@@ -110,9 +124,9 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Command</th><th>What it does</th></tr></thead>
     <tbody>
-      <tr><td><code>/crm</code></td><td>Personal CRM — add, log, radar, find, update contacts, contact health.</td></tr>
-      <tr><td><code>/viraid</code></td><td>Reads + triages a dedicated Telegram intake channel into actions.</td></tr>
-      <tr><td><code>/google-contacts</code></td><td>Google People API contact lookup / add / edit (standalone, separate from the CRM).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-crm"><code>/crm</code></a></td><td>Personal CRM — add, log, radar, find, update contacts, contact health.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-viraid"><code>/viraid</code></a></td><td>Reads + triages a dedicated Telegram intake channel into actions.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-google-contacts"><code>/google-contacts</code></a></td><td>Google People API contact lookup / add / edit (standalone, separate from the CRM).</td></tr>
     </tbody>
   </table></div>
 
@@ -120,17 +134,17 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Command</th><th>What it does</th></tr></thead>
     <tbody>
-      <tr><td><code>/deep-think</code></td><td>Structured sequential reasoning engine for hard, multi-variable calls.</td></tr>
-      <tr><td><code>/council</code></td><td>Parallel second opinions from independent third-party models.</td></tr>
-      <tr><td><code>/deal-strategy</code></td><td>Full deal strategy: positioning, pricing, objections, next steps.</td></tr>
-      <tr><td><code>/investor-pitch</code>, <code>/investor-update</code></td><td>A fundraising pitch deck; an investor / board update.</td></tr>
-      <tr><td><code>/proposal</code>, <code>/partnership-doc</code>, <code>/official-doc</code>, <code>/xpager</code>, <code>/rfp-response</code></td><td>The locked external-document templates (commercial proposal, MOU/LOI/term sheet, board resolution/notice, OnePager, RFP/tender).</td></tr>
-      <tr><td><code>/data-room</code></td><td>Investor data room + due-diligence materials.</td></tr>
-      <tr><td><code>/voss</code></td><td>Negotiation prep — tactical empathy, accusation audit, calibrated questions.</td></tr>
-      <tr><td><code>/state-check</code></td><td>Operational-state / function-health diagnostic.</td></tr>
-      <tr><td><code>/meeting-prep</code></td><td>Counterpart briefing (composes osint + voss + CRM + comms).</td></tr>
-      <tr><td><code>/odin</code></td><td>Personal AI advisor with a persistent knowledge brain — see <a href="memory-odin.html">Memory &amp; ODIN</a>.</td></tr>
-      <tr><td><code>/recall</code></td><td>Workspace-wide semantic recall over the local memory index.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-deep-think"><code>/deep-think</code></a></td><td>Structured sequential reasoning engine for hard, multi-variable calls.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-council"><code>/council</code></a></td><td>Parallel second opinions from independent third-party models.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-deal-strategy"><code>/deal-strategy</code></a></td><td>Full deal strategy: positioning, pricing, objections, next steps.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-investor-pitch"><code>/investor-pitch</code></a>, <a class="cmd-link" href="#s-investor-update"><code>/investor-update</code></a></td><td>A fundraising pitch deck; an investor / board update.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-proposal"><code>/proposal</code></a>, <a class="cmd-link" href="#s-partnership-doc"><code>/partnership-doc</code></a>, <a class="cmd-link" href="#s-official-doc"><code>/official-doc</code></a>, <a class="cmd-link" href="#s-xpager"><code>/xpager</code></a>, <a class="cmd-link" href="#s-rfp-response"><code>/rfp-response</code></a></td><td>The locked external-document templates (commercial proposal, MOU/LOI/term sheet, board resolution/notice, OnePager, RFP/tender).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-data-room"><code>/data-room</code></a></td><td>Investor data room + due-diligence materials.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-voss"><code>/voss</code></a></td><td>Negotiation prep — tactical empathy, accusation audit, calibrated questions.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-state-check"><code>/state-check</code></a></td><td>Operational-state / function-health diagnostic.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-meeting-prep"><code>/meeting-prep</code></a></td><td>Counterpart briefing (composes osint + voss + CRM + comms).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-odin"><code>/odin</code></a></td><td>Personal AI advisor with a persistent knowledge brain — see <a href="memory-odin.html">Memory &amp; ODIN</a>.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-recall"><code>/recall</code></a></td><td>Workspace-wide semantic recall over the local memory index.</td></tr>
     </tbody>
   </table></div>
 
@@ -138,24 +152,1069 @@
   <div class="table-wrap"><table>
     <thead><tr><th>Command</th><th>What it does</th></tr></thead>
     <tbody>
-      <tr><td><code>/prime</code> 🔒</td><td>Session boot context load + parallel health checks.</td></tr>
-      <tr><td><code>/dashboard</code>, <code>/next</code>, <code>/radar</code>, <code>/queue</code></td><td>Daily brief; "what's next" recommender; overdue-action detector; the terminal-native Action Queue.</td></tr>
-      <tr><td><code>/weekly-review</code></td><td>End-of-week review.</td></tr>
-      <tr><td><code>/dream</code> 🔒, <code>/memory-hygiene</code></td><td>Memory consolidation; memory rot scan. See <a href="memory-odin.html">Memory &amp; ODIN</a>.</td></tr>
-      <tr><td><code>/backup</code> 🔒, <code>/sync</code> 🔒</td><td>Commit + push both repos; pull updates (git ff-only + corporate refresh).</td></tr>
-      <tr><td><code>/push-updates</code> 🔒, <code>/publish-corporate</code> 🔒, <code>/promote-corporate</code> 🔒, <code>/rollback-corporate</code> 🔒</td><td>Multi-user fleet publishing pipeline (corporate content down to executives).</td></tr>
-      <tr><td><code>/create-plan</code>, <code>/pre-impl</code> 🔒, <code>/implement</code></td><td>Plan → pre-implementation gate → execute.</td></tr>
-      <tr><td><code>/evaluate</code>, <code>/scrutinize</code>, <code>/validate</code>, <code>/editorial-review</code></td><td>Artifact grading; principal-level audit; fact-check; document-structure editor.</td></tr>
-      <tr><td><code>/workspace-deep-audit</code> 🔒</td><td>Full 8-section comprehensive workspace audit.</td></tr>
-      <tr><td><code>/calibrate</code> 🔒, <code>/checkpoint</code> 🔒</td><td>End-of-session self-improvement; manual session-handoff save.</td></tr>
-      <tr><td><code>/align</code> 🔒, <code>/devil</code> 🔒, <code>/burst</code> 🔒</td><td>Forced scope clarification; contrarian critique; N content variants.</td></tr>
-      <tr><td><code>/sentinel</code> 🔒, <code>/bridge-health</code> 🔒, <code>/cold-sweep</code></td><td>Comms-monitor control; daemon fleet health; CRM "red debt" drain.</td></tr>
-      <tr><td><code>/thread</code></td><td>Operational thread registry — open / log / close / find.</td></tr>
-      <tr><td><code>/playwright</code>, <code>/ast-grep</code>, <code>/context7</code>, <code>/setup-browser-cookies</code></td><td>Headless browser; structural code search; library docs; cookie import.</td></tr>
-      <tr><td><code>/skill-creator</code> 🔒, <code>/request-skill</code> 🔒, <code>/setup-wizard</code> 🔒</td><td>Author / request a skill; configure a fresh workspace.</td></tr>
-      <tr><td><code>/event-debrief</code>, <code>/interview-prep</code>, <code>/zk</code>, <code>/mullvad</code></td><td>Post-event recap; hiring framework; Zettelkasten capture; Mullvad VPN control.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-prime"><code>/prime</code></a> 🔒</td><td>Session boot context load + parallel health checks.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-dashboard"><code>/dashboard</code></a>, <a class="cmd-link" href="#s-next"><code>/next</code></a>, <a class="cmd-link" href="#s-radar"><code>/radar</code></a>, <a class="cmd-link" href="#s-queue"><code>/queue</code></a></td><td>Daily brief; "what's next" recommender; overdue-action detector; the terminal-native Action Queue.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-weekly-review"><code>/weekly-review</code></a></td><td>End-of-week review.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-dream"><code>/dream</code></a> 🔒, <a class="cmd-link" href="#s-memory-hygiene"><code>/memory-hygiene</code></a></td><td>Memory consolidation; memory rot scan. See <a href="memory-odin.html">Memory &amp; ODIN</a>.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-backup"><code>/backup</code></a> 🔒, <a class="cmd-link" href="#s-sync"><code>/sync</code></a> 🔒</td><td>Commit + push both repos; pull updates (git ff-only + corporate refresh).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-push-updates"><code>/push-updates</code></a> 🔒, <a class="cmd-link" href="#s-publish-corporate"><code>/publish-corporate</code></a> 🔒, <a class="cmd-link" href="#s-promote-corporate"><code>/promote-corporate</code></a> 🔒, <a class="cmd-link" href="#s-rollback-corporate"><code>/rollback-corporate</code></a> 🔒</td><td>Multi-user fleet publishing pipeline (corporate content down to executives).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-create-plan"><code>/create-plan</code></a>, <a class="cmd-link" href="#s-pre-impl"><code>/pre-impl</code></a> 🔒, <a class="cmd-link" href="#s-implement"><code>/implement</code></a></td><td>Plan → pre-implementation gate → execute.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-evaluate"><code>/evaluate</code></a>, <a class="cmd-link" href="#s-scrutinize"><code>/scrutinize</code></a>, <a class="cmd-link" href="#s-validate"><code>/validate</code></a>, <a class="cmd-link" href="#s-editorial-review"><code>/editorial-review</code></a></td><td>Artifact grading; principal-level audit; fact-check; document-structure editor.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-workspace-deep-audit"><code>/workspace-deep-audit</code></a> 🔒</td><td>Full 8-section comprehensive workspace audit.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-calibrate"><code>/calibrate</code></a> 🔒, <a class="cmd-link" href="#s-checkpoint"><code>/checkpoint</code></a> 🔒</td><td>End-of-session self-improvement; manual session-handoff save.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-align"><code>/align</code></a> 🔒, <a class="cmd-link" href="#s-devil"><code>/devil</code></a> 🔒, <a class="cmd-link" href="#s-burst"><code>/burst</code></a> 🔒</td><td>Forced scope clarification; contrarian critique; N content variants.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-sentinel"><code>/sentinel</code></a> 🔒, <a class="cmd-link" href="#s-bridge-health"><code>/bridge-health</code></a> 🔒, <a class="cmd-link" href="#s-cold-sweep"><code>/cold-sweep</code></a></td><td>Comms-monitor control; daemon fleet health; CRM "red debt" drain.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-thread"><code>/thread</code></a></td><td>Operational thread registry — open / log / close / find.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-playwright"><code>/playwright</code></a>, <a class="cmd-link" href="#s-ast-grep"><code>/ast-grep</code></a>, <a class="cmd-link" href="#s-context7"><code>/context7</code></a>, <a class="cmd-link" href="#s-setup-browser-cookies"><code>/setup-browser-cookies</code></a></td><td>Headless browser; structural code search; library docs; cookie import.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-skill-creator"><code>/skill-creator</code></a> 🔒, <a class="cmd-link" href="#s-request-skill"><code>/request-skill</code></a> 🔒, <a class="cmd-link" href="#s-setup-wizard"><code>/setup-wizard</code></a> 🔒</td><td>Author / request a skill; configure a fresh workspace.</td></tr>
+      <tr><td><a class="cmd-link" href="#s-event-debrief"><code>/event-debrief</code></a>, <a class="cmd-link" href="#s-interview-prep"><code>/interview-prep</code></a>, <a class="cmd-link" href="#s-zk"><code>/zk</code></a>, <a class="cmd-link" href="#s-mullvad"><code>/mullvad</code></a></td><td>Post-event recap; hiring framework; Zettelkasten capture; Mullvad VPN control.</td></tr>
     </tbody>
   </table></div>
+
+  <h2 id="reference">Skill reference: every skill in detail</h2>
+  <p class="page-meta">Every local skill, grouped by category. Each entry states what it is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
+
+  <h3 class="cat" id="cat-intel">Intel</h3>
+
+<section class="skill" id="s-osint">
+<h3><code>/osint [target]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/intel/osint/YYYY-MM-DD-[target-slug]/</code></p>
+<p><strong>What it is.</strong> The master intelligence-gathering skill: deep, multi-source open-source intelligence on any company, person, market, or technology, producing an executive-grade brief with confidence ratings and source attribution. It is the raw-intel foundation the other intel skills consume.</p>
+<p><strong>What it does.</strong> Auto-detects the target mode (company / person / market / technology), then runs a deterministic entity resolver (<code>scripts/resolve_entity.py</code>, Tavily with Brave fallback plus a Haiku tool-use extraction) to expand aliases and handles, fans out mode-specific parallel research streams over WebSearch and Firecrawl, grades every finding Confirmed / Deduced / Hypothesized against a persistent case file, and cross-references the CRM and datastore. It writes <code>brief.md</code>, <code>research-notes.md</code>, and a dark self-contained <code>report.html</code>, then appends a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Reach for it for comprehensive recon on one named target; use <code>/competitor-intel</code> for a head-to-head against a vendor, <code>/market-brief</code> for a sector or region, and <code>/ceo-intel</code> for global geopolitics.</p>
+<pre><code>/osint Acme Corp
+"dig into Jane Doe, background check before the meeting"</code></pre>
+<p><strong>Customize.</strong> Variables <code>mode</code>, <code>depth</code> (standard / deep / maximum), <code>focus</code>, and <code>context</code>. Depth escalates to Agent Browser and DataStore cross-referencing. Per-mode stream catalogues live in <code>references/streams-{company,person,market,technology}.md</code>; domain filtering in <code>reference/search-domains.md</code>; evidence grading in <code>reference/forensic-evidence-grading.md</code>. Optional per-exec overrides via <code>scripts/resolve_customization.py</code> (see <code>config/skill-custom/README.md</code>).</p>
+</section>
+
+<section class="skill" id="s-osint-advanced">
+<h3><code>/osint-advanced [target]</code><span class="badge">Intel 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/intel/osint-advanced/YYYY-MM-DD-[target-slug]/</code></p>
+<p><strong>What it is.</strong> A specialized-database complement to <code>/osint</code>: it queries sanctions and compliance lists, corporate registries, breach databases, threat-actor platforms, infrastructure scanners, and face/username search that general web search does not reach.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model, selecting streams by mode from a fixed matrix (sanctions/compliance is MANDATORY in company and person mode). Each tool query follows a fallback chain: WebFetch to the API endpoint, then <code>scripts/firecrawl.py scrape</code>, then a <code>site:</code> WebSearch. It writes <code>brief.md</code>, raw <code>tool-responses.md</code>, and a <code>report.html</code> carrying a sanctions status banner (CLEAR / MATCH / PARTIAL) and a tool access log.</p>
+<p><strong>How to use it.</strong> Use it after <code>/osint</code> has run and a specific dimension still needs depth (compliance screening, breach exposure, infrastructure recon); for the first broad pass on any target, use <code>/osint</code>.</p>
+<pre><code>/osint-advanced Acme Corp
+/osint-advanced jane.doe@example.com</code></pre>
+<p><strong>Customize.</strong> <code>disable-model-invocation: true</code> keeps it explicit-only; <code>model: sonnet</code> is set in frontmatter. Variables <code>mode</code>, <code>streams</code> (all or a comma list), and <code>depth</code> (quick / full). Tool registry and validation status in <code>reference/osint-advanced-toolkit.md</code>; per-tool patterns in <code>references/tool-integration-guide.md</code> and <code>references/streams-deep-osint.md</code>.</p>
+</section>
+
+<section class="skill" id="s-competitor-intel">
+<h3><code>/competitor-intel [company]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · maintains a case file at <code>outputs/intel/cases/[competitor-slug].md</code></p>
+<p><strong>What it is.</strong> Deep competitive analysis of a named vendor against 31C/ODUN.ONE: product-gap comparison, geographic overlap, honest strengths, exploitable weaknesses, a win strategy, and recommended actions.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. It reads the existing DPI vendor landscape and 31C positioning, then runs three web passes: a filtered industry-source search, a broad company search (blocklist only), and a Firecrawl website crawl over the vendor's product and pricing pages. Every material claim is evidence-graded Confirmed / Deduced / Hypothesized against an append-only persistent case file, and the brief closes with a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Use it for a head-to-head against a named competitor; if the target is a person or a broad company profile use <code>/osint</code>, and for market sizing use <code>/market-brief</code>. For a bare "vs" with no named second party, disambiguate first.</p>
+<pre><code>/competitor-intel ExampleTelco
+"how does ExampleTelco compare to us on encrypted traffic"</code></pre>
+<p><strong>Customize.</strong> <code>model: sonnet</code> and <code>depth</code> (quick / deep) are the main knobs. Baseline competitive data in <code>reference/dpi-market-intelligence.md</code>; domain filtering in <code>reference/search-domains.md</code>; the case-file template at <code>reference/templates/intel-case-file.md</code>; evidence grading in <code>reference/forensic-evidence-grading.md</code>.</p>
+</section>
+
+<section class="skill" id="s-market-brief">
+<h3><code>/market-brief [topic]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a brief inline (forked-context research pass)</p>
+<p><strong>What it is.</strong> A fast market or regional intelligence brief on a sector or geography: market sizing, competitive landscape, regulatory environment, entry timing, and 31C positioning framed through the sovereign/DPI+ lens.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. It reads DPI market and geopolitical reference data plus 31C strategy, then searches the web with topic-group domain filtering. When the topic falls inside the Polymarket coverage whitelist (AI, big tech, elections, geopolitics, crypto, macro, sports, corporate events) it appends a "Markets Are Pricing" section from <code>scripts/polymarket.py</code>, and it closes with a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Use it for a sector, region, or TAM question; for a specific named company use <code>/osint</code> or <code>/competitor-intel</code>, and for global geopolitics use <code>/ceo-intel</code>.</p>
+<pre><code>/market-brief GCC telco DPI market
+"sector overview and TAM for sovereign 5G security"</code></pre>
+<p><strong>Customize.</strong> Variables <code>depth</code> (surface / detailed) and <code>purpose</code>. Reference data in <code>reference/dpi-market-intelligence.md</code> and <code>reference/geopolitical-landscape.md</code>; domain filtering in <code>reference/search-domains.md</code>; Polymarket whitelist and disambiguation rules in <code>reference/polymarket-coverage.md</code>. Polymarket output is internal-only and never quotable externally.</p>
+</section>
+
+<section class="skill" id="s-ceo-intel">
+<h3><code>/ceo-intel [focus]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/intel/briefs/world-intel-YYYY-MM-DD.html</code> (+ PDF)</p>
+<p><strong>What it is.</strong> A confidential CEO-eyes-only world intelligence brief covering geopolitics, cybersecurity, markets, and priority-region developments, each section framed through 31C's lens with direct business implications and action items.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. Phase 1 fans out parallel WebSearch streams (geopolitics, cybersecurity, priority regions, markets/DPI) with domain filtering, runs <code>scripts/perplexity-research.py</code>, fetches World Monitor feeds, and batch-scrapes top articles via Firecrawl. Phase 2 writes a single-page HTML brief with a threat-level bar, metrics strip, and per-section 31C-relevance callouts; Phase 3 renders a PDF via <code>scripts/html-to-pdf.py</code> and appends a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Use it for internal world/geopolitical situational awareness with action items; for the public-safe version use <code>/intel-briefing-newsletter</code>, and for a specific company or person use <code>/osint</code>.</p>
+<pre><code>/ceo-intel
+"give me a geopolitical brief on GCC defense"</code></pre>
+<p><strong>Customize.</strong> The <code>focus</code> variable narrows to a topic or region. The HTML design system (fonts, colors, layout) is specified inline. Reference data in <code>reference/dpi-market-intelligence.md</code>; domain filtering in <code>reference/search-domains.md</code>; the conditional Polymarket section uses <code>scripts/polymarket.py</code> per <code>reference/polymarket-coverage.md</code>. This brief is never shared externally.</p>
+</section>
+
+<section class="skill" id="s-intel-briefing-newsletter">
+<h3><code>/intel-briefing-newsletter [focus]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/intel/newsletters/YYYY-MM-DD/</code></p>
+<p><strong>What it is.</strong> The public-facing, branded 31C Intelligence Briefing newsletter: curated live world intel carrying zero confidential information, safe for Tribe distribution and external sharing.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. It fans out the same parallel research streams as <code>/ceo-intel</code> (WebSearch with domain filtering, Perplexity, World Monitor, Firecrawl), synthesizes the fixed section set (Hero, Indicators, Sea State, Cyber Front, Navigation Chart, Market Depth, The Heading, Signal Watch, Recommended Reading), then runs a mandatory confidentiality scrub against <code>context/people.md</code> and <code>context/pipeline.md</code>. It builds an <code>input.json</code>, optionally generates editorial images via the flux-image generator, and renders HTML + PDF through <code>scripts/generate-newsletter-html.py</code>.</p>
+<p><strong>How to use it.</strong> Use it when the output is meant to be published or shared; for the internal-only version that names partners and deals and adds action items, use <code>/ceo-intel</code>.</p>
+<pre><code>/intel-briefing-newsletter
+"publish an intel briefing on GCC cybersecurity"</code></pre>
+<p><strong>Customize.</strong> Variables <code>focus</code> and <code>issue_number</code>. Content structure, design system, and confidentiality rules in <code>reference/newsletter-guide.md</code>; voice in <code>reference/misha-voice.md</code>; domain filtering in <code>reference/search-domains.md</code>. Optional <code>/editorial-review</code> structural pass before finalizing.</p>
+</section>
+
+<section class="skill" id="s-yt-pulse">
+<h3><code>/yt-pulse [query]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/intel/pulse/YYYY-MM-DD-[slug]/</code></p>
+<p><strong>What it is.</strong> A domain-agnostic YouTube intelligence scanner: it searches YouTube for any topic, clusters the hot themes creators are discussing, deep-analyzes the top video by transcript, scores 31C relevance, and delivers a brief in MD, HTML, and PDF.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model, firing a mandatory VPN pre-flight gate first (datacenter IPs get blocked). Phase 1 runs <code>.claude/skills/yt-pulse/scripts/pulse.py</code> using YouTube's server-side date filter; it clusters titles into 3-5 topics, selects the top-ranked video by an engagement formula, and pulls the transcript via the Playwright <code>pw.py youtube</code> command (with a WebSearch/WebFetch fallback when the IP is blocked). Phase 5 generates the three-format brief and renders the PDF via <code>scripts/html-to-pdf.py</code>.</p>
+<p><strong>How to use it.</strong> Use it for YouTube content discovery and analysis in any domain; for non-YouTube target research use <code>/osint</code>, and for an X/Twitter account scan use <code>/x-pulse</code>.</p>
+<pre><code>/yt-pulse deep packet inspection
+"what's trending on YouTube about AI agents"</code></pre>
+<p><strong>Customize.</strong> Variables <code>timeframe</code> (24h / 72h / 7d / 30d) and <code>depth</code> (quick / full). Per-channel cap (default <code>--per-channel-cap 3</code>, pass <code>0</code> for uncapped), browser-cookie sourcing (default Brave ClaudeCode profile via yt-dlp), and residential-proxy fallback are in <code>references/configuration.md</code>. Output templates in <code>references/output-template.md</code>. VPN gate governed by <code>.claude/rules/vpn-preflight.md</code>.</p>
+</section>
+
+<section class="skill" id="s-x-pulse">
+<h3><code>/x-pulse [--window 24h|72h|7d] [--bucket &lt;name&gt;]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to the data overlay's <code>intel/x-pulse/YYYY-MM-DD-HHMM/</code></p>
+<p><strong>What it is.</strong> An account-centric X.com (Twitter) intelligence scanner: it pulls recent posts from a curated, categorised account list (peer CEOs, DPI competitors, sovereign-tech thinkers, AI-policy figures, personal interest) and produces an MD/HTML/PDF brief with top-3 highlights, per-category breakdown, and 31C relevance plus actions.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. Scraping is server-side via Apify (no browser, no VPN gate). It runs <code>.claude/skills/x-pulse/scripts/pulse.py --dry-run</code> first to show the plan and estimated cost, waits for confirmation, then fetches and applies a two-stage filter: a mechanical engagement filter (top 50% per category by <code>likes + 2*retweets + 3*replies</code>) followed by Claude judgement to pick the top 3 highlights. It renders the brief and PDF using the same design tokens as <code>/yt-pulse</code>.</p>
+<p><strong>How to use it.</strong> Use it to monitor specific X accounts; for topic-based YouTube discovery use <code>/yt-pulse</code>.</p>
+<pre><code>/x-pulse --window 72h --bucket peer_ceos
+"what's on X from the DPI vendors this week"</code></pre>
+<p><strong>Customize.</strong> Options <code>--window</code>, <code>--bucket</code>, <code>--max-per-account</code> (default 30, max 100), and <code>--dry-run</code>. The account list is <code>config/x-pulse-accounts.yaml</code>. Requires <code>APIFY_TOKEN</code> in <code>.env</code> (the skill halts with sign-up instructions if it is missing and never edits <code>.env</code> for you). Quoted tweet text is preserved verbatim and exempt from the humanisation rule.</p>
+</section>
+
+<section class="skill" id="s-notebooklm">
+<h3><code>/notebooklm [status|create|add|query|audio|research|report|describe|download] [args]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/content/notebooklm/</code> (CEO-only)</p>
+<p><strong>What it is.</strong> A CLI wrapper for Google NotebookLM: create topic notebooks, add sources (URLs, text, files), query with grounded citations, generate audio overviews (AI podcasts), run research discovery, and produce briefing reports. CEO-only, not synced to exec workspaces.</p>
+<p><strong>What it does.</strong> Runs on the Sonnet model, driving the <code>notebooklm-mcp-cli</code> (<code>nlm</code>) tool via a portable invocation pattern. Every mode is preceded by a Phase 0 auth check (<code>nlm login --check</code>); if auth is expired the skill stops and directs the user to log in manually. Phase 1 dispatches to one of nine modes; per-mode CLI commands, polling rules, and output templates live in <code>references/mode-catalog.md</code>. Long-running modes (audio, report) poll at 15-second intervals up to five minutes.</p>
+<p><strong>How to use it.</strong> Use it for NotebookLM-specific notebook work and AI audio overviews; for general target research use <code>/osint</code>, for atomic notes use <code>/zk</code>, and for topic-based YouTube podcasts use <code>/yt-pulse</code>.</p>
+<pre><code>/notebooklm create "Middle East DPI Market"
+"create a NotebookLM audio overview from these sources"</code></pre>
+<p><strong>Customize.</strong> Nine subcommand modes (<code>status</code>, <code>create</code>, <code>add</code>, <code>query</code>, <code>audio</code>, <code>research</code>, <code>report</code>, <code>describe</code>, <code>download</code>). Filenames follow <code>YYYY-MM-DD-&lt;slug&gt;.&lt;ext&gt;</code>. Uses undocumented Google APIs and may break without notice; it never auto-logs-in, never auto-upgrades the CLI, and never uses the MCP server. Auth is per-user via <code>nlm login</code>.</p>
+</section>
+
+<section class="skill" id="s-docparse">
+<h3><code>/docparse [file-path or directory] [question]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns an answer inline; optional HTML/PDF report on <code>--report</code></p>
+<p><strong>What it is.</strong> A document parser with visual citations: it parses PDF, DOCX, PPTX, and XLSX with spatial bounding boxes via LiteParse and answers a question by tracing every cited fact to its exact location on the source page.</p>
+<p><strong>What it does.</strong> Runs on the Sonnet model via <code>scripts/docparse.py</code> (cache-aware). Phase 0 runs a prerequisite check and, for documents over 50 pages, asks for a page range. Phase 1 parses to a JSON file; Phase 2 answers a question by extracting 5-15 character-for-character verbatim quotes as citations keyed to inline <code>[N]</code> markers, which the script's box engine maps to page coordinates. Phase 3 optionally renders a 31C-branded self-contained HTML report plus PDF.</p>
+<p><strong>How to use it.</strong> Use it when you need spatially-grounded citations or to show where a document says something; for plain text extraction use <code>datastore-extract.py</code>, for email use <code>/email-intel</code>, and for web pages use <code>/playwright</code>.</p>
+<pre><code>/docparse datastore/reports/acme-q3.pdf "What was Q3 revenue?"
+"parse this PDF and show me where it says the pricing"</code></pre>
+<p><strong>Customize.</strong> Flags <code>--pages</code> (required for 100+ page documents), <code>--dpi</code> (default 150), and <code>--report</code> / <code>--no-pdf</code>. Never parses over 100 pages without an explicit <code>--pages</code> restriction. Integration patterns for calling it from other skills are in <code>references/integration.md</code>.</p>
+</section>
+
+<section class="skill" id="s-deep-research-advance">
+<h3><code>/deep-research-advance "&lt;question&gt;" [--critical] [--audio] [--depth N] [--domains a.com,b.com]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/research/&lt;run&gt;/report.md</code></p>
+<p><strong>What it is.</strong> Advanced one-shot deep research on a public-web topic: a headless script offloads token-heavy acquisition (Perplexity) and reasoning/verification (Kimi), then Claude audits the findings, writes a cited report, and proposes an Odin distillate for approval.</p>
+<p><strong>What it does.</strong> Runs in a forked context. It states its data-boundary guardrail first, asks 2-3 scoping questions if the topic is underspecified, then runs <code>scripts/deep-research-advance.py</code>, which returns an <code>intermediate.json</code> of angles, sources, corpus, and Kimi's claim analysis. Phase 3 conditionally fires an adversarial audit governor (when sources exceed 12 or <code>--critical</code> is set) that tries to refute each supported claim from the corpus alone. Phase 4 synthesizes a report (executive summary, findings by angle, claims table, contradictions, source list) and appends a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Use it for deep, fact-checked reports on public-web topics; it refuses private or internal topics because the question and corpus leave to third-party clouds. For quick lookups use <code>/osint</code> or WebSearch, and for Odin-brain recall use <code>/odin</code>.</p>
+<pre><code>/deep-research-advance "state of sovereign DPI regulation in the GCC" --critical
+"advanced deep research with verification on 5G security standards"</code></pre>
+<p><strong>Customize.</strong> Flags <code>--depth N</code> (Perplexity angles, default 4, max 8), <code>--critical</code> (force the audit governor), <code>--recency {hour|day|week|month|year}</code>, <code>--domains</code> (allow-list), and the skill-level <code>--audio</code> (gated NotebookLM push, handled in Phase 5, not passed to the script). Persistence is double-gated: the Odin distillate and any NotebookLM audio each require explicit CEO approval. Never runs on private data or injects business context into cloud prompts.</p>
+</section>
+
+  <h3 class="cat" id="cat-communication">Communication</h3>
+
+<section class="skill" id="s-email-draft">
+<h3><code>/email-draft [to] [purpose]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts a new outbound email in Misha's voice: direct opener, ordered key points, a clear ask, plus subject-line options.</p>
+<p><strong>What it does.</strong> Before drafting it reads <code>reference/misha-voice.md</code>, <code>context/people.md</code>, and <code>context/business-info.md</code> for voice and relationship context, then applies the always-on Voss layer (<code>.claude/rules/voss.md</code>) for calibrated questions and labeling. It returns the draft inline with 2-3 subject lines and a pre-send flag. It never auto-sends: outbound send is human-gated, and sending goes through <code>scripts/send-email.py</code> only after you approve.</p>
+<p><strong>How to use it.</strong> Use for a fresh outbound email to a named recipient. To reply to an email you received use <code>/email-respond</code>; for peer CEO correspondence use <code>/ceo-to-ceo</code>; for a branded letter use <code>/corporate-letter</code>.</p>
+<pre><code>/email-draft Jane Doe intro to our platform
+"draft email to Jane Doe about the pilot timeline"</code></pre>
+<p><strong>Customize.</strong> Voice lives in <code>reference/misha-voice.md</code>; relationship context in <code>context/people.md</code>. The NEVER list (banned openers, passive voice, buried asks) is edited in the SKILL.md body.</p>
+</section>
+
+<section class="skill" id="s-email-respond">
+<h3><code>/email-respond [notes]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts a reply to an existing email thread in Misha's voice: reads the incoming message, reads the sender's real intent, and answers concisely.</p>
+<p><strong>What it does.</strong> You paste the incoming email below the divider. It reads <code>reference/misha-voice.md</code>, <code>context/people.md</code>, and <code>context/pipeline.md</code>, then runs a Voss tactical-empathy read (<code>.claude/rules/voss.md</code>): surface the emotion, label tension before substance, redirect demands with calibrated questions. It returns the draft, a subject line if re-titling, and one pre-send flag. It never sends and never fabricates commitments not in the thread; outbound send stays human-gated.</p>
+<p><strong>How to use it.</strong> Use to reply to a received email. For a new outbound email use <code>/email-draft</code>; to triage the whole inbox use <code>/email-intel</code>.</p>
+<pre><code>/email-respond keep it short, decline politely
+"reply to this email from Jane Doe"</code></pre>
+<p><strong>Customize.</strong> Voice in <code>reference/misha-voice.md</code>, relationship context in <code>context/people.md</code>, deal context in <code>context/pipeline.md</code>. Optional <code>notes</code> steer the reply per run.</p>
+</section>
+
+<section class="skill" id="s-email-intel">
+<h3><code>/email-intel [--hours N] [--inbox-only] [--sent-only]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/email-intelligence/</code>, <code>crm/contacts/</code>, <code>context/pipeline.md</code></p>
+<p><strong>What it is.</strong> Daily inbox intelligence processor. Scans incoming and outgoing 31C Exchange email, groups by conversation thread, and proposes CRM logs, tasks, pipeline updates, knowledge notes, and new contacts.</p>
+<p><strong>What it does.</strong> Runs five phases: state check, fetch and process via <code>scripts/email-intelligence.py</code> (Exchange EWS via exchangelib), present a priority-tagged (P1/P2/P3) digest plus one flat numbered action list, mandatory approval, then execute only the numbers you approve. Actions carry tier tags; the numbered list persists in <code>sweep-actions-YYYY-MM-DD.json</code> (via <code>scripts/email-sweep.py</code>) so an interrupted run resumes. Local writes land in <code>crm/contacts/</code>; pipeline changes route as a reversible notify card; <code>[send-gated]</code> replies and forwards send through <code>scripts/send-email.py</code> only after their number is approved (a procedural human gate). It never uses Gmail: Exchange only.</p>
+<p><strong>How to use it.</strong> Use to triage the inbox. For a single ad-hoc reply use <code>/email-respond</code>; for a multi-channel "what's new" sweep use the Morning Comms pattern.</p>
+<pre><code>/email-intel --hours 48
+"process my inbox"</code></pre>
+<p><strong>Customize.</strong> Priority signals and enrichment thresholds (14-day WARNING, 30-day CRITICAL) live in the SKILL.md; digest and execution formats in <code>references/digest-format.md</code> and <code>references/execution-templates.md</code>. Exchange credentials load from <code>.env</code>. State lives under <code>outputs/operations/email-intelligence/</code>.</p>
+</section>
+
+<section class="skill" id="s-follow-up">
+<h3><code>/follow-up [who] [context]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>crm/contacts/</code></p>
+<p><strong>What it is.</strong> Drafts a single personalized follow-up email after a specific meeting or conversation: under 150 words, one ask, referencing a concrete detail from the exchange.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code>, <code>context/people.md</code>, <code>context/pipeline.md</code>, and <code>context/business-info.md</code>, then builds an opener-thread-value-nextstep-close structure with Voss-style labeling (<code>reference/voss-negotiation.md</code>). It returns the draft and a suggested subject line, and auto-logs the interaction to the contact's <code>crm/contacts/</code> file (updating <code>last_touch</code>). It never sends: outbound send is human-gated, and it will not fabricate what was discussed.</p>
+<p><strong>How to use it.</strong> Use for a one-off post-meeting follow-up. For sweeping many overdue contacts use <code>/cold-sweep</code>; for mass event follow-ups the orchestrator runs the post-event pattern.</p>
+<pre><code>/follow-up Jane Doe met at the Acme Corp booth, discussed pilot
+"send a follow-up to Jane Doe after our call"</code></pre>
+<p><strong>Customize.</strong> Voice in <code>reference/misha-voice.md</code>; the 150-word cap, one-ask rule, and sign-off are set in the SKILL.md body. Relationship and deal context from <code>context/people.md</code> and <code>context/pipeline.md</code>.</p>
+</section>
+
+<section class="skill" id="s-ceo-to-ceo">
+<h3><code>/ceo-to-ceo [name] [subject]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts peer-level CEO-to-CEO correspondence in Misha's voice: executive register, relationship-aware, 150-300 words.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code>, <code>context/people.md</code>, <code>context/business-info.md</code>, <code>context/pipeline.md</code>, and validates facts against <code>datastore/INDEX.md</code>. It writes peer-to-peer (not vendor-to-client), proposes a concrete next step, and applies a Voss layer (accusation audit, normative leverage, calibrated next steps). It returns the draft with two subject-line options and one relationship flag. It never auto-sends and never invents shared history; outbound send stays human-gated.</p>
+<p><strong>How to use it.</strong> Use when writing to another company's CEO or founder as a peer. For a non-CEO recipient use <code>/email-draft</code>; for a formal branded letter on letterhead use <code>/corporate-letter</code>.</p>
+<pre><code>/ceo-to-ceo Jane Doe partnership expansion
+"write to the Acme Corp CEO about strategic alignment"</code></pre>
+<p><strong>Customize.</strong> Voice and CEO-to-CEO notes in <code>reference/misha-voice.md</code>; relationship depth in <code>context/people.md</code>. The 150-300 word bound and Voss hooks are set in the SKILL.md.</p>
+</section>
+
+<section class="skill" id="s-corporate-letter">
+<h3><code>/corporate-letter [recipient] [subject]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/documents/{sender-slug}/letter/</code></p>
+<p><strong>What it is.</strong> Produces a branded 31C external letter (PDF + DOCX) from the locked corporate template, with letterhead, signature block, confidentiality footer, and a 31C-LET reference number applied automatically.</p>
+<p><strong>What it does.</strong> Five phases: load <code>reference/corporate-style-guide.md</code> plus the corporate-docs, terminology, voice, and Voss rules; announce the template selection; draft the body (under 350 words, Voss precision, no round-number pricing); present for approval as a hard stop; then render via <code>scripts/render-doctype.py</code> to HTML, PDF, and DOCX under <code>outputs/documents/{sender-slug}/letter/</code>. Reference IDs increment from <code>outputs/documents/_letter-sequence.txt</code>. It never renders or sends without explicit approval and runs a hidden-character scan before reporting.</p>
+<p><strong>How to use it.</strong> Use for formal correspondence to customers, partners, regulators, or investors. For peer CEO correspondence use <code>/ceo-to-ceo</code>; for a commercial offer with pricing use <code>/proposal</code>; for an MOU or LOI use <code>/partnership-doc</code>.</p>
+<pre><code>/corporate-letter Jane Doe letter of introduction
+"write a formal letter to Acme Corp"</code></pre>
+<p><strong>Customize.</strong> Locked template, colors, typography, and signature live in <code>reference/corporate-style-guide.md</code> and the renderer registry (<code>scripts/utils/doctype_renderer.py</code>); the HTML template under <code>datastore/brand/templates/doctypes/letter.html</code>. Template changes require CEO approval.</p>
+</section>
+
+<section class="skill" id="s-telegram">
+<h3><code>/telegram [send|read|search] [contact] [message]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · sends and reads live messages (confirmed before send)</p>
+<p><strong>What it is.</strong> A live Telegram client operating as Misha's personal account over MTProto: send and read messages, check unread, search history, forward, reply, send and download files and media, and list chats and contacts.</p>
+<p><strong>What it does.</strong> Drives <code>.claude/skills/telegram/scripts/telegram_client.py</code> (Telethon) with 15 commands, run from the workspace root. Sent and downloaded files resolve under the data overlay via <code>get_outputs_dir()</code>, not the engine tree. It always confirms with Misha before sending to other people; sending to Saved Messages (<code>me</code>) is safe without confirmation. It never logs the session file, API hash, or auth tokens.</p>
+<p><strong>How to use it.</strong> Use to interact with Telegram as a user. For the VIRAID capture channel use <code>/viraid</code>; not for other messaging platforms or for building Telegram bots.</p>
+<pre><code>/telegram read "@janedoe" --limit 10
+"send a telegram to Jane Doe"</code></pre>
+<p><strong>Customize.</strong> Credentials (<code>TELEGRAM_API_ID</code>, <code>TELEGRAM_API_HASH</code>, <code>TELEGRAM_PHONE</code>) load from <code>.env</code>; the session lives gitignored at <code>.sessions/telegram/telegram.session</code>. Full command reference in <code>references/commands.md</code>.</p>
+</section>
+
+<section class="skill" id="s-tribe-message">
+<h3><code>/tribe-message [topic]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts a 100-250 word internal message to the 31C Tribe in the captain's voice, any day of the week: heading-setting, Navigation-Principle framing, with maritime register where natural.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code>, <code>outputs/operations/workspace/31c-operational-state-model.md</code> (operational vocabulary and Five Core Principles), and <code>context/current-data.md</code>, then drafts using sea-state and heading framing plus a Voss layer that labels the Tribe's state before the ask. It handles updates, policy, milestones, and Crunch Mode declarations, and returns a draft only.</p>
+<p><strong>How to use it.</strong> Use for any internal all-hands or Tribe-wide message. For the recurring Monday cadence message use <code>/tribe-monday</code>; for external content use <code>/linkedin-post</code> or <code>/corporate-letter</code>.</p>
+<pre><code>/tribe-message quarter close and next heading
+"write to the tribe about the pilot milestone"</code></pre>
+<p><strong>Customize.</strong> Voice and Tribe-communications guidance in <code>reference/misha-voice.md</code>; operational vocabulary in the state model. The NEVER list (no "team", no cheerleading, hyphens only) is in the SKILL.md.</p>
+</section>
+
+<section class="skill" id="s-tribe-monday">
+<h3><code>/tribe-monday [week_theme]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts the recurring 150-250 word Monday message to the 31C Tribe: reads the sea state, sets the week's heading, and connects to a Core Principle in the captain's voice.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code>, <code>outputs/operations/workspace/31c-operational-state-model.md</code>, and <code>context/current-data.md</code>, then opens with an honest read of external conditions, states the heading, acknowledges difficulty without drama, and can declare Crunch Mode when flagged. It returns a draft only for review.</p>
+<p><strong>How to use it.</strong> Use specifically for the weekly Monday cadence. For an off-cadence or one-off Tribe message use <code>/tribe-message</code>.</p>
+<pre><code>/tribe-monday focus week on the Acme Corp pilot
+"draft the monday tribe message"</code></pre>
+<p><strong>Customize.</strong> Voice in <code>reference/misha-voice.md</code>; the sea-state/heading structure, 150-250 word bound, and NEVER list are set in the SKILL.md.</p>
+</section>
+
+<section class="skill" id="s-translate">
+<h3><code>/translate [language] [text]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces the translation inline</p>
+<p><strong>What it is.</strong> Translates text between Russian and English (or other languages on request), preserving register, tone, and meaning rather than a literal word-for-word rendering.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code> (especially the Russian Language Notes), auto-detects direction and register (personal, business, formal, or tribe), returns the translation, and flags phrases that needed cultural adaptation. It leaves ODUN.ONE, 31C, DPI+, and proper nouns untranslated, and lets warmth come through more fully in Russian.</p>
+<p><strong>How to use it.</strong> Use to render a passage in the other language in Misha's voice. To draft new content use the relevant content or comms skill instead.</p>
+<pre><code>/translate ru
+"translate this to English"</code></pre>
+<p><strong>Customize.</strong> Voice and Russian-language guidance live in <code>reference/misha-voice.md</code>. The <code>direction</code> and <code>register</code> variables override auto-detection per run.</p>
+</section>
+
+  <h3 class="cat" id="cat-content">Content &amp; design</h3>
+
+<section class="skill" id="s-linkedin-post">
+<h3><code>/linkedin-post [topic]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only draft (does not publish)</p>
+<p><strong>What it is.</strong> Drafts a single LinkedIn post in the operator's authentic voice: a standalone hook, an observation-to-insight arc, and a thought-provoking close (no CTA).</p>
+<p><strong>What it does.</strong> Reads the voice guide, a best-example archive post, and business-positioning context, then validates any specific facts against the datastore before drafting. It produces the post plus two alternative openers, three to five hashtags, a recommended posting time, and a one-line cut suggestion. It is read-only (allowed tool: Read) and never publishes.</p>
+<p><strong>How to use it.</strong> Use for one post. For a multi-post plan across a theme use <code>/linkedin-series</code>; to file a post after publishing use <code>/linkedin-archive</code>.</p>
+<pre><code>/linkedin-post the category we are creating
+"draft a post about data sovereignty"</code></pre>
+<p><strong>Customize.</strong> Voice via <code>reference/misha-voice.md</code>; brand facts via <code>context/business-info.md</code> and <code>datastore/</code>. Length variable (short/medium/long, default medium). Per-exec overrides resolve at Phase 0 through <code>scripts/resolve_customization.py</code> (activation steps, persistent facts, output paths); see <code>config/skill-custom/README.md</code>.</p>
+</section>
+
+<section class="skill" id="s-linkedin-series">
+<h3><code>/linkedin-series [theme]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/content/linkedin/[theme-slug]/</code></p>
+<p><strong>What it is.</strong> Plans a multi-post LinkedIn content series around one theme or strategic moment, in the operator's voice.</p>
+<p><strong>What it does.</strong> Reads the voice guide, an example post, strategy, and current milestones, then produces a series overview, per-post angle/hook/proof-point/hashtags, the narrative arc, and a ready-to-publish draft of Post 1. It keeps an append-only session memory via <code>scripts/memlog.py</code> at <code>outputs/content/linkedin/[theme-slug]/.memlog.md</code> so the plan survives context compaction and resumes across sessions.</p>
+<p><strong>How to use it.</strong> Use to plan several connected posts around a strategic moment. For a single standalone post use <code>/linkedin-post</code>.</p>
+<pre><code>/linkedin-series the DPI category we are creating
+"plan posts for the week"</code></pre>
+<p><strong>Customize.</strong> Variables for post count (default 4), timeframe, and goal. Voice via <code>reference/misha-voice.md</code>; alignment inputs via <code>context/strategy.md</code> and <code>context/current-data.md</code>. The <code>.memlog.md</code> is gitignored working memory, not a deliverable.</p>
+</section>
+
+<section class="skill" id="s-linkedin-archive">
+<h3><code>/linkedin-archive [slug]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>datastore/content/linkedin-archive/</code></p>
+<p><strong>What it is.</strong> Files a just-published LinkedIn piece (article, post, or comment) plus any attached images out of staging and into the typed datastore archive.</p>
+<p><strong>What it does.</strong> Auto-fires on English or Russian "I published it on LinkedIn" phrasing. It resolves content type (from filename/frontmatter or an <code>AskUserQuestion</code> prompt) and any image paths, runs a dry-run via <code>scripts/linkedin-archive.py</code>, shows the plan, then waits for approval before moving files (with optional auto-commit). It moves exactly one piece per invocation and reports the destination folder, file count, and commit hash.</p>
+<p><strong>How to use it.</strong> Use right after publishing to file the content. For drafting a post use <code>/linkedin-post</code>; this skill never drafts.</p>
+<pre><code>/linkedin-archive my-post-slug
+"I published this on LinkedIn"</code></pre>
+<p><strong>Customize.</strong> Flags on the script: <code>--type</code> (post/article/comment), one or more <code>--image &lt;path&gt;</code>, <code>--execute</code>, and <code>--commit</code> for auto-commit. Confirm step is mandatory and cannot be skipped; there is no <code>--undo</code> flag.</p>
+</section>
+
+<section class="skill" id="s-keynote-deck">
+<h3><code>/keynote-deck [event] [topic]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only script (does not render .pptx)</p>
+<p><strong>What it is.</strong> Produces a slide-by-slide presentation script for an event, VIP meeting, or government engagement, each slide carrying a title, key message, content, and speaker notes in the operator's voice.</p>
+<p><strong>What it does.</strong> Reads business, current-data, market, geopolitical, strategy, and voice context, then builds the deck in six phases (opening hook, problem, solution, proof, future, close plus CTA). Slide count follows a duration rule (about 1 minute per slide for technical content, 2 for storytelling). Proof-point figures are pulled live from <code>context/current-data.md</code> rather than hardcoded. It outputs the structure and speaker script only; it does not render the file.</p>
+<p><strong>How to use it.</strong> Use for event and conference speaking decks. For an investor fundraising deck use <code>/investor-pitch</code>; to render slides as a PPTX use <code>/pptx-generator</code>.</p>
+<pre><code>/keynote-deck expo sovereign DPI for telcos
+"prepare a speaking deck for the conference"</code></pre>
+<p><strong>Customize.</strong> Variables for event, audience, topic, duration (drives slide count), and context. Grounding files: <code>context/business-info.md</code>, <code>context/current-data.md</code>, <code>reference/dpi-market-intelligence.md</code>, <code>reference/geopolitical-landscape.md</code>, <code>reference/misha-voice.md</code>.</p>
+</section>
+
+<section class="skill" id="s-image-prompt">
+<h3><code>/image-prompt [content to visualize]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · text only (no image file)</p>
+<p><strong>What it is.</strong> Turns content you just produced (post, article, email, slide copy) into a 50 to 150 word photorealistic text-to-image prompt for Midjourney, DALL-E, or Stable Diffusion.</p>
+<p><strong>What it does.</strong> Reads the preceding text, distills the central idea, extracts visual elements against a content-type-to-visual-language map (maritime, product/technical, sovereignty, etc.), sets the mood, and constructs the prompt. It returns the core theme, the prompt, parameters (16:9, photorealistic, no text), and a Midjourney suffix. Default brand palette: deep blues, teals, warm amber accents. Text only, no image file.</p>
+<p><strong>How to use it.</strong> Use to get a prompt for a visual companion to content. To actually render the image use <code>/flux-image</code>; for full design work (mockups, infographics, logos) use <code>/design</code>.</p>
+<pre><code>/image-prompt visualize the post about navigation and heading
+"generate an image prompt for this article"</code></pre>
+<p><strong>Customize.</strong> Per-platform suffixes in <code>references/platforms.md</code>. The output format (core theme, prompt, parameters, Midjourney suffix) and the never-include list (text, logos, stock clichés, military, dystopian imagery) are fixed by the skill.</p>
+</section>
+
+<section class="skill" id="s-flux-image">
+<h3><code>/flux-image [prompt]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/content/images/</code> (DATA overlay)</p>
+<p><strong>What it is.</strong> Generates real image files on disk from a text prompt via the Replicate API, using Nano Banana 2 (Google DeepMind, default) or FLUX.2 max (Black Forest Labs).</p>
+<p><strong>What it does.</strong> Runs <code>generate_image.py</code>, which loads <code>REPLICATE_API_TOKEN</code> from <code>.env</code> and calls Replicate, saving to the resolved DATA outputs directory. It resolves an absolute output path via <code>get_outputs_dir()</code> so images never land in the engine tree. Under <code>SENSITIVE_MODE</code> (fail-closed default) it strips all project-identifying detail from the prompt before the API call; only the prompt leaves the machine, the file stays local.</p>
+<p><strong>How to use it.</strong> Use when you want an actual picture produced. To craft the prompt only use <code>/image-prompt</code>; for a full multi-asset design pipeline use <code>/design</code>.</p>
+<pre><code>/flux-image a helm at golden hour over open water, 16:9
+"create an image for the announcement"</code></pre>
+<p><strong>Customize.</strong> <code>REPLICATE_API_TOKEN</code> in <code>.env</code>. Script flags: <code>--model banana|flux-max</code>, <code>--aspect-ratio</code> (1:1, 16:9, 21:9, 9:16, and more), <code>--num-outputs 1-4</code>, <code>--format png|jpg|webp</code>, <code>--seed</code>. Model details in <code>references/models.md</code>.</p>
+</section>
+
+<section class="skill" id="s-design">
+<h3><code>/design [type] [brief]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/design/</code> and <code>outputs/content/images/</code></p>
+<p><strong>What it is.</strong> A professional design studio for social graphics, infographics, UI mockups, cards, brochures, logos, and AI imagery, routing each task to the optimal pipeline.</p>
+<p><strong>What it does.</strong> Three pipelines: HTML Studio (free, deterministic layout/text/data work via <code>scripts/design-studio.py render</code> with brand CSS injected), Replicate AI (creative imagery and native SVG vectors via <code>scripts/design-engine.py generate|edit|upscale|remove-bg</code> across models like recraft-v4, flux-2-pro, recraft-v4-svg, ideogram-v3, flux-schnell, kontext), and Document Production (redirects decks to <code>/pptx-generator</code>, PDF from HTML via the design studio). HTML renders save to <code>outputs/design/</code> with source in <code>outputs/design/source/</code>; AI images to <code>outputs/content/images/</code>. Under <code>SENSITIVE_MODE</code> it strips identifying detail from any external prompt.</p>
+<p><strong>How to use it.</strong> Use for any branded visual asset. For a simple one-off image from a prompt use <code>/flux-image</code>; for presentation slides use <code>/pptx-generator</code>.</p>
+<pre><code>/design infographic sovereign DPI adoption by region
+"design a logo concept for the platform"</code></pre>
+<p><strong>Customize.</strong> Brand system in <code>references/brand.css</code> (dark theme, Inter font, accent colors); color source of truth <code>.claude/skills/pptx-generator/brands/31c/brand.json</code>. Per-command model choice and standard dimensions table (LinkedIn, Instagram, A4, and more); model registry in <code>references/models.md</code>. <code>REPLICATE_API_TOKEN</code> in <code>.env</code> for the AI pipeline.</p>
+</section>
+
+<section class="skill" id="s-pptx-generator">
+<h3><code>/pptx-generator [brand] [topic]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/content/decks/{brand}/</code> (DATA overlay)</p>
+<p><strong>What it is.</strong> Generates and edits on-brand presentation slides as PPTX files (PowerPoint, Google Slides, and Keynote compatible), builds square LinkedIn carousels exported to PDF, and manages reusable cookbook layouts.</p>
+<p><strong>What it does.</strong> Built on python-pptx. It reads the brand config (<code>brand.json</code>, <code>config.json</code>) and all cookbook layout frontmatters, presents a written slide plan with variety checks, then generates in batches of 5 slides maximum, validating after each batch (backgrounds set on every slide, no duplicate titles, correct colors) and combining into one final file with part files deleted. Three modes: presentation slides, LinkedIn carousels (1:1 to PDF), and layout CRUD.</p>
+<p><strong>How to use it.</strong> Use for editable branded decks, carousels, or layout work. For non-slide visuals use <code>/design</code>; for a quick markdown-driven internal deck use <code>/marp</code>.</p>
+<pre><code>/pptx-generator 31c sovereign DPI overview
+"create a linkedin carousel about data sovereignty"</code></pre>
+<p><strong>Customize.</strong> Per-brand configs under <code>.claude/skills/pptx-generator/brands/{brand}/</code> (colors as hex without <code>#</code>, fonts, asset paths, output dir, naming); reusable layouts in <code>cookbook/*.py</code> with TOML frontmatter. Reference workflows in <code>references/</code> (layout-guide, generation-workflow, brand-setup, carousel-workflow, layout-crud, technical-reference).</p>
+</section>
+
+<section class="skill" id="s-marp">
+<h3><code>/marp [new &lt;topic&gt; | render &lt;path&gt; | from &lt;path&gt; | watch &lt;path&gt;]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/deliverables/presentations/marp-source/</code></p>
+<p><strong>What it is.</strong> A markdown-driven presentation pipeline that renders branded PDF and HTML (not editable PPTX) from MARP source.</p>
+<p><strong>What it does.</strong> Four subcommands via <code>scripts/marp_render.py</code>: <code>new</code> drafts a full deck from a topic prompt then renders; <code>render</code> renders existing MARP source; <code>from</code> transforms any workspace markdown into slides in-memory (strips frontmatter and wiki-links, inserts slide breaks, auto-adds cover and closing) without mutating the source; <code>watch</code> gives live hot-reload preview. It uses a single-file dual-mode 31C theme with 7 layouts (<code>themes/31c.css.tmpl</code>) and workspace-aware mode defaults per source location. Every render reports hidden-character sanitizer status.</p>
+<p><strong>How to use it.</strong> Use for internal decks, runbooks, state checks, and knowledge renders. For an editable brand-heavy client deck or a LinkedIn carousel use <code>/pptx-generator</code>.</p>
+<pre><code>/marp from context/strategy.md
+"render this as a deck"</code></pre>
+<p><strong>Customize.</strong> Theme template <code>.claude/skills/marp/themes/31c.css.tmpl</code> (7 layouts, per-slide <code>_class</code> directives). Flags: <code>--slides N</code>, <code>--mode dark|light|mixed</code>, <code>--break-at h2|h3|manual</code>, <code>--title</code>/<code>--subtitle</code>, <code>--images png</code>, <code>--pdf-only</code>/<code>--html-only</code>, <code>--output</code>. Frontmatter fields (theme, size, class, footer, classification). Self-test: <code>python3 scripts/marp_render.py --self-test</code>.</p>
+</section>
+
+  <h3 class="cat" id="cat-crm">CRM</h3>
+
+<section class="skill" id="s-crm">
+<h3><code>/crm [add|log|radar|find|update|next] [contact] [details]</code><span class="badge">CRM</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>crm/contacts/</code></p>
+<p><strong>What it is.</strong> The personal relationship CRM: add contacts, log interactions, update records, find people, and surface a health radar of who has gone overdue.</p>
+<p><strong>What it does.</strong> Parses the first argument as the subcommand. <code>radar</code> (default) runs <code>scripts/crm-health.py</code> and presents RED/YELLOW/GREEN contacts by urgency; <code>next</code> runs <code>scripts/crm_next.py</code> to present the top-3 follow-ups as review-ready drafts. <code>add</code> creates an address-book entity plus a relationship record in <code>crm/contacts/</code> and appends to the <code>context/people.md</code> index; <code>log</code>, <code>find</code>, and <code>update</code> operate on those files. It resolves CEO versus exec paths from <code>.workspace-identity.json</code> and, on the CEO workspace only, can stamp Odin <code>relevant_principles</code> when the knowledge brain exists.</p>
+<p><strong>How to use it.</strong> Use to record or query one relationship. To draft nudges for many overdue contacts use <code>/cold-sweep</code>; for the Google address book use <code>/google-contacts</code>.</p>
+<pre><code>/crm add Jane Doe --company "Acme Corp" --email jane@acme.com
+/crm log Jane Doe met at the summit, sending the proposal Monday
+/crm radar
+"check CRM contact health"</code></pre>
+<p><strong>Customize.</strong> Cadence defaults and health thresholds live in <code>crm/config.md</code>. Contact records carry YAML frontmatter (<code>relationship_type</code>, <code>cadence</code>, <code>timezone</code>). Classification rules for new contact files are appended to <code>config/routing-map.yaml</code>. Admin-only company-wide radar reads <code>../31c-crm-central/aggregated/</code>.</p>
+</section>
+
+<section class="skill" id="s-viraid">
+<h3><code>/viraid [action]</code><span class="badge">CRM</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/viraid/</code></p>
+<p><strong>What it is.</strong> A virtual assistant that drains a dedicated Telegram capture channel: it reads new messages, categorizes each (CRM action, calendar, task, research, note), and turns them into approved actions so nothing falls through the cracks.</p>
+<p><strong>What it does.</strong> The default run fetches new channel messages via the Telegram client, categorizes and priority-tags them (P1/P2/P3), enriches with CRM, calendar policy, and pipeline context, then presents proposed actions behind a mandatory STOP gate before executing (writes tasks, logs CRM interactions). State is the DATA-overlay ledger <code>outputs/operations/viraid/state.json</code> and <code>tasks.md</code>. <code>/viraid sweep</code> triages active tasks with aging flags (AGING &gt;3 days, STALE &gt;7 days). Scheduling messages force a mandatory calendar check, and no meeting is created without explicit slot approval.</p>
+<p><strong>How to use it.</strong> Use to process the capture channel or triage its task backlog. For general Telegram messaging use <code>/telegram</code>; for the email inbox use <code>/email-intel</code>.</p>
+<pre><code>/viraid
+/viraid sweep
+"check viraid"</code></pre>
+<p><strong>Customize.</strong> The channel name is not hardcoded: set <code>VIRAID_CHANNEL_NAME</code> in <code>.env</code> (defaults to the built-in channel). Priority classification signals, task aging thresholds, and per-step flow live in the skill's <code>references/</code> files (<code>message-processing.md</code>, <code>sweep-mode.md</code>, <code>edge-cases.md</code>).</p>
+</section>
+
+<section class="skill" id="s-google-contacts">
+<h3><code>/google-contacts [search|add|edit] [name]</code><span class="badge">CRM</span></h3>
+<p class="skill-meta">Auto-routes from natural language · standalone connector, no workspace-file writes (Google-side only)</p>
+<p><strong>What it is.</strong> A standalone connector to Google Contacts via the People API for looking up, adding, editing, listing, and deleting contacts in your Google address book.</p>
+<p><strong>What it does.</strong> Drives <code>scripts/google-contacts.py</code> (a Haiku-model skill) with subcommands <code>search</code>, <code>add</code>, <code>get</code>, <code>edit</code>, <code>list</code>, and <code>delete</code>; all support <code>--json</code>. It authenticates over OAuth (first run opens a browser consent), caches the token, and resolves contacts by resource names like <code>people/c1234567890</code>. This is completely separate from the workspace CRM: it writes only to Google, never to <code>crm/contacts/</code>.</p>
+<p><strong>How to use it.</strong> Use to manage contacts inside Google. For workspace relationship tracking and interaction logs use <code>/crm</code>; not for Exchange or Outlook contacts.</p>
+<pre><code>/google-contacts search "Acme"
+/google-contacts add --name "Jane Doe" --email jane@acme.com --company "Acme Corp"
+"find their number in google contacts"</code></pre>
+<p><strong>Customize.</strong> OAuth setup requires the People API enabled and a Desktop OAuth client saved as <code>.sessions/google/credentials.json</code>; the token caches to <code>.sessions/google/token.json</code> (delete it to re-auth). Add-command flags include <code>--email</code>, <code>--phone</code>, <code>--company</code>, <code>--title</code>, <code>--notes</code>, <code>--address</code>, <code>--url</code>.</p>
+</section>
+
+  <h3 class="cat" id="cat-strategy">Strategy</h3>
+
+<section class="skill" id="s-deep-think">
+<h3><code>/deep-think [problem]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (and engages proactively) · saves strategic sessions to <code>outputs/thinking/</code></p>
+<p><strong>What it is.</strong> A structured sequential reasoning engine that breaks a complex decision into visible, numbered thought steps, surfacing every assumption and ending with a maritime-framed course recommendation.</p>
+<p><strong>What it does.</strong> Runs through named stages (Problem Definition, Assumptions Surfaced, Research/Evidence, Analysis with Path A/B/C branching, Revision, Synthesis, Heading Recommendation) at a depth of quick, standard, or deep. It can optionally pull 2-5 named elicitation methods via <code>scripts/elicit.py</code>. The output closes with a Course, Confidence (HIGH/MEDIUM/LOW), Key risk, and a concrete course correction; strategic standard/deep sessions persist to <code>outputs/thinking/YYYY-MM-DD-[topic].md</code>. It is a thinking layer that feeds <code>/deal-strategy</code>, <code>/create-plan</code>, <code>/meeting-prep</code>, and <code>/investor-pitch</code>.</p>
+<p><strong>How to use it.</strong> Use before generating a deliverable when reasoning quality matters, or let it engage itself on multi-variable, high-stakes problems. For a simple question just answer it; for independent opinions from other models use <code>/council</code>.</p>
+<pre><code>/deep-think enter the new market direct or through a partner, given the tender deadline
+"what are we missing on this pricing call"</code></pre>
+<p><strong>Customize.</strong> <code>depth</code> is <code>quick</code>/<code>standard</code>/<code>deep</code>. Per-exec overrides (default depth, currency, output path) resolve via <code>scripts/resolve_customization.py</code> (layout in <code>config/skill-custom/README.md</code>). Elicitation methods are catalogued in <code>reference/elicitation-methods.md</code>.</p>
+</section>
+
+<section class="skill" id="s-council">
+<h3><code>/council [question] | --critique [draft]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · saves transcript to <code>outputs/operations/council/</code></p>
+<p><strong>What it is.</strong> A second-opinion advisor that consults Gemini, Grok, and Kimi in parallel for independent views on a hard or high-stakes call, presented side-by-side with Claude's own view. The CEO decides, there is no synthesized final answer.</p>
+<p><strong>What it does.</strong> Runs in independent mode (all models see the problem fresh, without Claude's reasoning) or critique mode (all stress-test a draft). It dispatches <code>scripts/gemini-consult.py</code>, <code>scripts/grok-consult.py</code>, and <code>scripts/kimi-consult.py</code> in a single parallel message, distills each verbatim response into a traceable bullet block, adds Claude's independently reached view, then a where-we-agree/disagree paragraph. The transcript persists to <code>outputs/operations/council/</code>, and a final line asks the CEO which answer landed best (recorded via <code>scripts/council-record-verdict.py</code> and aggregated).</p>
+<p><strong>How to use it.</strong> Use for a hard call where cross-model disagreement is itself signal. For Claude reasoning alone use <code>/deep-think</code>; for Claude plus the curated knowledge brain use <code>/odin</code>.</p>
+<pre><code>/council should we sign the Acme Corp reseller deal or stay direct
+/council --critique "draft message text to stress-test"
+"second opinion on this pricing"</code></pre>
+<p><strong>Customize.</strong> Requires <code>GEMINI_API_KEY</code>, <code>XAI_API_KEY</code>, and <code>OLLAMA_API_KEY</code> in <code>.env</code>. Flags: <code>--gemini-only</code>/<code>--grok-only</code>/<code>--kimi-only</code> (run one), <code>--no-gemini</code>/<code>--no-grok</code>/<code>--no-kimi</code> (skip one), per-model <code>--gemini-model</code>/<code>--grok-model</code>/<code>--kimi-model</code>, plus <code>--temperature</code>, <code>--max-tokens</code>, and <code>--no-log</code>.</p>
+</section>
+
+<section class="skill" id="s-deal-strategy">
+<h3><code>/deal-strategy [prospect]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/negotiations/</code></p>
+<p><strong>What it is.</strong> A full deal strategy analysis for a specific prospect: prospect intelligence, competitive positioning, a pricing recommendation, Voss-informed objection handling, and recommended next steps in one briefing.</p>
+<p><strong>What it does.</strong> Reads the business, strategy, DPI market intelligence, growth playbook, and pipeline context files, then works through seven phases (prospect intelligence, competitive analysis, positioning, pricing, Voss objection handling, next steps, brain audit). It keeps an append-only memlog at <code>outputs/negotiations/[prospect]/.memlog.md</code> (via <code>scripts/memlog.py</code>) so work survives a context compaction, and writes the brief to the same directory. On the CEO workspace it can cite Odin principles via <code>scripts/odin-principles.py</code>, and it closes with a <code>/brain-audit</code> footer reporting source freshness and contradictions.</p>
+<p><strong>How to use it.</strong> Use to build the win plan for a specific opportunity. For competitor comparison alone use <code>/competitor-intel</code>; for market intel use <code>/market-brief</code>.</p>
+<pre><code>/deal-strategy Acme Corp
+"how do we win the Acme Corp deal"</code></pre>
+<p><strong>Customize.</strong> Positioning and pricing draw from <code>reference/billion-growth-playbook.md</code> and <code>reference/dpi-market-intelligence.md</code>; competitor profiles and geopolitical context from those and <code>reference/geopolitical-landscape.md</code>. Odin principle citation is brain-gated (CEO workspace only) and skips silently elsewhere.</p>
+</section>
+
+<section class="skill" id="s-investor-pitch">
+<h3><code>/investor-pitch [investor_type]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns deck content (read-only, no file write)</p>
+<p><strong>What it is.</strong> Full investor pitch deck content: the investment narrative arc, a slide-by-slide structure with key messages and speaker notes, and a data appendix, tuned to the investor type.</p>
+<p><strong>What it does.</strong> Reads the business, current-data, strategy, growth-playbook, market-intelligence, geopolitical, and voice context files, then produces three phases: the Problem-to-Ask narrative arc, a 14-slide structure (title, one-sentence key message, bullets, and speaker note per slide), and a supporting data appendix. Investor type (strategic, venture, sovereign fund, angel, corporate VC) tunes the framing. It optionally runs the <code>/editorial-review</code> structural checklist over a long assembled narrative. Output is text content for Misha to adapt and present, not a rendered file.</p>
+<p><strong>How to use it.</strong> Use to prepare materials for an investor meeting or fundraise. For a progress update to existing investors use <code>/investor-update</code>; to render the slides as PPTX use <code>/pptx-generator</code>.</p>
+<pre><code>/investor-pitch venture
+"prepare a fundraising deck for a sovereign fund"</code></pre>
+<p><strong>Customize.</strong> Set <code>investor_type</code>, <code>round_context</code>, <code>audience</code>, and <code>format</code> (<code>deck_outline</code>/<code>full_content</code>/<code>speaker_notes_only</code>, default full content). Narrative and metrics are grounded in <code>reference/billion-growth-playbook.md</code>, the context files, and validated against <code>datastore/INDEX.md</code>.</p>
+</section>
+
+<section class="skill" id="s-investor-update">
+<h3><code>/investor-update [period]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a ready-to-send update (read-only, no file write)</p>
+<p><strong>What it is.</strong> A progress update for existing investors, quarterly or milestone-triggered: an opening captain's note, a key-metrics table, milestones (said versus did), wins, honest challenges, next-90-days commitments, and any specific ask.</p>
+<p><strong>What it does.</strong> Reads <code>context/current-data.md</code>, <code>context/pipeline.md</code>, <code>context/people.md</code>, the growth playbook, and the voice guide, then drafts a 1-2 page update in Misha's voice against the locked structure (subject line with headline, opening, metrics table, milestones, what's working, what's challenging, next 90 days, ask, closing). Specific facts are validated against <code>datastore/INDEX.md</code>.</p>
+<p><strong>How to use it.</strong> Use for a recurring update to people already invested. For a first pitch to new investors use <code>/investor-pitch</code>; for a formal diligence package use <code>/data-room</code>.</p>
+<pre><code>/investor-update "Q2 2026"
+"draft the board update for this quarter"</code></pre>
+<p><strong>Customize.</strong> Set <code>period</code>, <code>investor</code>, <code>highlights</code>, <code>challenges</code>, and <code>ask</code> (leave blank if none). Metrics that matter for the valuation story come from <code>reference/billion-growth-playbook.md</code>; voice from <code>reference/misha-voice.md</code>.</p>
+</section>
+
+<section class="skill" id="s-voss">
+<h3><code>/voss [counterpart] [situation]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/negotiations/</code></p>
+<p><strong>What it is.</strong> A tactical negotiation and conversation coaching engine based on Christopher Voss's FBI methodology: it produces a situation-specific playbook for a high-stakes conversation.</p>
+<p><strong>What it does.</strong> Reads the Voss reference, voice guide, people, and pipeline files (plus the counterpart's CRM file if one exists), then builds five phases: intelligence and profiling (negotiator type, power dynamics), an accusation audit with preemptive labels, 8-12 calibrated questions, a tactical playbook (mirroring map, labeling scripts, "That's Right" pathway, Black Swan hypotheses, Ackerman plan), and scenario mapping. It saves the playbook to <code>outputs/negotiations/YYYY-MM-DD-{counterpart}.md</code> and logs a Note to the counterpart's CRM file if present.</p>
+<p><strong>How to use it.</strong> Use for deep per-conversation prep before a negotiation, difficult talk, or sensitive call. Note the Voss principles also run always-on across all outbound comms via the voss rule; this skill is the dedicated deep prep.</p>
+<pre><code>/voss Jane Doe (Acme Corp) renewal price pushback
+"prepare me for this difficult conversation"</code></pre>
+<p><strong>Customize.</strong> Set <code>counterpart</code>, <code>situation</code>, <code>goal</code>, and optional <code>tension</code>. The full methodology (Ackerman Model, tactical phrases) lives in <code>reference/voss-negotiation.md</code>; playbook language matches <code>reference/misha-voice.md</code>. Non-round numbers are enforced in any pricing.</p>
+</section>
+
+<section class="skill" id="s-state-check">
+<h3><code>/state-check [function]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a one-page assessment (read-only, no file write)</p>
+<p><strong>What it is.</strong> A diagnostic assessment of one workspace function or the whole system, run as a 15-minute State Check in the Navigation Principle sense: operational state, drift, and course corrections rather than rigid pass/fail targets.</p>
+<p><strong>What it does.</strong> Reads the operational-state-model, the state-check guide, current-data, and pipeline, then answers the four State Check questions (Sea State, Current State, Heading Check, Course Corrections) for the chosen function (sales, product, partnerships, tribe, research, or company-wide). Output is one page max: current state in a sentence, an on-heading / slight-drift / significant-drift verdict, a sea-state summary, up to three behavioral course corrections, and the next check timing.</p>
+<p><strong>How to use it.</strong> Use to diagnose whether a function is holding its operational state. For the morning briefing use <code>/dashboard</code>, for the full context load use <code>/prime</code>, for the end-of-week review use <code>/weekly-review</code>.</p>
+<pre><code>/state-check sales
+"how are we doing on partnerships"</code></pre>
+<p><strong>Customize.</strong> Set <code>function</code> and optional situational <code>context</code>. The operational states per function are defined in <code>outputs/operations/workspace/31c-operational-state-model.md</code>; the four-question format in <code>reference/state-check-guide.md</code>.</p>
+</section>
+
+<section class="skill" id="s-meeting-prep">
+<h3><code>/meeting-prep [with] [purpose]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/meeting-prep/</code></p>
+<p><strong>What it is.</strong> A deep pre-meeting brief on a named external counterpart: relationship history, their world right now, our objective, talking points, anticipated questions, competitive context, meeting flow, and a Voss tactical-empathy plan.</p>
+<p><strong>What it does.</strong> Reads people, pipeline, strategy, and business context, searches the web (with domain filtering and <code>scripts/firecrawl.py</code> for recent counterpart news), and consumes any existing <code>/osint</code> case file at <code>outputs/intel/cases/</code> read-only, carrying its evidence grades into the brief. It produces a nine-section briefing in Markdown, HTML, and PDF (via <code>scripts/html-to-pdf.py</code>) under <code>outputs/operations/meeting-prep/</code>, appends a <code>/brain-audit</code> footer, and logs a Note to the counterpart's CRM file. On the CEO workspace it also cites brain-gated Odin principles. A deep multi-signal request escalates to the orchestrator's parallel Deep Meeting Prep pattern (osint + voss + CRM + comms scout).</p>
+<p><strong>How to use it.</strong> Use before a meeting with a named external person and/or company. For raw recon on a target use <code>/osint</code>; for a full win plan on a deal use <code>/deal-strategy</code>.</p>
+<pre><code>/meeting-prep Jane Doe (Acme Corp) partnership discussion
+"prepare for meeting with the Acme Corp CTO"</code></pre>
+<p><strong>Customize.</strong> Set <code>with</code>, <code>purpose</code>, <code>date</code>, <code>format</code> (in-person/video/phone), and <code>context</code>. Web-search filtering uses <code>reference/search-domains.md</code>; the Voss section draws on <code>reference/voss-negotiation.md</code>; Odin-principle citation is brain-gated to the CEO workspace and skips silently elsewhere.</p>
+</section>
+
+<section class="skill" id="s-proposal">
+<h3><code>/proposal [type] [recipient]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (locked corporate doctype, changes require CEO approval) · writes to <code>outputs/documents/{sender}/proposal/</code></p>
+<p><strong>What it is.</strong> Produces a branded 31C commercial proposal (PDF + DOCX) for a sales, partnership, channel, or government deal from the locked corporate template.</p>
+<p><strong>What it does.</strong> Loads the brand stack (<code>reference/corporate-style-guide.md</code>, terminology, voice, Voss rules) and drafts a four-page deliverable: dark cover, executive opening plus opportunity, solution plus proof, commercial terms plus next steps, with Voss-precise pricing (no round numbers). After an approval gate it assembles a JSON payload and renders through <code>scripts/render-doctype.py --type proposal</code> to PDF and DOCX, then runs the hidden-character scan before reporting.</p>
+<p><strong>How to use it.</strong> Use it for a commercial offer with pricing; for an MOU, LOI, or term sheet use <code>/partnership-doc</code>, for a formal letter without pricing use <code>/corporate-letter</code>, and for a tender use <code>/rfp-response</code>.</p>
+<pre><code>/proposal partnership Acme Corp
+"write a commercial proposal for Northgate Capital"</code></pre>
+<p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/proposal.html</code>; brand rules in <code>reference/corporate-style-guide.md</code>; pricing bundles in <code>reference/billion-growth-playbook.md</code>; render output via the <code>--out</code> flag on <code>render-doctype.py</code>. Reference numbering (<code>31C-PROP-{YYYY}-{NNNN}</code>) counts from <code>outputs/documents/_proposal-sequence.txt</code>. Template changes require CEO approval.</p>
+</section>
+
+<section class="skill" id="s-partnership-doc">
+<h3><code>/partnership-doc [subtype] [counterparty]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (locked corporate doctype, changes require CEO approval) · writes to <code>outputs/documents/{sender}/partnership/</code></p>
+<p><strong>What it is.</strong> Produces a locked 31C partnership document (MOU, Letter of Intent, term sheet, or partnership agreement) defining mutual obligations, territory, exclusivity, governance, and confidentiality.</p>
+<p><strong>What it does.</strong> Loads the brand and guardrail stack, then drafts in a neutral legal-adjacent voice (no Voss moves inside the executed text) with a default clause set: territory, exclusivity, commercial terms, training, marketing, data sovereignty. After an approval gate it renders via <code>scripts/render-doctype.py --type partnership</code> to PDF and DOCX, runs the hidden-character scan, and appends a counsel-review reminder to every output.</p>
+<p><strong>How to use it.</strong> Use it for a legal-adjacent collaboration framework with mutual obligations; for a commercial offer with pricing and module activation use <code>/proposal</code>, and for a formal letter use <code>/corporate-letter</code>.</p>
+<pre><code>/partnership-doc MOU Acme Corp
+"draft an LOI with Northgate Capital"</code></pre>
+<p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/partnership.html</code>; brand rules in <code>reference/corporate-style-guide.md</code>. Reference numbering (<code>31C-{MOU|LOI|TS|PA}-{YYYY}-{NNNN}</code>) counts from <code>outputs/documents/_partnership-sequence.txt</code>. Template changes require CEO approval.</p>
+</section>
+
+<section class="skill" id="s-official-doc">
+<h3><code>/official-doc [class] [subject]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (locked corporate doctype, changes require CEO approval) · writes to <code>outputs/documents/{sender}/official/</code></p>
+<p><strong>What it is.</strong> Produces a 31C official document issued under corporate authority: board resolution, formal notice, letter of position, certificate of authority, or corporate directive.</p>
+<p><strong>What it does.</strong> Loads the brand and guardrail stack, then drafts in a declarative authoritative voice (third-person for the entity, "Whereas / Now, therefore, resolved" for resolutions, no marketing or Tribe vocabulary). After an approval gate it renders via <code>scripts/render-doctype.py --type official</code> to PDF and DOCX with a locked header, reference number, and seal block, then runs the hidden-character scan and a counsel-countersign reminder.</p>
+<p><strong>How to use it.</strong> Use it for documents issued under corporate authority; for an external partner letter use <code>/corporate-letter</code>, for a priced proposal use <code>/proposal</code>, and for an MOU or term sheet use <code>/partnership-doc</code>.</p>
+<pre><code>/official-doc "Board Resolution" appointment of authorized signatory
+"draft a formal notice to Acme Corp"</code></pre>
+<p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/official.html</code>; brand rules in <code>reference/corporate-style-guide.md</code>. Reference numbering (<code>31C-{BR|FN|LP|CA|CD}-{YYYY}-{QN}-{NNN}</code>) counts per class-code-year-quarter from <code>outputs/documents/_official-sequence.txt</code>. Template changes require CEO approval.</p>
+</section>
+
+<section class="skill" id="s-xpager">
+<h3><code>/xpager [product] [audience]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (locked corporate doctype, changes require CEO approval) · writes to <code>outputs/documents/{sender}/xpager/</code></p>
+<p><strong>What it is.</strong> Produces a three-page branded 31C OnePager (xPager): a dark full-bleed cover with the ODUN.ONE wordmark, a capability-card page, and a proof/contact page.</p>
+<p><strong>What it does.</strong> Loads the brand and guardrail stack, then drafts a cover tagline (under 180 characters), exactly four Voss-precise stats, four to six capability cards, and four proof cards. After an approval gate it renders via <code>scripts/render-doctype.py --type xpager</code> to PDF and HTML (both deliverables), reusing the white logo from <code>datastore/brand/assets/logos/</code> rather than rebuilding it, then runs the hidden-character scan.</p>
+<p><strong>How to use it.</strong> Use it for a single concise branded summary of a product or module; for a multi-page client deck use <code>/pptx-generator</code>, and for a priced commercial proposal use <code>/proposal</code>.</p>
+<pre><code>/xpager ODUN.ONE regulator
+"make a one-pager capability sheet for Acme Corp"</code></pre>
+<p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/xpager.html</code>; brand rules and the xPager checklist in <code>reference/corporate-style-guide.md</code>; the <code>--formats</code> flag on <code>render-doctype.py</code> controls the render set (PDF plus HTML here). Template changes require CEO approval.</p>
+</section>
+
+<section class="skill" id="s-rfp-response">
+<h3><code>/rfp-response [client]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a structured draft for review (read-only skill, no render pipeline)</p>
+<p><strong>What it is.</strong> Produces a structured response to a formal Request for Proposals or government tender, mapping stated requirements to ODUN.ONE capabilities.</p>
+<p><strong>What it does.</strong> Grounds claims in <code>context/business-info.md</code>, the market-intelligence and growth-playbook references, and the DataStore, then drafts six sections: requirements analysis, executive summary, technical response, company credentials, commercial proposal, and a compliance matrix. An optional structural pass via <code>/editorial-review</code> checks the argument arc before the CEO reviews and approves prior to submission.</p>
+<p><strong>How to use it.</strong> Use it for a formal RFP, ITT, or procurement bid; for an informal commercial proposal with pricing use <code>/proposal</code>, and for an MOU or term sheet use <code>/partnership-doc</code>.</p>
+<pre><code>/rfp-response Acme Corp
+"respond to this government tender"</code></pre>
+<p><strong>Customize.</strong> No locked render template: this skill drafts structured markdown for review. Grounding sources are <code>context/business-info.md</code>, <code>reference/dpi-market-intelligence.md</code>, <code>reference/billion-growth-playbook.md</code>, and <code>context/strategy.md</code>; paste the RFP requirements inline when invoking.</p>
+</section>
+
+<section class="skill" id="s-data-room">
+<h3><code>/data-room [type] [investor_type]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a drafted document for review (read-only skill, no render pipeline)</p>
+<p><strong>What it is.</strong> Prepares investor data room material, due diligence responses, and fundraising documents in Misha's voice.</p>
+<p><strong>What it does.</strong> Reads the context stack (<code>business-info</code>, <code>current-data</code>, <code>strategy</code>, <code>pipeline</code>) plus the growth playbook and market intelligence, validating specific facts against the datastore, then drafts one of several document types: company overview, financial summary, market analysis, team overview, technology brief, competitive landscape, a due-diligence question response, or a full-room table of contents. An optional <code>/editorial-review</code> structural pass runs before finalizing.</p>
+<p><strong>How to use it.</strong> Use it when preparing for investor conversations or answering diligence questions; for a live pitch deck use <code>/investor-pitch</code>, and for a recurring progress note to existing investors use <code>/investor-update</code>.</p>
+<pre><code>/data-room dd-response vc
+"prepare due diligence materials for Northgate Capital"</code></pre>
+<p><strong>Customize.</strong> No locked template: output is drafted markdown. The <code>type</code> argument selects the document (overview, financial-summary, market-analysis, team-overview, technology-brief, competitive-landscape, dd-response, full-room) and <code>investor_type</code> tunes the framing (strategic, vc, sovereign, pe). Grounding sources are the <code>context/</code> files, <code>reference/billion-growth-playbook.md</code>, and <code>datastore/INDEX.md</code>.</p>
+</section>
+
+<section class="skill" id="s-odin">
+<h3><code>/odin [mode] [source or question]</code><span class="badge">Strategy 🔒</span></h3>
+<p class="skill-meta">Auto-routes on "Odin" as a name or address (CEO-only, never synced) · writes to <code>knowledge/odin-brain/</code></p>
+<p><strong>What it is.</strong> A persistent AI advisor with a curated, CEO-only knowledge brain that ingests books, articles, and videos, builds principles and positions, and gives referenced first-person advice with a mandatory Challenge section.</p>
+<p><strong>What it does.</strong> Runs nine modes: learn (ingest a source and extract principles), consult (default, brain-grounded advice), recall, reflect, teach, log (record a dated episode), collect (scan business threads for episodes), compile (lint the brain plus ZK), and skill-proposal. All writes land only in the <code>knowledge/odin-brain/</code> brain; after any write it refreshes <code>INDEX.md</code> and rebuilds the associative memory index (<code>scripts/memory-index.py build</code>) so new notes are recallable, then runs the hidden-character scan.</p>
+<p><strong>How to use it.</strong> Use it to advise from or grow the curated brain, or to log episodes; for structured reasoning without the brain use <code>/deep-think</code>, and for a generic note use <code>/zk</code>. Do not trigger on "odin" as the Russian numeral "one".</p>
+<pre><code>/odin consult should we sign an exclusive channel deal in this region
+"ask Odin what he thinks about the pricing shift"</code></pre>
+<p><strong>Customize.</strong> Brain lives entirely under <code>knowledge/odin-brain/</code> (sources, principles, positions, episodes, conflicts), with mode pipelines in <code>references/mode-catalog.md</code> and file templates in <code>references/templates.md</code>. The index rebuild depends on a local ollama <code>bge-m3</code> model; the cadence-nudge Telegram target is set via the engine <code>.env</code> key <code>ODIN_CADENCE_TELEGRAM_TARGET</code>. CEO-only, never published to corporate or execs.</p>
+</section>
+
+<section class="skill" id="s-recall">
+<h3><code>/recall &lt;what to recall&gt; [--collection content|code|all] [--layer NAME]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (CEO-only, never synced) · read-only, cites file paths (no writes, no sends)</p>
+<p><strong>What it is.</strong> Workspace-wide semantic recall: finds past decisions, briefs, contacts, and notes by meaning across the whole workspace, then answers only from retrieved sources with path citations or says "not in memory".</p>
+<p><strong>What it does.</strong> Refreshes the local associative-memory index incrementally (<code>scripts/memory-index.py build</code>, ollama <code>bge-m3</code> hybrid dense plus BM25, on-machine, zero API cost), queries it with <code>--json</code> across the Odin brain, threads, CRM, LinkedIn, context, reference, plans, outputs, knowledge, and datastore extracts, then reads the top cited files and composes a cited answer. On a threshold gap it reports the gap plainly rather than guessing; it structurally air-gaps the vault and personal-thread branch.</p>
+<p><strong>How to use it.</strong> Use it to surface something the workspace already knows by meaning; for Odin-brain-only advice use <code>/odin recall</code>, for external intel use <code>/osint</code>, to capture a new note use <code>/zk</code>, and for exact-string search use Grep.</p>
+<pre><code>/recall where did we land on the Acme Corp pricing --collection content
+"have we touched Northgate Capital before"</code></pre>
+<p><strong>Customize.</strong> The <code>--collection</code> flag switches between <code>content</code> (default, what we know or decided), <code>code</code> (skills and rules), or <code>all</code>; <code>--layer NAME</code> pins one source layer (for example <code>odin</code>, <code>thread</code>, <code>crm</code>, <code>context</code>, <code>outputs</code>). The engine (<code>scripts/memory-index.py</code>) is cross-lingual RU/EN and runs entirely local. CEO-only, never synced to executives.</p>
+</section>
+
+  <h3 class="cat" id="cat-ops-daily">Operations: daily drivers</h3>
+
+<section class="skill" id="s-prime">
+<h3><code>/prime</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (loads context, spawns daemons if dead)</p>
+<p><strong>What it is.</strong> Session initializer: loads full workspace context, runs a parallel health block, surfaces priorities, and recommends the day's skills.</p>
+<p><strong>What it does.</strong> Reads the context files in order (personal, business, strategy, current data, people, pipeline, workspace index, datastore index), then runs seven read-only health checks in parallel via <code>scripts/prime-health-parallel.py</code> (CRM, knowledge, memory, email-intel state, threads archive-scan, Fireside daemon, Sync-Exchange daemon). If the Fireside or Sync-Exchange daemon is dead the health block spawns a detached one. It renders an Active Threads panel from <code>MEMORY.md</code>, flags sync files older than 48 hours as SYNC STALE, and defers the skill catalog to the router rather than duplicating it.</p>
+<p><strong>How to use it.</strong> Run once at the start of every working session. Mid-session, use <code>/next</code> for the logical next step, <code>/dashboard</code> for the morning briefing alone, or <code>/state-check</code> for function-by-function health.</p>
+<pre><code>/prime
+(no arguments; slash-command only, cannot be triggered from natural language)</code></pre>
+<p><strong>Customize.</strong> Reads <code>.workspace-identity.json</code> to branch CEO versus exec paths (flat versus <code>corporate/</code> + <code>personal/</code>); <code>disable-model-invocation: true</code> in frontmatter. On exec workspaces it prepends a setup-wizard completion line when <code>completion_pct &lt; 100</code>.</p>
+</section>
+
+<section class="skill" id="s-dashboard">
+<h3><code>/dashboard</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/dashboard/YYYY-MM-DD/</code></p>
+<p><strong>What it is.</strong> Generates the daily CEO Morning Dashboard: a single-page HTML and PDF briefing aggregating CRM health, pipeline, calendar, email, strategy, and data freshness.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/generate-dashboard.py --pdf</code>, which reads all workspace data sources (CRM health via <code>scripts/crm-health.py --json</code>, pipeline, calendar and email sync files, strategy, metrics) and writes <code>morning-dashboard.html</code> plus <code>.pdf</code>. It then validates hidden characters with <code>scripts/sanitize-text.py</code> and reports urgent-item count, today's meetings, and a pipeline snapshot. An optional live sea-state enrichment runs a quick WebSearch when requested.</p>
+<p><strong>How to use it.</strong> Use for the morning operational briefing. For a full context load at session start use <code>/prime</code>; for the logical next action use <code>/next</code>; for the end-of-week review use <code>/weekly-review</code>.</p>
+<pre><code>/dashboard
+"give me the morning brief"</code></pre>
+<p><strong>Customize.</strong> The <code>--pdf</code> flag on the backing script; branding is 31C corporate (GT Standard fonts and logos from <code>datastore/brand/</code>, with an explicit surfaced warning if they fail to embed rather than a silent Inter fallback). An R10 Capture Payoff panel auto-hides on any workspace with no Odin brain.</p>
+</section>
+
+<section class="skill" id="s-next">
+<h3><code>/next [area]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (recommends commands, never runs them)</p>
+<p><strong>What it is.</strong> State-aware "what's next" recommender: reads what just happened and names the logical next step plus the exact slash-command to run.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/next-signal.py --json</code> to build a ranked recent-actions list from four sources (the session handoff pointer, newest <code>outputs/</code> files, recent git log subjects, active business threads), then maps each action to its producing skill via <code>scripts/skill_graph.py</code> and looks up its follow-on edges. It emits 2 to 4 ranked one-line recommendations, or nothing when no edge is strong enough. Strictly read-only: it names the command but never invokes it, and it reads business threads only (personal threads stay out of the signal).</p>
+<p><strong>How to use it.</strong> Use at a mid-session lull or "where were we". Do NOT use for a full context load at session start (<code>/prime</code>), function-health diagnosis (<code>/state-check</code>), the daily briefing (<code>/dashboard</code>), or the end-of-week review (<code>/weekly-review</code>).</p>
+<pre><code>/next deals
+"what should I do now?"</code></pre>
+<p><strong>Customize.</strong> Optional area argument (for example <code>deals</code> or <code>content</code>) to scope the recommendation. Both backing scripts run standalone from terminal or chat, no daemon or browser.</p>
+</section>
+
+<section class="skill" id="s-radar">
+<h3><code>/radar [ack &lt;key&gt; | crunch on|off]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/ops-radar/</code></p>
+<p><strong>What it is.</strong> Manual-actions and silent-health detector: surfaces which high-consequence manual actions are objectively overdue and which machine states have degraded. A detector, never an executor.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/ops-radar.py</code>, which computes every signal, applies ack and crunch suppression, and prints a detailed due-items view (or "all clear"). Tier A machine states (ollama down, memory-index stale) self-heal on the timer; Tier B manual actions (backup, publish, weekly-review, cold-sweep, Odin collect/reflect) only nudge when objectively overdue, and for each due item the skill names the one command that clears it. It never sends, commits, publishes, or runs a manual action; a daily timer pushes the same counts-only line to Telegram.</p>
+<p><strong>How to use it.</strong> Use to see what is overdue or to ack/crunch. Do NOT use for a full morning brief (<code>/dashboard</code> or <code>/prime</code>), naming the single next action (<code>/next</code>), or function-by-function health (<code>/state-check</code>); the radar FEEDS those.</p>
+<pre><code>/radar ack backup --ttl 24h
+"what am I forgetting to run?"</code></pre>
+<p><strong>Customize.</strong> <code>ack &lt;key&gt;</code> silences one signal until its TTL (<code>--ttl 24h|7d</code>) or until severity worsens; valid keys include <code>backup</code>, <code>publish</code>, <code>weekly_review</code>, <code>cold_sweep</code>, <code>odin_cadence</code>, <code>ollama</code>, <code>memory_index</code>. <code>crunch on|off</code> toggles the critical-floor-only posture.</p>
+</section>
+
+<section class="skill" id="s-queue">
+<h3><code>/queue [list | show &lt;id&gt; | approve &lt;id&gt; | edit &lt;id&gt; | dismiss &lt;id&gt; | retry &lt;id&gt;]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/action-queue/</code></p>
+<p><strong>What it is.</strong> The terminal-native Action Queue: the one lane where proactive agents (cold-sweep, email-intel, viraid) deposit drafted actions for the CEO's go/no-go.</p>
+<p><strong>What it does.</strong> Drives <code>scripts/action-queue.py</code> entirely in-process, daemon-free and browser-free. <code>list</code> and <code>show</code> are read-only; <code>edit</code> rewrites a draft (flipping it to <code>ready_for_review</code>); <code>dismiss</code> suppresses re-proposal for 14 days; <code>retry</code> re-sends a failed card. Critically, <code>approve</code> SENDS the card synchronously in the same command and prints the outcome: this typed approve is the explicit human approval click that the lethal-trifecta and console-first rules require. It refuses any <code>email_send</code> card that does not resolve <code>gated</code>, and nothing is ever auto-sent.</p>
+<p><strong>How to use it.</strong> Use to clear the pending-draft backlog. Do NOT use to see what is overdue workspace-wide (<code>/radar</code>), to draft cold nudges (<code>/cold-sweep</code>), or for inbox triage (<code>/email-intel</code>); this is the approve/send surface those skills feed.</p>
+<pre><code>/queue approve a1b2
+"show my drafts"</code></pre>
+<p><strong>Customize.</strong> One approve per explicit instruction ("approve the first one" means only the first). Edit takes <code>--subject</code> and <code>--body-file</code>; dismiss takes <code>--reason</code>. All mutations must go through <code>scripts/action-queue.py</code>, never <code>queue.json</code> directly.</p>
+</section>
+
+<section class="skill" id="s-weekly-review">
+<h3><code>/weekly-review [week date]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/reviews/</code></p>
+<p><strong>What it is.</strong> The CEO weekly review: sea state, heading, pipeline movement, Tribe state, content cadence, top-3 priorities, and course corrections, with week-over-week continuity.</p>
+<p><strong>What it does.</strong> Phase 0 finds the most recent prior review and grades last week's priorities and course corrections against observable signals. Phase 1 loads context and pipeline files; Phase 2 analyzes deal movement (advances, stalls beyond 14 days, wins/losses, weighted value), content cadence against 3 posts and 1 newsletter per week, and context freshness. Phase 3 writes the 2-to-3-page review to <code>outputs/operations/reviews/YYYY-MM-DD-weekly-review.md</code>. On the CEO workspace it optionally surfaces ripe Odin reflection clusters, gated on explicit go-ahead.</p>
+<p><strong>How to use it.</strong> Use at the end of the week (Friday) or start of the next. For a single function's health use <code>/state-check</code>; for the daily briefing use <code>/dashboard</code>.</p>
+<pre><code>/weekly-review 2026-06-27
+"friday review"</code></pre>
+<p><strong>Customize.</strong> Optional week-date argument sets the review week and output filename. Weighting bands (Discovery 10 percent through Closed-Won 100 percent) and cadence targets live in the skill body. The Odin reflection phase is a provable no-op on any workspace without an <code>knowledge/odin-brain/</code> directory.</p>
+</section>
+
+<section class="skill" id="s-dream">
+<h3><code>/dream [focus area]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to the auto-memory directory + <code>MEMORY.md</code></p>
+<p><strong>What it is.</strong> Reflective memory consolidation: a periodic pass that merges recent learnings into durable, well-organized memory files for future sessions.</p>
+<p><strong>What it does.</strong> Orients over existing memory files and <code>MEMORY.md</code>, gathers recent signal from git log and business/pipeline state, validates technical claims against Context7 (<code>scripts/context7.py</code>), and passes a mandatory security gate before any write. It then merges (never duplicates), converts relative dates to absolute, prunes superseded files, keeps <code>MEMORY.md</code> under its 200-line budget, and produces a consolidation report. It leaves sections marked <code>&lt;!-- managed-by: ... --&gt;</code> (like Active Threads) untouched.</p>
+<p><strong>How to use it.</strong> Use at the end of a productive session or for periodic memory hygiene. For a simple one-off memory write use the auto-memory system; for knowledge-base notes use <code>/zk</code>; for session-resume snapshots use <code>/checkpoint</code>. To only detect defects without mutating, use <code>/memory-hygiene</code>.</p>
+<pre><code>/dream deployment
+"consolidate memories"</code></pre>
+<p><strong>Customize.</strong> Optional focus-area argument scopes targeted transcript investigation; <code>disable-model-invocation: true</code> in frontmatter. If either security rules file is missing the pass stops before Phase 2, incomplete but safe.</p>
+</section>
+
+<section class="skill" id="s-memory-hygiene">
+<h3><code>/memory-hygiene</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/memory-hygiene/</code></p>
+<p><strong>What it is.</strong> Objective-defect detector for the memory ecosystem (auto-memory plus Odin brain): flags only mechanically-verifiable rot, never mutating memory.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/memory-hygiene.py</code>, which reads the auto-memory directory and runs <code>odin-brain-health.py --compile</code>, then writes a dated report and exits non-zero when objective defects are present. The gate covers dangling or circular <code>superseded_by</code> refs, orphan memory files not linked from <code>MEMORY.md</code>, and an over-budget <code>MEMORY.md</code>; advisory (non-gating) signals include stale files older than 45 days and Odin stale seeds. If the brain is unavailable the script degrades clearly and still reports the auto-memory half.</p>
+<p><strong>How to use it.</strong> Use to check whether memory has accumulated objective rot, on demand or weekly. Do NOT use to consolidate, merge, or reword (that is judgement, use <code>/dream</code>), to recall a fact (<code>/recall</code>), or for operational function health (<code>/state-check</code>).</p>
+<pre><code>/memory-hygiene
+"scan memory for defects"</code></pre>
+<p><strong>Customize.</strong> No flags; detector only. Resolution is handed to <code>/dream</code> with the specific defects as a worklist.</p>
+</section>
+
+<section class="skill" id="s-sentinel">
+<h3><code>/sentinel [start|stop|status|logs|config]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>.sentinel/</code> (daemon state)</p>
+<p><strong>What it is.</strong> Manages the Sentinel background daemon that monitors corporate email (Exchange) and Telegram for urgent messages and evaluates meeting invites against the CEO Calendar Policy.</p>
+<p><strong>What it does.</strong> Drives <code>scripts/sentinel.py</code> to start (foreground or <code>--daemon</code>), stop (<code>--stop</code>), check <code>--status</code>, run a single dry-run cycle (<code>--test</code>), or view logs (<code>tail .sentinel/sentinel.log</code>); the default action starts the daemon if not already running and shows status. The daemon scores email urgency via the Claude API, recommends CEO actions, and can auto-accept or auto-decline policy-compliant invites while escalating VIP/external senders to Telegram. Runtime state lives in <code>.sentinel/state.json</code>, <code>.sentinel/sentinel.log</code>, and <code>.sentinel/sentinel.pid</code>.</p>
+<p><strong>How to use it.</strong> Use to start, stop, or check the comms-monitoring daemon. For a one-off inbox triage use <code>/email-intel</code>; for ad-hoc Telegram use <code>/telegram</code>.</p>
+<pre><code>/sentinel status
+"is the comms monitor running?"</code></pre>
+<p><strong>Customize.</strong> Config at <code>&lt;data-root&gt;/config/sentinel_config.yaml</code> (engine fallback <code>scripts/sentinel_config.example.yaml</code>): <code>check_interval_minutes</code> (default 15), <code>urgency_threshold</code> (default 7 on a 1-10 scale), <code>vip_senders</code>, <code>monitored_chats</code>, <code>notification.target_chat</code>, digest times, and calendar auto-accept/decline policy. Prerequisites: <code>ANTHROPIC_API_KEY</code>, an authenticated Telegram session, and Exchange credentials in <code>.env</code>. <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-bridge-health">
+<h3><code>/bridge-health [--stale SECONDS] [--gate] [--json]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (never mutates state)</p>
+<p><strong>What it is.</strong> Read-only rollup health check on the bridge daemon fleet: heartbeat staleness, version drift, config drift, active sessions, and the optional Phase 1 to Phase 2 adoption-gate verdict.</p>
+<p><strong>What it does.</strong> Wraps two scripts. First it runs the local liveness probe <code>scripts/bridge-daemon.py --health</code> (pretty-printing the <code>/health</code> JSON, falling back to on-disk heartbeat if the HTTP probe fails). Then it runs <code>scripts/daemon-fleet-health.py</code> for a per-workspace status grid (ok/stale/version-mismatch/config-drift/error/missing) with a rollup summary line. With <code>--gate</code> it curls the daemon's <code>/telemetry/summary</code> endpoint and labels the four adoption metrics PASS/BELOW. It ends with a one-line verdict and per-status remedies.</p>
+<p><strong>How to use it.</strong> Use when the dashboard feels stale, the sync-pill is amber or red, the daemon may have crashed, or before a <code>/push-updates</code> that changes daemon config. For a single-machine liveness probe run <code>scripts/bridge-daemon.py --health</code> directly.</p>
+<pre><code>/bridge-health --gate
+/bridge-health --stale 60 --json</code></pre>
+<p><strong>Customize.</strong> <code>--stale SECONDS</code> sets the staleness threshold (default 120); <code>--gate</code> adds the adoption-gate summary; <code>--json</code> emits machine-readable output. <code>disable-model-invocation: true</code>. Config edits go to <code>corporate/daemon/config.yaml</code> plus <code>/push-updates</code>, not here.</p>
+</section>
+
+<section class="skill" id="s-cold-sweep">
+<h3><code>/cold-sweep [--dry-run]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/action-queue/</code> · CEO-only (not synced to executives)</p>
+<p><strong>What it is.</strong> Drains overdue CRM "red debt" into the Action Queue as routed, voice-drafted nudges for one-click CEO approval. It only drafts; it never sends.</p>
+<p><strong>What it does.</strong> The deterministic routing (who, what priority) is done headless by <code>scripts/cold_sweep_core.py</code>, which reads <code>crm-health.py --json</code> and deposits <code>email_send</code> cards with <code>draft_status: needs_draft</code> (via the daemon schedule or a manual <code>scripts/cold-sweep.py</code> run). This skill fills each <code>needs_draft</code> card with a roughly 150-word nudge in Misha's voice, cites one real specific from the contact file, validates with <code>sanitize-text.py</code> and <code>humanization-check.py</code>, and flips the card to <code>ready_for_review</code> through <code>scripts/action-queue.py edit</code>. The CEO then approves and sends synchronously from the terminal with <code>/queue approve &lt;id&gt;</code>; this skill never sends.</p>
+<p><strong>How to use it.</strong> Use to drain the whole overdue-CRM backlog into ready drafts. For a single follow-up use <code>/follow-up</code>; for pipeline review use <code>/crm</code>.</p>
+<pre><code>/cold-sweep --dry-run
+"drain the cold contacts"</code></pre>
+<p><strong>Customize.</strong> <code>--dry-run</code> previews the routed cards without drafting and stops. Routing thresholds live in <code>cold_sweep_core</code>; the daemon runs the sweep on a 06:30 local schedule when enabled. Never invents contacts or fabricates a hook to hit the word count.</p>
+</section>
+
+<section class="skill" id="s-thread">
+<h3><code>/thread &lt;command&gt; [args]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>threads/</code> and <code>MEMORY.md</code></p>
+<p><strong>What it is.</strong> The operational threads registry: the running state of multi-step business and personal situations across sessions, distinct from CRM (people), pipeline (deals), and ZK (ideas).</p>
+<p><strong>What it does.</strong> Drives <code>scripts/thread.py</code> with subcommands: <code>open</code>, <code>log</code> (with <code>--artifact</code>, <code>--decision</code>, <code>--follow-up</code>, <code>--done</code>), <code>close</code>, <code>hold</code>, <code>reopen</code>, <code>list</code>, <code>find</code>, <code>show</code>, and <code>archive-scan</code> (used by <code>/prime</code>). It never opens or logs silently: before invoking the CLI it asks for approval. Personal threads are strictly protected: their content is never referenced in any output leaving the workspace, backed by a PreToolUse hook, <code>.gitignore</code>, classification, and a path filter.</p>
+<p><strong>How to use it.</strong> Use for a multi-step situation that follows through across sessions. For a single email use <code>/email-draft</code>; for a note use <code>/zk</code>; for a contact log use <code>/crm</code>. Code work and debugging are explicitly out of scope.</p>
+<pre><code>/thread log &lt;thread-id&gt; "sent reply" --follow-up "chase next week"
+"open a thread for the vendor dispute"</code></pre>
+<p><strong>Customize.</strong> Thread type is <code>business</code> or <code>personal</code> at open; <code>list</code> filters on <code>--type</code> and <code>--status</code>; <code>archive-scan --apply</code> archives closed threads. The approval gate is always on (relaxation deferred to v2).</p>
+</section>
+
+  <h3 class="cat" id="cat-ops-quality">Operations: planning &amp; review</h3>
+
+<section class="skill" id="s-create-plan">
+<h3><code>/create-plan [describe what to plan]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>plans/</code></p>
+<p><strong>What it is.</strong> Designs a structured implementation plan for a non-trivial change before any code is written: objective, scope, critical files, step sequence, success criteria, and risks.</p>
+<p><strong>What it does.</strong> Researches the workspace first (core reference files, existing patterns, connections), then writes a complete plan document to <code>plans/YYYY-MM-DD-{name}.md</code> following a fixed template (Overview, Spec Core, Current State, Proposed Changes, Step-by-Step Tasks, Success Criteria). It plans only and never makes the changes. Steps are grouped into optional parallel waves so <code>/implement</code> can execute them cleanly, and the Spec Core must carry at least one Non-Goal and a single testable Success Signal.</p>
+<p><strong>How to use it.</strong> Use before significant or multi-file work; to carry out the plan use <code>/implement</code>, and to stress-test it before approval use <code>/scrutinize</code>. Do not use it to execute an existing plan.</p>
+<pre><code>/create-plan add a new intake command with routing config
+"plan for restructuring the outputs directory"</code></pre>
+<p><strong>Customize.</strong> The one argument is a free-text description of what to plan. No flags. The plan structure is fixed by the reference template; wave grouping is optional inside the plan itself.</p>
+</section>
+
+<section class="skill" id="s-pre-impl">
+<h3><code>/pre-impl [plan description or @path/to/plan.md]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>plans/</code></p>
+<p><strong>What it is.</strong> A recommended structured gate between plan approval and <code>/implement</code>: it defines success criteria, stress-tests the plan, audits the harness, and writes a test contract before a single line of code is generated.</p>
+<p><strong>What it does.</strong> Runs six phases: context load, 3 to 5 binary success criteria, an inline contrarian critique (the <code>/devil</code> discipline, run inline because <code>/devil</code> is locked), an optional <code>/council</code> architecture review with Kimi as devil's advocate, a harness gap audit, and a proposed test contract, ending in a GO or NO-GO decision with a ready-to-paste <code>/implement</code> prompt. It saves the gate report alongside the plan at <code>plans/YYYY-MM-DD-pre-impl-{slug}.md</code>. The gate is recommended, not harness-enforced: nothing blocks <code>/implement</code> if it is skipped.</p>
+<p><strong>How to use it.</strong> Run after <code>/create-plan</code> approval and before <code>/implement</code> for any non-trivial work. Skip it for one-liner fixes, typo corrections, and config-only changes. Full chain: <code>/create-plan</code> to <code>/pre-impl</code> to <code>/implement</code> to <code>/scrutinize</code>.</p>
+<pre><code>/pre-impl @plans/2026-07-01-add-intake-command.md
+"are we ready to implement this?"</code></pre>
+<p><strong>Customize.</strong> The argument is either a plan description or an <code>@path</code> to a plan file (or nothing, to pick up the most recent plan in session). Phase 3's council review is optional and can be skipped for low-architectural-risk plans. No flags.</p>
+</section>
+
+<section class="skill" id="s-implement">
+<h3><code>/implement [plan-path] [--no-trajectory] [--evaluate]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/implement/</code> and the files the plan touches</p>
+<p><strong>What it is.</strong> Executes an approved implementation plan step by step, writing complete files and emitting a structured trajectory for every phase so the run can be audited later.</p>
+<p><strong>What it does.</strong> Reads the plan in full, runs a soft pre-impl gate reminder, then executes each step (or each wave, when the plan uses <code>### Wave</code> headers, dispatching parallel steps as agents). It writes a JSONL trajectory to <code>outputs/operations/implement/_trajectory_&lt;run_id&gt;.jsonl</code> unless <code>--no-trajectory</code> is passed, validates against the plan's checklist, and updates the plan status to Implemented. Pass <code>--evaluate</code> to grade each artifact with <code>/evaluate</code> after execution (up to three rework cycles).</p>
+<p><strong>How to use it.</strong> Use to build out a plan from <code>/create-plan</code>; do not use it for planning itself. To audit the finished run afterward, run <code>/scrutinize trajectory:&lt;run_id&gt;</code>.</p>
+<pre><code>/implement plans/2026-07-01-add-intake-command.md --evaluate
+"execute the plan"</code></pre>
+<p><strong>Customize.</strong> The <code>plan-path</code> argument, plus two flags: <code>--no-trajectory</code> (skip JSONL emission for throwaway runs) and <code>--evaluate</code> (run <code>/evaluate</code> on each artifact after Phase 3).</p>
+</section>
+
+<section class="skill" id="s-evaluate">
+<h3><code>/evaluate [artifact-path] [--plan plan-path]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (reports inline)</p>
+<p><strong>What it is.</strong> A skeptical quality evaluator that grades a workspace artifact (skill, script, reference file, or rule) against workspace standards and, optionally, a plan's success criteria.</p>
+<p><strong>What it does.</strong> Runs a two-layer assessment: deterministic checks via <code>scripts/artifact-evaluator.py</code>, then a qualitative pass from a deliberately skeptical reviewer persona that looks for shortcuts and vagueness. It ends in one of four grades (PASS, PASS WITH NOTES, NEEDS REWORK, FAIL) with specific, line-referenced rework instructions. A deterministic failure cannot pass.</p>
+<p><strong>How to use it.</strong> Use to grade an artifact against a fixed rubric after <code>/implement</code> or standalone. For fact-checking a draft against source documents use <code>/validate</code>; for a multi-phase stress-test that proposes and applies fixes use <code>/scrutinize</code>.</p>
+<pre><code>/evaluate .claude/skills/intake/SKILL.md --plan plans/2026-07-01-add-intake-command.md
+"grade this script"</code></pre>
+<p><strong>Customize.</strong> The <code>artifact-path</code> argument plus an optional <code>--plan &lt;plan-path&gt;</code> to grade against that plan's success criteria and validation checklist. Artifact type is auto-detected from the path.</p>
+</section>
+
+<section class="skill" id="s-scrutinize">
+<h3><code>/scrutinize [plan | execution | file:&lt;path&gt; | dir:&lt;path&gt; | workspace | trajectory:&lt;run_id&gt;] [--relentless] [--no-refute]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/operations/scrutiny/</code> plus any file approved for a fix</p>
+<p><strong>What it is.</strong> A maximum-effort principal-engineer review gate that runs a Validate-Identify-Improve-Adjust pass over a target, then presents evidence-backed findings with concrete proposed fixes, blocking forward progress until approved.</p>
+<p><strong>What it does.</strong> Runs 14 subchecks over the target, then an adversarial refutation layer (Phase 2.5) with cross-family judge rotation (Claude, Gemini, Grok) and a two-agent debate on BLOCKER and HIGH findings to drop false positives. Findings carry confidence scores and land in an approval block; only explicitly approved fixes are applied. The <code>workspace</code> target dispatches five parallel specialist agents; <code>--relentless</code> pre-approves fixes and loops with adaptive termination (two-zero, marginal-twice, a 10-iteration cap, check failure, or oscillation), and <code>--no-refute</code> skips the debate layer.</p>
+<p><strong>How to use it.</strong> Use to stress-test a plan before approval or audit changes after <code>/implement</code>. For artifact grading against a rubric use <code>/evaluate</code>; for fact-checking a draft use <code>/validate</code>; for decision reasoning use <code>/deep-think</code>.</p>
+<pre><code>/scrutinize file:scripts/intake.py --relentless
+/scrutinize trajectory:2026-07-01_143052_add-intake-command</code></pre>
+<p><strong>Customize.</strong> Six target selectors (<code>plan</code>, <code>execution</code>, <code>file:&lt;path&gt;</code>, <code>dir:&lt;path&gt;</code>, <code>workspace</code>, <code>trajectory:&lt;run_id&gt;</code>) plus four flags: <code>--relentless</code> (auto-apply and loop, incompatible with <code>target=plan</code>), <code>--no-refute</code>, <code>--include-low-confidence</code>, <code>--include-ambiguous</code>. Confidence threshold defaults to 75. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-validate">
+<h3><code>/validate [content or file path]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (reports inline)</p>
+<p><strong>What it is.</strong> Fact-checks a draft against the source-of-truth DataStore documents, bucketing every claim as Validated, Unverified, or Contradicted.</p>
+<p><strong>What it does.</strong> Extracts every factual claim (numbers, names, dates, technical and market claims, superlatives), then validates each against a source hierarchy where the DataStore wins over context files, which win over reference files. Each verdict carries a forensic evidence grade (Confirmed, Deduced, Hypothesized) and a risk level (High, Medium, Low), and the report ends with corrections prioritized by risk. It never fabricates a validation: no source found means Unverified, not a guess.</p>
+<p><strong>How to use it.</strong> Use to verify facts, figures, and superlatives before external-facing content ships. For grading an artifact's craft and completeness use <code>/evaluate</code>; for a full engineering review use <code>/scrutinize</code>.</p>
+<pre><code>/validate outputs/content/2026-07-01_proposal-draft.md
+"fact-check this draft"</code></pre>
+<p><strong>Customize.</strong> One argument: either pasted draft text or a file path. No flags; the source hierarchy and risk table are fixed.</p>
+</section>
+
+<section class="skill" id="s-editorial-review">
+<h3><code>/editorial-review [file:&lt;path&gt; | pasted text]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · edits the target document in place (structural operations only)</p>
+<p><strong>What it is.</strong> A document-level structural editor for long deliverables: it reviews a draft's argument architecture (section ordering, claim-to-evidence linkage, hierarchy, redundancy, buried lede) and never touches the ideas.</p>
+<p><strong>What it does.</strong> Phase 1 selects a document model, maps the structure with word counts, walks a defect checklist, and emits findings each tagged with one operation (CUT, MERGE, MOVE, CONDENSE, SPLIT, ADD, PROMOTE, DEMOTE, PRESERVE, QUESTION) and a word-savings estimate, behind an approval gate. On approval it applies only the approved structural edits. Phase 2 hands all sentence-level work (rhythm, specificity, vocabulary) to the always-on humanization prose rule and runs the sanitize and humanization-check gates. Content is sacrosanct: it reorganizes, it never rewrites sentences.</p>
+<p><strong>How to use it.</strong> Use on a long proposal, brief, or report whose argument arc needs checking. For sentence-level "make this sound human" work use the humanization rule, not this skill; for fact-checking use <code>/validate</code>; for artifact grading use <code>/evaluate</code>.</p>
+<pre><code>/editorial-review file:outputs/content/2026-07-01_market-brief.md
+"review the structure of this draft"</code></pre>
+<p><strong>Customize.</strong> One argument: <code>file:&lt;path&gt;</code> or pasted text. No flags; the operation vocabulary and defect checklist are fixed by the reference file.</p>
+</section>
+
+<section class="skill" id="s-workspace-deep-audit">
+<h3><code>/workspace-deep-audit [--mode={full|quick|focus}] [--focus={skills|rules|deps|security|architecture}] [--vs=&lt;previous_audit_path&gt;]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/operations/workspace/</code></p>
+<p><strong>What it is.</strong> The heaviest workspace skill: a comprehensive 8-section deep audit of the entire workspace (executive summary, inventory matrix, architectural findings, dependency validation, a best-practices gap score, competitive mapping, prioritized recommendations).</p>
+<p><strong>What it does.</strong> Dispatches up to seven parallel read-only inventory agents (batched under the concurrency cap), validates every dependency pin against current docs via Context7, scores the workspace against a 34-point best-practices rubric, maps it against a competitive baseline, and emits prioritized P0 to P3 recommendations. Output renders to markdown plus branded HTML and logs to an audit thread. It is read-only against the workspace: fix application belongs to <code>/scrutinize</code>. <code>--mode=quick</code> skips competitive and best-practices analysis (roughly half the runtime), <code>--mode=focus</code> plus <code>--focus</code> scopes to one subsystem, and <code>--vs</code> produces a before/after delta report.</p>
+<p><strong>How to use it.</strong> Use at a major milestone or when checking ecosystem drift. For a single-skill review use <code>/evaluate</code>; to apply fixes use <code>/scrutinize</code>; for a quick operational health check use <code>/state-check</code>.</p>
+<pre><code>/workspace-deep-audit --mode=focus --focus=security
+/workspace-deep-audit --vs=outputs/operations/workspace/2026-05-14_audit_workspace-deep-overview.md</code></pre>
+<p><strong>Customize.</strong> Three flags: <code>--mode</code> (<code>full</code> default, <code>quick</code>, <code>focus</code>), <code>--focus</code> (one of <code>skills</code>, <code>rules</code>, <code>deps</code>, <code>security</code>, <code>architecture</code>, <code>observability</code>; required with <code>focus</code> mode), and <code>--vs=&lt;prev_audit_path&gt;</code> for delta mode. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-calibrate">
+<h3><code>/calibrate [light]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to memory, settings, CEO-only skills and rules, and <code>outputs/operations/calibrate/</code></p>
+<p><strong>What it is.</strong> A reflective end-of-session self-improvement pass: it scans the current session for corrections, preferences, repeated patterns, errors, successes, and voice violations, then proposes concrete patches.</p>
+<p><strong>What it does.</strong> Runs six-category detection over a parsed session envelope, applies an idempotency check, and resolves each candidate's classification. CEO-only candidates go to a numbered approval list; corporate-classified candidates route to a separate review queue and are never auto-applied. Approved patches to memory, settings, and CEO-only skills and rules are applied and committed in one atomic git commit. <code>/calibrate light</code> scans only the in-context conversation (skipping the repeated-patterns and errors categories) for low-token or quick sweeps.</p>
+<p><strong>How to use it.</strong> Use at the end of a working session to capture learnings. For cross-session memory consolidation use <code>/dream</code>; for grading a single artifact use <code>/evaluate</code>.</p>
+<pre><code>/calibrate light
+/calibrate</code></pre>
+<p><strong>Customize.</strong> One optional argument: <code>light</code> (or <code>--light</code>) selects the lighter in-context mode. No other flags. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-checkpoint">
+<h3><code>/checkpoint [optional note]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/operations/handoff-archive/</code></p>
+<p><strong>What it is.</strong> Saves a manual session handoff so the session can be resumed later with clean context, without running compact or clearing anything.</p>
+<p><strong>What it does.</strong> Writes one combined handoff file (objective, acceptance criteria, constraints, decisions, files touched, current state, next steps, continuation prompt) to <code>outputs/operations/handoff-archive/</code>, then updates the <code>.latest/summary.md</code> and <code>.latest/prompt.md</code> pointer files that the SessionStart inject hook reads on resume. It does not run compact, does not clear the session, and does not continue work after writing. It surfaces from the two-tier checkpoint-offer hook at 25 and 30 percent context used.</p>
+<p><strong>How to use it.</strong> Use before switching tasks, before a risky action, or when the checkpoint-offer hook fires. For a reflective end-of-session capture use <code>/calibrate</code>; for cross-session memory consolidation use <code>/dream</code>.</p>
+<pre><code>/checkpoint paused mid-refactor, tests still failing
+/checkpoint</code></pre>
+<p><strong>Customize.</strong> One optional free-text note argument, appended as a "User note" section (omitted if empty). No flags. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-align">
+<h3><code>/align [N]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (purely conversational, nothing persisted)</p>
+<p><strong>What it is.</strong> A manual escalation lever above the always-on prompt-refinement rule: it forces exactly N numbered clarifying questions before any work begins, so scope is locked up front instead of corrected later.</p>
+<p><strong>What it does.</strong> Parses and validates N, walks back to the latest substantive request, then returns a compact expansion plus N numbered questions, each with lettered options and one committed recommendation, a summary table, and a closer. After the user answers (compactly, for example "1a, 2c, 3 - custom: ..."), it produces the full expanded prompt and waits at an approval gate before executing. Single-shot per invocation.</p>
+<p><strong>How to use it.</strong> Use before a high-stakes or ambiguous task where a wrong assumption is expensive. For simple requests the always-on prompt-refinement rule already handles clarification, so skip it. For contrarian critique use <code>/devil</code>; for content variants use <code>/burst</code>.</p>
+<pre><code>/align 3
+/align</code></pre>
+<p><strong>Customize.</strong> One optional argument N, default 5, valid range 1 to 10; anything outside the range aborts with a one-line error. No flags. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-devil">
+<h3><code>/devil [N] [: &lt;inline claim&gt;]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (purely conversational, nothing persisted)</p>
+<p><strong>What it is.</strong> A manual sycophancy-breaker: it forces exactly N contrarian critique points against a target position, each from a distinct angle, in committed prose with no fixes and no hedging.</p>
+<p><strong>What it does.</strong> Targets either an inline claim (<code>/devil 5: &lt;claim&gt;</code>) or the latest substantive decision walked back from conversation. It emits N numbered points, each with a severity tag (BLOCKER, HIGH, MEDIUM, LOW), a bolded 2-to-5-word headline, and one or two sentences that land the cut and stop. Points span distinct angles (correctness, scope, cost, timing, alternatives, second-order effects, stakeholder risk, and more) and sort by severity. An honesty floor stops it early rather than fabricate weak points to hit N. Single-shot: after the pass it exits with no approval gate.</p>
+<p><strong>How to use it.</strong> Use to pressure-test a recent decision cheaply. For external Gemini, Grok, and Kimi views use <code>/council</code>; for a multi-phase principal-engineer review use <code>/scrutinize</code>.</p>
+<pre><code>/devil 5: we should ship the intake command without a test contract
+/devil 3</code></pre>
+<p><strong>Customize.</strong> Optional N, default 5, range 1 to 10; optional inline claim after a colon (else it walks back). The <code>force N</code> reply is the honesty-floor escape hatch to surface weak points anyway. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-burst">
+<h3><code>/burst [N] [: &lt;inline seed&gt;]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (purely conversational, nothing persisted)</p>
+<p><strong>What it is.</strong> A manual variation lever: it produces N different versions of the latest content artifact, each attacking a distinct axis, with one mandatory "swing-the-other-way" variant that inverts a defining property.</p>
+<p><strong>What it does.</strong> Targets either an inline seed (<code>/burst 3: &lt;seed&gt;</code>) or the latest assistant-produced content turn. It generates N-1 spread variants across diverse axes (opener, tone, structure, lens, length, voice, metaphor) plus one swing variant, holding the core message constant and varying only the wrapper, then closes with one recommended pick. A cost-and-time pre-flight gate fires when each variant would run a paid-API call or a multi-step task. Single-shot, and it supports the convergence pattern: pick a variant, run <code>/burst</code> again from there.</p>
+<p><strong>How to use it.</strong> Use to compare directions, escape a stuck draft, or converge on a final version. For N clarifying questions use <code>/align</code>; for contrarian critique use <code>/devil</code>.</p>
+<pre><code>/burst 5: a 150-word post about data sovereignty
+/burst</code></pre>
+<p><strong>Customize.</strong> Optional N, default 3, range 2 to 5; optional inline seed after a colon (else it walks back). The cost gate requires an explicit "go" per invocation for paid or long tasks. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-brain-audit">
+<h3><code>/brain-audit --sources &lt;paths&gt; [--entity &lt;name&gt;] [--modalities &lt;list&gt;]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Invoked by other synthesis skills, not from natural language · read-only (returns a footer string)</p>
+<p><strong>What it is.</strong> A small post-synthesis audit primitive: given a set of cited source files, it returns a stable three-section footer reporting source freshness, modality coverage, and disagreements.</p>
+<p><strong>What it does.</strong> Runs three checks over the sources passed in: newest-modified date per source (flagging anything over 90 days as STALE), comms and intel modality coverage for a named entity (email, telegram, osint, crm-log, calendar), and a single LLM call to detect disagreements between sources. It returns a <code>## Brain audit</code> footer and nothing else. It is a leaf: it never synthesizes, never scans the whole workspace, and never writes state, and every failure mode degrades to a valid footer rather than aborting the caller. It is composed by <code>/meeting-prep</code>, <code>/odin</code> (consult mode), and <code>/deal-strategy</code>, which paste the footer beneath their output.</p>
+<p><strong>How to use it.</strong> Not a natural-language command. A composing synthesis skill invokes it at the end of its synthesis phase; the CEO may also invoke it directly for an ad-hoc audit.</p>
+<pre><code>/brain-audit --sources crm/contacts/example-corp.md,outputs/intel/osint/2026-07-01_osint_example-corp.md --entity "Example Corp"</code></pre>
+<p><strong>Customize.</strong> <code>--sources</code> (required, comma-separated workspace-relative paths, capped at 20 for the contradiction check), <code>--entity</code> (optional, scopes the modality scan), and <code>--modalities</code> (optional subset of the canonical list). Footer shape adapts to single-source, no-entity, degraded, and no-sources cases.</p>
+</section>
+
+  <h3 class="cat" id="cat-ops-infra">Operations: publishing, infra &amp; tooling</h3>
+
+<section class="skill" id="s-backup">
+<h3><code>/backup</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>origin/main</code> of both repos</p>
+<p><strong>What it is.</strong> One command that backs up the entire workspace to GitHub, committing and pushing every changed file off-machine.</p>
+<p><strong>What it does.</strong> On the two-part topology it runs <code>scripts/push-all.py</code>, which commits working-tree changes and pushes BOTH the engine clone and the data overlay to their private <code>origin/main</code>, with a pre-push secret scan and an ahead/behind <code>[0 0]</code> verification (a bare push can silently leave a ref behind). It reads <code>GH_TOKEN</code> from the engine <code>.env</code>, refuses to push any tracked secret-like file (<code>.env</code>, <code>.session</code>, <code>cookies.json</code>), and never pushes the rebuildable <code>.memory-index/</code>. On an exec workspace it is exec-aware and pushes only the writable data overlay, skipping the read-only engine clone.</p>
+<p><strong>How to use it.</strong> Use to save the whole workspace to GitHub. To publish content to executives use <code>/publish-corporate</code>; for a full versioned fleet push with CRM aggregate use <code>/push-updates</code>.</p>
+<pre><code>/backup
+python scripts/push-all.py --dry-run    # show what would happen, change nothing</code></pre>
+<p><strong>Customize.</strong> Set <code>GH_TOKEN</code> in the engine <code>.env</code>; message via <code>-m "msg"</code>; <code>--no-commit</code> pushes existing commits only. <code>disable-model-invocation: true</code> keeps it slash-command-only. Never pass <code>--no-verify</code>.</p>
+</section>
+
+<section class="skill" id="s-sync">
+<h3><code>/sync [pull|backup]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>origin/main</code> of both repos</p>
+<p><strong>What it is.</strong> Manually syncs the workspace with plain git: pulls the latest code and data, then backs it up. This replaced the retired copy-and-orphan-delete sync engine.</p>
+<p><strong>What it does.</strong> Pull runs <code>git pull --ff-only</code> on the engine clone and the data overlay (fast-forward only, so a divergent history surfaces as a plain error), and on exec workspaces refreshes the gitignored <code>.corporate-repo/</code> via <code>scripts/sync-corporate.py</code> (a no-op on the CEO workspace). Backup runs <code>scripts/push-all.py</code> with its secret scan and <code>[0 0]</code> ahead/behind verification. There is no orphan-deletion step.</p>
+<p><strong>How to use it.</strong> Use to pull updates or back up between sessions. To publish corporate changes out to all execs use <code>/push-updates</code>; for a backup alone use <code>/backup</code>.</p>
+<pre><code>/sync
+/sync pull       # git pull --ff-only only
+/sync backup     # push-all.py only</code></pre>
+<p><strong>Customize.</strong> Data root resolves from the <code>.heading-os-data</code> sibling or the <code>HEADING_OS_DATA</code> env var; auth from <code>GH_TOKEN</code> in the engine <code>.env</code>. Explicit-invocation-only. Never force-push or pass <code>--no-verify</code> to work around a failed gate.</p>
+</section>
+
+<section class="skill" id="s-push-updates">
+<h3><code>/push-updates [summary]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒), CEO-only (admin role) · writes to <code>../heading-os-corporate/</code>, <code>crm/</code>, <code>config/</code></p>
+<p><strong>What it is.</strong> The single CEO command that ships all workspace changes to every executive through the corporate repo, with build versioning.</p>
+<p><strong>What it does.</strong> It verifies the admin role, runs a routing-regression soft gate, then commits ceo-main; publishes corporate-classified files via <code>scripts/publish-corporate.py --copy</code> (classification from <code>config/routing-map.yaml</code>, content-only, never engine code); bumps <code>BUILD.json</code> and updates <code>VERSION</code>/<code>CHANGELOG.md</code>; pushes the corporate repo and ceo-main to <code>origin/main</code>; rides CRM changes on the data overlay via <code>push-all.py</code>; and refreshes CRM Central via <code>aggregate-crm.py</code>. The hand-typed file list is forbidden (a broken build shipped that way); the script is the single source of truth. Execs receive updates on their next plain <code>git pull</code>.</p>
+<p><strong>How to use it.</strong> Use to propagate shared updates to the whole fleet. For a personal GitHub backup of ceo-main only use <code>/backup</code>; to publish corporate files without the full CRM and versioning tail use <code>/publish-corporate</code>.</p>
+<pre><code>/push-updates "New competitor-intel skill, updated Q2 strategy"</code></pre>
+<p><strong>Customize.</strong> File classification lives in <code>config/routing-map.yaml</code> (add a rule rather than working around the script). CEO-only via the admin role in <code>.workspace-identity.json</code>; <code>disable-model-invocation: true</code>. Version bump (PATCH vs MINOR) is confirmed interactively.</p>
+</section>
+
+<section class="skill" id="s-publish-corporate">
+<h3><code>/publish-corporate [description]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒), CEO-only (admin role) · writes to <code>../heading-os-corporate/</code></p>
+<p><strong>What it is.</strong> CEO-only targeted publisher: copies corporate-classified content from the data overlay to the corporate repo and pushes, so execs pull it with plain <code>git pull</code>.</p>
+<p><strong>What it does.</strong> It verifies the admin role, identifies the files to publish (routing destination <code>corporate</code> per <code>config/routing-map.yaml</code>: datastore, <code>knowledge/shared/</code>, context carve-outs, CRM config, corporate daemon config), runs a critical-leak scan via <code>scripts/sanitize-check.py</code>, previews the set for confirmation, then copies preserving directory structure, commits, pushes, and bumps the corporate <code>VERSION</code>/<code>CHANGELOG.md</code> PATCH. A hard safety check blocks personal content (personal-info, people, <code>crm/contacts/*</code>, <code>outputs/*</code>, <code>threads/</code>, <code>.env</code>) even if misclassified.</p>
+<p><strong>How to use it.</strong> Use for selective targeted publishing. For a full versioned push including <code>BUILD.json</code> and CRM aggregate use <code>/push-updates</code>; for a personal workspace backup use <code>/backup</code>.</p>
+<pre><code>/publish-corporate "Updated a competing vendor competitive document"</code></pre>
+<p><strong>Customize.</strong> Classification input is <code>config/routing-map.yaml</code>; run <code>scripts/publish-corporate.py --preview|--copy|--verify</code>. CEO-only via admin role in <code>.workspace-identity.json</code>; <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-promote-corporate">
+<h3><code>/promote-corporate [--force] [--dry-run]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒), CEO-only (admin role) · writes to <code>../heading-os-corporate/</code> (main branch)</p>
+<p><strong>What it is.</strong> CEO-only staged-rollout gate: fast-forward merges the corporate <code>staging</code> branch to <code>main</code> after canary validation, so all execs receive a soaked build.</p>
+<p><strong>What it does.</strong> It runs <code>scripts/promote-corporate.py --dry-run</code> to print the gate report (canary slug, staging tip, soak hours), then enforces the soak (at least 4 hours since the latest staging commit), canary-freshness, and smoke gates plus an advisory eval status. On CEO go-ahead it does <code>git checkout main &amp;&amp; git merge origin/staging --ff-only &amp;&amp; git push origin main</code>. The fast-forward preserves staging's <code>BUILD.json</code> verbatim: promote never bumps the build. Blocking gates require the CEO to type the failing flag name to force.</p>
+<p><strong>How to use it.</strong> Use to promote a soaked staging build to all execs. For a routine publish use <code>/push-updates</code>; to undo a bad build use <code>/rollback-corporate</code>.</p>
+<pre><code>/promote-corporate --dry-run    # gate report, no merge
+/promote-corporate</code></pre>
+<p><strong>Customize.</strong> A canary exec must be flagged <code>canary: true</code> in <code>config/exec-registry.json</code>. CEO-only via admin role in <code>.workspace-identity.json</code>; <code>disable-model-invocation: true</code>. Never rebase/squash-merge (breaks rollback's HEAD-revert semantics).</p>
+</section>
+
+<section class="skill" id="s-rollback-corporate">
+<h3><code>/rollback-corporate [--dry-run]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒), CEO-only (admin role) · writes to <code>../heading-os-corporate/</code> (main branch)</p>
+<p><strong>What it is.</strong> CEO-only safety net: rolls the corporate <code>main</code> branch back to the previous BUILD when a published build broke something the canary missed.</p>
+<p><strong>What it does.</strong> It previews via <code>scripts/rollback-corporate.py --dry-run</code> (current build and the <code>HEAD~1</code> target), then does <code>git revert --no-edit HEAD &amp;&amp; git push origin main</code>: a forward revert, not a hard reset, so no history is rewritten and branch protection on <code>main</code> holds. It fails closed and refuses when <code>HEAD~1</code> does not carry the previous build (a multi-commit publish would not restore correctly). The bad commit stays on <code>staging</code> for investigation, never re-propagated. Execs pull the reverted state on their next sync.</p>
+<p><strong>How to use it.</strong> Use only when a published corporate build broke something the canary missed. For a routine publish use <code>/push-updates</code>; for the promote-to-main gate use <code>/promote-corporate</code>.</p>
+<pre><code>/rollback-corporate --dry-run
+/rollback-corporate</code></pre>
+<p><strong>Customize.</strong> Assumes the prior promote was <code>--ff-only</code>. CEO-only via admin role in <code>.workspace-identity.json</code>; <code>disable-model-invocation: true</code>. Never hard-reset and force-push <code>main</code>.</p>
+</section>
+
+<section class="skill" id="s-playwright">
+<h3><code>/playwright [url] [action]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/browser/</code> (data overlay)</p>
+<p><strong>What it is.</strong> Real headless browser automation: screenshots, scraping JS-rendered pages, form filling, PDF generation, website monitoring, plus YouTube content extraction (title, description, chapters, full transcript).</p>
+<p><strong>What it does.</strong> It shells to <code>.claude/skills/playwright/scripts/pw.py</code> with subcommands (<code>screenshot</code>, <code>extract</code>, <code>fill</code>, <code>click</code>, <code>pdf</code>, <code>youtube</code>, <code>monitor</code>, <code>batch-screenshots</code>, <code>execute</code>), backed by Playwright/Chromium plus <code>yt-dlp</code> and <code>youtube-transcript-api</code> for the YouTube path. Outputs auto-place under the data overlay's <code>browser/</code> tree via <code>get_outputs_dir()</code>. It auto-loads authenticated sessions from <code>outputs/browser/cookies.json</code>. The <code>youtube</code> subcommand requires the VPN pre-flight, since datacenter IPs are blocked for transcripts.</p>
+<p><strong>How to use it.</strong> Use when a task needs a real browser or YouTube understanding. For simple URL fetching use WebFetch; to import auth cookies first use <code>/setup-browser-cookies</code>.</p>
+<pre><code>/playwright screenshot "https://example.com"
+"what's in this YouTube video: https://youtu.be/VIDEO_ID"</code></pre>
+<p><strong>Customize.</strong> Common flags: <code>--headed</code>, <code>--device</code>, <code>--full-page</code>, <code>--wait-for</code>, <code>-o</code>. YouTube cookie source via <code>--browser brave:ClaudeCode</code> or <code>--cookies file.txt</code>. Never submit a form on the CEO's behalf without explicit approval, and never store scraped cookies or tokens in a tracked file.</p>
+</section>
+
+<section class="skill" id="s-ast-grep">
+<h3><code>/ast-grep [search-query-or-pattern]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (search)</p>
+<p><strong>What it is.</strong> Structural code search: translates a plain-language query into ast-grep AST patterns or YAML rules and runs them, finding code by structure (node kind, has/inside relations) rather than text.</p>
+<p><strong>What it does.</strong> It writes a small example snippet, drafts an ast-grep rule (using <code>kind</code>, relational <code>has</code>/<code>inside</code> with <code>stopBy: end</code>, and composite <code>all</code>/<code>any</code>/<code>not</code>), verifies the rule against the snippet with <code>ast-grep scan --stdin</code>, then searches the codebase via <code>ast-grep run --pattern</code> or <code>ast-grep scan --rule</code>. It never reports matches from an unverified rule. Search-only by default: structural rewrites (<code>--update-all</code>) require explicit approval.</p>
+<p><strong>How to use it.</strong> Use for structural code search across a codebase. For plain text or filename matching use Grep; for a semantic "what does this do" question just answer it.</p>
+<pre><code>/ast-grep find all async functions with no try-catch
+ast-grep run --pattern 'console.log($ARG)' --lang javascript .</code></pre>
+<p><strong>Customize.</strong> No config knobs. Rule syntax and CLI recipes live in the skill's <code>references/rule_reference.md</code> and <code>references/cli-cookbook.md</code>. Requires the <code>ast-grep</code> (<code>sg</code>) binary on PATH.</p>
+</section>
+
+<section class="skill" id="s-context7">
+<h3><code>/context7 [library] [query]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (returns docs inline)</p>
+<p><strong>What it is.</strong> Fetches live, version-specific library documentation from the Context7 API, formatted for accurate API reference and code validation instead of relying on training data.</p>
+<p><strong>What it does.</strong> It parses the input (first word is the library, the rest is the query) and calls <code>scripts/context7.py</code>, which hits the Context7 REST API and returns authoritative docs. Flags: <code>--list</code> (matching libraries without fetching), <code>--version</code> (pin a version), <code>--json</code>, <code>--limit</code> (cap token count). The API works without a key at lower rate limits.</p>
+<p><strong>How to use it.</strong> Use when writing or validating code against an external library and you need current docs. For general web research use <code>/osint</code>; for workspace notes use <code>/zk</code>. A namespaced plugin <code>context7:context7</code> also exists; the bare <code>/context7</code> resolves to this local skill.</p>
+<pre><code>/context7 nextjs app router middleware
+/context7 react hooks --version v18</code></pre>
+<p><strong>Customize.</strong> Set <code>CONTEXT7_API_KEY</code> (format <code>ctx7sk-...</code>) in the workspace <code>.env</code>; a free key comes from the Context7 dashboard.</p>
+</section>
+
+<section class="skill" id="s-setup-browser-cookies">
+<h3><code>/setup-browser-cookies [domain]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/browser/cookies.json</code> (gitignored)</p>
+<p><strong>What it is.</strong> Imports logged-in cookies from a real Chromium-family browser (Brave, Chrome, Chromium, Edge) into the workspace cookie store, so Playwright and headless sessions reuse the authenticated session.</p>
+<p><strong>What it does.</strong> It drives <code>scripts/utils/chromium_cookies.py</code>, which decrypts a domain's cookies directly from the browser profile DB (DPAPI on Windows, libsecret on Linux, Keychain on macOS) per profile, then converts the <code>{name: value}</code> map into Playwright cookie objects and merges them into <code>outputs/browser/cookies.json</code> (preserving other domains). It reports only domain names and counts, never cookie values, and never commits or transmits the store.</p>
+<p><strong>How to use it.</strong> Use before QA-testing or scraping pages that require an authenticated session. For the browser automation itself use <code>/playwright</code>, which auto-loads the resulting cookie store.</p>
+<pre><code>/setup-browser-cookies github.com
+"import cookies for dashboard.example.com from brave"</code></pre>
+<p><strong>Customize.</strong> Browser via <code>--browser brave|chrome|chromium|edge</code> (default brave); profile via <code>--profile ClaudeCode</code> (default). The cookie store is gitignored and on the secret-scan allow-list. Chrome M127+ app-bound (v20) encryption falls back to <code>yt-dlp --cookies-from-browser</code>.</p>
+</section>
+
+<section class="skill" id="s-skill-creator">
+<h3><code>/skill-creator [create|improve|eval|optimize]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒), CEO-only (mutates skill infrastructure) · writes to <code>.claude/skills/</code>, <code>evals/</code></p>
+<p><strong>What it is.</strong> Authors new skills and iteratively improves, evaluates, and optimizes existing ones: draft the SKILL.md, run test prompts, evaluate results, rewrite, repeat.</p>
+<p><strong>What it does.</strong> It captures intent, drafts the SKILL.md against the Anthropic spec (including the namespaced <code>x-31c-orchestration</code> workspace extension), saves realistic test prompts to <code>evals/evals.json</code>, runs with-skill and baseline runs, drafts assertions, grades and aggregates, and renders results via <code>eval-viewer/generate_review.py</code>. It also optimizes the <code>description</code> frontmatter (the primary triggering mechanism) through a train/test loop, and can package the skill into a <code>.skill</code> file where the tooling is available.</p>
+<p><strong>How to use it.</strong> Use to author or refine a skill directly (CEO). Executives who want a new skill instead use <code>/request-skill</code> to email the request to the CEO.</p>
+<pre><code>/skill-creator create
+/skill-creator improve</code></pre>
+<p><strong>Customize.</strong> Eval schemas and grading contracts live in the skill's <code>references/</code> and <code>agents/</code> files; <code>grading.json</code> expectations must use the exact <code>text</code>/<code>passed</code>/<code>evidence</code> fields the viewer depends on. <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill" id="s-request-skill">
+<h3><code>/request-skill [description]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒), sends external email · read-only to workspace (emails the CEO)</p>
+<p><strong>What it is.</strong> Lets an executive request a new skill from the CEO: captures what it should do, a use case, and expected output, then emails the request to the admin.</p>
+<p><strong>What it does.</strong> If the description is vague it asks three focused questions, reads <code>.workspace-identity.json</code> and the requester's personal context for name and title, composes an HTML request email, shows it for confirmation, then sends it via <code>scripts/send-email.py</code> to the hardcoded CEO address. If an existing skill already covers the request, it points the user to that skill instead of sending.</p>
+<p><strong>How to use it.</strong> Use when you need a capability the workspace does not have yet. Building or editing skills directly is the CEO-only <code>/skill-creator</code>.</p>
+<pre><code>/request-skill "draft weekly one-page status memos from my CRM activity"</code></pre>
+<p><strong>Customize.</strong> Recipient is hardcoded to the CEO address (not user-editable). <code>disable-model-invocation: true</code>. Outbound send stays human-gated (confirmation before sending).</p>
+</section>
+
+<section class="skill" id="s-setup-wizard">
+<h3><code>/setup-wizard</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒), refuses on the CEO master · writes to <code>.setup/answers.json</code>, <code>.env</code>, <code>reference/</code>, <code>context/</code>, <code>personal/</code></p>
+<p><strong>What it is.</strong> Interactive per-question setup that personalizes a fresh workspace: about 22 questions for a public HEADING OS clone, or 9 for a 31C exec, enriching short answers into full voice, personal, and business docs.</p>
+<p><strong>What it does.</strong> It calls <code>scripts/apply-wizard-answers.py --status</code> to detect the audience and completion state (aborting on the CEO master), then walks each pending question, delivering prompt/example/help text from the status rows. For rich questions it drafts a full 200-400 word doc for approval; for secret questions it captures API keys into <code>.env</code> with optional live-ping validation via <code>wizard-verify-key.py</code>. All writes go through the apply script, never direct edits. Re-runs render a completion-percent dashboard for editing individual answers.</p>
+<p><strong>How to use it.</strong> Use on a newly provisioned exec workspace or a public HEADING OS clone to personalize it, or re-run anytime to edit answers. Not for the CEO master workspace, which it refuses.</p>
+<pre><code>/setup-wizard
+"finish my setup"</code></pre>
+<p><strong>Customize.</strong> Question bank content comes from the status rows (never read the YAML directly). <code>disable-model-invocation: true</code>; the CEO-master abort is not overridable by end users. API keys captured land in <code>.env</code>.</p>
+</section>
+
+<section class="skill" id="s-event-debrief">
+<h3><code>/event-debrief [event name]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>crm/contacts/</code> (interaction logs)</p>
+<p><strong>What it is.</strong> Turns raw event notes and business cards into a structured post-event recap after a conference, summit, or VIP engagement: leads, meetings, competitive intel, market signals, lessons, and action items.</p>
+<p><strong>What it does.</strong> It reads the pipeline, people, and strategy context, then produces a 10-section debrief (executive summary, leads table, meetings held, competitive intelligence, market signals, what worked, what to improve, action items with owners and deadlines, plus pipeline and people update recommendations). Afterward it offers to log a CRM interaction for each contact met and to create CRM files for hot or warm leads via <code>/crm add</code>. Marked <code>parallel_safe: partial</code>: the research phase parallelizes, CRM writes stay sequential and post-approval.</p>
+<p><strong>How to use it.</strong> Use after an event to capture outcomes before they decay. To then send follow-ups to everyone met, use <code>/follow-up</code> or the Post-Event compound pattern.</p>
+<pre><code>/event-debrief MWC 2026
+"debrief the partner summit"</code></pre>
+<p><strong>Customize.</strong> Feeds the orchestrator's Post-Event Follow-ups pattern when mass follow-ups are needed. No config flags.</p>
+</section>
+
+<section class="skill" id="s-interview-prep">
+<h3><code>/interview-prep [position] [level]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (returns the kit inline)</p>
+<p><strong>What it is.</strong> Builds a complete interview kit for a role: a 20-question bank, a 1-5 scoring rubric, and a post-interview scorecard aligned to the 31C Five Core Principles.</p>
+<p><strong>What it does.</strong> It reads the business, hiring-playbook, operational-state, and voice references, then generates a role-specific question bank (warm-up, technical, Five Core Principles behavioral, culture, candidate questions), a category-by-category 1-5 rubric with a minimum-3 threshold and automatic no-hire on any 1, and a scorecard template with an overall recommendation line. Output is returned inline, ready for any interviewer on the Tribe.</p>
+<p><strong>How to use it.</strong> Use when preparing to interview a candidate or building a hiring evaluation framework. For general research on a person use <code>/osint</code>.</p>
+<pre><code>/interview-prep "Senior DPI Engineer" senior
+"build me a hiring framework for a mid-level SDR"</code></pre>
+<p><strong>Customize.</strong> Level accepts junior, mid, senior, or leadership. No config flags; the standard follows the 31C hiring bar baked into the skill.</p>
+</section>
+
+<section class="skill" id="s-zk">
+<h3><code>/zk [add|enrich|find|connect|distill|garden|stats|brief] [target]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>knowledge/</code>, <code>knowledge/INDEX.md</code></p>
+<p><strong>What it is.</strong> A Zettelkasten second-brain manager over the <code>knowledge/</code> tree (shared with Zettlr): add atomic notes, enrich, find, connect, distill skill outputs into durable notes, garden for orphans and stale seeds, stats, and topic briefs.</p>
+<p><strong>What it does.</strong> It dispatches by subcommand: <code>add</code> creates a timestamped atomic note by type into the brain subtree; <code>enrich</code> researches a note and upgrades its seed to growing to evergreen status; <code>connect</code> adds bidirectional wiki-links; <code>distill</code> extracts 3-7 durable insights from an output file; <code>garden</code> and <code>stats</code> run <code>scripts/odin-brain-health.py</code> to surface stale seeds, orphans, and broken links and regenerate <code>INDEX.md</code>; <code>brief</code> synthesizes a topic into a what-we-know / think / watch narrative. Every generated note is validated with <code>scripts/sanitize-text.py</code> for hidden characters.</p>
+<p><strong>How to use it.</strong> This is the primary capture tool for the executive fleet. On the CEO workspace <code>/zk</code> is dormant: durable CEO capture flows to <code>/odin log</code>, <code>/thread</code>, and auto-memory instead.</p>
+<pre><code>/zk add signal
+/zk distill outputs/intel/osint/example/brief.md
+"what do we know about sovereign DPI"</code></pre>
+<p><strong>Customize.</strong> Paths resolve by workspace type (flat <code>knowledge/</code> on CEO, tiered <code>personal/knowledge/</code> plus <code>corporate/knowledge/shared/</code> on execs). Corporate-classified notes get a rule in <code>config/routing-map.yaml</code>. Frontmatter follows Zettlr conventions (<code>keywords</code>, <code>[[ID|Label]]</code> links).</p>
+</section>
+
+<section class="skill" id="s-mullvad">
+<h3><code>/mullvad [connect &lt;1|2|3&gt;]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/mullvad_fastest_YYYY-MM-DD.json</code></p>
+<p><strong>What it is.</strong> Benchmarks Mullvad WireGuard relays by real ICMP latency from this host, presents the three fastest as a numbered menu, and connects to whichever one you select, verifying the tunnel is up.</p>
+<p><strong>What it does.</strong> It preflights the Mullvad CLI and daemon, detects the current connection (warning that pinging through an active tunnel biases results and offering to disconnect first), runs <code>scripts/mullvad-fastest.py --owned-only</code> to measure Europe and Middle East relays, and reads the saved JSON for the sorted top three (with a <code>[DAITA]</code> marker where applicable). On selection it runs <code>mullvad relay set location &lt;hostname&gt;</code> then <code>mullvad connect</code>, polls status up to 15 times, and reports the live visible location and IPv4.</p>
+<p><strong>How to use it.</strong> Use to find and switch to the fastest Mullvad relay. For general VPN questions or Mullvad help pages use WebFetch; for the YouTube/Google residential-exit need use Proton, not Mullvad.</p>
+<pre><code>/mullvad
+connect 2</code></pre>
+<p><strong>Customize.</strong> Owned-only (provider 31173/Blix) is the default; region defaults to EU plus Middle East. Never silently pick a relay: every connect requires explicit selection. Never write account numbers, session tokens, or exit IPs to shared files.</p>
+</section>
+
+<section class="skill" id="s-modem-tune">
+<h3><code>/modem-tune [status | revert]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒), CEO-only personal-hardware tool (not synced to execs) · writes to <code>outputs/operations/reference/modem-imei-ledger.json</code></p>
+<p><strong>What it is.</strong> Changes the reported IMEI on the configured GL.iNet GL-XE300 travel router over SSH for work testing, generating a fresh never-reused value, staging it, then resetting and verifying it live.</p>
+<p><strong>What it does.</strong> All mechanics live in <code>scripts/modem-tune.py</code>; the skill is the conversational wrapper that owns the reset confirmation gate. It runs <code>status</code> (live IMEI, SIM, network, signal), <code>generate</code> (a valid unique device-class IMEI), <code>apply</code> (records the outgoing IMEI to the ledger with a timestamp before sending <code>AT+EGMR</code>), a hard confirmation gate before <code>reset</code> (full router reboot, roughly 2-3 minutes of downtime), and <code>verify</code>. It is dormant on any instance without its own private <code>config/modem.json</code>. SSH credentials load from <code>.env</code>.</p>
+<p><strong>How to use it.</strong> Use to rotate or check the router IMEI for work testing. There is no alternative skill: it is the sole owner of the IMEI ledger. Run <code>/modem-tune status</code> for a read-only check.</p>
+<pre><code>/modem-tune status
+/modem-tune</code></pre>
+<p><strong>Customize.</strong> Device identity in <code>config/modem.json</code>; SSH via <code>MODEM_HOST</code>, <code>MODEM_USER</code>, <code>MODEM_SSH_PASSWORD</code> in <code>.env</code>. <code>disable-model-invocation: true</code>. Never reboot without the confirmation gate, never reuse an IMEI, and never document this tool or its credentials in corporate or exec-facing files.</p>
+</section>
 
   <h2>MCP servers</h2>
   <p>The engine ships <strong>zero baked-in MCP config</strong> — all MCP servers are registered at <strong>user scope</strong> in the machine-local <code>~/.claude.json</code> (gitignored, never in either repo). A fresh clone has no MCP servers until you re-register them with <code>claude mcp add ... -s user</code>.</p>

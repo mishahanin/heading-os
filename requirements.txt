@@ -451,7 +451,7 @@ websockets==16.0
     #   firecrawl-py
     #   google-genai
     #   uvicorn
-wrapt==1.17.3
+wrapt==2.2.2
     # via langfuse
 xlsxwriter==3.2.9
     # via

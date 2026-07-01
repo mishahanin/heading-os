@@ -234,6 +234,7 @@ SITE_NAV_GROUPS = [
         ("memory-odin.html", "Memory &amp; ODIN"),
         ("MODELS-SETUP.html", "AI models"),
         ("INTEGRATIONS-SETUP.html", "Integrations &amp; credentials"),
+        ("TELEGRAM-AND-ALERTS.html", "Telegram &amp; alerts"),
     ]),
     ("Reference", [
         ("ARCHITECTURE.html", "Architecture"),

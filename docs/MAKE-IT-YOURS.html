@@ -33,6 +33,7 @@
       <a href="memory-odin.html">Memory &amp; ODIN</a>
       <a href="MODELS-SETUP.html">AI models</a>
       <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
     </div>
     <div class="nav-group">
       <div class="label">Reference</div>
@@ -47,7 +48,7 @@
 <main class="content">
   <h1>Make it yours</h1>
   <p class="page-meta">The engine ships as one person&#x27;s working system. It carries 31 Concept&#x27;s house</p>
-  <!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+  <!-- version: 1.1.0 | last-updated: 2026-07-01 -->
 
 <p>The engine ships as one person&rsquo;s working system. It carries 31 Concept&rsquo;s house
 language, an executive&rsquo;s voice, and a built-in identity. None of that is wired into
@@ -57,7 +58,9 @@ is how you turn a fresh clone into <em>your</em> workspace, speaking in <em>your
 <blockquote>
 <p>Credentials for the services below are in their own guides:
 <a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a> (email, Telegram, Google, OSINT) and
-<a href="MODELS-SETUP.html">MODELS-SETUP</a> (Ollama, Council models).</p>
+<a href="MODELS-SETUP.html">MODELS-SETUP</a> (Ollama, Council models). For the full step-by-step
+on Telegram, your own capture and alert channels, Viraid, and the Sentinel monitor, see
+<a href="TELEGRAM-AND-ALERTS.html">TELEGRAM-AND-ALERTS</a>.</p>
 </blockquote>
 <hr />
 <h2 id="1-the-idea">1. The idea</h2>
@@ -199,6 +202,16 @@ what runs without a permission prompt, or to add or remove a hook on your machin
 <p>Change rules deliberately: several encode security controls (the outbound-send gate,
 the engine/data separation, the secret guards). Adapt the brand and voice rules
 freely; leave the security ones in place.</p>
+<h3 id="43-per-skill-overrides-that-survive-updates">4.3 Per-skill overrides that survive updates</h3>
+<p>A few skills read an optional personal override file at
+<code>config/skill-custom/{skill}.user.toml</code>. These <code>*.user.toml</code> files are gitignored, so they
+are the intended way to tune a skill&rsquo;s behavior without editing the tracked skill itself
+and without a future update overwriting your change. When a skill supports one, its
+SKILL.md says so. Prefer this over hand-editing a tracked skill whenever it is available.</p>
+<h3 id="44-telegram-viraid-and-sentinel">4.4 Telegram, Viraid, and Sentinel</h3>
+<p>These three deserve their own walkthrough: creating your capture and alert channels,
+pointing Viraid at your channel, and tuning what Sentinel watches and where it sends. See
+<a href="TELEGRAM-AND-ALERTS.html">TELEGRAM-AND-ALERTS</a>.</p>
 <hr />
 <h2 id="5-what-stays">5. What stays</h2>
 <p>Two things are the engine&rsquo;s provenance, not your personalization, and should not be
@@ -223,7 +236,65 @@ claude<span class="w">        </span><span class="c1"># then /prime</span>
 <p>A <code>/prime</code> that greets you by your role, cites your business profile, and routes in
 your voice means the workspace is yours.</p>
 <hr />
-<h2 id="7-reference">7. Reference</h2>
+<h2 id="7-what-happens-when-you-update-the-engine">7. What happens when you update the engine</h2>
+<p>The engine keeps improving, and you get new versions with a plain <code>git pull</code> (or the
+<code>/sync</code> command, which wraps it). The natural worry is: <em>will an update wipe the changes
+I made?</em> The answer depends on which kind of thing you changed. There are three kinds, and
+they behave very differently.</p>
+<h3 id="71-your-private-substance-is-never-touched">7.1 Your private substance is never touched</h3>
+<p>Everything personal lives <strong>outside</strong> the engine repository, so an engine update cannot
+reach it:</p>
+<ul>
+<li>Your whole data overlay (<code>.heading-os-data/</code>): CRM, knowledge, outputs, threads,
+  context, plans, your Sentinel config. This is a separate private repository; the engine
+  update has no idea it exists.</li>
+<li>Your credentials and machine-local files, which are gitignored inside the engine clone:
+  <code>.env</code>, <code>.sessions/</code>, <code>.sentinel/</code>, <code>.workspace-identity.json</code>,
+  <code>.claude/settings.local.json</code>, and the <code>config/skill-custom/*.user.toml</code> overrides from
+  section 4.3.</li>
+</ul>
+<p>Because git never tracks any of these, <code>git pull</code> leaves every one of them exactly as it
+was. Your facts, voice, keys, logins, and per-skill overrides all carry across updates
+untouched. This is the whole point of the engine/data split: your substance is not in the
+thing that gets updated.</p>
+<h3 id="72-a-brand-new-file-you-create-is-left-alone">7.2 A brand-new file you create is left alone</h3>
+<p>If you create something genuinely new, for example your own skill at
+<code>.claude/skills/my-skill/</code>, a plain <code>git pull</code> does <strong>not</strong> delete or overwrite it. An
+update only changes files the maintainer also changed; a file that exists only on your
+machine is invisible to it and stays put.</p>
+<p>The one situation to know about: if the maintainer later ships a skill with the <em>same
+folder name</em> you chose, the two collide. Avoid it by giving your own skills a distinctive
+name (a personal prefix such as <code>acme-</code> works well). A brand-new script, rule, or reference
+file behaves the same way: yours, untouched, unless a future update happens to add a file
+at the identical path.</p>
+<h3 id="73-editing-a-file-the-engine-also-ships-is-the-case-to-handle-with-care">7.3 Editing a file the engine also ships is the case to handle with care</h3>
+<p>This is the one that can bite. If you <strong>edit a tracked engine file</strong> (a shipped rule like
+<code>terminology.md</code>, or a shipped skill) and the maintainer later changes that same file, the
+update cannot simply fast-forward. HEADING OS pulls with <code>--ff-only</code> on purpose, so instead
+of silently merging or clobbering your edit, the pull <strong>stops and tells you</strong> the histories
+diverged. Nothing is lost; you are just asked to decide.</p>
+<p>Two clean ways to work so this never hurts:</p>
+<ol>
+<li><strong>Prefer a non-tracked seam when one exists.</strong> For behavior, use a
+   <code>config/skill-custom/*.user.toml</code> override (section 4.3). For your facts and voice, edit
+   the data-overlay documents (section 3.2), not engine rules. These live outside the
+   tracked engine, so there is nothing to collide.</li>
+<li><strong>When you must edit a tracked file, keep the edit as a small local commit</strong> and expect
+   to re-apply it occasionally. The three brand rules (<code>terminology.md</code>, <code>voice.md</code>,
+   <code>humanization.md</code>) are meant to be personalized this way. If a <code>git pull</code> reports a
+   conflict on one of them, it means the maintainer touched the same file; reconcile the
+   two versions by hand, keeping your brand language and their improvement.</li>
+</ol>
+<p>Rule of thumb: <strong>substance in the overlay, behavior through overrides, and only reach into
+tracked engine files when there is no seam, keeping those edits small and committed.</strong> Do
+that and updates stay boring, which is what you want.</p>
+<h3 id="74-what-an-update-actually-pulls">7.4 What an update actually pulls</h3>
+<p>For completeness, <code>git pull</code> (and <code>/sync</code>) refresh the shared engine: skills, rules,
+scripts, hooks, docs, config templates. On a managed multi-person deployment, <code>/sync</code> also
+refreshes the separate corporate-content clone. Neither ever pulls into your private data
+overlay; that repository you push and pull yourself.</p>
+<hr />
+<h2 id="8-reference">8. Reference</h2>
 <table>
 <thead>
 <tr>
@@ -264,12 +335,25 @@ your voice means the workspace is yours.</p>
 <td><code>.claude/settings.README.md</code></td>
 <td>How the two settings files relate</td>
 </tr>
+<tr>
+<td><code>config/skill-custom/*.user.toml</code></td>
+<td>Gitignored per-skill overrides (survive updates)</td>
+</tr>
+<tr>
+<td><code>.heading-os-data/</code></td>
+<td>Your private data overlay (never touched by an engine update)</td>
+</tr>
+<tr>
+<td><a href="TELEGRAM-AND-ALERTS.html">TELEGRAM-AND-ALERTS</a></td>
+<td>Telegram, capture/alert channels, Viraid, Sentinel</td>
+</tr>
 </tbody>
 </table>
 <hr />
 <p><em>HEADING OS · Make it yours · maintained by 31 Concept · see also
-<a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a> and <a href="MODELS-SETUP.html">MODELS-SETUP</a> for
-the services a personalized workspace connects to.</em></p>
+<a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP</a>, <a href="MODELS-SETUP.html">MODELS-SETUP</a>, and
+<a href="TELEGRAM-AND-ALERTS.html">TELEGRAM-AND-ALERTS</a> for the services a personalized workspace
+connects to.</em></p>
   <footer class="foot">
     <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>

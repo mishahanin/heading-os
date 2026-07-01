@@ -7,6 +7,11 @@ Consumed by: `.claude/skills/viraid/SKILL.md` when `/viraid` is invoked with no 
 > `VIRAID_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")/operations/viraid"`.
 > Every `outputs/operations/viraid/...` path below means `$VIRAID_DIR/...`. A bare relative path
 > resolves against the engine git root (empty `outputs/`) and must never be created there.
+>
+> **Channel-name note.** The channel is configurable via `VIRAID_CHANNEL_NAME` (default `M's VIRAID`).
+> Resolve `$VIRAID_CH` once (see SKILL.md § State Files) and use `"$VIRAID_CH"` in every fetch/delete
+> command below in place of a literal channel name. The canonical fetch commands in SKILL.md inline
+> the resolver so they run in one shell call.
 
 ### Step 1 -- Load State
 
@@ -14,7 +19,7 @@ Consumed by: `.claude/skills/viraid/SKILL.md` when `/viraid` is invoked with no 
 2. If the file doesn't exist (first run), initialize in memory:
    ```json
    {
-     "channel_name": "M's VIRAID",
+     "channel_name": "[resolved $VIRAID_CH, e.g. M's VIRAID]",
      "last_run": null,
      "last_message_id": 0,
      "stats": {
@@ -40,12 +45,12 @@ Consumed by: `.claude/skills/viraid/SKILL.md` when `/viraid` is invoked with no 
 2. Fetch:
    - If `last_message_id` > 0 (returning run):
      ```bash
-     cd "$(git rev-parse --show-toplevel)" && python ".claude/skills/telegram/scripts/telegram_client.py" --json read "M's VIRAID" --min-id [last_message_id] --limit 100 --reverse
+     cd "$(git rev-parse --show-toplevel)" && VIRAID_CH="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import load_env, get_workspace_root; load_env(get_workspace_root()); import os; print(os.environ.get('VIRAID_CHANNEL_NAME', 'M'+chr(39)+'s VIRAID'))")" && python ".claude/skills/telegram/scripts/telegram_client.py" --json read "$VIRAID_CH" --min-id [last_message_id] --limit 100 --reverse
      ```
      The `cd` anchors the shell at the workspace root -- a prior skill can leave it in a subdirectory, which breaks the root-relative script path. This fetches ONLY messages newer than the last processed ID, server-side. Zero wasted bandwidth.
    - If `last_message_id` == 0 (first run):
      ```bash
-     cd "$(git rev-parse --show-toplevel)" && python ".claude/skills/telegram/scripts/telegram_client.py" --json read "M's VIRAID" --limit 500 --reverse
+     cd "$(git rev-parse --show-toplevel)" && VIRAID_CH="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import load_env, get_workspace_root; load_env(get_workspace_root()); import os; print(os.environ.get('VIRAID_CHANNEL_NAME', 'M'+chr(39)+'s VIRAID'))")" && python ".claude/skills/telegram/scripts/telegram_client.py" --json read "$VIRAID_CH" --limit 500 --reverse
      ```
      If exactly 500 returned, re-fetch with `--limit 1000` (first-run only).
 3. Parse JSON. Messages arrive oldest-first (`--reverse`), no client-side sorting needed.
@@ -163,7 +168,7 @@ For each message, based on Misha's decision:
 
 **Channel cleanup (default behavior):** After executing actions for any approved/modified/skipped message, automatically delete it from Telegram:
 ```bash
-cd "$(git rev-parse --show-toplevel)" && python ".claude/skills/telegram/scripts/telegram_client.py" delete "M's VIRAID" [msg_id]
+cd "$(git rev-parse --show-toplevel)" && VIRAID_CH="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import load_env, get_workspace_root; load_env(get_workspace_root()); import os; print(os.environ.get('VIRAID_CHANNEL_NAME', 'M'+chr(39)+'s VIRAID'))")" && python ".claude/skills/telegram/scripts/telegram_client.py" delete "$VIRAID_CH" [msg_id]
 ```
 This prevents stale messages from accumulating in the channel. Only `keep-in-channel` skips deletion.
 
@@ -201,7 +206,7 @@ If `outputs/operations/viraid/tasks.md` doesn't exist yet, create it:
 ```markdown
 # Viraid Action Items
 
-> Captured from M's VIRAID Telegram channel. Managed by `/viraid`.
+> Captured from the VIRAID Telegram channel ($VIRAID_CH). Managed by `/viraid`.
 > Last updated: YYYY-MM-DD
 
 ## Active

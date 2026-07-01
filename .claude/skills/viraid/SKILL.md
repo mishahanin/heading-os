@@ -7,7 +7,7 @@ model: sonnet
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "2.0"
+  version: "2.1"
 x-31c-orchestration:
   parallel_safe: partial
   shared_state:
@@ -30,7 +30,7 @@ x-31c-capability:
 ---
 # Viraid -- Virtual Assistant for Telegram Task Capture
 
-Reads new messages from **M's VIRAID** Telegram channel, categorizes them, enriches with workspace context (CRM, calendar, pipeline), proposes structured actions, and executes after Misha's approval. Nothing falls through the cracks.
+Reads new messages from the VIRAID Telegram channel (default **M's VIRAID**; set `VIRAID_CHANNEL_NAME` in `.env` to use your own), categorizes them, enriches with workspace context (CRM, calendar, pipeline), proposes structured actions, and executes after Misha's approval. Nothing falls through the cracks.
 
 ## State Files
 
@@ -44,6 +44,17 @@ VIRAID_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils
 Then `state.json` = `$VIRAID_DIR/state.json`, `tasks.md` = `$VIRAID_DIR/tasks.md`. Read and write
 only there. Never write viraid state into the engine tree (`.heading-os/outputs/...` must not be
 created) -- a bare relative path resolves against the engine git root, where `outputs/` does not exist.
+
+**Channel name is configurable.** The Telegram channel Viraid reads is NOT hardcoded. Resolve it
+once at run start; it comes from the `VIRAID_CHANNEL_NAME` env var (in `.env`), defaulting to
+`M's VIRAID` when unset:
+
+```bash
+VIRAID_CH="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import load_env, get_workspace_root; load_env(get_workspace_root()); import os; print(os.environ.get('VIRAID_CHANNEL_NAME', 'M'+chr(39)+'s VIRAID'))")"
+```
+
+Use `"$VIRAID_CH"` wherever a fetch/delete command names the channel. The canonical fetch commands
+below inline this resolver so they work in a single shell call.
 
 - **Ledger:** `$VIRAID_DIR/state.json` -- single source of truth for all processed messages
 - **Tasks:** `$VIRAID_DIR/tasks.md` -- active and completed action items
@@ -106,11 +117,12 @@ Steps 1-9 of the default `/viraid` invocation -- load state, fetch new messages,
 Critical guardrails that stay in this SKILL.md:
 
 - **Canonical fetch command (inlined so it survives any summary):**
-  - Returning run: `cd "$(git rev-parse --show-toplevel)" && python ".claude/skills/telegram/scripts/telegram_client.py" --json read "M's VIRAID" --min-id [last_message_id] --limit 100 --reverse`
+  - Returning run: `cd "$(git rev-parse --show-toplevel)" && VIRAID_CH="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import load_env, get_workspace_root; load_env(get_workspace_root()); import os; print(os.environ.get('VIRAID_CHANNEL_NAME', 'M'+chr(39)+'s VIRAID'))")" && python ".claude/skills/telegram/scripts/telegram_client.py" --json read "$VIRAID_CH" --min-id [last_message_id] --limit 100 --reverse`
   - First run: same with `--limit 500` and no `--min-id`.
   - `--json` is a GLOBAL flag that MUST come BEFORE the `read` subcommand. There is NO `fetch-channel`
     subcommand and NO `--after-id` flag -- use `read --min-id`. The script lives at
     `.claude/skills/telegram/scripts/telegram_client.py` (in the engine), never at `scripts/telegram_client.py`.
+  - The channel name comes from `$VIRAID_CH` (resolves `VIRAID_CHANNEL_NAME`, default `M's VIRAID`) -- see § State Files.
 - **Step 6 STOP gate:** after presenting proposed actions, halt and wait for Misha's explicit approve / modify / skip / keep-in-channel response. No execution before approval.
 - **Calendar check is mandatory** for any scheduling-related message -- run `sync-exchange.py --calendar --days 14`, read `reference/ceo-calendar-policy.md`, never propose a slot without verifying it's free.
 - **Channel deletion is the default cleanup** for all dispositions except `keep-in-channel`.

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rules reference</title>
+<meta name="description" content="The always-on behavioural layer: what governs every Claude Code session before a single skill runs.">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html" class="active">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Rules reference</h1>
+  <p class="page-meta">The always-on behavioural layer: what governs every Claude Code session before a single skill runs.</p>
+  <p>The always-on behavioural layer: what governs every Claude Code session before a single skill runs.</p>
+<p>Skills are invoked. Rules are always in force. Every file in <code>.claude/rules/</code> loads into the agent&rsquo;s context automatically, so the engine behaves consistently across sessions without anyone asking for it. This page is the catalogue of that layer, the rule equivalent of the <a href="skills-mcp-plugins.html">skills catalogue</a>.</p>
+<h2 id="how-rules-load">How rules load</h2>
+<p>Rules live as markdown files in <code>.claude/rules/</code>. Two kinds:</p>
+<ul>
+<li><strong>Always-on.</strong> No <code>paths:</code> frontmatter, so the rule is active in every session. Most rules are this kind.</li>
+<li><strong>Path-scoped.</strong> A <code>paths:</code> list in the frontmatter (glob patterns). The rule activates only when the work touches a matching path. Example: the DataStore rule loads only when you edit content or deliverables.</li>
+</ul>
+<p>You never invoke a rule. You change the engine&rsquo;s behaviour by editing or adding rule files, then the change is in force on the next session. A rule that changes voice, classification, or a safety control is load-bearing: read the rule&rsquo;s own &ldquo;Change control&rdquo; note before editing it.</p>
+<h2 id="the-rules-by-function">The rules, by function</h2>
+<h3 id="voice-and-prose">Voice and prose</h3>
+<p>Every piece of natural-language output the engine produces passes through this group.</p>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Scope</th>
+<th>What it enforces</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>voice.md</code></td>
+<td>Always-on</td>
+<td>Core communication style: truth first, draft-then-iterate, bilingual reply matching the user&rsquo;s language, no structural changes without approval, the canonical &ldquo;no double dashes&rdquo; rule.</td>
+</tr>
+<tr>
+<td><code>humanization.md</code></td>
+<td>Always-on</td>
+<td>Writes all prose so it reads as written by a person, not a machine: specificity density, committed stance, deliberate rhythm, a banned-vocabulary list, and a test-before-rewriting calibration gate.</td>
+</tr>
+<tr>
+<td><code>hidden-chars.md</code></td>
+<td>Always-on</td>
+<td>Zero invisible Unicode in any output (zero-width spaces, soft hyphens, non-breaking spaces, BOM). Validated with <code>scripts/sanitize-text.py</code>.</td>
+</tr>
+<tr>
+<td><code>terminology.md</code></td>
+<td>Always-on</td>
+<td>House vocabulary: the Navigation Principle, operational states, and the correct product and philosophy terms. See the <a href="GLOSSARY.html">glossary</a>.</td>
+</tr>
+<tr>
+<td><code>voss.md</code></td>
+<td>Always-on</td>
+<td>Chris Voss tactical-empathy overlay on all outgoing communication: labels, calibrated questions, precise numbers, never split the difference.</td>
+</tr>
+<tr>
+<td><code>output-naming.md</code></td>
+<td>Always-on</td>
+<td>The <code>YYYY-MM-DD_{type}_{slug}.{ext}</code> naming standard for everything written under <code>outputs/</code>, so the tree stays searchable and sortable.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="security-and-safety">Security and safety</h3>
+<p>The controls with teeth. These are enforced by hooks and code, not by prose alone. See the <a href="SECURITY-MODEL.html">security model</a> and the <a href="HOOKS-REFERENCE.html">hooks reference</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Scope</th>
+<th>What it enforces</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lethal-trifecta.md</code></td>
+<td>Always-on</td>
+<td>The one control every send-capable path inherits: outbound send is always human-gated, never autonomous. An agent may draft and queue, a human clicks before anything leaves.</td>
+</tr>
+<tr>
+<td><code>tiered-risk.md</code></td>
+<td>Path-scoped</td>
+<td>The three-tier risk gate (<code>autonomous</code> / <code>notify</code> / <code>gated</code>) for Action Queue cards, and the invariant that a send-capable action always floors to <code>gated</code> regardless of config.</td>
+</tr>
+<tr>
+<td><code>security.md</code></td>
+<td>Always-on</td>
+<td>Where secrets belong (never in tracked files), the defence layers, credential rotation, and incident response.</td>
+</tr>
+<tr>
+<td><code>classification.md</code></td>
+<td>Always-on</td>
+<td>Record classification (engine / private / corporate) driven by <code>config/routing-map.yaml</code>. The fail-closed direction that keeps real data out of the engine.</td>
+</tr>
+<tr>
+<td><code>vpn-preflight.md</code></td>
+<td>Always-on</td>
+<td>A confirmation gate before browsing operations that public services block from datacenter IPs (YouTube, Google, LinkedIn, some OSINT).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="workflow-and-interaction">Workflow and interaction</h3>
+<p>How the engine interprets a request and routes it to the right work.</p>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Scope</th>
+<th>What it enforces</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prompt-refinement.md</code></td>
+<td>Always-on</td>
+<td>The interpret then clarify then await-approval flow before acting, plus the <code>/align</code>, <code>/devil</code>, and <code>/burst</code> escalations and the <code>!</code> escape valve.</td>
+</tr>
+<tr>
+<td><code>skill-router.md</code></td>
+<td>Always-on</td>
+<td>Matches a natural-language message to the right skill, with a full skill registry, exclusions, and compound-trigger handoff.</td>
+</tr>
+<tr>
+<td><code>skill-orchestrator.md</code></td>
+<td>Always-on</td>
+<td>Detects compound workflows and dispatches parallel research agents while serialising writes, bounded by a concurrency cap and approval gates.</td>
+</tr>
+<tr>
+<td><code>console-first.md</code></td>
+<td>Always-on</td>
+<td>Every capability must be operable from the terminal and chat. The web dashboard is a convenience layer, never a dependency.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="corporate-output-and-design">Corporate output and design</h3>
+<p>Loads mostly when producing external-facing or visual artifacts.</p>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Scope</th>
+<th>What it enforces</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>corporate-docs.md</code></td>
+<td>Always-on</td>
+<td>Five external doctypes (letter, proposal, partnership doc, official doc, one-pager) auto-route to their locked branded templates with an announced skill selection.</td>
+</tr>
+<tr>
+<td><code>datastore.md</code></td>
+<td>Path-scoped</td>
+<td>Validate factual claims against the authoritative source documents in <code>datastore/</code> before stating them as fact.</td>
+</tr>
+<tr>
+<td><code>visual-design-discipline.md</code></td>
+<td>Always-on</td>
+<td>Design every visual so it reads as intentional and human-made, not a templated default.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="engineering-and-operations">Engineering and operations</h3>
+<p>Governs development work on the engine itself.</p>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Scope</th>
+<th>What it enforces</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>development-standards.md</code></td>
+<td>Path-scoped</td>
+<td>Quality gates for every artifact: research first, restraint (simplicity and surgical changes), a debugging discipline, and the skill / script / reference standards.</td>
+</tr>
+<tr>
+<td><code>documentation.md</code></td>
+<td>Always-on</td>
+<td>Keep documentation in step with the code: which docs to update when a skill, script, rule, or structure changes, and the version-marker convention.</td>
+</tr>
+<tr>
+<td><code>trace-id.md</code></td>
+<td>Path-scoped</td>
+<td>One correlation ID per process tree, so a single grep answers &ldquo;what happened in this run?&rdquo; across the daemon logs.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="editing-a-rule">Editing a rule</h2>
+<ol>
+<li>Rules are plain markdown. Edit the file in <code>.claude/rules/</code>; the change is in force next session.</li>
+<li>A rule with <code>paths:</code> frontmatter is path-scoped. Omit <code>paths:</code> (or leave it empty and always-active) for an always-on rule.</li>
+<li>If your change touches a load-bearing control (a security gate, the classification map, voice), read that rule&rsquo;s &ldquo;Change control&rdquo; note first. Several controls, notably the send-gate invariant, are enforced by code and tests, not by the rule text.</li>
+<li>Keep the <code>Last Verified</code> date current, per the documentation rule.</li>
+</ol>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="skills-mcp-plugins.html">Skills, MCP and plugins</a>: the invoked layer that sits on top of these rules.</li>
+<li><a href="HOOKS-REFERENCE.html">Hooks reference</a>: the code that enforces several of these rules before a write lands.</li>
+<li><a href="SECURITY-MODEL.html">Security model</a>: how the safety rules compose into a defended system.</li>
+<li><a href="CONFIGURATION.html">Configuration</a>: the config files several rules read from.</li>
+</ul>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

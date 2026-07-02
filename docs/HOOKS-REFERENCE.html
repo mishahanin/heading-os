@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hooks reference</title>
+<meta name="description" content="The code that runs at fixed points in a session: before a tool call, after a write, at session start, on stop and compaction. Hooks are where several of the [rules](RULES-REFERENCE.html) stop being pr">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html" class="active">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Hooks reference</h1>
+  <p class="page-meta">The code that runs at fixed points in a session: before a tool call, after a write, at session start, on stop and compaction. Hooks are where several of the [rules](RULES-REFERENCE.html) stop being pr</p>
+  <p>The code that runs at fixed points in a session: before a tool call, after a write, at session start, on stop and compaction. Hooks are where several of the <a href="RULES-REFERENCE.html">rules</a> stop being prose and become enforcement.</p>
+<h2 id="what-a-hook-is">What a hook is</h2>
+<p>A hook is a script the Claude Code harness runs at a named event. HEADING OS ships its hooks in <code>.claude/hooks/</code> and wires them in the settings files:</p>
+<ul>
+<li><strong><code>.claude/settings.json</code></strong> wires the one fully portable hook (<code>data-path-redirect.py</code>) with a self-locating launcher, so it works from any clone location.</li>
+<li><strong><code>.claude/settings.local.{linux,macos,windows}.json</code></strong> wire the rest, per operating system. Copy the template for your platform to <code>.claude/settings.local.json</code> on a fresh clone.</li>
+</ul>
+<p>Two hook events can block work; the rest observe, enrich, or record.</p>
+<ul>
+<li><strong><code>PreToolUse</code></strong> runs before a tool call and can deny it. This is where blocking guards live (secret detection, the engine/data boundary, path redirection).</li>
+<li><strong><code>PostToolUse</code></strong> runs after a tool call. It cannot un-write a file, so its guards are advisory or corrective (hidden-character scan, injection detection).</li>
+<li><strong><code>SessionStart</code></strong>, <strong><code>Stop</code></strong>, <strong><code>PostCompact</code></strong>, and <strong><code>statusLine</code></strong> run around the session lifecycle: priming context, offering checkpoints, saving handoffs, rendering the status line.</li>
+</ul>
+<h2 id="pretooluse-can-block">PreToolUse (can block)</h2>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data-path-redirect.py</code></td>
+<td>Redirects data-relative tool paths to the resolved data root, so a <code>Read</code>/<code>Write</code>/<code>Edit</code>/<code>Grep</code>/<code>Glob</code> aimed at a data path lands in the private overlay, not the engine tree. The one hook wired in the portable <code>settings.json</code>.</td>
+</tr>
+<tr>
+<td><code>_dispatch.py</code></td>
+<td>The consolidated PreToolUse guard on <code>Write</code>/<code>Edit</code>. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, and the personal-threads protection.</td>
+</tr>
+</tbody>
+</table>
+<p><code>prevent-secrets.py</code>, <code>protect-corporate.py</code>, <code>protect-docs.py</code>, and <code>protect-personal-threads.py</code> are thin compatibility shims that delegate to <code>_dispatch.py</code>. They exist so older settings files that reference the individual script names keep working.</p>
+<h2 id="posttooluse-observe-and-correct">PostToolUse (observe and correct)</h2>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>post-write-sanitize.py</code></td>
+<td>Scans every written or edited file for invisible Unicode characters and flags contamination. Enforces the <a href="RULES-REFERENCE.html">hidden-characters rule</a>.</td>
+</tr>
+<tr>
+<td><code>prompt-guard.py</code></td>
+<td>Advisory detection of prompt-injection patterns in ingest-path files (<code>knowledge/</code>, <code>datastore/</code>, <code>crm/contacts/</code>), the paths where untrusted third-party text lands.</td>
+</tr>
+<tr>
+<td><code>context-monitor.py</code></td>
+<td>Warns when the context window approaches capacity, so long sessions get a checkpoint before they run out of room.</td>
+</tr>
+<tr>
+<td><code>sync-docs.py</code></td>
+<td>Auto-syncs <code>templates/</code> to <code>docs/</code> when documentation files change, keeping the two in step per the documentation rule.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="sessionstart">SessionStart</h2>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>session-start.py</code></td>
+<td>Surfaces urgent CRM contacts and data-freshness alerts at the start of a session.</td>
+</tr>
+<tr>
+<td><code>memory-inject.py</code></td>
+<td>Loads the auto-memory index (<code>MEMORY.md</code> pointers) into context on startup.</td>
+</tr>
+<tr>
+<td><code>memory-reconcile.py</code></td>
+<td>Reconciles the native harness memory store with the workspace auto-memory files.</td>
+</tr>
+<tr>
+<td><code>checkpoint-inject.py</code></td>
+<td>On <code>compact</code>, <code>clear</code>, or <code>resume</code>, injects the latest saved handoff so work continues across a context reset.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="session-lifecycle">Session lifecycle</h2>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Event</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>checkpoint-offer.py</code></td>
+<td><code>Stop</code></td>
+<td>Offers to save a checkpoint at rising context-usage thresholds.</td>
+</tr>
+<tr>
+<td><code>checkpoint-save.py</code></td>
+<td><code>PostCompact</code></td>
+<td>Saves a session handoff to the archive after a compaction, so the next window resumes cleanly.</td>
+</tr>
+<tr>
+<td><code>checkpoint-statusline.py</code></td>
+<td><code>statusLine</code></td>
+<td>Renders the status line, including context-usage and checkpoint state.</td>
+</tr>
+<tr>
+<td><code>bridge-hook.py</code></td>
+<td>(router)</td>
+<td>Feeds session events to the optional bridge dashboard daemon. Present only when the bridge is in use; harmless when it is not.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="adding-or-changing-a-hook">Adding or changing a hook</h2>
+<ol>
+<li>Write the script in <code>.claude/hooks/</code>. A hook reads the harness event JSON on stdin and, for a blocking <code>PreToolUse</code> hook, writes a decision to stdout.</li>
+<li>Wire it in the settings file for its event: <code>settings.json</code> for a portable, self-locating hook, or the per-OS <code>settings.local.{os}.json</code> templates for the rest.</li>
+<li>A <code>PreToolUse</code> hook that denies work must fail safe and fail loud: block on the dangerous case, and print a plain reason so the operator knows why.</li>
+<li>Keep blocking logic in <code>PreToolUse</code>. A <code>PostToolUse</code> hook cannot prevent a write that already happened; use it to detect, correct, or record.</li>
+</ol>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="RULES-REFERENCE.html">Rules reference</a>: the behavioural layer these hooks enforce.</li>
+<li><a href="SECURITY-MODEL.html">Security model</a>: how the blocking hooks compose with the push-time scan and the send-gate.</li>
+<li><a href="CONFIGURATION.html">Configuration</a>: the config files the hooks and guards read.</li>
+</ul>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

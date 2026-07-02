@@ -115,7 +115,7 @@ If you find a vulnerability, please report it privately (see SECURITY.md) rather
 
 ## Status
 
-`v0.1.0`. The architecture, the security model, and the data seam are stable and load-bearing. Skills and daemons evolve. Interfaces may change between minor versions while the project is pre-1.0.
+`v0.1.0`. The architecture, the security model, and the data seam are stable and load-bearing. Skills and daemons evolve. Interfaces may change between minor versions while the project is pre-1.0. See **[ROADMAP.md](ROADMAP.md)** for direction and **[CHANGELOG.md](CHANGELOG.md)** for what has changed.
 
 ## Contributing
 

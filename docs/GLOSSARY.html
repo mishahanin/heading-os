@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glossary</title>
+<meta name="description" content="The vocabulary the engine and its documentation use. Two kinds: the operating philosophy (which you can adopt or rename for your own house), and the engine mechanics (which are structural).">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="GLOSSARY.html" class="active">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Glossary</h1>
+  <p class="page-meta">The vocabulary the engine and its documentation use. Two kinds: the operating philosophy (which you can adopt or rename for your own house), and the engine mechanics (which are structural).</p>
+  <p>The vocabulary the engine and its documentation use. Two kinds: the operating philosophy (which you can adopt or rename for your own house), and the engine mechanics (which are structural).</p>
+<h2 id="operating-philosophy">Operating philosophy</h2>
+<p>HEADING OS is named after the way it frames work. This vocabulary runs through the skills, the rules, and the outputs. On a fresh clone you can keep it, or rename it to your own via <a href="MAKE-IT-YOURS.html">make it yours</a>; the <a href="RULES-REFERENCE.html">terminology rule</a> enforces whichever set you choose.</p>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Navigation Principle</strong></td>
+<td>The core idea: set a heading and hold it, correcting course as conditions change, rather than steering toward a fixed point and hoping. Durable state over one-shot prompts.</td>
+</tr>
+<tr>
+<td><strong>Operational state</strong></td>
+<td>A sustained condition you maintain, not a target you hit once. Priorities are framed as states to hold.</td>
+</tr>
+<tr>
+<td><strong>Heading</strong></td>
+<td>The direction of movement. Adjustable, unlike a fixed destination.</td>
+</tr>
+<tr>
+<td><strong>Sea state</strong></td>
+<td>The external conditions affecting operations.</td>
+</tr>
+<tr>
+<td><strong>Course correction</strong></td>
+<td>An adjustment that restores an operational state after drift.</td>
+</tr>
+<tr>
+<td><strong>Drift</strong></td>
+<td>Unconscious movement out of an operational state.</td>
+</tr>
+<tr>
+<td><strong>State check</strong></td>
+<td>A short diagnostic assessment that replaces the traditional long review.</td>
+</tr>
+<tr>
+<td><strong>Crunch mode</strong></td>
+<td>A heightened operational state: compressed decisions, tightened communication, zero tolerance for drift.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="31c-product-vocabulary">31C product vocabulary</h2>
+<p>These are the author&rsquo;s company terms. They appear in the default data examples and some skills. On your own clone you would replace them with your own.</p>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>31C / 31 Concept</strong></td>
+<td>The company that builds and maintains HEADING OS.</td>
+</tr>
+<tr>
+<td><strong>Tribe</strong></td>
+<td>The company&rsquo;s people. The house word for the team.</td>
+</tr>
+<tr>
+<td><strong>ODUN.ONE</strong></td>
+<td>31C&rsquo;s sovereign deep-packet-intelligence platform.</td>
+</tr>
+<tr>
+<td><strong>DPI+</strong></td>
+<td>Deep Packet Intelligence, the next generation beyond traditional deep packet inspection.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="engine-mechanics">Engine mechanics</h2>
+<p>Structural terms. These are the same on every clone.</p>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Engine</strong></td>
+<td>This repository (<code>.heading-os</code>): skills, scripts, rules, hooks, tests. Shareable, public, no real data.</td>
+</tr>
+<tr>
+<td><strong>Data</strong></td>
+<td>Your separate private repository (<code>.heading-os-data</code>): CRM, knowledge, outputs, threads, context. Never in the engine, never leaked.</td>
+</tr>
+<tr>
+<td><strong>Data root</strong></td>
+<td>The single seam (<code>get_data_root()</code>) through which the engine resolves your data repository at runtime, as a sibling directory or via <code>HEADING_OS_DATA</code>.</td>
+</tr>
+<tr>
+<td><strong>Skill</strong></td>
+<td>A slash-command workflow (in <code>.claude/skills/</code>) invoked from natural language by the router. See the <a href="skills-mcp-plugins.html">skills catalogue</a>.</td>
+</tr>
+<tr>
+<td><strong>Rule</strong></td>
+<td>An always-on behavioural file (in <code>.claude/rules/</code>) that governs the session without being invoked. See the <a href="RULES-REFERENCE.html">rules reference</a>.</td>
+</tr>
+<tr>
+<td><strong>Hook</strong></td>
+<td>A script the harness runs at a fixed event (before a tool call, after a write, at session start). See the <a href="HOOKS-REFERENCE.html">hooks reference</a>.</td>
+</tr>
+<tr>
+<td><strong>Daemon</strong></td>
+<td>An optional always-on background service (the bridge dashboard, mail and calendar sync), driven from the CLI, never required through a browser. See <a href="daemons.html">daemons</a>.</td>
+</tr>
+<tr>
+<td><strong>Router</strong></td>
+<td>The <code>skill-router</code> rule that maps a natural-language message to the right skill.</td>
+</tr>
+<tr>
+<td><strong>Classification</strong></td>
+<td>The engine / private / corporate destination of a record, resolved from <code>config/routing-map.yaml</code>. See <a href="CONFIGURATION.html">configuration</a>.</td>
+</tr>
+<tr>
+<td><strong>Leak guard</strong></td>
+<td>A code layer that keeps private data out of the engine tree. Part of the <a href="SECURITY-MODEL.html">security model</a>.</td>
+</tr>
+<tr>
+<td><strong>Lethal trifecta</strong></td>
+<td>The failure mode where private-data access, untrusted content, and outbound send meet in one execution. The engine keeps the send leg permanently human-gated.</td>
+</tr>
+<tr>
+<td><strong>Send-gate</strong></td>
+<td>The control that makes every outbound send require an explicit human click. Enforced in code, not just policy.</td>
+</tr>
+<tr>
+<td><strong>Action Queue</strong></td>
+<td>The single lane where proactive agents deposit drafted actions for a go / no-go, driven from the terminal.</td>
+</tr>
+<tr>
+<td><strong>ODIN</strong></td>
+<td>The persistent knowledge brain: ingests material, builds principles, gives referenced advice. See <a href="memory-odin.html">memory and ODIN</a>.</td>
+</tr>
+<tr>
+<td><strong>Recall</strong></td>
+<td>Workspace-wide semantic search over the local memory index, answered only from retrieved sources with citations.</td>
+</tr>
+<tr>
+<td><strong>Console-first</strong></td>
+<td>The rule that every capability works from the terminal and chat; the dashboard is convenience, never a dependency.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="RULES-REFERENCE.html">Terminology rule</a>: enforces the vocabulary above.</li>
+<li><a href="MAKE-IT-YOURS.html">Make it yours</a>: renaming the philosophy and product vocabulary for your own house.</li>
+<li><a href="ARCHITECTURE.html">Architecture</a>: how the engine mechanics fit together.</li>
+</ul>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

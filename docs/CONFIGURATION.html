@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configuration</title>
+<meta name="description" content="Everything in config/ that shapes how the engine classifies, routes, and fails over. These files are engine code (shareable, no secrets). Real credentials live in the gitignored .env and .session">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html" class="active">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Configuration</h1>
+  <p class="page-meta">Everything in config/ that shapes how the engine classifies, routes, and fails over. These files are engine code (shareable, no secrets). Real credentials live in the gitignored .env and .session</p>
+  <p>Everything in <code>config/</code> that shapes how the engine classifies, routes, and fails over. These files are engine code (shareable, no secrets). Real credentials live in the gitignored <code>.env</code> and <code>.sessions/</code>, never here. See <a href="INTEGRATIONS-SETUP.html">integrations and credentials</a> for where secrets go.</p>
+<h2 id="the-files">The files</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What it drives</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>routing-map.yaml</code></td>
+<td>The engine / data / corporate classifier.</td>
+</tr>
+<tr>
+<td><code>tool-risk.json</code></td>
+<td>The Action Queue risk ledger and the send-gate.</td>
+</tr>
+<tr>
+<td><code>memory-index.yaml</code></td>
+<td>The <code>/recall</code> associative-memory index.</td>
+</tr>
+<tr>
+<td><code>llm_fallback.yaml</code></td>
+<td>Model failover chains.</td>
+</tr>
+<tr>
+<td><code>wizard-questions.yaml</code></td>
+<td>The <code>/setup-wizard</code> question bank.</td>
+</tr>
+<tr>
+<td><code>schemas/</code></td>
+<td>JSON schemas for CRM records.</td>
+</tr>
+<tr>
+<td><code>wizard-templates/</code></td>
+<td>Document templates the setup wizard fills in.</td>
+</tr>
+<tr>
+<td><code>skill-custom/</code></td>
+<td>Local per-clone skill overrides.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="routing-mapyaml-the-classifier"><code>routing-map.yaml</code>: the classifier</h2>
+<p>The single source of truth for where a record belongs. Every path resolves to one of three destinations:</p>
+<ul>
+<li><code>engine</code>: code, shareable, eventually public (<code>.heading-os</code>).</li>
+<li><code>private</code>: your private data, never shared (<code>.heading-os-data</code>).</li>
+<li><code>corporate</code>: content shared down to a team, not public.</li>
+</ul>
+<p>Resolution is longest-match: the most-specific matching key wins, otherwise the map <code>default</code> applies. The default is <code>engine</code>, but every data directory (<code>crm/</code>, <code>knowledge/</code>, <code>outputs/</code>, <code>threads/</code>, <code>context/</code>) carries an explicit <code>private</code> rule, so real data fails closed. A broken map forces the default to <code>private</code>, the safe direction. This is the file the <a href="RULES-REFERENCE.html">classification rule</a>, the leak guard, and the push-time wall all read. Add a rule by appending its path under <code>rules:</code>, then run <code>scripts/classification-health.py</code> to verify.</p>
+<h2 id="tool-riskjson-the-send-gate-ledger"><code>tool-risk.json</code>: the send-gate ledger</h2>
+<p>Maps each Action Queue <code>action_type</code> to a risk tier: <code>autonomous</code> (read-only, no click), <code>notify</code> (reversible, auto-applied with one-click undo), or <code>gated</code> (irreversible outbound send, requires an explicit human click). The invariant: any <code>action_type</code> in the <code>send_capable</code> set floors to <code>gated</code> no matter what its <code>tiers</code> entry says, and an unknown type also resolves <code>gated</code>. This is what makes the <a href="SECURITY-MODEL.html">lethal-trifecta control</a> impossible to defeat by editing config. The ledger is data; the send-gate is code, and tests assert a tampered ledger cannot auto-send.</p>
+<h2 id="memory-indexyaml-the-recall-index"><code>memory-index.yaml</code>: the recall index</h2>
+<p>Drives <code>scripts/memory-index.py</code>, the local associative-memory index behind <code>/recall</code>: which workspace layers to embed, the on-machine embedder (<code>bge-m3</code> via Ollama), the salience threshold, and the air-gap denylist that keeps sensitive layers out of the index. Runs entirely on-machine at zero API cost. See <a href="memory-odin.html">memory and ODIN</a>.</p>
+<h2 id="llm_fallbackyaml-model-failover"><code>llm_fallback.yaml</code>: model failover</h2>
+<p>Maps each Anthropic model tier to an ordered fallback chain. When a primary call fails with a retriable error (5xx, 429, timeout, connection reset), the caller cascades through the chain instead of failing the whole operation. See <a href="MODELS-SETUP.html">AI models</a>.</p>
+<h2 id="wizard-questionsyaml-and-wizard-templates"><code>wizard-questions.yaml</code> and <code>wizard-templates/</code></h2>
+<p>The <code>wizard-questions.yaml</code> bank is the authoritative set of questions <code>/setup-wizard</code> asks a fresh clone. Question IDs are immutable once shipped: adding questions is safe, removing them is not. The <code>wizard-templates/</code> directory holds the document templates the wizard fills from your answers (business info, personal info, voice, calendar policy). See <a href="MAKE-IT-YOURS.html">make it yours</a>.</p>
+<h2 id="schemas"><code>schemas/</code></h2>
+<p>JSON schemas for CRM records: <code>crm-contact.schema.json</code>, <code>crm-relationship.schema.json</code>, and <code>crm-address-book.schema.json</code>. They validate the shape of contact data written by the <code>/crm</code> skill.</p>
+<h2 id="skill-custom"><code>skill-custom/</code></h2>
+<p>A place for local, per-clone skill overrides that should not ship with the engine. See its <code>README.md</code> for the override convention.</p>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="RULES-REFERENCE.html">Rules reference</a>: the rules that read these files.</li>
+<li><a href="SECURITY-MODEL.html">Security model</a>: the classifier and the send-gate in context.</li>
+<li><a href="INTEGRATIONS-SETUP.html">Integrations and credentials</a>: where secrets go instead of <code>config/</code>.</li>
+</ul>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin / 31 Concept. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+</body>
+</html>

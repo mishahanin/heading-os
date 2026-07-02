@@ -235,12 +235,20 @@ SITE_NAV_GROUPS = [
         ("MODELS-SETUP.html", "AI models"),
         ("INTEGRATIONS-SETUP.html", "Integrations &amp; credentials"),
         ("TELEGRAM-AND-ALERTS.html", "Telegram &amp; alerts"),
+        ("TROUBLESHOOTING.html", "Troubleshooting"),
+        ("EMERGENCY-PROCEDURES.html", "Emergency procedures"),
     ]),
     ("Reference", [
         ("ARCHITECTURE.html", "Architecture"),
         ("data-structure.html", "Data overlay structure"),
+        ("RULES-REFERENCE.html", "Rules reference"),
+        ("HOOKS-REFERENCE.html", "Hooks reference"),
+        ("CONFIGURATION.html", "Configuration"),
         ("SECURITY-MODEL.html", "Security model"),
+        ("engine-data-segregation-contract.html", "Engine/data contract"),
         ("EXTENDING.html", "Extending the engine"),
+        ("GLOSSARY.html", "Glossary"),
+        ("https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md", "Roadmap"),
         ("https://github.com/mishahanin/heading-os", "GitHub repository"),
     ]),
 ]
@@ -259,6 +267,50 @@ def _site_nav(active: str) -> str:
             + "\n    </div>"
         )
     return "\n".join(groups)
+
+
+NAV_BLOCK_RE = re.compile(
+    r'(<div class="nav-body" id="navbody">).*?(</div>\s*</aside>)',
+    re.DOTALL,
+)
+
+
+def sync_nav(html_path: Path, quiet: bool = False) -> bool:
+    """Rewrite ONLY the sidebar nav block of a hand-authored site page so its
+    navigation stays identical to SITE_NAV_GROUPS. The HTML-only pages (index,
+    prerequisites, daemons, ...) have no MD source, so regenerate() never touches
+    them; without this their baked-in nav silently drifts from the generated
+    pages as the nav grows."""
+    if not html_path.exists():
+        print(f"ERROR: HTML not found: {html_path}", file=sys.stderr)
+        return False
+    text = html_path.read_text(encoding="utf-8")
+    if not NAV_BLOCK_RE.search(text):
+        if not quiet:
+            print(f"  (no nav block in {html_path.name}, skipped)")
+        return True
+    replacement = (
+        '<div class="nav-body" id="navbody">\n'
+        + _site_nav(html_path.name)
+        + "\n  </div>\n</aside>"
+    )
+    new_text = NAV_BLOCK_RE.sub(lambda _m: replacement, text, count=1)
+    if new_text != text:
+        html_path.write_text(new_text, encoding="utf-8")
+        if not quiet:
+            print(f"  nav-synced {_display_path(html_path)}")
+    return True
+
+
+def sync_all_navs(quiet: bool = False) -> bool:
+    """Nav-sync every docs-site HTML page that has NO MD source (md-sourced pages
+    already get correct nav from regenerate())."""
+    ok = True
+    for html in sorted(SITE_DIR.glob("*.html")):
+        if html.with_suffix(".md").exists():
+            continue
+        ok = sync_nav(html, quiet=quiet) and ok
+    return ok
 
 
 SITE_SHELL = """<!DOCTYPE html>
@@ -429,7 +481,8 @@ def check_stale(pairs: list[Path]) -> list[tuple[Path, Path, float]]:
 def main():
     parser = argparse.ArgumentParser(description="Regenerate HTML docs from MD sources")
     parser.add_argument("md_file", nargs="?", help="Path to MD file to regenerate")
-    parser.add_argument("--all", action="store_true", help="Regenerate every tracked HTML/MD pair")
+    parser.add_argument("--all", action="store_true", help="Regenerate every tracked HTML/MD pair (also nav-syncs hand-authored site pages)")
+    parser.add_argument("--nav-sync", action="store_true", help="Only rewrite the sidebar nav of hand-authored site pages to match SITE_NAV_GROUPS")
     parser.add_argument("--check", action="store_true", help="List stale pairs without regenerating")
     parser.add_argument("--quiet", action="store_true", help="Suppress non-error output")
     args = parser.parse_args()
@@ -446,11 +499,18 @@ def main():
             print(f"  {_display_path(md)} is {days:.1f} days newer than {html.name}")
         sys.exit(1 if stale else 0)
 
+    if args.nav_sync:
+        ok = sync_all_navs(quiet=args.quiet)
+        sys.exit(0 if ok else 1)
+
     if args.all:
         pairs = find_tracked_pairs()
         if not args.quiet:
             print(f"Regenerating {len(pairs)} HTML file(s)...")
         ok = all(regenerate(md, quiet=args.quiet) for md in pairs)
+        if not args.quiet:
+            print("Syncing nav on hand-authored site pages...")
+        ok = sync_all_navs(quiet=args.quiet) and ok
         sys.exit(0 if ok else 1)
 
     if not args.md_file:

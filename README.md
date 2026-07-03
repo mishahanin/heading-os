@@ -13,13 +13,17 @@
 [![Lint](https://img.shields.io/badge/lint-ruff-261230.svg?logo=ruff&logoColor=white)](pyproject.toml)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-d97757.svg)](https://claude.com/product/claude-code)
 
+<br>
+
+<img src="docs/assets/demo.svg" alt="A read-only skill running against the bundled demo data" width="820">
+
 </div>
 
 ---
 
 HEADING OS is the workspace an executive actually runs their work from — research, communications, CRM, content, operations — with Claude Code as the agent and a strict line drawn between the code and the data. The code is a shareable engine. The data is a private repository the engine never contains and never leaks. That separation is the whole design, and it is enforced, not just intended.
 
-It is named after its operating philosophy: the **Navigation Principle** — you set a heading and hold it, correcting course as conditions change, rather than steering toward a fixed point and hoping. The same idea runs through the system: durable state over one-shot prompts, verified completion over hopeful timeouts, operational states over rigid targets.
+It is named after its operating philosophy: the **[Navigation Principle](docs/GLOSSARY.md)** — you set a heading and hold it, correcting course as conditions change, rather than steering toward a fixed point and hoping. The same idea runs through the system: durable state over one-shot prompts, verified completion over hopeful timeouts, operational states over rigid targets. New to the house vocabulary (heading, drift, operational state, engine vs data)? The **[glossary](docs/GLOSSARY.md)** defines every term in a line.
 
 ## The two-repository design
 

@@ -41,6 +41,15 @@ from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
 WORKSPACE_ROOT = get_workspace_root()
 SKILL_DIR = WORKSPACE_ROOT / ".claude" / "skills" / "marp"
 THEME_TEMPLATE = SKILL_DIR / "themes" / "31c.css.tmpl"
+# Selectable theme variants. Default "31c" is the internal-deck theme; "31c-investor"
+# is the brand-forward investor-deck master (palette #423BFF/#FF9235, GT Standard L).
+# THEME_TEMPLATE / THEME_NAME are reassigned in main() when --theme-variant is given,
+# so prepare_theme() (which reads the module global) and inject_frontmatter() follow.
+THEME_NAME = "31c"
+THEME_VARIANTS = {
+    "31c": (SKILL_DIR / "themes" / "31c.css.tmpl", "31c"),
+    "31c-investor": (SKILL_DIR / "themes" / "31c-investor.css.tmpl", "31c-investor"),
+}
 FONTS_DIR = SKILL_DIR / "themes" / "fonts"
 SAMPLE_DECK = SKILL_DIR / "examples" / "sample-deck.md"
 VERSION_PIN_FILE = WORKSPACE_ROOT / "scripts" / ".marp-version"
@@ -240,7 +249,7 @@ def inject_frontmatter(source_text: str, title: str = "", mode: str = "dark",
 
     fm = {
         "marp": True,
-        "theme": "31c",
+        "theme": THEME_NAME,
         "paginate": True,
         "size": "16:9",
         "class": mode,
@@ -473,6 +482,11 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
             "--theme", str(theme_path),
             "--allow-local-files",
         ]
+        # The investor master expresses multi-element grid layouts (stat rows, feature
+        # cards, comparison panels) with inline HTML, so enable HTML for that variant
+        # only. Internal decks keep HTML disabled (default) for safety.
+        if THEME_NAME == "31c-investor":
+            base_cmd.append("--html")
         if browser_path:
             base_cmd.extend(["--browser-path", browser_path])
 
@@ -979,6 +993,10 @@ def main():
     )
     parser.add_argument("--self-test", action="store_true", help="Run self-test")
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("--theme-variant", choices=sorted(THEME_VARIANTS),
+                        default="31c",
+                        help="Theme variant: '31c' (internal decks, default) or "
+                             "'31c-investor' (brand-forward investor master).")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -1011,6 +1029,13 @@ def main():
     watch_p.add_argument("action", nargs="?", default=None, help="Path to watch, or 'stop'/'status'")
 
     args = parser.parse_args()
+
+    # Select theme variant (default "31c" keeps all existing behavior). prepare_theme()
+    # and inject_frontmatter() read these module globals, so reassigning here is enough.
+    variant = getattr(args, "theme_variant", "31c")
+    if variant != "31c":
+        global THEME_TEMPLATE, THEME_NAME
+        THEME_TEMPLATE, THEME_NAME = THEME_VARIANTS[variant]
 
     if args.self_test:
         result = self_test()

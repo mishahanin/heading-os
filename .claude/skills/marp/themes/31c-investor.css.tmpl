@@ -1,0 +1,401 @@
+/* @theme 31c-investor */
+
+/*
+ * 31 Concept - Investor Deck MARP Master
+ * Light-first, brand-forward. Reverse-engineered pixel-accurately from
+ * "31C Investor Deck (Master, 03-Jul-2026)". Design spec + reference renders:
+ *   datastore/brand/design-system/31c-deck-design-system.md
+ *
+ * Font placeholder {FONTS_DIR} is substituted by marp_render.py at render time.
+ * Select with:  python scripts/marp_render.py --theme-variant 31c-investor render deck.md
+ *
+ * Palette (canonical hex, from the deck):
+ *   indigo   #423BFF   (primary accent)     orange   #FF9235  (secondary accent)
+ *   ink      #2A2A2A   (text on light)      black    #000000  (dark bg)
+ *   navy     #14161F   (dark alt)           haze     #F3F3F3  (light bg)
+ *   paper    #F0EDE8   (warm off-white)     khaki    #E1E7C0  (highlight band)
+ *   mist     #D7D5D4   (gray card/divider)  periwinkle #747DBE (footer/muted)
+ */
+
+/* ================================================================
+   1. Font Faces  (GT Standard L = display, M = body, 31C Horizontal = dot-matrix)
+   ================================================================ */
+
+@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/GT-Standard-L-Standard-Medium.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/GT-Standard-L-Standard-Medium-Oblique.woff2') format('woff2'); font-weight: 500; font-style: oblique; font-display: swap; }
+@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/GT-Standard-L-Standard-Light.woff2') format('woff2'); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: 'GT Standard L'; src: url('{FONTS_DIR}/GT-Standard-L-Standard-Light-Oblique.woff2') format('woff2'); font-weight: 300; font-style: oblique; font-display: swap; }
+
+@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/GT-Standard-M-Standard-Medium.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/GT-Standard-M-Standard-Medium-Oblique.woff2') format('woff2'); font-weight: 500; font-style: oblique; font-display: swap; }
+@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/GT-Standard-M-Standard-Light.woff2') format('woff2'); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: 'GT Standard M'; src: url('{FONTS_DIR}/GT-Standard-M-Standard-Light-Oblique.woff2') format('woff2'); font-weight: 300; font-style: oblique; font-display: swap; }
+
+@font-face { font-family: '31C Horizontal'; src: url('{FONTS_DIR}/31CHorizontalT03-Clarity.woff2') format('woff2'); font-weight: normal; font-style: normal; font-display: swap; }
+
+/* ================================================================
+   2. Design Tokens
+   ================================================================ */
+
+:root {
+  --indigo: #423BFF;
+  --indigo-soft: #747DBE;
+  --orange: #FF9235;
+  --ink: #2A2A2A;
+  --black: #000000;
+  --navy: #14161F;
+  --haze: #F3F3F3;
+  --paper: #F0EDE8;
+  --khaki: #E1E7C0;
+  --mist: #D7D5D4;
+  --white: #FFFFFF;
+  --periwinkle: #747DBE;
+  --slate: #5B5E66;
+
+  --bg: var(--haze);
+  --fg: var(--ink);
+  --fg-muted: var(--slate);
+  --accent: var(--indigo);
+  --accent-2: var(--orange);
+  --card-bg: var(--white);
+  --rule: var(--mist);
+
+  --corner-color: var(--orange);
+  --corner-width: 5.6%;
+  --corner-height: 10%;
+
+  --font-display: 'GT Standard L', 'GT Standard M', Inter, system-ui, sans-serif;
+  --font-heading: 'GT Standard M', Inter, 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'GT Standard M', Inter, 'Segoe UI', system-ui, sans-serif;
+  --font-dot: '31C Horizontal', 'GT Standard M', Inter, system-ui, sans-serif;
+}
+
+/* ================================================================
+   3. Base Section  (light by default)
+   ================================================================ */
+
+section {
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 20px;
+  line-height: 1.5;
+  padding: 56px 70px;
+  width: 1280px;
+  height: 720px;
+  background-color: var(--bg);
+  color: var(--fg);
+  justify-content: flex-start;
+}
+
+/* Orange corner tab - the 31C signature (top-left). */
+section::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: var(--corner-width);
+  height: var(--corner-height);
+  background: var(--corner-color);
+  z-index: 10;
+}
+section.no-corner::before { display: none; }
+
+/* ================================================================
+   4. Typography
+   ================================================================ */
+
+section h1 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 44px;
+  line-height: 1.12;
+  letter-spacing: -0.012em;
+  margin: 0 0 6px 0;
+  color: var(--fg);
+}
+section h2 {
+  font-family: var(--font-heading);
+  font-weight: 300;
+  font-size: 22px;
+  line-height: 1.3;
+  color: var(--fg-muted);
+  margin: 0 0 20px 0;
+}
+section h3 {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: 20px;
+  line-height: 1.3;
+  margin: 0 0 10px 0;
+  color: var(--accent);
+}
+section p { margin: 0 0 12px 0; }
+section ul, section ol { margin: 0 0 12px 0; padding-left: 1.4em; }
+section li { margin-bottom: 6px; }
+section strong { font-weight: 500; color: var(--fg); }
+section em { font-style: oblique; }
+section a { color: var(--accent); text-decoration: none; }
+
+/* Content title with hairline under it. */
+section.content h1 {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 22px;
+}
+
+/* Emphasis helpers */
+.indigo { color: var(--indigo) !important; }
+.orange { color: var(--orange) !important; }
+.ink { color: var(--ink) !important; }
+.muted { color: var(--fg-muted) !important; }
+.eyebrow {
+  font-family: var(--font-heading); font-weight: 500;
+  font-size: 15px; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--accent);
+}
+.dotmatrix { font-family: var(--font-dot); letter-spacing: 0.06em; }
+
+/* ================================================================
+   5. Footer  (3-line block bottom-right, periwinkle)
+   ================================================================ */
+
+footer {
+  position: absolute;
+  right: 50px; bottom: 26px;
+  text-align: right;
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--periwinkle);
+  white-space: pre-line;
+}
+section.no-footer footer,
+section.title footer,
+section.section-break footer,
+section.closing footer { display: none; }
+
+section::after { color: var(--periwinkle); font-family: var(--font-body); font-size: 13px; }
+
+/* 31C dot-matrix wordmark, bottom-left (optional; add class .brandmark). */
+section.brandmark::after {
+  content: '31C';
+  font-family: var(--font-dot);
+  position: absolute;
+  left: 50px; bottom: 24px;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  color: var(--mist);
+}
+section.dark.brandmark::after { color: var(--white); }
+
+/* ================================================================
+   6. Cards, rules, bands  (reusable primitives)
+   ================================================================ */
+
+.card {
+  background: var(--card-bg);
+  border-top: 3px solid var(--accent);
+  padding: 22px 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.card.orange-rule { border-top-color: var(--orange); }
+.card.plain { border-top: none; }
+
+/* Left-border row (numbered lists, deal lists). */
+.row {
+  background: var(--white);
+  border-left: 5px solid var(--accent);
+  padding: 14px 22px;
+  margin: 0 0 12px 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.row.orange { border-left-color: var(--orange); }
+.row.khaki { background: var(--khaki); }
+.row.mist  { background: var(--mist); }
+
+/* Full-width highlight band (Defensible IP, callouts). */
+.band {
+  background: var(--khaki);
+  border-left: 6px solid var(--orange);
+  padding: 18px 26px;
+  color: var(--ink);
+}
+
+blockquote {
+  border-left: 4px solid var(--accent);
+  margin: 16px 0;
+  padding: 8px 22px;
+  background: var(--white);
+  font-style: oblique;
+  color: var(--fg-muted);
+}
+blockquote strong { color: var(--fg); }
+
+table { width: 100%; border-collapse: collapse; font-size: 18px; margin: 14px 0; }
+th { font-family: var(--font-heading); font-weight: 500; text-align: left; padding: 10px 12px; border-top: 2px solid var(--accent); border-bottom: 1px solid var(--rule); }
+td { padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+tr:nth-child(even) td { background: var(--paper); }
+
+/* ================================================================
+   7. Dark mode  (cover, section-break, closing, and .dark)
+   ================================================================ */
+
+section.dark,
+section.title,
+section.section-break,
+section.closing {
+  --bg: var(--black);
+  --fg: var(--white);
+  --fg-muted: var(--periwinkle);
+  --card-bg: #10121A;
+  --rule: #232340;
+  background-color: var(--bg);
+  color: var(--fg);
+}
+section.dark h1, section.title h1, section.section-break h1, section.closing h1 { color: var(--white); }
+
+/* Floating indigo squares motif (add spans with .sq in content, or decorative). */
+.sq { display: inline-block; width: 22px; height: 22px; background: var(--indigo); }
+
+/* ================================================================
+   8. Layout A: Title / Cover (dark)
+   ================================================================ */
+
+section.title {
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 60px 70px 88px;
+}
+section.title h1 {
+  font-family: var(--font-display);
+  font-size: 92px; line-height: 1.02; letter-spacing: -0.025em;
+  margin: 0 0 14px 0; border-bottom: none; padding-bottom: 0;
+}
+section.title h2 { font-size: 34px; font-weight: 300; color: var(--white); margin: 0 0 18px 0; }
+section.title p, section.title .tagline { font-size: 30px; color: var(--indigo); margin: 0; line-height: 1.25; }
+
+/* ================================================================
+   9. Layout B: Section-break / Divider (dark)
+   ================================================================ */
+
+section.section-break {
+  display: flex; flex-direction: column; justify-content: center; align-items: flex-start;
+  padding: 60px 70px;
+}
+section.section-break::before { display: block; }
+section.section-break h1 { font-size: 88px; font-weight: 500; line-height: 1.02; letter-spacing: -0.028em; margin: 0 0 10px 0; }
+section.section-break h2 { font-size: 34px; font-weight: 300; color: var(--indigo); margin: 0; }
+
+/* ================================================================
+   10. Layout C: Content (default body)
+   ================================================================ */
+
+section.content { display: flex; flex-direction: column; justify-content: flex-start; }
+
+/* ================================================================
+   11. Layout D: Stat-card row  (3-4 up)
+   Markup: <div class="stat-row"> <div class="stat"> <span class="num">$78B</span> ...
+   ================================================================ */
+
+.stat-row { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 24px; margin: 18px 0; }
+.stat {
+  background: var(--white); border-top: 3px solid var(--indigo);
+  padding: 26px 22px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.stat.orange { border-top-color: var(--orange); }
+.stat .num { display: block; font-family: var(--font-display); font-weight: 500; font-size: 64px; line-height: 1; color: var(--indigo); letter-spacing: -0.02em; }
+.stat.orange .num { color: var(--orange); }
+.stat .label { display: block; font-family: var(--font-heading); font-weight: 500; font-size: 20px; color: var(--ink); margin: 14px 0 8px; }
+.stat .cap { display: block; font-size: 15px; color: var(--fg-muted); }
+.source { font-size: 15px; color: var(--fg-muted); margin-top: 16px; }
+
+/* ================================================================
+   12. Layout E: Icon-feature cards (3-up)
+   ================================================================ */
+
+.feature-row { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 24px; margin: 24px 0; }
+.feature { background: var(--white); border-top: 3px solid var(--indigo); padding: 30px 26px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.feature .icon { font-size: 40px; color: var(--indigo); margin-bottom: 14px; }
+.feature .title { font-family: var(--font-heading); font-weight: 500; font-size: 24px; color: var(--indigo); margin-bottom: 12px; }
+.feature .body { font-size: 17px; color: var(--fg-muted); }
+
+/* ================================================================
+   13. Layout F: Numbered rows (dot-matrix numeral)
+   ================================================================ */
+
+.numrow { display: grid; grid-template-columns: 72px 1fr; align-items: center; gap: 8px 18px;
+  background: var(--khaki); border-left: 5px solid var(--indigo); padding: 12px 20px; margin: 0 0 12px 0; }
+.numrow.orange { border-left-color: var(--orange); }
+.numrow .n { font-family: var(--font-dot); font-size: 30px; color: var(--indigo); }
+.numrow.orange .n { color: var(--orange); }
+.numrow .t { font-family: var(--font-heading); font-weight: 500; font-size: 20px; color: var(--indigo); }
+.numrow.orange .t { color: var(--orange); }
+.numrow .d { grid-column: 2; font-size: 16px; color: var(--slate); }
+
+/* ================================================================
+   14. Layout G: Two-column comparison
+   ================================================================ */
+
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 18px; }
+.panel { background: var(--white); padding: 26px 28px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.panel h3 { margin-bottom: 18px; }
+.panel.alt h3 { color: var(--orange); }
+.panel.alt li, .panel.alt p { color: var(--orange); font-style: oblique; }
+.panel.us h3 { color: var(--indigo); }
+.panel.us li, .panel.us p { color: var(--indigo); font-style: oblique; }
+
+/* ================================================================
+   15. Layout H: Executive bio (photo-left, bullets-right)
+   ================================================================ */
+
+section.exec { display: grid; grid-template-columns: 34% 1fr; gap: 0 40px; align-items: start; padding: 0 70px 56px 0; }
+section.exec .photopanel { background: var(--mist); padding: 56px 32px 40px 70px; height: 720px; box-sizing: border-box; }
+section.exec .name { font-family: var(--font-display); font-weight: 500; font-size: 40px; color: var(--orange); margin: 18px 0 2px; }
+section.exec .role { font-size: 22px; color: var(--indigo); margin: 0 0 14px; }
+section.exec .bullets { padding-top: 56px; }
+section.exec .bullets li::marker { color: var(--indigo); }
+section.exec .pull { color: var(--periwinkle); font-style: oblique; font-size: 17px; margin-top: 22px; }
+section.exec .pull strong { color: var(--periwinkle); font-weight: 500; }
+
+/* ================================================================
+   16. Layout I: Team grid (6-up)
+   ================================================================ */
+
+.team { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 22px; margin-top: 18px; }
+.member { background: var(--white); padding: 20px 22px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.member .mname { font-family: var(--font-heading); font-weight: 500; font-size: 20px; color: var(--ink); }
+.member .mrole { font-size: 16px; color: var(--indigo); margin-bottom: 8px; }
+.member .mcap { font-size: 15px; color: var(--fg-muted); }
+
+/* ================================================================
+   17. Layout J: Big two-color statement
+   ================================================================ */
+
+section.statement { display: flex; flex-direction: column; justify-content: center; }
+section.statement h1 { font-family: var(--font-display); font-size: 84px; line-height: 1.04; letter-spacing: -0.025em; border-bottom: none; padding: 0; margin: 0; }
+section.statement .l2 { color: var(--orange); }
+
+/* ================================================================
+   18. Layout K: Phase timeline
+   ================================================================ */
+
+.phases { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; margin-top: 40px; }
+.phase .head { font-family: var(--font-dot); font-size: 26px; color: var(--indigo); margin-bottom: 12px; }
+.phase .card2 { background: var(--white); padding: 20px 22px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.phase .card2 .pt { color: var(--orange); font-family: var(--font-heading); font-weight: 500; font-size: 20px; margin-bottom: 6px; }
+.phase .card2 .pb { font-size: 15px; color: var(--slate); }
+
+/* ================================================================
+   19. Layout M: Closing / Thank you (dark)
+   ================================================================ */
+
+section.closing { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
+section.closing h1 { font-family: var(--font-dot); font-size: 120px; line-height: 1.0; letter-spacing: 0.02em; color: var(--white); margin: 0; }
+section.closing .link { color: var(--periwinkle); font-size: 22px; margin-top: 24px; }
+
+/* ================================================================
+   20. Images
+   ================================================================ */
+
+section img { max-width: 100%; height: auto; }
+section img[alt~="bg"] { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: -1; }
+section img[alt~="right"] { float: right; max-width: 45%; margin-left: 24px; }

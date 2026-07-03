@@ -128,6 +128,16 @@ Single-file dual-mode 31C theme with 7 layouts. Template: `.claude/skills/marp/t
 
 **Layouts:** title, content, two-column, quote, stats, section-break, closing
 
+### Investor theme variant (`--theme-variant 31c-investor`)
+
+Brand-forward master reverse-engineered from the 03-Jul-2026 Investor Deck. Light-first palette (indigo `#423BFF`, orange `#FF9235`), GT Standard L display faces, and the full archetype set (title, section-break, content, stat-row, feature cards, numbered rows, comparison, statement, phase timeline, team grid, exec bio, closing). Layouts use inline HTML, so this variant renders with `--html` enabled automatically.
+
+```bash
+python3 scripts/marp_render.py --theme-variant 31c-investor render <deck.md>
+```
+
+Set `theme: 31c-investor` in the deck frontmatter to match. Sample: `.claude/skills/marp/examples/31c-investor-sample.md`. Full design spec and reference renders: `datastore/brand/design-system/31c-deck-design-system.md`. The default variant (`31c`) is unchanged for internal decks.
+
 **Per-slide directives:**
 ```markdown
 <!-- _class: title | content | two-column | quote | stats | section-break | closing -->

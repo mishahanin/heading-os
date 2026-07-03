@@ -3,8 +3,11 @@
 HEADING OS is an operations engine for an AI executive assistant: a library of
 skills, always-on rules, automation scripts, and daemons that let Claude Code act
 as a strategic assistant across sessions. This repository is the **engine** — code
-only, no private data. It is built and maintained by Misha Hanin / 31 Concept (31C)
-and shared as an open framework.
+only, no private data. It is a personal project built and maintained by Misha
+Hanin and shared as an open framework. Misha is the Founder & CEO of 31 Concept
+(31C) and uses HEADING OS himself, but 31 Concept is not involved in it and bears
+no responsibility for it; any 31C-like vocabulary here is illustrative example
+data only.
 
 ## Engine / data separation
 

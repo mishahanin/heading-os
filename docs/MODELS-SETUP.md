@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-06-30 -->
+<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 # AI models & integrations
 
 How to connect every AI model HEADING OS uses beyond Claude itself: the local
@@ -381,6 +381,6 @@ running). A printed answer and exit `0` mean the voice is live.
 
 ---
 
-*HEADING OS · AI models & integrations · maintained by 31 Concept · see also
+*HEADING OS · AI models & integrations · maintained by Misha Hanin · see also
 [DEPLOYMENT](DEPLOYMENT.html) for the core install and [Memory & ODIN](memory-odin.html)
 for how recall feeds the brain.*

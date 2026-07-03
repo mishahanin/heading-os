@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 # Telegram and alerts
 
 Connect HEADING OS to Telegram, create your own capture and alert channels, and tune
@@ -384,6 +384,6 @@ the bot and check the daemon's log, which prints the chat ID it sees).
 
 ---
 
-*HEADING OS · Telegram and alerts · maintained by 31 Concept · see also
+*HEADING OS · Telegram and alerts · maintained by Misha Hanin · see also
 [INTEGRATIONS-SETUP](INTEGRATIONS-SETUP.html), [MAKE-IT-YOURS](MAKE-IT-YOURS.html), and
 [Daemons](daemons.html).*

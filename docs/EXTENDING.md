@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 # Extending the engine
 
 How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
@@ -176,6 +176,6 @@ apply the fix, watch it pass.
 
 ---
 
-*HEADING OS · Extending the engine · maintained by 31 Concept · see also
+*HEADING OS · Extending the engine · maintained by Misha Hanin · see also
 [Architecture](ARCHITECTURE.html) for how the pieces compose and
 [Security model](SECURITY-MODEL.html) for the controls your code inherits.*

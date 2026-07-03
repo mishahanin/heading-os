@@ -1,4 +1,4 @@
-<!-- version: 1.3.0 | last-updated: 2026-07-03 -->
+<!-- version: 1.3.1 | last-updated: 2026-07-03 -->
 # HEADING OS — Deployment & Setup
 
 The complete, zero-to-running guide for standing up a HEADING OS workspace from a
@@ -434,5 +434,5 @@ claude plugin install <plugin>@claude-plugins-official --scope project
 
 ---
 
-*HEADING OS · Deployment & Setup · maintained by 31 Concept · see also QUICKSTART for
+*HEADING OS · Deployment & Setup · maintained by Misha Hanin · see also QUICKSTART for
 the short version and the in-workspace `/prime` for live orientation.*

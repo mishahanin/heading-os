@@ -1,11 +1,11 @@
-<!-- version: 1.1.0 | last-updated: 2026-07-01 -->
+<!-- version: 1.2.0 | last-updated: 2026-07-03 -->
 # Make it yours
 
-The engine ships as one person's working system. It carries 31 Concept's house
-language, an executive's voice, and a built-in identity. None of that is wired into
-the code: it lives in editable rules, templates, and your own private data. This page
-is how you turn a fresh clone into *your* workspace, speaking in *your* voice about
-*your* work.
+The engine ships as one person's working system. It carries example house
+language borrowed from 31 Concept (the author's company), an executive's voice, and
+a built-in identity. None of that is wired into the code: it lives in editable rules,
+templates, and your own private data. This page is how you turn a fresh clone into
+*your* workspace, speaking in *your* voice about *your* work.
 
 > Credentials for the services below are in their own guides:
 > [INTEGRATIONS-SETUP](INTEGRATIONS-SETUP.html) (email, Telegram, Google, OSINT) and
@@ -165,10 +165,12 @@ pointing Viraid at your channel, and tuning what Sentinel watches and where it s
 Two things are the engine's provenance, not your personalization, and should not be
 scrubbed:
 
-- **Author attribution.** The engine is built and maintained by Misha Hanin /
-  31 Concept. That authorship is part of the project's identity and stays in the
-  code, the same way any open project keeps its authors. It does not leak into your
-  outputs: those use *your* voice and *your* facts from your data overlay.
+- **Author attribution.** The engine is a personal project built and maintained by
+  Misha Hanin. That authorship is part of the project's identity and stays in the
+  code, the same way any open project keeps its authors. (Misha is Founder & CEO of
+  31 Concept and uses HEADING OS himself, but 31C is not involved in the project and
+  bears no responsibility for it.) Attribution does not leak into your outputs: those
+  use *your* voice and *your* facts from your data overlay.
 - **License and notices.** `LICENSE` and `NOTICE` (Apache-2.0) govern your use. Keep
   them.
 
@@ -280,7 +282,7 @@ overlay; that repository you push and pull yourself.
 
 ---
 
-*HEADING OS · Make it yours · maintained by 31 Concept · see also
+*HEADING OS · Make it yours · maintained by Misha Hanin · see also
 [INTEGRATIONS-SETUP](INTEGRATIONS-SETUP.html), [MODELS-SETUP](MODELS-SETUP.html), and
 [TELEGRAM-AND-ALERTS](TELEGRAM-AND-ALERTS.html) for the services a personalized workspace
 connects to.*

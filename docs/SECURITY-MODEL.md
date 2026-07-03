@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 # Security model
 
 How HEADING OS protects your data and your principal. The controls here are
@@ -158,6 +158,6 @@ The engine enforces a great deal, but the first line of defense is you:
 
 ---
 
-*HEADING OS · Security model · maintained by 31 Concept · see also
+*HEADING OS · Security model · maintained by Misha Hanin · see also
 [Extending the engine](EXTENDING.html) for the developer-side gates and
 [Architecture](ARCHITECTURE.html) for how the controls sit in the whole.*

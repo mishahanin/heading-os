@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 # Architecture
 
 How the pieces fit. Claude Code is the agent; HEADING OS is the structure built around
@@ -115,6 +115,6 @@ All three are detailed in the **[Security model](SECURITY-MODEL.html)**.
 
 ---
 
-*HEADING OS · Architecture · maintained by 31 Concept · the Navigation Principle in
+*HEADING OS · Architecture · maintained by Misha Hanin · the Navigation Principle in
 software: durable state over one-shot prompts, verified completion over hopeful
 timeouts.*

@@ -108,6 +108,7 @@ rules:
   # the broader `datastore/: corporate` rule below.
   "datastore/intelligence/": private          # competitor/industry/market-reference intel — CEO-only
   "datastore/investment/": private            # investor decks + financial materials — CEO-only
+  "datastore/brand/design-system/": private   # embeds CEO-only investor-deck renders + figures — CEO-only
   "reference/workspace-overview.md": private  # decision: live catalogue of this CEO instance's internals
   # 2026-06-13 CEO audit: CEO strategic + personal reference content. Real partners
   # (PartnerCo, AllianceCo, DistributorCo), market-entry strategy, traction/financials,

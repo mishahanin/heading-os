@@ -1,4 +1,4 @@
-<!-- version: 1.2.0 | last-updated: 2026-07-01 -->
+<!-- version: 1.3.0 | last-updated: 2026-07-03 -->
 # HEADING OS — Deployment & Setup
 
 The complete, zero-to-running guide for standing up a HEADING OS workspace from a
@@ -378,6 +378,9 @@ the engine, stop — see the troubleshooting table.
 | `wsl --install` → "distribution already exists" | WSL is already installed. Skip it; just `wsl -d Ubuntu`. |
 | `cd~: command not found` | `cd` needs a space: `cd ~`. |
 | `python: command not found` | Ubuntu ships only `python3`, no pip. Use `uv run python …` and `uv sync`. Never system pip. |
+| `uv: command not found` | The installer put `uv` in `~/.local/bin`, not on this shell's PATH. Run `source $HOME/.local/bin/env` (or reopen the shell); confirm with `which uv`. |
+| `uv sync` picks the wrong Python, or `Python 3.11 not found` | Pin the interpreter: `uv python install 3.11`, then `uv sync`. Verify with `uv run python --version`. |
+| The commit secret gate never fires (a bad commit goes through) | The `pre-commit install` step in §7 was skipped. Run `uv run pre-commit install` in the engine clone; verify with `uv run python scripts/install-hooks.py --check`. |
 | `which claude` / `node` shows `/mnt/c/…` | Shell is using the Windows install. Re-source nvm (`. "$NVM_DIR/nvm.sh"`); confirm it resolves under `~/.nvm/…`. |
 | Browser won't open during `gh` / `claude` login | WSL has no default browser. Copy the URL + one-time code into your Windows browser manually. |
 | Claude trust prompt shows a system path | Don't trust `/mnt/c/WINDOWS/system32`. Exit, `cd <engine>`, relaunch `claude`, trust that. |

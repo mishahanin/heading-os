@@ -56,7 +56,7 @@
 <main class="content">
   <h1>HEADING OS — Deployment &amp; Setup</h1>
   <p class="page-meta">The complete, zero-to-running guide for standing up a HEADING OS workspace from a</p>
-  <!-- version: 1.2.0 | last-updated: 2026-07-01 -->
+  <!-- version: 1.3.0 | last-updated: 2026-07-03 -->
 
 <p>The complete, zero-to-running guide for standing up a HEADING OS workspace from a
 clean machine. Every command is generalized — substitute the <code>&lt;placeholders&gt;</code> for
@@ -455,6 +455,18 @@ the engine, stop — see the troubleshooting table.</p>
 <tr>
 <td><code>python: command not found</code></td>
 <td>Ubuntu ships only <code>python3</code>, no pip. Use <code>uv run python …</code> and <code>uv sync</code>. Never system pip.</td>
+</tr>
+<tr>
+<td><code>uv: command not found</code></td>
+<td>The installer put <code>uv</code> in <code>~/.local/bin</code>, not on this shell&rsquo;s PATH. Run <code>source $HOME/.local/bin/env</code> (or reopen the shell); confirm with <code>which uv</code>.</td>
+</tr>
+<tr>
+<td><code>uv sync</code> picks the wrong Python, or <code>Python 3.11 not found</code></td>
+<td>Pin the interpreter: <code>uv python install 3.11</code>, then <code>uv sync</code>. Verify with <code>uv run python --version</code>.</td>
+</tr>
+<tr>
+<td>The commit secret gate never fires (a bad commit goes through)</td>
+<td>The <code>pre-commit install</code> step in §7 was skipped. Run <code>uv run pre-commit install</code> in the engine clone; verify with <code>uv run python scripts/install-hooks.py --check</code>.</td>
 </tr>
 <tr>
 <td><code>which claude</code> / <code>node</code> shows <code>/mnt/c/…</code></td>

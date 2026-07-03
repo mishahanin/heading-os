@@ -17,16 +17,16 @@ HEADING OS is named after the way it frames work. This vocabulary runs through t
 | **State check** | A short diagnostic assessment that replaces the traditional long review. |
 | **Crunch mode** | A heightened operational state: compressed decisions, tightened communication, zero tolerance for drift. |
 
-## 31C product vocabulary
+## Example vocabulary (from the author's separate company)
 
-These are the author's company terms. They appear in the default data examples and some skills. On your own clone you would replace them with your own.
+These terms belong to the author's company, 31 Concept. They appear in the default data examples and some skills purely as illustration. HEADING OS is a personal project of Misha Hanin, not a 31 Concept product; 31C is not involved in it and these terms carry no such implication. On your own clone you would replace them with your own.
 
 | Term | Meaning |
 |------|---------|
-| **31C / 31 Concept** | The company that builds and maintains HEADING OS. |
-| **Tribe** | The company's people. The house word for the team. |
-| **ODUN.ONE** | 31C's sovereign deep-packet-intelligence platform. |
-| **DPI+** | Deep Packet Intelligence, the next generation beyond traditional deep packet inspection. |
+| **31C / 31 Concept** | The author's company, where Misha is Founder & CEO. It builds ODUN.ONE and TrustONE, not HEADING OS; it appears here only as the source of the example vocabulary. |
+| **Tribe** | 31 Concept's word for its people. Used in the example data. |
+| **ODUN.ONE** | 31 Concept's sovereign deep-packet-intelligence platform. An example product name. |
+| **DPI+** | Deep Packet Intelligence, the next generation beyond traditional deep packet inspection. A 31C term used as an example. |
 
 ## Engine mechanics
 

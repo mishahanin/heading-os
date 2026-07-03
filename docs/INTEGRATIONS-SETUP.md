@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 # Integrations & credentials
 
 How to connect the external services HEADING OS talks to: corporate email
@@ -242,6 +242,6 @@ defense; you are.
 
 ---
 
-*HEADING OS · Integrations & credentials · maintained by 31 Concept · see also
+*HEADING OS · Integrations & credentials · maintained by Misha Hanin · see also
 [MODELS-SETUP](MODELS-SETUP.html) for AI models and [MAKE-IT-YOURS](MAKE-IT-YOURS.html)
 to personalize the workspace.*

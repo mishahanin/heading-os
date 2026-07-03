@@ -1,15 +1,24 @@
 HEADING OS — engine
-Copyright 2026 Misha Hanin / 31 Concept (31C)
+Copyright 2026 Misha Hanin
+
+Ownership & disclaimer: HEADING OS is a personal project created and maintained
+by Misha Hanin. Misha is the Founder & CEO of 31 Concept (31C) and uses HEADING
+OS in his own work and life, but HEADING OS is his personal project. 31 Concept
+is not involved in HEADING OS, does not maintain, sponsor, or endorse it, and
+bears no responsibility or liability for it. Any vocabulary that resembles
+31C's (ODUN.ONE, TrustONE, DPI+, Tribe, and similar) appears only as
+illustrative example data and does not imply 31C involvement.
 
 This product is licensed under the Apache License, Version 2.0 (the "License").
 You may obtain a copy of the License in the LICENSE file at the root of this
 repository or at http://www.apache.org/licenses/LICENSE-2.0
 
-HEADING OS, ODUN.ONE, TrustONE, and the 31 Concept name and marks are trademarks
-of 31 Concept. The Apache License does not grant permission to use these marks
-except as required for reasonable and customary use in describing the origin of
-the work (see Section 6 of the License).
+ODUN.ONE, TrustONE, and the 31 Concept name and marks are trademarks of 31
+Concept, referenced in this repository only as example vocabulary. The Apache
+License does not grant permission to use these marks except as required for
+reasonable and customary use in describing the origin of the work (see Section 6
+of the License).
 
 This repository is the ENGINE — code only. It is designed to operate against a
 separate, private data repository that it never contains. See README.md and
-docs/SETUP-GUIDE.md for the architecture.
+docs/DEPLOYMENT.md for the architecture.

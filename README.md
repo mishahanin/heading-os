@@ -127,10 +127,14 @@ Issues — bug reports, questions, and ideas — are welcome. Pull requests are 
 
 ## License
 
-Apache License 2.0 — see **[LICENSE](LICENSE)** and **[NOTICE](NOTICE)**. You may use, modify, and distribute the engine with attribution; the patent grant and trademark terms are in the license. HEADING OS, ODUN.ONE, and the 31 Concept marks are trademarks of 31 Concept.
+Apache License 2.0 — see **[LICENSE](LICENSE)** and **[NOTICE](NOTICE)**. You may use, modify, and distribute the engine with attribution; the patent grant and trademark terms are in the license. ODUN.ONE, TrustONE, and the 31 Concept marks are trademarks of 31 Concept, referenced here only as example vocabulary.
+
+## Ownership & disclaimer
+
+HEADING OS is a personal project created and maintained by **Misha Hanin**. Misha is the Founder & CEO of [31 Concept](https://31c.io) (31C) and uses HEADING OS in his own work and life, but HEADING OS is his personal project. **31 Concept is not involved in HEADING OS, does not maintain, sponsor, or endorse it, and bears no responsibility or liability for it.** Any vocabulary that resembles 31C's (ODUN.ONE, TrustONE, DPI+, Tribe, and similar) appears only as illustrative example data and does not imply 31C involvement.
 
 ## Author
 
-Built by **Misha Hanin**, Founder & CEO of [31 Concept](https://31c.io) (31C) — `misha.hanin@odinix.com`.
+Built by **Misha Hanin** as a personal project (`misha.hanin@odinix.com`).
 
 <div align="center"><sub>Set a heading. Hold it.</sub></div>

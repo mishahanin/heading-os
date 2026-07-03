@@ -56,7 +56,7 @@
 <main class="content">
   <h1>Extending the engine</h1>
   <p class="page-meta">How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates</p>
-  <!-- version: 1.0.0 | last-updated: 2026-07-01 -->
+  <!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 
 <p>How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
 before declaring it done. This is the developer how-to. The contribution policy (open
@@ -154,10 +154,10 @@ rules freely, but leave the security ones in place.</p>
 <h2 id="4-writing-a-script">4. Writing a script</h2>
 <div class="highlight"><pre><span></span><code><span class="ch">#!/usr/bin/env python3</span>
 <span class="sd">&quot;&quot;&quot;One-line purpose. Usage examples in the docstring.&quot;&quot;&quot;</span>
-<span class="kn">import</span> <span class="nn">sys</span>
-<span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
 <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">()</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">parent</span><span class="p">))</span>
-<span class="kn">from</span> <span class="nn">scripts.utils.workspace</span> <span class="kn">import</span> <span class="n">get_workspace_root</span>   <span class="c1"># reuse, don&#39;t reinvent</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scripts.utils.workspace</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_workspace_root</span>   <span class="c1"># reuse, don&#39;t reinvent</span>
 <span class="c1"># ... argparse CLI ...</span>
 <span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="n">main</span><span class="p">()</span>
@@ -244,7 +244,7 @@ apply the fix, watch it pass.</p>
 </tbody>
 </table>
 <hr />
-<p><em>HEADING OS · Extending the engine · maintained by 31 Concept · see also
+<p><em>HEADING OS · Extending the engine · maintained by Misha Hanin · see also
 <a href="ARCHITECTURE.html">Architecture</a> for how the pieces compose and
 <a href="SECURITY-MODEL.html">Security model</a> for the controls your code inherits.</em></p>
   <footer class="foot">

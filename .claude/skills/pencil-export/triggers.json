@@ -1,0 +1,19 @@
+[
+  { "query": "export this pencil deck to pdf and pptx", "should_trigger": true },
+  { "query": "convert the .pen file to slides", "should_trigger": true },
+  { "query": "render the pencil deck to png and pdf", "should_trigger": true },
+  { "query": "export the pen deck for me", "should_trigger": true },
+  { "query": "turn this pencil design into a pdf deck", "should_trigger": true },
+  { "query": "get pdf, pptx and html out of the pencil file", "should_trigger": true },
+  { "query": "the pencil MCP export is broken, export the deck another way", "should_trigger": true },
+  { "query": "make an editable version of this pencil deck", "should_trigger": true },
+  { "query": "same look but editable pptx from the pen deck", "should_trigger": true },
+  { "query": "export the pencil deck with editable text", "should_trigger": true },
+  { "query": "render this markdown as slides", "should_trigger": false },
+  { "query": "make a marp deck from this doc", "should_trigger": false },
+  { "query": "create an editable branded powerpoint from scratch", "should_trigger": false },
+  { "query": "build a linkedin carousel", "should_trigger": false },
+  { "query": "generate a presentation about our roadmap", "should_trigger": false },
+  { "query": "design an infographic", "should_trigger": false },
+  { "query": "export my email to pdf", "should_trigger": false }
+]

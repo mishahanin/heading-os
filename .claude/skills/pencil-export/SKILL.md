@@ -1,12 +1,12 @@
 ---
 name: pencil-export
-description: "Export a Pencil (.pen) deck to PNG + PDF + PPTX + self-contained HTML on WSL, where the Pencil MCP export_nodes tool is broken, and optionally an EDITABLE PPTX twin (identical look, native editable text). Two steps: the agent calls the export_html MCP tool to dump all frames to one HTML, then scripts/pencil-export.py renders each frame in isolation via chromium and assembles the formats. Use when asked to export/convert a Pencil deck to slides/PDF/PPTX, or to make an editable version of a Pencil deck. Do NOT use for MARP markdown decks (use /marp) or for a brand PPTX authored from scratch (use /pptx-generator)."
-argument-hint: "<path-to.pen> [--formats png,pdf,pptx,html,editable]"
+description: "Export a Pencil (.pen) deck to PNG + PDF + a self-contained HTML on WSL, where the Pencil MCP export_nodes tool is broken. PPTX defaults to an EDITABLE twin (identical look, native editable text, brand fonts embedded); the image-per-slide locked-look PPTX is opt-in via pptx-flat. Two steps: the agent calls the export_html MCP tool to dump all frames to one HTML, then scripts/pencil-export.py renders each frame in isolation via chromium and assembles the formats. Use when asked to export/convert a Pencil deck to slides/PDF/PPTX, or to make an editable version of a Pencil deck. Do NOT use for MARP markdown decks (use /marp) or for a brand PPTX authored from scratch (use /pptx-generator)."
+argument-hint: "<path-to.pen> [--formats png,pdf,html,pptx,pptx-flat]"
 allowed-tools: "Read, Write, Bash(python3:*), mcp__pencil__get_editor_state, mcp__pencil__export_html, mcp__pencil__snapshot_layout"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.0"
+  version: "1.1"
 x-31c-orchestration:
   parallel_safe: false
   shared_state: ["outputs/"]
@@ -18,11 +18,12 @@ x-31c-orchestration:
     - "render pencil deck"
 x-31c-capability:
   what: >
-    Exports a Pencil .pen deck to per-slide PNG, a 16:9 PDF, a full-bleed PPTX,
+    Exports a Pencil .pen deck to per-slide PNG, a 16:9 PDF, an EDITABLE PPTX (the
+    default: text-less background image plus native, editable text boxes at matching
+    coordinates, with the brand fonts embedded so it renders identically anywhere),
     and a portable self-contained HTML, working around the broken Pencil MCP
-    export_nodes tool on WSL. With --formats editable it also produces an
-    identical-looking PPTX twin whose text is native and editable (text-less
-    background image plus native text boxes at matching coordinates).
+    export_nodes tool on WSL. The locked-look image-per-slide PPTX is opt-in via
+    --formats pptx-flat.
   how: >
     Ensure the .pen is the active editor in the Pencil desktop app, then run the
     skill. It calls export_html to dump all frames to one HTML and runs
@@ -87,8 +88,15 @@ python scripts/pencil-export.py \
 ```
 
 Flags: `--width/--height` (default 1920x1080), `--scale` (default 2),
-`--formats` (subset of `png,pdf,pptx,html`). Requires `playwright` (chromium) and
-`python-pptx` in the venv.
+`--formats` (subset of `png,pdf,html,pptx,pptx-flat`). Requires `playwright`
+(chromium) and `python-pptx` in the venv.
+
+**PPTX defaults to editable.** The `pptx` token now builds the editable twin
+`<stem>.pptx` (Phase 2b), because editability is the whole point of a PPTX. The
+locked-look image-per-slide deck is opt-in via `pptx-flat` (alias `pptx-image`) and
+is written as `<stem> (ready to be shared with the world).pptx` - byte-frozen and
+portable (needs no fonts installed). `editable` remains an accepted alias of `pptx`.
+`pdf` is always image-per-slide.
 
 **Compression (no NXPowerLite needed).** Lossless PNG at 2x makes a heavy deck
 (45-slide PPTX ~29 MB, PDF ~45 MB). Add `--image-format jpeg` (with `--quality`,
@@ -99,14 +107,14 @@ same result NXPowerLite gives by hand. Reference points on the ODUN deck: `--sca
 1600` or lower `--quality` shrink further. Use lossless PNG for print masters, JPEG
 for anything shared or emailed.
 
-## Phase 2b - Editable twin (optional, `--formats editable`)
+## Phase 2b - Editable PPTX (the default `pptx`)
 
-When the CEO wants a version that **looks identical but whose text is editable in
-PowerPoint**, add `editable` to `--formats`. It emits `<stem>.editable.pptx`: each
-slide is the exact Pencil render used as a full-bleed **background image with the
-content text removed**, plus **native editable text boxes** laid on top at the same
-coordinates, with matching brand font, size, colour and alignment. Branding,
-graphics, images and table grids stay baked in the background.
+`pptx` builds the editable deck `<stem>.pptx`: each slide is the exact Pencil render
+used as a full-bleed **background image with the content text removed**, plus
+**native editable text boxes** laid on top at the same coordinates, with matching
+brand font, size, colour and alignment. Branding, graphics, images and table grids
+stay baked in the background. The brand typefaces used on the runs are **embedded
+into the file** so it renders identically on a machine without the fonts installed.
 
 ```bash
 python scripts/pencil-export.py \
@@ -114,7 +122,7 @@ python scripts/pencil-export.py \
   --out-dir <deck-dir>/export \
   --fonts-dir <path>/datastore/brand/fonts \
   --stem <deck-slug> \
-  --formats editable \
+  --formats pptx \
   --image-format jpeg --quality 82 --scale 1
 ```
 
@@ -131,15 +139,22 @@ How it works and what to know:
   extracted line-height.
 - **Overlap-safe.** Each background is rendered with all other slide frames hidden,
   so off-grid / overlapping Pencil frames cannot bleed into a neighbour's background.
-- **Font dependency.** The twin renders identically only where the brand fonts are
-  installed on the opening machine. For portability, embed fonts from PowerPoint
-  (File > Options > Save > Embed fonts in the file).
-- **Keep the locked-look deck too.** Produce the image-per-slide `pptx` for the
-  frozen-visual version and the `editable` twin for editing; they are siblings.
-- **Verify** the twin by rendering it back to images (LibreOffice converts the pptx
-  to PDF on this WSL setup: `soffice --headless --convert-to pdf --outdir <tmp>
-  <stem>.editable.pptx`, then rasterise with PyMuPDF) and spot-check the cover, a
-  dense table, and any single-word title against the original renders.
+- **Fonts embedded automatically.** When `--fonts-dir` is given, `embed_fonts()`
+  adds the used typefaces to the .pptx package (the PowerPoint "Embed fonts in the
+  file" structures: a fntdata content-type, one font part + relationship per
+  typeface, and a schema-ordered `<p:embeddedFontLst>` with `embedTrueTypeFonts`).
+  **Only TTF/OTF embed** - PowerPoint cannot use woff/woff2, so a typeface present in
+  the fonts dir only as woff is reported as "no TTF/OTF for typeface X" and falls
+  back on the opening machine. The script never round-trips through LibreOffice (that
+  would drift the layout); it edits the OPC package directly.
+- **Locked-look flat deck is opt-in.** For a byte-frozen, portable, needs-no-fonts
+  version, add `pptx-flat` (alias `pptx-image`); it writes `<stem> (ready to be
+  shared with the world).pptx`, an image-per-slide deck (like the PDF, not editable).
+  Editable `<stem>.pptx` and flat `<stem> (ready...).pptx` are siblings.
+- **Verify** by opening the .pptx with python-pptx (validates the package) and, when
+  a real render is needed, in PowerPoint itself. LibreOffice headless conversion is
+  unreliable on this WSL setup (see auto-memory `libreoffice-headless-pdf-fails-wsl`),
+  so do not depend on `soffice --convert-to pdf` for the check.
 
 ## Phase 3 - Verify
 

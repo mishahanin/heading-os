@@ -17,20 +17,23 @@ This script owns step 2. It never calls Pencil; run it on the HTML the agent
 produced. Fonts are supplied via one or more --fonts-dir paths (kept out of the
 engine so no brand assets are hardcoded here).
 
-The default formats produce an image-per-slide (locked-look) deck. The `editable`
-format additionally produces `<stem>.editable.pptx`: a visually identical twin
-where each slide is the text-less Pencil render as a full-bleed background image
-with native, editable PowerPoint text boxes laid on top at the same coordinates
-and style (branding/graphics stay baked in the background). It renders identically
-only where the brand fonts are installed on the opening machine; for portability,
-embed fonts from PowerPoint (File > Options > Save > Embed fonts).
+PPTX defaults to the EDITABLE twin, `<stem>.pptx`: a visually identical deck where
+each slide is the text-less Pencil render as a full-bleed background image with
+native, editable PowerPoint text boxes laid on top at the same coordinates and
+style (branding/graphics stay baked in the background). The brand fonts used on the
+runs are embedded into the file (via --fonts-dir) so it renders identically on a
+machine without them installed - editability is the whole point of a PPTX.
+
+The image-per-slide "locked look" PPTX is opt-in via the `pptx-flat` format: it is
+byte-frozen and portable (needs no fonts) but not editable, and is written as
+`<stem> (ready to be shared with the world).pptx`. PDF is always image-per-slide.
 
 Usage:
     python scripts/pencil-export.py \\
       --html  <deck>/pencil/deck.html \\
       --out-dir <deck>/export \\
       --fonts-dir /path/to/brand/fonts \\
-      [--stem deck] [--formats png,pdf,pptx,html,editable] \\
+      [--stem deck] [--formats png,pdf,html,pptx,pptx-flat] \\
       [--keep-in-bg Footer --keep-in-bg Logo] \\
       [--width 1920] [--height 1080] [--scale 2] \\
       [--image-format jpeg --quality 82] [--verbose]
@@ -385,13 +388,16 @@ def _rgb(s: str):
     return RGBColor(0, 0, 0)
 
 
-def build_editable_pptx(bg_dir: Path, data, pptx_path: Path, width, height):
+def build_editable_pptx(bg_dir: Path, data, pptx_path: Path, width, height,
+                        font_dirs=None, verbose=False):
     """Hybrid PPTX: each slide is its text-less background image full-bleed, with
     native (editable) text boxes laid on top at the extracted coordinates and
     style. Coordinate map: EMU_per_px = 12192000/width, font pt = px*EMU_per_px/12700
     (px == 1/144 in on a 1920px 16:9 slide). Single-line boxes never wrap (a wider
     renderer would otherwise break the last word); multi-line boxes keep the
-    extracted line-height."""
+    extracted line-height. When font_dirs are given, the brand typefaces used on the
+    runs are embedded into the package so the file renders identically without them
+    installed. Returns (slide_count, embedded_font_count)."""
     from pptx import Presentation
     from pptx.util import Emu, Pt
     from pptx.enum.text import MSO_ANCHOR, PP_ALIGN, MSO_AUTO_SIZE
@@ -408,10 +414,12 @@ def build_editable_pptx(bg_dir: Path, data, pptx_path: Path, width, height):
     prs.slide_width = Emu(12192000)
     prs.slide_height = Emu(round(12192000 * height / width))
     blank = prs.slide_layouts[6]
+    fam_italic = {}  # typeface -> True if any run in it is italic (for embedding)
     for d, bg in zip(data, bgs):
         slide = prs.slides.add_slide(blank)
         slide.shapes.add_picture(str(bg), 0, 0, width=prs.slide_width, height=prs.slide_height)
         for it in d["items"]:
+            fam_italic[it["fam"]] = fam_italic.get(it["fam"], False) or bool(it["italic"])
             tb = slide.shapes.add_textbox(
                 Emu(round(it["x"] * emu_px)), Emu(round(it["y"] * emu_px)),
                 Emu(max(1, round(it["w"] * emu_px))), Emu(max(1, round(it["h"] * emu_px))))
@@ -433,7 +441,147 @@ def build_editable_pptx(bg_dir: Path, data, pptx_path: Path, width, height):
             run.font.italic = it["italic"]
             run.font.color.rgb = _rgb(it["color"])
     prs.save(str(pptx_path))
-    return len(data)
+    n_fonts = embed_fonts(pptx_path, fam_italic, font_dirs, verbose=verbose) if font_dirs else 0
+    return len(data), n_fonts
+
+
+def _embeddable_font(family: str, font_dirs):
+    """Best TTF/OTF file for a typeface name. PowerPoint embeds raw TTF/OTF only
+    (never woff/woff2), so this resolver is restricted to those extensions,
+    preferring TTF. Primary match is exact-token / oblique-intent (like
+    _find_font_file), which handles separator-rich names ('GT-Standard-L-Standard-
+    Medium'). Fallback is normalized-equality (_norm), which handles glued filenames
+    whose tokens carry no separators ('31CHorizontalT03-560' for typeface
+    '31C Horizontal T03 560')."""
+    ttf_otf = [f for d in font_dirs if d.exists() for f in d.rglob("*")
+               if f.suffix.lower() in (".ttf", ".otf")]
+    fam_tokens = [t for t in re.split(r"[^a-z0-9]+", family.lower()) if t]
+    fam_oblique = any(t in ("oblique", "italic") for t in fam_tokens)
+    fam_core = {t for t in fam_tokens if t not in ("oblique", "italic")}
+
+    best = None
+    for f in ttf_otf:
+        ft = {t for t in re.split(r"[^a-z0-9]+", f.stem.lower()) if t}
+        if not fam_core.issubset(ft):
+            continue
+        if bool(ft & {"oblique", "italic"}) != fam_oblique:
+            continue
+        rank = (0 if f.suffix.lower() == ".ttf" else 1, len(ft - fam_core), len(f.stem))
+        if best is None or rank < best[0]:
+            best = (rank, f)
+    if best:
+        return best[1]
+
+    # fallback: whole-name normalized equality (glued filenames)
+    fam_norm = _norm(family)
+    eq = [f for f in ttf_otf if _norm(f.stem) == fam_norm]
+    eq.sort(key=lambda f: (0 if f.suffix.lower() == ".ttf" else 1, len(f.stem)))
+    return eq[0] if eq else None
+
+
+def embed_fonts(pptx_path: Path, fam_italic: dict, font_dirs, verbose=False):
+    """Embed the used brand typefaces into the .pptx package so it renders
+    identically on a machine without the fonts installed - the PowerPoint 'Embed
+    fonts in the file' feature, applied at the OPC layer since python-pptx has no
+    API for it. `fam_italic` maps each run typeface to whether any italic run uses
+    it. Only TTF/OTF can be embedded. Returns the number of font files added."""
+    import zipfile
+    from lxml import etree
+
+    # We only ever parse the OOXML parts python-pptx just wrote from a fixed template
+    # (trusted, in-process - never untrusted external XML). A hardened parser with no
+    # entity expansion and no network access makes the bandit B320 blacklist a
+    # documented false positive rather than a real XXE/billion-laughs surface.
+    xmlp = etree.XMLParser(resolve_entities=False, no_network=True)
+
+    P = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    CT = "http://schemas.openxmlformats.org/package/2006/content-types"
+    PR = "http://schemas.openxmlformats.org/package/2006/relationships"
+    RT_FONT = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font"
+
+    # Resolve one embeddable file per (typeface, style) slot.
+    slots = []  # (typeface, 'regular'|'italic', Path)
+    for fam in sorted(fam_italic):
+        reg = _embeddable_font(fam, font_dirs)
+        if reg:
+            slots.append((fam, "regular", reg))
+        elif verbose:
+            print(f"{YELLOW}  embed: no TTF/OTF for typeface {fam}{RESET}")
+        if fam_italic[fam]:
+            ital = _embeddable_font(fam + " oblique", font_dirs) or _embeddable_font(fam + " italic", font_dirs)
+            if ital:
+                slots.append((fam, "italic", ital))
+    if not slots:
+        return 0
+
+    with zipfile.ZipFile(pptx_path, "r") as z:
+        members = {n: z.read(n) for n in z.namelist()}
+
+    # 1. [Content_Types].xml: default mapping for the fntdata extension
+    ctree = etree.fromstring(members["[Content_Types].xml"], xmlp)  # nosec B320 - trusted in-process OOXML
+    if not any(d.get("Extension") == "fntdata" for d in ctree.findall(f"{{{CT}}}Default")):
+        d = etree.SubElement(ctree, f"{{{CT}}}Default")
+        d.set("Extension", "fntdata")
+        d.set("ContentType", "application/x-fontdata")
+    members["[Content_Types].xml"] = etree.tostring(
+        ctree, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    # 2. font parts + presentation relationships
+    rels_name = "ppt/_rels/presentation.xml.rels"
+    rtree = etree.fromstring(members[rels_name], xmlp)  # nosec B320 - trusted in-process OOXML
+    used_ids = {r.get("Id") for r in rtree.findall(f"{{{PR}}}Relationship")}
+
+    def _new_id(seed):
+        rid = f"rIdF{seed}"
+        while rid in used_ids:
+            seed += 1
+            rid = f"rIdF{seed}"
+        used_ids.add(rid)
+        return rid
+
+    slot_ids = []  # (typeface, style, rId)
+    for i, (fam, style, path) in enumerate(slots, 1):
+        members[f"ppt/fonts/font{i}.fntdata"] = path.read_bytes()
+        rid = _new_id(i)
+        rel = etree.SubElement(rtree, f"{{{PR}}}Relationship")
+        rel.set("Id", rid)
+        rel.set("Type", RT_FONT)
+        rel.set("Target", f"fonts/font{i}.fntdata")
+        slot_ids.append((fam, style, rid))
+    members[rels_name] = etree.tostring(
+        rtree, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    # 3. presentation.xml: embedTrueTypeFonts + embeddedFontLst (schema-ordered)
+    ptree = etree.fromstring(members["ppt/presentation.xml"], xmlp)  # nosec B320 - trusted in-process OOXML
+    ptree.set("embedTrueTypeFonts", "1")
+    by_fam = {}
+    for fam, style, rid in slot_ids:
+        by_fam.setdefault(fam, {})[style] = rid
+    lst = etree.Element(f"{{{P}}}embeddedFontLst", nsmap={"p": P, "r": R})
+    for fam in sorted(by_fam):
+        ef = etree.SubElement(lst, f"{{{P}}}embeddedFont")
+        etree.SubElement(ef, f"{{{P}}}font").set("typeface", fam)
+        for style in ("regular", "italic"):  # schema order: regular before italic
+            if style in by_fam[fam]:
+                etree.SubElement(ef, f"{{{P}}}{style}").set(f"{{{R}}}id", by_fam[fam][style])
+    # CT_Presentation order: ... sldIdLst, sldSz, notesSz, smartTags, embeddedFontLst ...
+    anchor = next((ptree.find(f"{{{P}}}{t}") for t in ("notesSz", "sldSz", "sldIdLst")
+                   if ptree.find(f"{{{P}}}{t}") is not None), None)
+    if anchor is not None:
+        anchor.addnext(lst)
+    else:
+        ptree.append(lst)
+    members["ppt/presentation.xml"] = etree.tostring(
+        ptree, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    # 4. rewrite the package
+    with zipfile.ZipFile(pptx_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, b in members.items():
+            z.writestr(n, b)
+    if verbose:
+        print(f"{GRAY}  embedded {len(slots)} font file(s): {', '.join(sorted(by_fam))}{RESET}")
+    return len(slots)
 
 
 def inline_html(work_html: Path, out_html: Path):
@@ -477,8 +625,11 @@ def main():
     ap.add_argument("--fonts-dir", action="append", default=[], help="dir to search for brand fonts (repeatable)")
     ap.add_argument("--stem", default=None, help="output filename stem (default: HTML stem)")
     ap.add_argument("--formats", default="png,pdf,pptx,html",
-                    help="comma list: png,pdf,pptx,html,editable. 'editable' emits "
-                         "<stem>.editable.pptx (text-less backgrounds + native editable text boxes)")
+                    help="comma list: png,pdf,html,pptx,pptx-flat. 'pptx' (default) emits the "
+                         "EDITABLE <stem>.pptx (text-less backgrounds + native text boxes, brand "
+                         "fonts embedded); 'pptx-flat' (alias pptx-image) emits the locked-look "
+                         "image-per-slide '<stem> (ready to be shared with the world).pptx'. "
+                         "'editable' is an alias of 'pptx'")
     ap.add_argument("--keep-in-bg", action="append", default=[],
                     help="editable mode: extra data-pencil-name whose text stays baked in the "
                          "background (branding/decoration), added to the built-in decor set (repeatable)")
@@ -514,9 +665,12 @@ def main():
     work_html = src_html.parent / f"{stem}._render.html"
     work_html.write_text(html, encoding="utf-8")
 
-    picture_formats = formats & {"png", "pdf", "pptx", "html"}
+    want_editable = bool(formats & {"pptx", "editable"})   # pptx == the editable twin
+    want_flat = bool(formats & {"pptx-flat", "pptx-image"})  # opt-in locked-look image deck
+    # render_pngs feeds png/pdf/html and the flat pptx (the editable twin renders its own bg)
+    need_pngs = bool(formats & {"png", "pdf", "html"}) or want_flat
     try:
-        if picture_formats:
+        if need_pngs:
             n = render_pngs(work_html, png_dir, args.width, args.height, args.scale,
                             img_format=args.image_format, quality=args.quality, verbose=args.verbose)
             print(f"{GREEN}  {args.image_format.upper():4}{RESET}  {n} slides -> {png_dir}")
@@ -524,9 +678,10 @@ def main():
             if "pdf" in formats:
                 build_pdf(png_dir, out_dir / f"{stem}.pdf", args.width, args.height)
                 print(f"{GREEN}  PDF{RESET}   {out_dir / (stem + '.pdf')}")
-            if "pptx" in formats:
-                build_pptx(png_dir, out_dir / f"{stem}.pptx")
-                print(f"{GREEN}  PPTX{RESET}  {out_dir / (stem + '.pptx')}")
+            if want_flat:
+                flat_path = out_dir / f"{stem} (ready to be shared with the world).pptx"
+                build_pptx(png_dir, flat_path)
+                print(f"{GREEN}  FLAT{RESET}  {flat_path} (image-per-slide, portable, not editable)")
             if "html" in formats:
                 inline_html(work_html, out_dir / f"{stem}.html")
                 print(f"{GREEN}  HTML{RESET}  {out_dir / (stem + '.html')} (self-contained)")
@@ -534,16 +689,18 @@ def main():
                 for p in _slide_files(png_dir):
                     p.unlink()
 
-        if "editable" in formats:
+        if want_editable:
             decor = list(DECOR_DEFAULT) + list(args.keep_in_bg)
             ebg = out_dir / "editable-bg"
             data = render_editable(work_html, ebg, args.width, args.height, args.scale,
                                    decor, img_format=args.image_format, quality=args.quality,
                                    verbose=args.verbose)
-            edit_pptx = out_dir / f"{stem}.editable.pptx"
-            build_editable_pptx(ebg, data, edit_pptx, args.width, args.height)
+            edit_pptx = out_dir / f"{stem}.pptx"
+            n_slides, n_fonts = build_editable_pptx(ebg, data, edit_pptx, args.width, args.height,
+                                                    font_dirs=fonts, verbose=args.verbose)
             nb = sum(len(d["items"]) for d in data)
-            print(f"{GREEN}  EDIT{RESET}  {edit_pptx} ({len(data)} slides, {nb} native text boxes)")
+            fmsg = f", {n_fonts} font(s) embedded" if n_fonts else " (no fonts embedded)"
+            print(f"{GREEN}  PPTX{RESET}  {edit_pptx} (editable: {n_slides} slides, {nb} text boxes{fmsg})")
     finally:
         work_html.unlink(missing_ok=True)
 

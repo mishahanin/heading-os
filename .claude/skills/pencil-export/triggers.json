@@ -9,6 +9,8 @@
   { "query": "make an editable version of this pencil deck", "should_trigger": true },
   { "query": "same look but editable pptx from the pen deck", "should_trigger": true },
   { "query": "export the pencil deck with editable text", "should_trigger": true },
+  { "query": "give me a shareable flat pptx of the pen deck", "should_trigger": true },
+  { "query": "export the pencil deck with the brand fonts embedded", "should_trigger": true },
   { "query": "render this markdown as slides", "should_trigger": false },
   { "query": "make a marp deck from this doc", "should_trigger": false },
   { "query": "create an editable branded powerpoint from scratch", "should_trigger": false },

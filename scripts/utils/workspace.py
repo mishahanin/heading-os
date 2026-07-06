@@ -269,6 +269,11 @@ def get_outputs_dir() -> Path:
     return get_personal_root() / "outputs"
 
 
+def get_auto_memory_dir() -> Path:
+    """Durable canonical auto-memory fact store in the DATA overlay."""
+    return get_data_root() / "auto-memory"
+
+
 def get_threads_dir() -> Path:
     """Get the threads directory (operational registry — private CEO data).
 

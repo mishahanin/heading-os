@@ -5,10 +5,6 @@ Usage:
     python scripts/md-to-docx-letter.py
 """
 
-from docx import Document
-from docx.shared import Pt, Inches, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
 import re
 import sys
 from pathlib import Path
@@ -20,8 +16,24 @@ from scripts.utils.venv import ensure_venv  # noqa: E402
 ensure_venv()
 from scripts.utils.workspace import get_outputs_dir
 
+# docx names are bound lazily (F-2.1: import stays pure).
+Document = Pt = Inches = Cm = WD_ALIGN_PARAGRAPH = qn = None
+
+
+def _ensure_docx():
+    global Document, Pt, Inches, Cm, WD_ALIGN_PARAGRAPH, qn
+    if Document is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("docx", extra="documents")
+    from docx import Document
+    from docx.shared import Pt, Inches, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+
 
 def create_letter_docx(md_path, docx_path):
+    _ensure_docx()
     doc = Document()
 
     # Page margins

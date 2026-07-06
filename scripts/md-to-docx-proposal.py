@@ -16,22 +16,34 @@ ensure_venv()
 from scripts.utils.docx_helpers import set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
-from docx import Document
-from docx.shared import Pt, Inches, Cm, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.section import WD_ORIENT
-from docx.oxml.ns import qn, nsdecls
-from docx.oxml import parse_xml
-
 INPUT_PATH = str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.md')
 OUTPUT_PATH = str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.docx')
 
-# 31C brand colors
-BRAND_DARK = RGBColor(0x1A, 0x1A, 0x2E)   # Dark navy
-BRAND_ACCENT = RGBColor(0x00, 0x7A, 0xCC)  # Blue accent
-BRAND_LIGHT = RGBColor(0x4A, 0x4A, 0x5A)   # Body text grey
-WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+# docx names + brand colours are bound lazily (F-2.1: import stays pure).
+Document = Pt = Inches = Cm = RGBColor = None
+WD_ALIGN_PARAGRAPH = WD_TABLE_ALIGNMENT = WD_ORIENT = qn = nsdecls = parse_xml = None
+BRAND_DARK = BRAND_ACCENT = BRAND_LIGHT = WHITE = None
+
+
+def _ensure_docx():
+    global Document, Pt, Inches, Cm, RGBColor
+    global WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, WD_ORIENT, qn, nsdecls, parse_xml
+    global BRAND_DARK, BRAND_ACCENT, BRAND_LIGHT, WHITE
+    if Document is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("docx", extra="documents")
+    from docx import Document
+    from docx.shared import Pt, Inches, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.section import WD_ORIENT
+    from docx.oxml.ns import qn, nsdecls
+    from docx.oxml import parse_xml
+    BRAND_DARK = RGBColor(0x1A, 0x1A, 0x2E)   # Dark navy
+    BRAND_ACCENT = RGBColor(0x00, 0x7A, 0xCC)  # Blue accent
+    BRAND_LIGHT = RGBColor(0x4A, 0x4A, 0x5A)   # Body text grey
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 TABLE_HEADER_BG = "007ACC"
 TABLE_ALT_BG = "F2F7FC"
 
@@ -310,6 +322,7 @@ def add_rich_text(paragraph, text):
 
 def build_document():
     """Build the Word document from the markdown source."""
+    _ensure_docx()
     with open(INPUT_PATH, 'r', encoding='utf-8') as f:
         md_text = f.read()
 

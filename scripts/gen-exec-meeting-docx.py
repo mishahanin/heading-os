@@ -22,16 +22,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv import ensure_venv  # noqa: E402
 
 ensure_venv()
-from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-
 from scripts.utils.workspace import get_outputs_dir, resolve_config_with_example  # noqa: E402
 
 OUT_DIR = get_outputs_dir() / "operations" / "exec-meeting"
 
-NAVY = RGBColor(0x1A, 0x2B, 0x4A)
-GRAY = RGBColor(0x60, 0x60, 0x60)
+# docx names + brand colours are bound lazily (F-2.1: import stays pure).
+Document = Pt = RGBColor = WD_ALIGN_PARAGRAPH = None
+NAVY = GRAY = None
+
+
+def _ensure_docx():
+    global Document, Pt, RGBColor, WD_ALIGN_PARAGRAPH, NAVY, GRAY
+    if Document is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("docx", extra="documents")
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    NAVY = RGBColor(0x1A, 0x2B, 0x4A)
+    GRAY = RGBColor(0x60, 0x60, 0x60)
 
 # Attendee roster is per-instance DATA (real exec names): lives in the data overlay
 # at <data-root>/config/exec-meeting-attendees.json; the engine ships
@@ -70,7 +80,9 @@ def _style_base(doc):
     normal.font.size = Pt(11)
 
 
-def _heading(doc, text, size=13, color=NAVY, space_before=10):
+def _heading(doc, text, size=13, color=None, space_before=10):
+    if color is None:
+        color = NAVY
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(space_before)
     p.paragraph_format.space_after = Pt(4)
@@ -183,6 +195,7 @@ def main():
     ap.add_argument("--weeks", type=int, default=12, help="Number of weekly instances to generate.")
     ap.add_argument("--master-only", action="store_true", help="Generate only the reusable master template.")
     args = ap.parse_args()
+    _ensure_docx()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 

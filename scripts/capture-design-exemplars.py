@@ -22,11 +22,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import CYAN, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import display_path, get_outputs_dir  # noqa: E402
 
-try:
+# playwright is bound lazily (F-2.1: import stays pure).
+async_playwright = None
+
+
+def _ensure_playwright():
+    global async_playwright
+    if async_playwright is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("playwright", extra="browser")
     from playwright.async_api import async_playwright
-except ImportError:
-    print(f"{RED}playwright not installed. Run: pip install playwright && playwright install chromium{RESET}")
-    sys.exit(1)
+
 
 OUTPUT_DIR = get_outputs_dir() / "research" / "_drafts" / "exemplars"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -114,6 +121,7 @@ async def capture_one(browser, semaphore, slug, url, category, settle_ms):
 
 
 async def main():
+    _ensure_playwright()
     print(f"{CYAN}Capturing {len(TARGETS)} targets at {VIEWPORT['width']}x{VIEWPORT['height']}, concurrency={CONCURRENCY}{RESET}")
     print(f"Output dir: {OUTPUT_DIR}\n")
 

@@ -22,13 +22,11 @@ Logic:
 """
 from __future__ import annotations
 
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
-
-import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -216,12 +214,26 @@ def build_roster() -> tuple[list[dict], dict]:
 # ============================================================
 # Excel writer
 # ============================================================
-HEADER_FILL = PatternFill(start_color="1A2332", end_color="1A2332", fill_type="solid")
-HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
-TECH_FILL = PatternFill(start_color="E8F4FD", end_color="E8F4FD", fill_type="solid")
-OPS_FILL = PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid")
-BOTH_FILL = PatternFill(start_color="E8F8E8", end_color="E8F8E8", fill_type="solid")
-UNKNOWN_FILL = PatternFill(start_color="F8E8E8", end_color="F8E8E8", fill_type="solid")
+# openpyxl names + style constants are bound lazily (F-2.1: import stays pure).
+openpyxl = Alignment = Font = PatternFill = get_column_letter = None
+HEADER_FILL = HEADER_FONT = TECH_FILL = OPS_FILL = BOTH_FILL = UNKNOWN_FILL = None
+
+
+def _ensure_openpyxl():
+    global openpyxl, Alignment, Font, PatternFill, get_column_letter
+    global HEADER_FILL, HEADER_FONT, TECH_FILL, OPS_FILL, BOTH_FILL, UNKNOWN_FILL
+    if openpyxl is not None:
+        return
+    from scripts.utils.optdeps import require
+    openpyxl = require("openpyxl", extra="documents")
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    HEADER_FILL = PatternFill(start_color="1A2332", end_color="1A2332", fill_type="solid")
+    HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
+    TECH_FILL = PatternFill(start_color="E8F4FD", end_color="E8F4FD", fill_type="solid")
+    OPS_FILL = PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid")
+    BOTH_FILL = PatternFill(start_color="E8F8E8", end_color="E8F8E8", fill_type="solid")
+    UNKNOWN_FILL = PatternFill(start_color="F8E8E8", end_color="F8E8E8", fill_type="solid")
 
 
 def row_fill(tech: str, ops: str) -> PatternFill | None:
@@ -336,6 +348,7 @@ def write_excel(rows: list[dict], excluded: dict):
 
 
 def main():
+    _ensure_openpyxl()
     rows, excluded = build_roster()
     write_excel(rows, excluded)
 

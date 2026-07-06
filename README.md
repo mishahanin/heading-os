@@ -9,7 +9,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-2000%2B%20passing-2ea44f.svg)](tests/)
+[![CI](https://github.com/mishahanin/heading-os/actions/workflows/ci.yml/badge.svg)](https://github.com/mishahanin/heading-os/actions/workflows/ci.yml)
 [![Lint](https://img.shields.io/badge/lint-ruff-261230.svg?logo=ruff&logoColor=white)](pyproject.toml)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-d97757.svg)](https://claude.com/product/claude-code)
 
@@ -119,7 +119,8 @@ If you find a vulnerability, please report it privately (see SECURITY.md) rather
 
 ## Status
 
-`v0.1.0`. The architecture, the security model, and the data seam are stable and load-bearing. Skills and daemons evolve. Interfaces may change between minor versions while the project is pre-1.0. See **[ROADMAP.md](ROADMAP.md)** for direction and **[CHANGELOG.md](CHANGELOG.md)** for what has changed.
+<!-- version: keep in sync with pyproject.toml; checked by scripts/check-version-sync.py -->
+`v0.3.0`. The architecture, the security model, and the data seam are stable and load-bearing. Skills and daemons evolve. Interfaces may change between minor versions while the project is pre-1.0. See **[ROADMAP.md](ROADMAP.md)** for direction and **[CHANGELOG.md](CHANGELOG.md)** for what has changed.
 
 ## Contributing
 

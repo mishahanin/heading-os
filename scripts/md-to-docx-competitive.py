@@ -17,29 +17,43 @@ ensure_venv()
 from scripts.utils.docx_helpers import set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
-from docx import Document
-from docx.shared import Inches, Pt, Cm, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.section import WD_ORIENT
-from docx.oxml.ns import qn, nsdecls
-from docx.oxml import parse_xml
 import os
 
 INPUT = str(get_outputs_dir() / "documents" / "competitive-analysis-example.md")
 OUTPUT = str(get_outputs_dir() / "documents" / "competitive-analysis-example.docx")
 
-# 31C brand colors
-NAVY = RGBColor(0x0A, 0x1F, 0x3C)
-ACCENT_BLUE = RGBColor(0x1A, 0x73, 0xE8)
-DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
-MED_GRAY = RGBColor(0x66, 0x66, 0x66)
-LIGHT_GRAY = RGBColor(0xF2, 0xF2, 0xF2)
-WHITE = RGBColor(0xFF, 0xFF, 0xFF)
-GREEN = RGBColor(0x0D, 0x7C, 0x3E)
-RED = RGBColor(0xC0, 0x39, 0x2B)
-ORANGE = RGBColor(0xE6, 0x7E, 0x22)
-TEAL = RGBColor(0x16, 0xA0, 0x85)
+# docx names + brand colours are bound lazily (F-2.1: import stays pure).
+Document = Inches = Pt = Cm = RGBColor = None
+WD_ALIGN_PARAGRAPH = WD_TABLE_ALIGNMENT = WD_ORIENT = qn = nsdecls = parse_xml = None
+NAVY = ACCENT_BLUE = DARK_GRAY = MED_GRAY = LIGHT_GRAY = WHITE = None
+GREEN = RED = ORANGE = TEAL = None
+
+
+def _ensure_docx():
+    global Document, Inches, Pt, Cm, RGBColor
+    global WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, WD_ORIENT, qn, nsdecls, parse_xml
+    global NAVY, ACCENT_BLUE, DARK_GRAY, MED_GRAY, LIGHT_GRAY, WHITE, GREEN, RED, ORANGE, TEAL
+    if Document is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("docx", extra="documents")
+    from docx import Document
+    from docx.shared import Inches, Pt, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.section import WD_ORIENT
+    from docx.oxml.ns import qn, nsdecls
+    from docx.oxml import parse_xml
+    NAVY = RGBColor(0x0A, 0x1F, 0x3C)
+    ACCENT_BLUE = RGBColor(0x1A, 0x73, 0xE8)
+    DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
+    MED_GRAY = RGBColor(0x66, 0x66, 0x66)
+    LIGHT_GRAY = RGBColor(0xF2, 0xF2, 0xF2)
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+    GREEN = RGBColor(0x0D, 0x7C, 0x3E)
+    RED = RGBColor(0xC0, 0x39, 0x2B)
+    ORANGE = RGBColor(0xE6, 0x7E, 0x22)
+    TEAL = RGBColor(0x16, 0xA0, 0x85)
 
 def set_cell_borders(cell, top=None, bottom=None, left=None, right=None):
     tc = cell._tc
@@ -82,6 +96,7 @@ def parse_inline(paragraph, text, default_color=None, default_size=None):
                     add_formatted_text(paragraph, cp, color=default_color, size=default_size)
 
 def build_docx():
+    _ensure_docx()
     doc = Document()
 
     # Page setup

@@ -1,0 +1,106 @@
+# HEADING OS engine CI (F-1.2) - proves what the README claims.
+#
+# Jobs: guards (identity of the project) -> lint -> security-tests -> unit-tests.
+# Every action is pinned by commit SHA (F-1.5). Every step here was verified to
+# run headless on this data-less engine tree before commit.
+#
+# FIRST-PUSH NOTE (operator): the unit-tests job runs the full non-integration
+# suite. Because the extras split (F-7.1) has NOT landed yet, `uv sync --dev`
+# installs the whole dependency set, so the suite has its deps - EXCEPT browser
+# binaries (playwright) and anything needing live network. The first push is a
+# watched calibration run: if a browser/network test fails, mark it with the
+# capability markers added in F-2.2 (`requires_playwright` / `requires_network`)
+# and exclude it here, then widen. `guards` + `security-tests` are the checks to
+# make required on `main`.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tests pin their own TZ in conftest; this is belt-and-suspenders determinism.
+  HEADING_OS_TZ: UTC
+
+jobs:
+  guards:
+    name: sovereignty guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          enable-cache: true
+      - run: uv sync --dev --frozen
+      - name: Leak guard (no hardcoded data paths in engine code)
+        run: git ls-files '*.py' '*.sh' | xargs uv run python scripts/leak-guard.py check-paths --files
+      - name: Engine tree clean (no data-class artifact in the engine clone)
+        run: uv run python -m pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py -q
+      - name: Skill router registry in sync
+        run: uv run python scripts/check-skill-router-sync.py --quiet
+      - name: Skill metadata contract
+        run: uv run python scripts/skill-metadata-check.py
+      - name: Version sync (F-1.1)
+        run: uv run python scripts/check-version-sync.py --quiet
+      - name: detect-secrets baseline drift (F-9.4)
+        run: uv run detect-secrets scan --baseline .secrets.baseline
+
+  lint:
+    name: ruff + bandit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          enable-cache: true
+      - run: uv sync --dev --frozen
+      - name: ruff - blocking security subset (mirror of the pre-commit gate)
+        run: uv run ruff check . --select S --ignore S101,S105,S310,S603,S607
+      - name: ruff - full-ruleset report (advisory ratchet baseline for F-3.2)
+        run: uv run ruff check . --statistics || true
+      - name: bandit
+        run: uv run bandit -c pyproject.toml -r scripts .claude/hooks -q
+
+  security-tests:
+    name: security suite (the money badge)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          enable-cache: true
+      - run: uv sync --dev --frozen
+      - run: uv run pytest tests/security -q -p no:cacheprovider
+
+  unit-tests:
+    name: unit tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --dev --frozen --python ${{ matrix.python }}
+      - name: unit + capability tests (integration/acceptance excluded)
+        run: >
+          uv run pytest tests/ -q -p no:cacheprovider
+          -m "not integration and not acceptance"
+          --cov=scripts/utils --cov-report=term

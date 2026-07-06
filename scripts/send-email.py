@@ -87,24 +87,40 @@ from pathlib import Path
 # Configuration
 # ============================================================
 
-# --- Dependency check ---
-def check_dependencies():
-    missing = []
-    try:
-        import exchangelib
-    except ImportError:
-        missing.append("exchangelib")
-    if missing:
-        print(f"[ERROR] Missing packages: {', '.join(missing)}")
-        print(f"        Run: pip install {' '.join(missing)}")
-        sys.exit(1)
+# --- Lazy exchangelib loading (F-2.1: import must stay pure) ---
+# The heavy `exchangelib` import is deferred out of module scope so that
+# importing this file (e.g. pytest collection on a fresh clone without the
+# `email` extra) never triggers an import-time SystemExit. Every function that
+# constructs an exchangelib object calls `_ensure_exchangelib()` first, which
+# imports the package (loud + attributed via optdeps.require) and binds the
+# names into module globals on first use. CLI behaviour is unchanged.
+Account = Configuration = Credentials = DELEGATE = None
+Message = Mailbox = HTMLBody = FileAttachment = None
+_EXCHANGELIB_LOADED = False
 
-check_dependencies()
 
-from exchangelib import (
-    Account, Configuration, Credentials, DELEGATE,
-    Message, Mailbox, HTMLBody, FileAttachment
-)
+def _ensure_exchangelib():
+    """Import exchangelib on first call and bind its names into module globals.
+
+    Idempotent and cheap after the first call. Exits 1 with an actionable
+    message if the `email` extra is not installed (never a bare stack trace).
+    """
+    global _EXCHANGELIB_LOADED
+    global Account, Configuration, Credentials, DELEGATE
+    global Message, Mailbox, HTMLBody, FileAttachment
+    if _EXCHANGELIB_LOADED:
+        return
+    from scripts.utils.optdeps import require
+    exchangelib = require("exchangelib", extra="email")
+    Account = exchangelib.Account
+    Configuration = exchangelib.Configuration
+    Credentials = exchangelib.Credentials
+    DELEGATE = exchangelib.DELEGATE
+    Message = exchangelib.Message
+    Mailbox = exchangelib.Mailbox
+    HTMLBody = exchangelib.HTMLBody
+    FileAttachment = exchangelib.FileAttachment
+    _EXCHANGELIB_LOADED = True
 
 
 def _derive_subject(mode: str, original_subject: str, override: str = None) -> str:
@@ -186,6 +202,7 @@ def load_config():
 
 def connect(config, max_retries=3):
     """Connect to Exchange server via EWS with retry."""
+    _ensure_exchangelib()
     credentials = Credentials(
         username=config["EXCHANGE_USERNAME"],
         password=config["EXCHANGE_PASSWORD"]
@@ -221,6 +238,7 @@ def connect(config, max_retries=3):
 
 def build_signature_attachments():
     """Create inline FileAttachment objects for signature images."""
+    _ensure_exchangelib()
     attachments = []
 
     if LOGO_PATH.exists():
@@ -323,6 +341,7 @@ def build_file_attachments(paths):
     file_attachments = []
     if not paths:
         return file_attachments
+    _ensure_exchangelib()
     for raw in paths:
         p = Path(raw)
         if not p.exists():
@@ -389,6 +408,7 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
     (batch mode) so we do not re-read the signature HTML or re-build the
     inline FileAttachment objects on every message.
     """
+    _ensure_exchangelib()
     if signature is None:
         signature = load_signature()
     if sig_attachments is None:
@@ -531,6 +551,7 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
 
     Returns {"to": [...], "status": "sent"|"failed", "error": str|None}.
     """
+    _ensure_exchangelib()
     if signature is None:
         signature = load_signature()
     file_attachments = build_file_attachments(attach)

@@ -16,28 +16,40 @@ ensure_venv()
 from scripts.utils.docx_helpers import set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
-from docx import Document
-from docx.shared import Inches, Pt, Cm, RGBColor, Emu
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.section import WD_ORIENT
-from docx.oxml.ns import qn, nsdecls
-from docx.oxml import parse_xml
-
 # ============================================================
 # Configuration / Paths
 # ============================================================
 IMAGES_DIR = str(get_outputs_dir() / 'images' / 'client')
 OUTPUT_PATH = str(get_outputs_dir() / 'documents' / 'ODUN-ONE-Conceptual-Design-Template.docx')
 
-# Brand colors
-DARK_NAVY = RGBColor(0x0A, 0x1A, 0x2F)
-BRAND_BLUE = RGBColor(0x00, 0x6B, 0xB6)
-BRAND_ORANGE = RGBColor(0xE8, 0x6C, 0x00)
-DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
-MEDIUM_GRAY = RGBColor(0x66, 0x66, 0x66)
-LIGHT_GRAY = RGBColor(0xF2, 0xF2, 0xF2)
-WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+# docx names + brand colours are bound lazily (F-2.1: import stays pure).
+Document = Inches = Pt = Cm = RGBColor = Emu = None
+WD_ALIGN_PARAGRAPH = WD_TABLE_ALIGNMENT = WD_ORIENT = qn = nsdecls = parse_xml = None
+DARK_NAVY = BRAND_BLUE = BRAND_ORANGE = DARK_GRAY = MEDIUM_GRAY = LIGHT_GRAY = WHITE = None
+
+
+def _ensure_docx():
+    global Document, Inches, Pt, Cm, RGBColor, Emu
+    global WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, WD_ORIENT, qn, nsdecls, parse_xml
+    global DARK_NAVY, BRAND_BLUE, BRAND_ORANGE, DARK_GRAY, MEDIUM_GRAY, LIGHT_GRAY, WHITE
+    if Document is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("docx", extra="documents")
+    from docx import Document
+    from docx.shared import Inches, Pt, Cm, RGBColor, Emu
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.section import WD_ORIENT
+    from docx.oxml.ns import qn, nsdecls
+    from docx.oxml import parse_xml
+    DARK_NAVY = RGBColor(0x0A, 0x1A, 0x2F)
+    BRAND_BLUE = RGBColor(0x00, 0x6B, 0xB6)
+    BRAND_ORANGE = RGBColor(0xE8, 0x6C, 0x00)
+    DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
+    MEDIUM_GRAY = RGBColor(0x66, 0x66, 0x66)
+    LIGHT_GRAY = RGBColor(0xF2, 0xF2, 0xF2)
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 TABLE_HEADER_BG = '006BB6'
 TABLE_ALT_BG = 'F0F6FC'
 
@@ -104,8 +116,10 @@ def add_styled_table(doc, headers, rows, col_widths=None):
 # ============================================================
 # Content Helpers (Headings / Body / Images / Lists)
 # ============================================================
-def add_image_safe(doc, image_name, width=Inches(6.5)):
+def add_image_safe(doc, image_name, width=None):
     """Add an image if it exists, skip gracefully if not."""
+    if width is None:
+        width = Inches(6.5)
     path = str(Path(IMAGES_DIR) / image_name)
     if os.path.exists(path):
         doc.add_picture(path, width=width)
@@ -208,6 +222,7 @@ def add_separator(doc):
 # Rendering / Document Builder
 # ============================================================
 def build_document():
+    _ensure_docx()
     doc = Document()
 
     # ── Page setup ──

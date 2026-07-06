@@ -17,12 +17,6 @@ ensure_venv()
 from scripts.utils.docx_helpers import set_cell_shading
 from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
 
-from docx import Document
-from docx.shared import Pt, Cm, RGBColor, Emu
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml.ns import qn, nsdecls
-from docx.oxml import parse_xml
 from copy import deepcopy
 import os
 
@@ -43,11 +37,32 @@ OUTPUT = str(get_outputs_dir() / "deliverables" / "documents" /
 # Cover metadata: orange #FF9235
 TABLE_HEADER_BG = "423BFF"   # Heading 2 blue for table headers
 TABLE_ALT_BG = "F0F4FF"     # Light blue-purple tint
-ORANGE = RGBColor(0xFF, 0x92, 0x35)
-PURPLE = RGBColor(0x74, 0x7D, 0xBE)
-BLUE = RGBColor(0x42, 0x3B, 0xFF)
-BLACK = RGBColor(0x00, 0x00, 0x00)
-WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+
+# docx names + brand colours are bound lazily (F-2.1: import stays pure).
+Document = Pt = Cm = RGBColor = Emu = None
+WD_ALIGN_PARAGRAPH = WD_TABLE_ALIGNMENT = qn = nsdecls = parse_xml = None
+ORANGE = PURPLE = BLUE = BLACK = WHITE = None
+
+
+def _ensure_docx():
+    global Document, Pt, Cm, RGBColor, Emu
+    global WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, qn, nsdecls, parse_xml
+    global ORANGE, PURPLE, BLUE, BLACK, WHITE
+    if Document is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("docx", extra="documents")
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor, Emu
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml.ns import qn, nsdecls
+    from docx.oxml import parse_xml
+    ORANGE = RGBColor(0xFF, 0x92, 0x35)
+    PURPLE = RGBColor(0x74, 0x7D, 0xBE)
+    BLUE = RGBColor(0x42, 0x3B, 0xFF)
+    BLACK = RGBColor(0x00, 0x00, 0x00)
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 
 
 # ============================================================
@@ -187,6 +202,7 @@ def add_page_break(doc):
 # ============================================================
 def build_document():
     """Build the complete DOCX from the 31C template."""
+    _ensure_docx()
     print(f"Loading template: {TEMPLATE}")
     doc = Document(TEMPLATE)
 

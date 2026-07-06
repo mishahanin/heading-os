@@ -39,25 +39,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv import ensure_venv  # noqa: E402
 
 ensure_venv()
-# --- Dependency check ---
-def check_dependencies():
-    missing = []
-    try:
-        import exchangelib
-    except ImportError:
-        missing.append("exchangelib")
-    if missing:
-        print(f"[ERROR] Missing packages: {', '.join(missing)}")
-        print(f"        Run: pip install {' '.join(missing)}")
-        sys.exit(1)
+# exchangelib names are bound lazily (F-2.1: import stays pure). The daemon
+# always calls connect() before any sync work, so binding there covers every
+# downstream constructor.
+Account = CalendarItem = Configuration = Credentials = DELEGATE = IMPERSONATION = None
+EWSDateTime = EWSTimeZone = Build = Version = None
 
-check_dependencies()
 
-from exchangelib import (
-    Account, CalendarItem, Configuration, Credentials, DELEGATE, IMPERSONATION,
-    EWSDateTime, EWSTimeZone, Build, Version
-)
-from exchangelib.protocol import BaseProtocol
+def _ensure_exchangelib():
+    global Account, CalendarItem, Configuration, Credentials, DELEGATE, IMPERSONATION
+    global EWSDateTime, EWSTimeZone, Build, Version
+    if Account is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("exchangelib", extra="email")
+    from exchangelib import (
+        Account, CalendarItem, Configuration, Credentials, DELEGATE, IMPERSONATION,
+        EWSDateTime, EWSTimeZone, Build, Version,
+    )
+
 
 from scripts.utils.html import strip_html  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_default_tz, get_default_tz_name, get_outputs_dir, get_workspace_root, load_env  # noqa: E402
@@ -105,6 +105,7 @@ def load_config():
 
 def connect(config):
     """Connect to Exchange server via EWS."""
+    _ensure_exchangelib()
     print(f"[INFO] Connecting to {config['EXCHANGE_SERVER']}...")
 
     credentials = Credentials(

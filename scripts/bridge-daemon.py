@@ -20,7 +20,8 @@ from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_en
 from scripts.utils.paths import get_data_root
 
 from scripts.bridge_daemon._atomic import atomic_write_text
-from scripts.bridge_daemon.app import build_app
+# build_app is imported lazily inside start_daemon() (F-2.1: it pulls in fastapi,
+# which must not import at module scope so bridge-daemon.py stays collectable).
 from scripts.bridge_daemon.auth import get_or_create_token
 from scripts.bridge_daemon.config import (
     ConfigState,
@@ -388,6 +389,7 @@ def start_daemon(explicit_port: int | None = None):
     auto-pick from cfg["port_range_start"] (default 31415, scanning +50).
     """
     import uvicorn
+    from scripts.bridge_daemon.app import build_app
     # R12: mint a trace ID for this daemon's process tree and install the
     # record factory before any logging so every line (and every subprocess
     # this daemon spawns) carries the same [trace_id].

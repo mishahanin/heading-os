@@ -223,3 +223,62 @@ blockquote {
   .nav-body { display: none; margin-top: 14px; }
   .nav-body.open { display: block; }
 }
+
+/* ============================================================
+   Site-wide search (assets/search.js + assets/search-index.json)
+   ============================================================ */
+.search-box { position: relative; margin: 0 0 20px 40px; }
+.search-input {
+  width: calc(100% - 8px);
+  box-sizing: border-box;
+  padding: 8px 12px;
+  font: 500 0.85rem var(--font);
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.search-input::placeholder { color: var(--text-faint); font-weight: 400; }
+.search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(36, 86, 214, 0.16);
+}
+.search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(440px, 82vw);
+  max-height: 65vh;
+  overflow-y: auto;
+  z-index: 60;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 5px;
+}
+.search-results[hidden] { display: none; }
+.search-hit {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 7px;
+  text-decoration: none;
+  color: var(--text);
+}
+.search-hit:hover, .search-hit.active { background: var(--panel-2); }
+.search-hit-title { font-size: 0.82rem; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.search-hit-title .crumb-sep { color: var(--text-faint); font-weight: 400; padding: 0 2px; }
+.search-hit-snip { font-size: 0.76rem; color: var(--text-dim); line-height: 1.45; }
+.search-hit mark {
+  background: rgba(36, 86, 214, 0.20);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.search-empty { padding: 10px 12px; font-size: 0.8rem; color: var(--text-faint); }
+@media (max-width: 860px) {
+  .search-box { margin-left: 0; }
+  .search-results { width: min(440px, 92vw); }
+}

@@ -16,6 +16,10 @@
 <aside class="sidebar">
   <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
   <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
   <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
   <div class="nav-body" id="navbody">
     <div class="nav-group">
@@ -193,5 +197,6 @@
   </footer>
 </main>
 </div>
+<script src="assets/search.js" defer></script>
 </body>
 </html>

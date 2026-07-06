@@ -16,8 +16,10 @@ light theme).
 
 import argparse
 import html as html_stdlib
+import json
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -303,13 +305,15 @@ def sync_nav(html_path: Path, quiet: bool = False) -> bool:
 
 
 def sync_all_navs(quiet: bool = False) -> bool:
-    """Nav-sync every docs-site HTML page that has NO MD source (md-sourced pages
-    already get correct nav from regenerate())."""
+    """Nav-sync AND search-inject every docs-site HTML page that has NO MD source
+    (md-sourced pages already get both the nav and the search box from
+    regenerate())."""
     ok = True
     for html in sorted(SITE_DIR.glob("*.html")):
         if html.with_suffix(".md").exists():
             continue
         ok = sync_nav(html, quiet=quiet) and ok
+        ok = inject_search(html, quiet=quiet) and ok
     return ok
 
 
@@ -331,6 +335,7 @@ SITE_SHELL = """<!DOCTYPE html>
 <aside class="sidebar">
   <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
   <p class="tagline">Operations engine for an AI executive assistant</p>
+{search_box}
   <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
   <div class="nav-body" id="navbody">
 {nav}
@@ -345,9 +350,165 @@ SITE_SHELL = """<!DOCTYPE html>
   </footer>
 </main>
 </div>
+{search_script}
 </body>
 </html>
 """
+
+# Site-wide search: a dependency-free client-side search box (injected into the
+# sidebar) backed by a prebuilt JSON index of every docs/*.html section. The box
+# markup and the loader <script> live in these two constants so SITE_SHELL and the
+# hand-authored pages (via inject_search) stay byte-identical.
+SEARCH_BOX = (
+    '  <div class="search-box">\n'
+    '    <input type="search" id="doc-search" class="search-input" '
+    'placeholder="Search docs" autocomplete="off" spellcheck="false" '
+    'aria-label="Search the documentation">\n'
+    '    <div class="search-results" id="search-results" role="listbox" hidden></div>\n'
+    '  </div>'
+)
+SEARCH_SCRIPT = '<script src="assets/search.js" defer></script>'
+SEARCH_INDEX_PATH = SITE_DIR / "assets" / "search-index.json"
+SEARCH_TEXT_CAP = 1600  # chars of body text stored per section (keeps the index small)
+
+
+class _SectionExtractor(HTMLParser):
+    """Walk a rendered docs-site page and split its <main class="content"> body
+    into sections keyed by the h1/h2/h3 that opens each one, capturing the heading
+    id (the in-page anchor) and the plain text until the next heading. Only content
+    inside <main> is read, so the shared sidebar nav never pollutes the index."""
+
+    HEADINGS = {"h1", "h2", "h3"}
+    SKIP = {"script", "style"}
+    BLOCK = {"p", "li", "tr", "div", "h1", "h2", "h3", "h4", "br", "pre", "td", "th"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.in_main = False
+        self.skip_depth = 0
+        self.in_heading = False
+        self.head_parts: list[str] = []
+        self.cur: dict | None = None
+        self.sections: list[dict] = []
+        self.page_title: str | None = None
+
+    def _open_section(self, sec_id: str | None) -> None:
+        if self.cur is not None:
+            self.sections.append(self.cur)
+        self.cur = {"id": sec_id or "", "heading": "", "text": []}
+
+    def handle_starttag(self, tag, attrs):  # noqa: D102
+        ad = dict(attrs)
+        if tag == "main" and "content" in (ad.get("class") or "").split():
+            self.in_main = True
+            return
+        if not self.in_main:
+            return
+        if tag in self.SKIP:
+            self.skip_depth += 1
+            return
+        if tag in self.HEADINGS:
+            self._open_section(ad.get("id"))
+            self.in_heading = True
+            self.head_parts = []
+            return
+        if tag in self.BLOCK and self.cur is not None:
+            self.cur["text"].append(" ")
+
+    def handle_endtag(self, tag):  # noqa: D102
+        if tag == "main":
+            self.in_main = False
+            self.in_heading = False
+            return
+        if not self.in_main:
+            return
+        if tag in self.SKIP and self.skip_depth:
+            self.skip_depth -= 1
+            return
+        if tag in self.HEADINGS and self.in_heading:
+            self.in_heading = False
+            heading = "".join(self.head_parts).strip()
+            if self.cur is not None:
+                self.cur["heading"] = heading
+            if self.page_title is None and tag == "h1":
+                self.page_title = heading
+
+    def handle_data(self, data):  # noqa: D102
+        if not self.in_main or self.skip_depth:
+            return
+        if self.in_heading:
+            self.head_parts.append(data)
+        elif self.cur is not None:
+            self.cur["text"].append(data)
+
+
+def _extract_sections(html_text: str, fallback_title: str) -> tuple[str, list[dict]]:
+    parser = _SectionExtractor()
+    parser.feed(html_text)
+    parser.close()
+    if parser.cur is not None:
+        parser.sections.append(parser.cur)
+    title = parser.page_title or fallback_title
+    out = []
+    for sec in parser.sections:
+        text = re.sub(r"\s+", " ", "".join(sec["text"])).strip()
+        heading = re.sub(r"\s+", " ", sec["heading"]).strip()
+        if not text and not heading:
+            continue
+        out.append({"id": sec["id"], "heading": heading, "text": text[:SEARCH_TEXT_CAP]})
+    return title, out
+
+
+def build_search_index(quiet: bool = False) -> int:
+    """Build docs/assets/search-index.json from every rendered docs/*.html page.
+    One record per section: {u:file, a:anchor, p:page title, h:heading, t:text}."""
+    pages = sorted(SITE_DIR.glob("*.html"))
+    records = []
+    for html_path in pages:
+        title, sections = _extract_sections(html_path.read_text(encoding="utf-8"), html_path.stem)
+        for sec in sections:
+            records.append({
+                "u": html_path.name,
+                "a": sec["id"] or "",
+                "p": title,
+                "h": sec["heading"] or title,
+                "t": sec["text"],
+            })
+    SEARCH_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SEARCH_INDEX_PATH.write_text(
+        json.dumps(records, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    if not quiet:
+        kb = SEARCH_INDEX_PATH.stat().st_size / 1024
+        print(f"  search index: {len(records)} sections across {len(pages)} pages "
+              f"-> assets/search-index.json ({kb:.0f} KB)")
+    return len(records)
+
+
+def inject_search(html_path: Path, quiet: bool = False) -> bool:
+    """Idempotently add the sidebar search box and the loader <script> to a
+    hand-authored site page. Md-sourced pages get both from SITE_SHELL on
+    regenerate(); this covers index.html, daemons.html, and the other hand-authored
+    pages that regenerate() never rewrites."""
+    if not html_path.exists():
+        print(f"ERROR: HTML not found: {html_path}", file=sys.stderr)
+        return False
+    text = html_path.read_text(encoding="utf-8")
+    orig = text
+    if 'id="doc-search"' not in text and '<button class="menu-toggle"' in text:
+        text = text.replace(
+            '  <button class="menu-toggle"',
+            SEARCH_BOX + "\n  <button class=\"menu-toggle\"",
+            1,
+        )
+    if "assets/search.js" not in text and "</body>" in text:
+        text = text.replace("</body>", SEARCH_SCRIPT + "\n</body>", 1)
+    if text != orig:
+        html_path.write_text(text, encoding="utf-8")
+        if not quiet:
+            print(f"  search-injected {_display_path(html_path)}")
+    return True
 
 
 def load_css() -> str:
@@ -420,8 +581,10 @@ def regenerate(md_path: Path, quiet: bool = False) -> bool:
             subtitle_attr=html_stdlib.escape(subtitle) if subtitle else "",
             display_title=html_stdlib.escape(display_title),
             subtitle_block=subtitle_block,
+            search_box=SEARCH_BOX,
             nav=_site_nav(html_path.name),
             body=body_html,
+            search_script=SEARCH_SCRIPT,
         )
     else:
         # Portable self-contained guide (templates/, CEO guides): inline theme.
@@ -482,7 +645,8 @@ def main():
     parser = argparse.ArgumentParser(description="Regenerate HTML docs from MD sources")
     parser.add_argument("md_file", nargs="?", help="Path to MD file to regenerate")
     parser.add_argument("--all", action="store_true", help="Regenerate every tracked HTML/MD pair (also nav-syncs hand-authored site pages)")
-    parser.add_argument("--nav-sync", action="store_true", help="Only rewrite the sidebar nav of hand-authored site pages to match SITE_NAV_GROUPS")
+    parser.add_argument("--nav-sync", action="store_true", help="Rewrite the sidebar nav + inject the search box on hand-authored site pages, then rebuild the search index")
+    parser.add_argument("--search-index", action="store_true", help="Only rebuild docs/assets/search-index.json from the current docs/*.html pages")
     parser.add_argument("--check", action="store_true", help="List stale pairs without regenerating")
     parser.add_argument("--quiet", action="store_true", help="Suppress non-error output")
     args = parser.parse_args()
@@ -499,8 +663,13 @@ def main():
             print(f"  {_display_path(md)} is {days:.1f} days newer than {html.name}")
         sys.exit(1 if stale else 0)
 
+    if args.search_index:
+        build_search_index(quiet=args.quiet)
+        sys.exit(0)
+
     if args.nav_sync:
         ok = sync_all_navs(quiet=args.quiet)
+        build_search_index(quiet=args.quiet)
         sys.exit(0 if ok else 1)
 
     if args.all:
@@ -509,8 +678,9 @@ def main():
             print(f"Regenerating {len(pairs)} HTML file(s)...")
         ok = all(regenerate(md, quiet=args.quiet) for md in pairs)
         if not args.quiet:
-            print("Syncing nav on hand-authored site pages...")
+            print("Syncing nav + search box on hand-authored site pages...")
         ok = sync_all_navs(quiet=args.quiet) and ok
+        build_search_index(quiet=args.quiet)
         sys.exit(0 if ok else 1)
 
     if not args.md_file:

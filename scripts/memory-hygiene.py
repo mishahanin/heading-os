@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.memory_health import compute_memory_defects  # noqa: E402
+from scripts.utils.memory_health import compute_memory_defects, scan_redundancy  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
     get_data_root,
     get_default_tz,
@@ -86,6 +86,7 @@ def gather() -> dict:
     """Collect both halves and split defects into gate vs advisory."""
     mem_dir = get_data_root() / "auto-memory"
     mem = compute_memory_defects(mem_dir)
+    redundancy = scan_redundancy(mem_dir)
     brain = collect_brain_compile()
     bdata = brain["data"] or {}
     temporal = bdata.get("temporal_validity") or {}
@@ -115,6 +116,7 @@ def gather() -> dict:
         "gate": gate,
         "gate_count": gate_count,
         "advisory": advisory,
+        "redundancy": redundancy,
     }
 
 
@@ -126,6 +128,7 @@ def render_report(result: dict, generated_iso: str) -> str:
     mem = result["memory"]
     gate = result["gate"]
     adv = result["advisory"]
+    redundancy = result["redundancy"]
     lines: list[str] = []
     lines.append("# Memory Hygiene Report")
     lines.append("")
@@ -201,6 +204,17 @@ def render_report(result: dict, generated_iso: str) -> str:
         if len(items) > 20:
             lines.append(f"- ...and {len(items) - 20} more")
         lines.append("")
+
+    lines.append("")
+    lines.append("## Redundancy (advisory - not gated)")
+    if not redundancy["ok"]:
+        lines.append(f"- {redundancy['note']}")
+    elif not redundancy["pairs"]:
+        lines.append("- no near-duplicate pairs above threshold")
+    else:
+        for p in redundancy["pairs"]:
+            lines.append(f"- {p['a']} <-> {p['b']} (score {p['score']}) - candidate merge; resolve via /dream")
+    lines.append("")
 
     lines.append("---")
     lines.append("")

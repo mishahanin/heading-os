@@ -5,13 +5,13 @@
 # Install: python -m pip install -r scripts/bridge_daemon/requirements.txt
 # CVE scan: python -m pip_audit --requirement scripts/bridge_daemon/requirements.txt
 
-# fastapi bumped to 0.136.3 (F-H4 CVE fix: CVE-2025-54121, CVE-2025-62727)
-fastapi==0.136.3
+# fastapi bumped to 0.139.0 (F-H4 CVE fix: CVE-2025-54121, CVE-2025-62727)
+fastapi==0.139.0
 # firecrawl-py pinned per F-H3 to prevent silent version drift
-firecrawl-py==4.28.2
-uvicorn[standard]==0.48.0
+firecrawl-py==4.31.0
+uvicorn[standard]==0.50.2
 watchdog==6.0.0
-apscheduler==3.11.2
+apscheduler==3.11.3
 httpx==0.28.1
 
 # PyYAML is shared with the main workspace at 6.0.3; do not pin

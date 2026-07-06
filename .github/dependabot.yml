@@ -24,6 +24,15 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # Transitive majors that cannot be satisfied without breaking their parent.
+    # markitdown 0.1.6 pins magika<1; a parent pins wrapt<2. Dependabot kept
+    # reopening these as unmergeable PRs (closed 2026-07-06 as #6/#8). Ignore the
+    # blocked majors until the parent relaxes; minor/patch still flow.
+    ignore:
+      - dependency-name: "magika"
+        versions: [">=1.0.0"]
+      - dependency-name: "wrapt"
+        versions: [">=2.0.0"]
 
   # Bridge daemon's own requirements.
   - package-ecosystem: "pip"

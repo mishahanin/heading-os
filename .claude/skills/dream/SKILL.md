@@ -21,7 +21,7 @@ metadata:
 x-31c-orchestration:
   parallel_safe: false
   shared_state:
-    - memory/
+    - auto-memory/
   triggers:
     - dream
     - consolidate memories
@@ -48,8 +48,12 @@ Perform a reflective pass over memory files. Synthesize recent learnings into du
 
 ## Paths
 
-- **Memory directory:** `~/.claude/projects/<project-slug>/memory/`
-- **Index file:** `MEMORY.md` (inside memory directory, 200-line budget)
+- **Memory directory:** the canonical DATA overlay `<data-root>/auto-memory/`, resolved via:
+  ```bash
+  python3 -c "from scripts.utils.workspace import get_auto_memory_dir; print(get_auto_memory_dir())"
+  ```
+  This is the authoritative store. Do NOT operate on the native harness store `~/.claude/projects/<project-slug>/memory/` - `memory-reconcile.py` re-syncs from the canonical dir at SessionStart.
+- **Index file:** `MEMORY.md` (inside that dir, 200-line budget)
 - **Transcripts:** `~/.claude/projects/<project-slug>/*.jsonl`
 - **Context7:** `python3 scripts/context7.py "<library>" "<topic>"`
 - **Security rules:** `.claude/rules/security.md`, `docs/security/SECURITY-CONSTITUTION.md`
@@ -66,7 +70,7 @@ Understand the current state of the memory system before making any changes.
 
 1. **List memory files:**
    ```bash
-   ls ~/.claude/projects/<project-slug>/memory/
+   ls "$(python3 -c 'from scripts.utils.workspace import get_auto_memory_dir; print(get_auto_memory_dir())')"
    ```
 
 2. **Read the index:** Read `MEMORY.md` to understand current structure, categories, and entry count.
@@ -197,7 +201,11 @@ Write or update memory files based on signals gathered in Phase 1. Every write m
 
 6. **Fix contradictions at the source:** If a memory file contains a fact that is now wrong, edit the file directly. Don't leave stale information.
 
-7. **Delete superseded files:** If a memory has been fully replaced by updated information in another file, delete the old one.
+7. **Retire superseded files (both-store):** if a memory is fully replaced, retire it with `python scripts/retire-memory.py <name.md>` - this removes it from the canonical store AND every native harness store. A plain `rm` or Edit-delete on one store alone is resurrected at the next SessionStart, because `memory-reconcile.py` never propagates a delete. Never delete a memory file any other way.
+
+### Apply redundancy merge proposals (human-gated)
+
+Read the latest `<data-root>/outputs/operations/memory-hygiene/` report's "## Redundancy (advisory - not gated)" section. For each candidate pair, show Misha both files and ask for approval. On approval, merge the two facts into ONE survivor file (keeping genuinely distinct facts as SEPARATE files - respect one-fact-per-file), update the survivor's `MEMORY.md` pointer, then retire the other file with `python scripts/retire-memory.py <other.md>`. Never auto-merge; each pair needs explicit approval.
 
 ### What NOT to Write
 
@@ -266,6 +274,24 @@ Security protocol consulted: PASS
 Index: {X} lines ({Y} files), within budget.
 ```
 
+### Step 3: Append consolidation trace
+
+After the report, append one JSON line recording this run's actions. Fill `merged` and `retired` with the run's REAL actions (merged survivor filenames and retired filenames) - leave them as empty lists if nothing was merged or retired.
+
+```bash
+python3 - <<'PY'
+import json, time, sys
+from pathlib import Path
+sys.path.insert(0, ".")
+from scripts.utils.workspace import get_outputs_dir
+p = get_outputs_dir() / "operations" / "dream" / "consolidation-trace.jsonl"
+p.parent.mkdir(parents=True, exist_ok=True)
+row = {"ts": time.time(), "merged": [], "retired": []}  # fill with THIS run's actual actions
+with p.open("a", encoding="utf-8") as fh:
+    fh.write(json.dumps(row) + "\n")
+PY
+```
+
 ---
 
 ## NEVER
@@ -275,7 +301,8 @@ Index: {X} lines ({Y} files), within budget.
 - NEVER create duplicate memories - always merge into existing topic files
 - NEVER write memory content directly into MEMORY.md - it is an index of pointers only
 - NEVER skip the security gate - if protocol files are not found, stop and report
-- NEVER modify files outside the memory directory during a dream pass
+- NEVER modify files outside the memory directory during a dream pass (running `scripts/retire-memory.py` and appending the consolidation trace under `outputs/operations/dream/` are permitted memory-maintenance actions)
+- NEVER delete a memory file on one store only - always retire via `scripts/retire-memory.py` so the delete sticks on both stores
 - NEVER delete memory files without explaining the reason in the consolidation report
 - NEVER proceed to Phase 2 if the security gate returned BLOCKED
 - NEVER store code patterns, git history, or ephemeral task details in memory

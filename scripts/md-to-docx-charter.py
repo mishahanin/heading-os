@@ -5,11 +5,6 @@ Usage:
     python scripts/md-to-docx-charter.py
 """
 
-from docx import Document
-from docx.shared import Pt, Cm, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 import re
 import sys
 from pathlib import Path
@@ -20,6 +15,22 @@ from scripts.utils.venv import ensure_venv  # noqa: E402
 
 ensure_venv()
 from scripts.utils.workspace import get_outputs_dir
+
+# docx names are bound lazily (F-2.1: import stays pure).
+Document = Pt = Cm = Inches = RGBColor = WD_ALIGN_PARAGRAPH = qn = OxmlElement = None
+
+
+def _ensure_docx():
+    global Document, Pt, Cm, Inches, RGBColor, WD_ALIGN_PARAGRAPH, qn, OxmlElement
+    if Document is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("docx", extra="documents")
+    from docx import Document
+    from docx.shared import Pt, Cm, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
 
 
 def add_horizontal_line(doc):
@@ -38,8 +49,10 @@ def add_horizontal_line(doc):
     pPr.append(pBdr)
 
 
-def add_formatted_text(paragraph, text, default_size=Pt(11)):
+def add_formatted_text(paragraph, text, default_size=None):
     """Parse markdown bold and add runs."""
+    if default_size is None:
+        default_size = Pt(11)
     parts = re.split(r'(\*\*.*?\*\*)', text)
     for part in parts:
         if part.startswith('**') and part.endswith('**'):
@@ -52,6 +65,7 @@ def add_formatted_text(paragraph, text, default_size=Pt(11)):
 
 
 def create_charter_docx(md_path, docx_path):
+    _ensure_docx()
     doc = Document()
 
     # Page margins

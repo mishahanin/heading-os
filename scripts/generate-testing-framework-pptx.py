@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 """Generate MIB Testing Framework presentation in 31C corporate style."""
 
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
-from pptx.enum.shapes import MSO_SHAPE
 import os
 import sys
 from pathlib import Path
@@ -17,19 +12,36 @@ from scripts.utils.venv import ensure_venv  # noqa: E402
 ensure_venv()
 from scripts.utils.workspace import get_outputs_dir
 
-# 31C Brand Colors
-DARK_BG = RGBColor(0x0A, 0x0E, 0x1A)
-CARD_BG = RGBColor(0x12, 0x17, 0x2A)
-BRAND_BLUE = RGBColor(0x42, 0x3B, 0xFF)
-BRAND_ORANGE = RGBColor(0xFF, 0x92, 0x35)
-WHITE = RGBColor(0xFF, 0xFF, 0xFF)
-LIGHT_GRAY = RGBColor(0xB0, 0xB8, 0xC8)
-MED_GRAY = RGBColor(0x6B, 0x72, 0x85)
-ACCENT_TEAL = RGBColor(0x00, 0xD4, 0xAA)
-CARD_BORDER = RGBColor(0x1E, 0x24, 0x3B)
+# python-pptx names + brand colours/dimensions are bound lazily (F-2.1).
+Presentation = Inches = Pt = RGBColor = PP_ALIGN = MSO_SHAPE = None
+DARK_BG = CARD_BG = BRAND_BLUE = BRAND_ORANGE = WHITE = None
+LIGHT_GRAY = MED_GRAY = ACCENT_TEAL = CARD_BORDER = SLIDE_W = SLIDE_H = None
 
-SLIDE_W = Inches(13.333)
-SLIDE_H = Inches(7.5)
+
+def _ensure_pptx():
+    global Presentation, Inches, Pt, RGBColor, PP_ALIGN, MSO_SHAPE
+    global DARK_BG, CARD_BG, BRAND_BLUE, BRAND_ORANGE, WHITE
+    global LIGHT_GRAY, MED_GRAY, ACCENT_TEAL, CARD_BORDER, SLIDE_W, SLIDE_H
+    if Presentation is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("pptx", extra="documents")
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    from pptx.enum.shapes import MSO_SHAPE
+    DARK_BG = RGBColor(0x0A, 0x0E, 0x1A)
+    CARD_BG = RGBColor(0x12, 0x17, 0x2A)
+    BRAND_BLUE = RGBColor(0x42, 0x3B, 0xFF)
+    BRAND_ORANGE = RGBColor(0xFF, 0x92, 0x35)
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+    LIGHT_GRAY = RGBColor(0xB0, 0xB8, 0xC8)
+    MED_GRAY = RGBColor(0x6B, 0x72, 0x85)
+    ACCENT_TEAL = RGBColor(0x00, 0xD4, 0xAA)
+    CARD_BORDER = RGBColor(0x1E, 0x24, 0x3B)
+    SLIDE_W = Inches(13.333)
+    SLIDE_H = Inches(7.5)
 
 OUTPUT = str(get_outputs_dir() / "deliverables" / "presentations"
              / "MIB - Testing Framework (31C Style).pptx")
@@ -60,8 +72,12 @@ def add_bar(slide, left, top, width, height, fill):
     return shape
 
 
-def txt(slide, left, top, w, h, text, size=14, color=WHITE, bold=False,
-        align=PP_ALIGN.LEFT, font="Segoe UI", spacing=1.2):
+def txt(slide, left, top, w, h, text, size=14, color=None, bold=False,
+        align=None, font="Segoe UI", spacing=1.2):
+    if color is None:
+        color = WHITE
+    if align is None:
+        align = PP_ALIGN.LEFT
     box = slide.shapes.add_textbox(left, top, w, h)
     tf = box.text_frame
     tf.word_wrap = True
@@ -83,6 +99,7 @@ def top_bar(slide):
 
 
 def build():
+    _ensure_pptx()
     prs = Presentation()
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H

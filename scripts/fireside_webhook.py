@@ -23,10 +23,21 @@ import logging
 import time
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+# fastapi names are bound lazily (F-2.1: import stays pure so the module is
+# collectable without the `dashboard` extra installed).
+FastAPI = Header = HTTPException = Request = None
 
 
-def create_app(fb_module: Any, secret_token: str, logger: logging.Logger) -> FastAPI:
+def _ensure_fastapi():
+    global FastAPI, Header, HTTPException, Request
+    if FastAPI is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("fastapi", extra="dashboard")
+    from fastapi import FastAPI, Header, HTTPException, Request
+
+
+def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
     """Build the webhook FastAPI app.
 
     Args:
@@ -41,6 +52,7 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger) -> Fas
     if not secret_token:
         raise ValueError("create_app requires a non-empty secret_token")
 
+    _ensure_fastapi()
     app = FastAPI(title="fireside-webhook")
 
     async def _process_in_background(update: dict, kind: str, t_recv: float) -> None:

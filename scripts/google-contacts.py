@@ -105,7 +105,7 @@ def _check_dependencies():
         sys.exit(1)
 
 
-_check_dependencies()
+# _check_dependencies() runs inside authenticate() (F-2.1: no import-time exit).
 
 
 # ===========================================================================
@@ -141,6 +141,7 @@ def authenticate():
     First run opens browser for OAuth consent (handles 2FA transparently).
     Token is cached and auto-refreshed for subsequent runs.
     """
+    _check_dependencies()
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow

@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 """Generate ODUN.ONE AI Monetization Use Cases DOCX using 31C corporate template."""
 
-from docx import Document
-from docx.shared import Pt, Cm, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml.ns import qn
 import shutil, zipfile, os, sys
 from pathlib import Path
 
@@ -20,11 +15,29 @@ from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
 # Configuration
 # ============================================================
 
-# --- Colors ---
-DARK_BLUE = RGBColor(0x0A, 0x1E, 0x3D)
-ACCENT_BLUE = RGBColor(0x1A, 0x5C, 0xB0)
-DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
-MED_GRAY = RGBColor(0x66, 0x66, 0x66)
+# --- docx names + brand colours are bound lazily (F-2.1: import stays pure) ---
+Document = Pt = Cm = RGBColor = None
+WD_ALIGN_PARAGRAPH = WD_TABLE_ALIGNMENT = qn = None
+DARK_BLUE = ACCENT_BLUE = DARK_GRAY = MED_GRAY = None
+
+
+def _ensure_docx():
+    """Bind python-docx names and brand colours on first use (F-2.1)."""
+    global Document, Pt, Cm, RGBColor, WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, qn
+    global DARK_BLUE, ACCENT_BLUE, DARK_GRAY, MED_GRAY
+    if Document is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("docx", extra="documents")
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml.ns import qn
+    DARK_BLUE = RGBColor(0x0A, 0x1E, 0x3D)
+    ACCENT_BLUE = RGBColor(0x1A, 0x5C, 0xB0)
+    DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
+    MED_GRAY = RGBColor(0x66, 0x66, 0x66)
 
 TMPL = str(get_datastore_dir() / "brand" / "templates"
            / "31C - Master Template (New Identity 2026 v1.00).dotx")
@@ -112,6 +125,7 @@ def add_usecase(doc, number, title, body, impact):
 
 
 def build():
+    _ensure_docx()
     doc = load_template()
 
     # === TITLE PAGE ===

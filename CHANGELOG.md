@@ -54,6 +54,7 @@ Initial public release.
 - **Memory and ODIN**: a local associative-memory index behind `/recall` and a persistent knowledge brain.
 - The published documentation site at [mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/), the deployment guide, and the focused setup guides for models, integrations, and personalization.
 
-[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mishahanin/heading-os/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mishahanin/heading-os/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mishahanin/heading-os/releases/tag/v0.1.0

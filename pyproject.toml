@@ -122,6 +122,13 @@ markers = [
     "integration: integration tests (mocked external services)",
     "slow: tests that take >5 seconds",
     "acceptance: A+ sign-off gates; excluded from the per-push run (run explicitly in Phase 4)",
+    "requires_exchange: needs exchangelib (uv sync --extra email)",
+    "requires_telegram: needs Telethon (uv sync --extra telegram)",
+    "requires_playwright: needs playwright (uv sync --extra browser)",
+    "requires_documents: needs weasyprint/docx/pptx stack (uv sync --extra documents)",
+    "requires_media: needs yt-dlp / transcript APIs (uv sync --extra media)",
+    "requires_ollama: needs a local Ollama with bge-m3",
+    "requires_network: performs real network I/O",
 ]
 
 [tool.coverage.run]

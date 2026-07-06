@@ -94,6 +94,17 @@ repos:
         files: '^\.claude/(skills/.*/SKILL\.md|rules/skill-router\.md)$'
         pass_filenames: false
 
+  # Version-sync guard (F-1.1): pyproject.toml is the single source of truth;
+  # README § Status and the newest CHANGELOG heading must agree with it.
+  - repo: local
+    hooks:
+      - id: version-sync
+        name: Verify README/CHANGELOG version matches pyproject.toml
+        entry: python3 scripts/check-version-sync.py --quiet
+        language: system
+        files: '^(README\.md|CHANGELOG\.md|pyproject\.toml)$'
+        pass_filenames: false
+
   # CRM schema enforcement -- closes P2.4 from the 2026-05-14 workspace deep audit.
   # Blocks commits that introduce malformed CRM contact frontmatter (missing name/type/
   # last_touch, invalid YAML, bad date format). Permissive on phone/email/type quality -

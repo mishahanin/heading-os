@@ -54,3 +54,15 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # GitHub Actions: keep the SHA-pinned action versions (F-1.5) fresh via PRs,
+  # so pinning by commit does not silently rot. Dependabot updates the SHA and
+  # the trailing `# vX` comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"

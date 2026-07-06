@@ -25,10 +25,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv import ensure_venv  # noqa: E402
 
 ensure_venv()
-from exchangelib import Account, Configuration, Credentials, DELEGATE, Version, Build
-from exchangelib.protocol import BaseProtocol
-
 from scripts.utils.workspace import get_outputs_dir, get_workspace_root, load_env
+
+# exchangelib names are bound lazily (F-2.1: import stays pure).
+Account = Configuration = Credentials = DELEGATE = Version = Build = None
+
+
+def _ensure_exchangelib():
+    global Account, Configuration, Credentials, DELEGATE, Version, Build
+    if Account is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("exchangelib", extra="email")
+    from exchangelib import Account, Configuration, Credentials, DELEGATE, Version, Build
 
 WORKSPACE_ROOT = get_workspace_root()
 ENV_FILE = WORKSPACE_ROOT / ".env"
@@ -53,6 +62,7 @@ def load_config() -> dict:
 
 
 def connect(cfg: dict) -> Account:
+    _ensure_exchangelib()
     creds = Credentials(username=cfg["EXCHANGE_USERNAME"], password=cfg["EXCHANGE_PASSWORD"])
     # Exchange 2019 build hint - exchangelib's resolve_names() requires an explicit
     # version_hint on the protocol; without it, ResolveNames raises NoneType.api_version

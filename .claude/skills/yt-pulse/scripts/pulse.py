@@ -20,11 +20,16 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    import yt_dlp
-except ImportError:
-    print(json.dumps({"error": "yt-dlp not installed. Run: pip install yt-dlp"}))
-    sys.exit(1)
+def _yt_dlp():
+    """Lazy yt-dlp import (F-2.1: module import must stay pure so pytest can
+    collect this file on a fresh clone without the `media` extra). Exits 1 with
+    an attributed message only when the search path is actually exercised."""
+    try:
+        import yt_dlp
+    except ImportError:
+        print(json.dumps({"error": "yt-dlp not installed; this capability needs: uv sync --extra media"}))
+        raise SystemExit(1) from None
+    return yt_dlp
 
 
 # YouTube search filter parameters (sp= values)
@@ -92,6 +97,7 @@ def search_youtube(
         if browser_spec:
             ydl_opts["cookiesfrombrowser"] = browser_spec
 
+    yt_dlp = _yt_dlp()
     videos = []
     for attempt in range(2):
         try:

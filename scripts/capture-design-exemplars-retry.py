@@ -17,7 +17,18 @@ ensure_venv()
 from scripts.utils.colors import CYAN, GREEN, RED, RESET  # noqa: E402
 from scripts.utils.workspace import display_path, get_outputs_dir  # noqa: E402
 
-from playwright.async_api import async_playwright
+# playwright is bound lazily (F-2.1: import stays pure).
+async_playwright = None
+
+
+def _ensure_playwright():
+    global async_playwright
+    if async_playwright is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("playwright", extra="browser")
+    from playwright.async_api import async_playwright
+
 
 OUTPUT_DIR = get_outputs_dir() / "research" / "_drafts" / "exemplars"
 MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
@@ -71,6 +82,7 @@ async def capture_one(browser, slug, url, category, settle_ms, full_page):
 
 
 async def main():
+    _ensure_playwright()
     print(f"{CYAN}Retrying {len(RETRIES)} targets with tuned settings{RESET}\n")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)

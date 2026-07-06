@@ -38,26 +38,19 @@ from scripts.utils.workspace import get_default_tz, get_default_tz_name, get_wor
 # Dependency check
 # ============================================================
 
-def _check_deps():
-    import importlib
-    missing = []
-    for pkg in ("exchangelib",):
-        try:
-            importlib.import_module(pkg)
-        except ImportError:
-            missing.append(pkg)
-    if missing:
-        print(f"{RED}[ERROR]{RESET} Missing packages: {', '.join(missing)}")
-        print(f"        Run: pip install {' '.join(missing)}")
-        sys.exit(1)
+# exchangelib names are bound lazily (F-2.1: import stays pure).
+Account = Configuration = Credentials = DELEGATE = None
+EWSDateTime = EWSTimeZone = Task = None
 
-_check_deps()
 
-from exchangelib import (
-    Account, Configuration, Credentials, DELEGATE,
-    EWSDateTime, EWSTimeZone,
-)
-from exchangelib.items import Task
+def _ensure_exchangelib():
+    global Account, Configuration, Credentials, DELEGATE, EWSDateTime, EWSTimeZone, Task
+    if Account is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("exchangelib", extra="email")
+    from exchangelib import Account, Configuration, Credentials, DELEGATE, EWSDateTime, EWSTimeZone
+    from exchangelib.items import Task
 
 # ============================================================
 # Config & connection
@@ -86,6 +79,7 @@ def load_config() -> dict:
 
 
 def connect(config: dict) -> Account:
+    _ensure_exchangelib()
     print(f"{GRAY}[INFO]{RESET} Connecting to {config['EXCHANGE_SERVER']}...")
     credentials = Credentials(
         username=config["EXCHANGE_USERNAME"],

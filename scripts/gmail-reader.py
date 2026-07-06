@@ -36,10 +36,21 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
+# Google API names are bound lazily (F-2.1: import stays pure).
+Request = Credentials = InstalledAppFlow = build = None
+
+
+def _ensure_google():
+    global Request, Credentials, InstalledAppFlow, build
+    if build is not None:
+        return
+    from scripts.utils.optdeps import require
+    require("google", extra="ai-extra")
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -66,6 +77,7 @@ TOKEN_PATH = str(PROJECT_ROOT / ".sessions" / "google" / "gmail_token.json")
 
 
 def get_service():
+    _ensure_google()
     creds = None
     if os.path.exists(TOKEN_PATH):
         creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)

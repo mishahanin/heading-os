@@ -798,6 +798,25 @@ def _query_store(conn, qvec, full_text, *, threshold, layer, allowed):
 
 
 def cmd_query(args) -> int:
+    _t0 = time.perf_counter()
+
+    def _emit(gap, hits_list):
+        try:
+            from scripts.utils.memory_ops_log import log_recall
+            log_recall(
+                query_snippet=getattr(args, "text", ""),
+                collection=getattr(args, "collection", "content"),
+                layer=getattr(args, "layer", None),
+                top_score=(hits_list[0]["score"] if hits_list else None),
+                gap=bool(gap),
+                n_hits=len(hits_list),
+                threshold=getattr(args, "threshold", None),
+                latency_ms=round((time.perf_counter() - _t0) * 1000, 1),
+                hit_paths=[h.get("path") for h in hits_list],
+            )
+        except Exception:
+            return
+
     cfg = load_config(get_workspace_root())  # memory-index.yaml is engine config
     threshold = args.threshold if args.threshold is not None else cfg["threshold"]
     top_k = args.top_k or cfg["top_k"]
@@ -865,6 +884,7 @@ def cmd_query(args) -> int:
 
     if not metas:
         print(f"{YELLOW}Index is empty.{RESET} Run: python3 scripts/memory-index.py build")
+        _emit(gap=True, hits_list=[])
         return 0
 
     # Pool: dense re-sorted globally by cosine (a no-op for a single store, which
@@ -883,11 +903,13 @@ def cmd_query(args) -> int:
                  "threshold": round(float(threshold), 4)},
                 ensure_ascii=False,
             ))
+            _emit(gap=True, hits_list=[])
             return 0
         print(
             f"{YELLOW}Nothing above threshold {threshold:.2f}{RESET} "
             f"(best {best_val:.3f}, no lexical match) -- a gap in this area of memory."
         )
+        _emit(gap=True, hits_list=[])
         return 0
 
     fused, _ = _rrf_fuse(dense_ids, combined_sparse)
@@ -942,6 +964,7 @@ def cmd_query(args) -> int:
 
     if want_json:
         print(json.dumps({"hits": hits, "gap": False}, ensure_ascii=False))
+        _emit(gap=False, hits_list=hits)
         return 0
 
     print(f"{BOLD}Associative recall{RESET} {GRAY}(recency x importance x relevance){RESET}")
@@ -956,6 +979,7 @@ def cmd_query(args) -> int:
             f"{ntype}{cls}  {h['title']}{chunk}"
         )
         print(f"          {GRAY}{h['path']}{RESET}")
+    _emit(gap=False, hits_list=hits)
     return 0
 
 

@@ -80,8 +80,11 @@ dev = [
 constraint-dependencies = ["msgpack>=1.2.1"]
 
 [tool.bandit]
-severity = "medium"
-confidence = "medium"
+# Severity/confidence thresholds are CLI-only in bandit (--severity-level /
+# --confidence-level, set on the bandit step in .github/workflows/ci.yml). They
+# are NOT read from this table, so declaring them here does nothing - the CI
+# step owns the medium/medium floor. This table carries only keys bandit honors
+# from config: exclude_dirs and skips.
 exclude_dirs = ["tests"]
 # B310: urllib urlopen audit for file:/custom schemes. Our scripts call hardcoded
 # https API endpoints (Telegram, etc.) via f-string literals, never user-controlled

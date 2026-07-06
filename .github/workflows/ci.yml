@@ -28,8 +28,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Tests pin their own TZ in conftest; this is belt-and-suspenders determinism.
-  HEADING_OS_TZ: UTC
+  # Match the session TZ the test suite pins in tests/conftest.py: Etc/GMT-4 is
+  # UTC+4 with no DST (a neutral fixed offset, not a location signal). The
+  # tz-sensitive calendar/pulse tests assert +4 local-time math; a bare UTC here
+  # overrides the conftest default and fails them.
+  HEADING_OS_TZ: Etc/GMT-4
 
 jobs:
   guards:
@@ -70,7 +73,7 @@ jobs:
       - name: ruff - full-ruleset report (advisory ratchet baseline for F-3.2)
         run: uv run ruff check . --statistics || true
       - name: bandit
-        run: uv run bandit -c pyproject.toml -r scripts .claude/hooks -q
+        run: uv run bandit -c pyproject.toml -r scripts .claude/hooks -q --severity-level medium --confidence-level medium
 
   security-tests:
     name: security suite (the money badge)

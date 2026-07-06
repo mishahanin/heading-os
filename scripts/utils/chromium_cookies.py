@@ -265,7 +265,7 @@ def _derive_pbkdf2(password: bytes, iterations: int) -> bytes:
     # cookies the browser wrote requires using the exact algorithm it used to
     # write them. Changing SHA1 here means we cannot read Chromium cookies.
     kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA1(),  # noqa: S303 - Chromium wire-format constraint
+        algorithm=hashes.SHA1(),  # noqa: S303  # nosec B303 - Chromium wire-format constraint
         length=16,
         salt=b"saltysalt",
         iterations=iterations,

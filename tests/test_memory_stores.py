@@ -5,6 +5,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils import memory_stores
 
+import subprocess
+
 
 def _seed(store: Path, name: str, body="x"):
     store.mkdir(parents=True, exist_ok=True)
@@ -35,3 +37,12 @@ def test_retire_is_idempotent_and_missing_safe(tmp_path):
     _seed(canonical, "a.md")
     assert memory_stores.retire_memory("a.md", stores=[canonical]) == [str(canonical / "a.md")]
     assert memory_stores.retire_memory("a.md", stores=[canonical]) == []
+
+
+def test_retire_cli_runs_on_missing_name():
+    root = Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        [sys.executable, str(root / "scripts" / "retire-memory.py"), "definitely_absent_zzz.md"],
+        capture_output=True, text=True)
+    assert out.returncode == 0
+    assert "not found" in out.stdout

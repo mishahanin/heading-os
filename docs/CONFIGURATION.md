@@ -33,6 +33,8 @@ Maps each Action Queue `action_type` to a risk tier: `autonomous` (read-only, no
 
 Drives `scripts/memory-index.py`, the local associative-memory index behind `/recall`: which workspace layers to embed, the on-machine embedder (`bge-m3` via Ollama), the salience threshold, and the air-gap denylist that keeps sensitive layers out of the index. Runs entirely on-machine at zero API cost. See [memory and ODIN](memory-odin.html).
 
+The `audit:` block tunes the metamemory scan: `audit.near_dup_threshold` (float, default `0.86`) is the cosine-similarity threshold above which two auto-memory files are flagged as a near-duplicate merge candidate. The scan (`scan_redundancy()` in `scripts/utils/memory_health.py`) is advisory-only — it surfaces candidates in the weekly `scripts/memory-hygiene.py` report for a human to resolve via `/dream`, never in the hygiene exit-code gate and never auto-applied.
+
 ## `llm_fallback.yaml`: model failover
 
 Maps each Anthropic model tier to an ordered fallback chain. When a primary call fails with a retriable error (5xx, 429, timeout, connection reset), the caller cascades through the chain instead of failing the whole operation. See [AI models](MODELS-SETUP.html).

@@ -1,6 +1,6 @@
 # Roadmap
 
-HEADING OS is `v0.2.0`. The architecture, the security model, and the engine/data seam are stable and load-bearing. This roadmap sketches direction, not dates. Interfaces may change between minor versions while the project is pre-1.0.
+HEADING OS is `v0.3.0`. The architecture, the security model, and the engine/data seam are stable and load-bearing. This roadmap sketches direction, not dates. Interfaces may change between minor versions while the project is pre-1.0.
 
 ## Now
 - Hardening the skill catalog and the router as usage surfaces edge cases.

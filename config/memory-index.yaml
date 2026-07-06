@@ -147,3 +147,9 @@ deny_prefixes:
   - "_secure/"
 deny_segments:
   - "personal"
+
+# Hygiene audit knobs (scripts/memory-hygiene.py). near_dup_threshold feeds
+# scan_redundancy() in scripts/utils/memory_health.py -- cosine similarity at
+# or above this value flags an advisory redundancy-merge candidate.
+audit:
+  near_dup_threshold: 0.86   # cosine >= this => redundancy merge candidate (advisory)

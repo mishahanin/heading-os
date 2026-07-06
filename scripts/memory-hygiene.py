@@ -82,11 +82,24 @@ def collect_brain_compile() -> dict:
     return {"ok": True, "data": data, "note": ""}
 
 
+def _near_dup_threshold() -> float:
+    """Read audit.near_dup_threshold from config/memory-index.yaml; fall back to 0.86."""
+    try:
+        import yaml
+
+        cfg_path = get_workspace_root() / "config" / "memory-index.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        val = (cfg.get("audit") or {}).get("near_dup_threshold")
+        return float(val) if val is not None else 0.86
+    except Exception:
+        return 0.86
+
+
 def gather() -> dict:
     """Collect both halves and split defects into gate vs advisory."""
     mem_dir = get_data_root() / "auto-memory"
     mem = compute_memory_defects(mem_dir)
-    redundancy = scan_redundancy(mem_dir)
+    redundancy = scan_redundancy(mem_dir, threshold=_near_dup_threshold())
     brain = collect_brain_compile()
     bdata = brain["data"] or {}
     temporal = bdata.get("temporal_validity") or {}

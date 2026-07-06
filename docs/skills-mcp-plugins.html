@@ -126,6 +126,7 @@
       <tr><td><a class="cmd-link" href="#s-design"><code>/design</code></a></td><td>Design system — illustrations, mockups, social graphics, logos, infographics.</td></tr>
       <tr><td><a class="cmd-link" href="#s-pptx-generator"><code>/pptx-generator</code></a></td><td>Editable PowerPoint decks and LinkedIn carousels.</td></tr>
       <tr><td><a class="cmd-link" href="#s-marp"><code>/marp</code></a></td><td>Markdown-to-slides pipeline (PDF + HTML).</td></tr>
+      <tr><td><a class="cmd-link" href="#s-pencil-export"><code>/pencil-export</code></a></td><td>Exports a Pencil <code>.pen</code> deck to PNG, PDF, editable PPTX, and HTML (WSL-safe).</td></tr>
     </tbody>
   </table></div>
 
@@ -517,6 +518,17 @@
 <pre><code>/marp from context/strategy.md
 "render this as a deck"</code></pre>
 <p><strong>Customize.</strong> Theme template <code>.claude/skills/marp/themes/31c.css.tmpl</code> (7 layouts, per-slide <code>_class</code> directives). Flags: <code>--slides N</code>, <code>--mode dark|light|mixed</code>, <code>--break-at h2|h3|manual</code>, <code>--title</code>/<code>--subtitle</code>, <code>--images png</code>, <code>--pdf-only</code>/<code>--html-only</code>, <code>--output</code>. Frontmatter fields (theme, size, class, footer, classification). Self-test: <code>python3 scripts/marp_render.py --self-test</code>.</p>
+</section>
+
+<section class="skill" id="s-pencil-export">
+<h3><code>/pencil-export &lt;path-to.pen&gt; [--formats png,pdf,html,pptx,pptx-flat]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>&lt;deck-dir&gt;/export/</code> (DATA overlay)</p>
+<p><strong>What it is.</strong> Exports a Pencil <code>.pen</code> design deck to per-slide PNG, a 16:9 PDF, an editable PPTX, and a portable self-contained HTML. It exists because the Pencil MCP <code>export_nodes</code> tool (native PNG/PDF) is broken on WSL: its bundled path translator prepends <code>\\wsl.localhost\&lt;distro&gt;\</code> inconsistently and cannot write per-slide images from a WSL-resident deck. The MCP <code>export_html</code> tool in the same server resolves paths correctly, so this skill uses it as the seam.</p>
+<p><strong>What it does.</strong> Two steps. First the agent calls <code>export_html</code> to dump all slide frames to one HTML written inside the deck's <code>pencil/</code> dir, so relative image fills resolve. Then <code>scripts/pencil-export.py</code> renders each <code>Slide-*</code> frame in isolation via chromium (sibling frames hidden, so overlapping absolutely-positioned frames cannot bleed into a neighbour), and assembles the requested formats. PPTX defaults to the <strong>editable twin</strong>: each slide becomes a text-less background render plus native, editable PowerPoint text boxes laid on top at the extracted coordinates, size, colour, and alignment. The brand fonts are embedded into the file (the PowerPoint "Embed fonts" OPC structures, written directly at the OpenXML package layer, TTF/OTF only), so it opens identically without the fonts installed and never round-trips through LibreOffice, which would drift the layout. Branding, graphics, images, and table grids stay baked into the background.</p>
+<p><strong>How to use it.</strong> Open the target <code>.pen</code> as the active editor in the Pencil desktop app, then run the skill. For a markdown-driven deck use <code>/marp</code>; for an editable brand PPTX authored from scratch use <code>/pptx-generator</code>.</p>
+<pre><code>/pencil-export outputs/.../deck.pen
+"export the pencil deck to pdf and an editable pptx"</code></pre>
+<p><strong>Customize.</strong> Flags on <code>scripts/pencil-export.py</code>: <code>--formats</code> (subset of <code>png,pdf,html,pptx,pptx-flat</code>; <code>pptx-flat</code> alias <code>pptx-image</code> writes the locked-look image-per-slide deck as <code>&lt;stem&gt; (ready to be shared with the world).pptx</code>, byte-frozen and needing no fonts installed), <code>--fonts-dir</code> (brand typefaces to embed), <code>--width</code>/<code>--height</code> (default 1920x1080), <code>--scale</code> (default 2), <code>--image-format jpeg</code> with <code>--quality</code> (default 85) to shrink a heavy deck to a few MB in one pass, and <code>--keep-in-bg &lt;Name&gt;</code> to keep a named decorative component baked into the background. Requires <code>playwright</code> (chromium) and <code>python-pptx</code>.</p>
 </section>
 
   <h3 class="cat" id="cat-crm">CRM</h3>

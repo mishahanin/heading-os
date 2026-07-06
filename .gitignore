@@ -216,6 +216,13 @@ outputs/operations/tribe-fireside/pulse-checkpoint.json
 # briefings themselves are tracked, _build/ are throwaway artifacts)
 outputs/operations/fundraising/**/_build/
 
+# Ephemeral per-machine runtime dirs (paths.py log_dir/state_dir/data_dir).
+# Never source-of-truth; the recall-op log under .logs/memory-ops/ can hold
+# private query text/paths and must never reach this public repo.
+.logs/
+.state/
+.data/
+
 # Local associative-memory index (rebuildable cache, per-machine, not source-of-truth)
 .memory-index/
 # Engine-side code index (skill/rule layers; rebuildable cache, per-machine)

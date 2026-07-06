@@ -1,0 +1,17 @@
+[Unit]
+Description=31C memory auto-retire (retire memories past their explicit expires: date)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+# The safe, deterministic slice of /dream: retires ONLY records whose author
+# stamped an explicit expires: date now in the past (both-store delete + MEMORY.md
+# pointer strip). No judgement at retire-time. Orphans, redundancy pairs, and
+# rewording remain a human-gated /dream call - this unit never touches them.
+# Exit 0 always on a clean run (including "nothing expired"); a non-zero exit
+# means a real script error, so no SuccessExitStatus override is declared.
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/memory-auto-retire.py
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

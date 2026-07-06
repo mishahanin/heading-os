@@ -223,6 +223,9 @@ outputs/operations/fundraising/**/_build/
 .state/
 .data/
 
+# Marp skill scratch sources (dot-prefixed per-run temps, not source-of-truth)
+.*.marp-src-*.md
+
 # Local associative-memory index (rebuildable cache, per-machine, not source-of-truth)
 .memory-index/
 # Engine-side code index (skill/rule layers; rebuildable cache, per-machine)

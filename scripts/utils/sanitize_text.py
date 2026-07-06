@@ -37,7 +37,7 @@ INVISIBLE_CHARS = (
     "‌"  # Zero-width non-joiner
     "‍"  # Zero-width joiner
     "‎"  # Left-to-right mark
-    "‏"  # Right-to-left mark
+    "‏"  # Right-to-left mark; sanitizer intentionally lists bidi/invisible chars to strip them  # nosec B613
     "­"  # Soft hyphen
     "⁠"  # Word joiner
     "﻿"  # Byte order mark (when not at file start)

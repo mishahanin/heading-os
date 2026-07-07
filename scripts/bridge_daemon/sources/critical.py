@@ -28,6 +28,7 @@ import hashlib
 import json
 import threading
 from datetime import date, datetime, timezone
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
@@ -192,7 +193,7 @@ def mark_critical(
         "source_page": source_page or "",
         "note": safe_note,
         "ts": ts,
-        "date": date.today().isoformat(),
+        "date": datetime.now(get_default_tz()).date().isoformat(),
     }
     log_path = workspace_root / CRITICAL_LOG_FILE
     log_path.parent.mkdir(parents=True, exist_ok=True)

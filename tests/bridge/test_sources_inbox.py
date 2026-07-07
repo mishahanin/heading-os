@@ -1,6 +1,7 @@
 """Unit tests for /inbox real-data source (bands, defer, unread mirror)."""
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from scripts.utils.workspace import get_default_tz
 
 from scripts.bridge_daemon.sources.inbox import (
     read_inbox,
@@ -20,7 +21,7 @@ from scripts.bridge_daemon.sources.inbox import (
 
 def _future(days=3):
     """An ISO date `days` in the future - a valid defer target."""
-    return (date.today() + timedelta(days=days)).isoformat()
+    return (datetime.now(get_default_tz()).date() + timedelta(days=days)).isoformat()
 
 
 def _write_state(workspace_root, conversations, last_run="2026-05-18T10:00:00+00:00"):
@@ -463,9 +464,9 @@ def test_mark_deferred_accepts_future_date(tmp_path):
 
 
 def test_mark_deferred_rejects_past_and_garbage(tmp_path):
-    past = (date.today() - timedelta(days=1)).isoformat()
+    past = (datetime.now(get_default_tz()).date() - timedelta(days=1)).isoformat()
     assert mark_deferred(tmp_path, "c1", past)["ok"] is False
-    assert mark_deferred(tmp_path, "c1", date.today().isoformat())["ok"] is False
+    assert mark_deferred(tmp_path, "c1", datetime.now(get_default_tz()).date().isoformat())["ok"] is False
     assert mark_deferred(tmp_path, "c1", "not-a-date")["ok"] is False
     assert mark_deferred(tmp_path, "", _future())["ok"] is False
 
@@ -474,7 +475,7 @@ def test_read_defer_log_excludes_expired(tmp_path):
     """A defer whose date has arrived is no longer reported as deferred."""
     mark_deferred(tmp_path, "future", _future(5))
     assert "future" in read_defer_log(tmp_path)
-    far = date.today() + timedelta(days=10)
+    far = datetime.now(get_default_tz()).date() + timedelta(days=10)
     assert "future" not in read_defer_log(tmp_path, today=far)
 
 

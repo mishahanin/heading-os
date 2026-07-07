@@ -12,6 +12,7 @@ import json
 import re
 import threading
 from datetime import date, datetime, timezone
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
@@ -343,7 +344,7 @@ def mark_sent(workspace_root: Path, firm_num: int, note: str = "") -> dict:
     now = datetime.now(timezone.utc)
     entry = {
         "firm_num": firm_num,
-        "date": date.today().isoformat(),
+        "date": datetime.now(get_default_tz()).date().isoformat(),
         "ts": now.isoformat(),
         "note": safe_note,
     }

@@ -106,7 +106,7 @@ def check_crm_health(project_dir):
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached = json.loads(f.read())
             cached_at = cached.get("cached_at", 0)
-            if (datetime.now().timestamp() - cached_at) < _CRM_CACHE_TTL_SECONDS:
+            if (datetime.now().astimezone().timestamp() - cached_at) < _CRM_CACHE_TTL_SECONDS:
                 red_lines = cached.get("red_lines") or []
                 return red_lines if red_lines else None
     except Exception as e:
@@ -131,7 +131,7 @@ def check_crm_health(project_dir):
                 tmp_path = cache_file + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump({
-                        "cached_at": datetime.now().timestamp(),
+                        "cached_at": datetime.now().astimezone().timestamp(),
                         "red_lines": red_lines,
                     }, f)
                 os.replace(tmp_path, cache_file)
@@ -234,8 +234,8 @@ def check_stale_files(project_dir, identity=None):
         except Exception:  # noqa: BLE001 -- alerts are best-effort, never block start
             context_dir = os.path.join(project_dir, "context")
     stale = []
-    warn_threshold = datetime.now() - timedelta(days=14)
-    crit_threshold = datetime.now() - timedelta(days=30)
+    warn_threshold = datetime.now().astimezone() - timedelta(days=14)
+    crit_threshold = datetime.now().astimezone() - timedelta(days=30)
 
     if not os.path.isdir(context_dir):
         return stale
@@ -250,8 +250,8 @@ def check_stale_files(project_dir, identity=None):
                     if "Last verified:" in line or "last verified:" in line.lower():
                         for part in line.split():
                             try:
-                                d = datetime.strptime(part.strip(), "%Y-%m-%d")
-                                days_old = (datetime.now() - d).days
+                                d = datetime.strptime(part.strip(), "%Y-%m-%d").replace(tzinfo=datetime.now().astimezone().tzinfo)
+                                days_old = (datetime.now().astimezone() - d).days
                                 if d < crit_threshold:
                                     stale.append((fname, days_old, "CRITICAL"))
                                 elif d < warn_threshold:

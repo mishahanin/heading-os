@@ -49,6 +49,7 @@ from scripts.utils.content_denylist import build_denylist
 from scripts.utils.engine_guard import scan_engine_repo
 from scripts.utils.git_push import supervised_push
 from scripts.utils.workspace import (
+    get_default_tz,
     get_data_root,
     get_exec_data_root,
     get_routing_destination,
@@ -295,7 +296,7 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="show what would happen; make no commits or pushes")
     args = ap.parse_args()
 
-    message = args.message or f"chore: workspace backup {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    message = args.message or f"chore: workspace backup {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M')}"
 
     token = gh_token()
     if not token and not args.dry_run:

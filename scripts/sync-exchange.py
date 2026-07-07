@@ -141,7 +141,7 @@ def sync_calendar(account, days=7, timezone_str=get_default_tz_name()):
         ZoneInfo(timezone_str)
     )
 
-    now = datetime.now()
+    now = datetime.now(get_default_tz())
     start = EWSDateTime(now.year, now.month, now.day, 0, 0, 0, tzinfo=tz)
     end = start + timedelta(days=days)
 
@@ -171,7 +171,7 @@ def sync_calendar(account, days=7, timezone_str=get_default_tz_name()):
     lines = []
     lines.append(f"# Calendar - Next {days} Days")
     lines.append(f"")
-    lines.append(f"> Synced: {datetime.now().strftime('%Y-%m-%d %H:%M')} ({timezone_str})")
+    lines.append(f"> Synced: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M')} ({timezone_str})")
     lines.append(f"> Range: {start.date()} to {end.date()}")
     lines.append("")
 
@@ -242,7 +242,7 @@ def sync_calendar(account, days=7, timezone_str=get_default_tz_name()):
     # Also write per-day files
     for date_str, day_events in by_date.items():
         day_file = CALENDAR_DIR / f"{date_str}.md"
-        day_lines = [f"# Calendar - {date_str}", "", f"> Synced: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
+        day_lines = [f"# Calendar - {date_str}", "", f"> Synced: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M')}", ""]
         day_lines.append("| Time | Subject | Location |")
         day_lines.append("|------|---------|----------|")
         for event in day_events:
@@ -298,7 +298,7 @@ def sync_emails(account, count=30, unread_only=False, folder_name="Inbox"):
     lines = []
     lines.append(f"# {folder_name} - {'Unread' if unread_only else f'Last {count}'}")
     lines.append("")
-    lines.append(f"> Synced: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"> Synced: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"> Count: {len(email_list)} emails")
     lines.append("")
 
@@ -452,7 +452,7 @@ def create_meeting(account, subject, start_time, duration_minutes=30, location=N
 
     # Parse start_time: "HH:MM" (today) or "YYYY-MM-DD HH:MM"
     if len(start_time) <= 5:
-        now = datetime.now()
+        now = datetime.now(get_default_tz())
         hour, minute = map(int, start_time.split(":"))
         start = EWSDateTime(now.year, now.month, now.day, hour, minute, 0, tzinfo=tz)
     else:

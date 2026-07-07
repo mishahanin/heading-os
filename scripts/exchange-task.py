@@ -135,7 +135,7 @@ def parse_args() -> argparse.Namespace:
 
 def parse_date(s: str) -> date:
     try:
-        return datetime.strptime(s, "%Y-%m-%d").date()
+        return date.fromisoformat(s)
     except ValueError:
         print(f"{RED}[ERROR]{RESET} Invalid date '{s}'. Use YYYY-MM-DD format.")
         sys.exit(1)
@@ -143,7 +143,7 @@ def parse_date(s: str) -> date:
 
 def parse_remind_at(s: str, tz: EWSTimeZone) -> EWSDateTime:
     try:
-        dt = datetime.strptime(s, "%Y-%m-%d %H:%M")
+        dt = datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=get_default_tz())
     except ValueError:
         print(f"{RED}[ERROR]{RESET} Invalid --remind-at '{s}'. Use 'YYYY-MM-DD HH:MM' format.")
         sys.exit(1)

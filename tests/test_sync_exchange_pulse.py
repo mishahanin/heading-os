@@ -29,7 +29,7 @@ def _stamp(dt: datetime) -> str:
 
 def test_parses_post_r12_trace_id_line(tmp_path, monkeypatch):
     """A recent line carrying the [<hex>] trace-id token must be matched."""
-    recent = datetime.now() - timedelta(minutes=12)
+    recent = datetime.now().astimezone() - timedelta(minutes=12)
     log = tmp_path / "daemon.log"
     log.write_text(
         f"{_stamp(recent)} INFO [0d6113bbcc6b40cb85f03d73eb194e43] "
@@ -46,8 +46,8 @@ def test_does_not_fall_back_to_stale_pre_r12_line(tmp_path, monkeypatch):
     This is the exact failure mode: an old pre-R12 line sits days back, a fresh
     post-R12 line is minutes old. The buggy regex reported the stale one.
     """
-    stale = datetime.now() - timedelta(days=6)
-    fresh = datetime.now() - timedelta(minutes=3)
+    stale = datetime.now().astimezone() - timedelta(days=6)
+    fresh = datetime.now().astimezone() - timedelta(minutes=3)
     log = tmp_path / "daemon.log"
     log.write_text(
         f"{_stamp(stale)} INFO job-ok sync-exchange (exit=0)\n"
@@ -62,7 +62,7 @@ def test_does_not_fall_back_to_stale_pre_r12_line(tmp_path, monkeypatch):
 
 def test_still_parses_pre_r12_line(tmp_path, monkeypatch):
     """Backward compatibility: the old format without a trace-id still matches."""
-    recent = datetime.now() - timedelta(minutes=5)
+    recent = datetime.now().astimezone() - timedelta(minutes=5)
     log = tmp_path / "daemon.log"
     log.write_text(
         f"{_stamp(recent)} INFO job-ok sync-exchange (exit=0)\n",

@@ -1,5 +1,6 @@
 """Unit tests for /pulse real-data sources."""
 from datetime import datetime, timezone
+from scripts.utils.workspace import get_default_tz
 
 from scripts.bridge_daemon.sources.pulse import (
     days_to_odin_5,
@@ -456,7 +457,7 @@ def test_pulse_data_includes_pipeline_overdue_and_stages(tmp_path):
     assert result["kpi"]["pipeline_stages"]["Negotiation"] == 2
     assert result["kpi"]["pipeline_stages"]["Lead"] == 1
     # At least one overdue (Deal A's 2026-04-01 due date is before any plausible test "now").
-    # The list_pipeline default uses date.today(), so this assertion is robust.
+    # The list_pipeline default uses datetime.now(get_default_tz()).date(), so this assertion is robust.
     assert result["kpi"]["pipeline_overdue"] >= 1
 
 
@@ -790,8 +791,8 @@ def test_threads_preview_none_when_no_active(tmp_path):
 
 def test_threads_preview_returns_active_sorted_by_recency(tmp_path):
     """Active threads sorted by days_since ASC (most recent first), capped at 6."""
-    from datetime import date, timedelta
-    today = date.today()
+    from datetime import timedelta
+    today = datetime.now(get_default_tz()).date()
     for i in range(8):
         _write_thread(tmp_path, f"t{i}", f"Thread {i}",
                       (today - timedelta(days=i)).isoformat())
@@ -838,8 +839,8 @@ def test_tribe_preview_none_when_no_members(tmp_path):
 
 def test_tribe_preview_returns_top_n_sorted_by_recency(tmp_path):
     """Members ordered by days_since ASC; cap at 6 rows."""
-    from datetime import date, timedelta
-    today = date.today()
+    from datetime import timedelta
+    today = datetime.now(get_default_tz()).date()
     for i in range(8):
         _write_tribe_member(
             tmp_path,
@@ -856,8 +857,8 @@ def test_tribe_preview_returns_top_n_sorted_by_recency(tmp_path):
 
 def test_tribe_preview_presence_threshold(tmp_path):
     """days_since <= 7 -> 'on'; > 7 -> 'off'."""
-    from datetime import date, timedelta
-    today = date.today()
+    from datetime import timedelta
+    today = datetime.now(get_default_tz()).date()
     _write_tribe_member(tmp_path, "fresh", "Fresh One", (today - timedelta(days=1)).isoformat())
     _write_tribe_member(tmp_path, "edge", "Edge One",  (today - timedelta(days=7)).isoformat())
     _write_tribe_member(tmp_path, "stale", "Stale One", (today - timedelta(days=30)).isoformat())
@@ -871,8 +872,7 @@ def test_tribe_preview_presence_threshold(tmp_path):
 
 def test_pulse_data_includes_tribe_state(tmp_path):
     """pulse_data() surfaces tribe_state under kpi."""
-    from datetime import date
-    _write_tribe_member(tmp_path, "victor", "Morgan H", date.today().isoformat())
+    _write_tribe_member(tmp_path, "victor", "Morgan H", datetime.now(get_default_tz()).date().isoformat())
     result = pulse_data(tmp_path)
     ts = result["kpi"].get("tribe_state")
     assert ts is not None

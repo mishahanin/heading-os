@@ -485,7 +485,7 @@ def _parse_date(value: str) -> Optional[datetime]:
     """
     try:
         date_str = str(value).strip().strip("'\"")
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-        return dt.replace(tzinfo=timezone.utc)
+        dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return dt
     except (ValueError, AttributeError):
         return None

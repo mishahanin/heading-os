@@ -15,6 +15,7 @@ conversation), replacing the flat now/later zoned list.
 import json
 import threading
 from datetime import date, datetime, timedelta, timezone
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
@@ -172,7 +173,7 @@ def mark_dismissed(workspace_root: Path, conv_id: str, note: str = "") -> dict:
     now = datetime.now(timezone.utc)
     entry = {
         "conv_id": conv_id,
-        "date": date.today().isoformat(),
+        "date": datetime.now(get_default_tz()).date().isoformat(),
         "ts": now.isoformat(),
         "note": safe_note,
     }
@@ -323,7 +324,7 @@ def read_defer_log(workspace_root: Path, today: date | None = None) -> set[str]:
     A defer whose date has arrived is not returned - the conversation
     resurfaces in its band with no mutation needed.
     """
-    today = today or date.today()
+    today = today or datetime.now(get_default_tz()).date()
     deferred = set()
     for conv_id, entry in _active_defers(workspace_root).items():
         until = _parse_date(entry.get("defer_until"))
@@ -341,7 +342,7 @@ def mark_deferred(workspace_root: Path, conv_id: str, defer_until: str, note: st
     until = _parse_date(defer_until)
     if until is None:
         return {"ok": False, "error": "defer_until must be a YYYY-MM-DD date"}
-    if until <= date.today():
+    if until <= datetime.now(get_default_tz()).date():
         return {"ok": False, "error": "defer_until must be a future date"}
     safe_note = (note or "").replace("\n", " ").replace("\r", " ").strip()[:DISMISS_NOTE_MAX_CHARS]
     entry = {
@@ -377,7 +378,7 @@ def defer_log_recent(workspace_root: Path, today: date | None = None, limit: int
     Each entry: {conv_id, topic, defer_until, ts, note}. Drives the
     'Deferred' footer so the CEO can see and undo a defer.
     """
-    today = today or date.today()
+    today = today or datetime.now(get_default_tz()).date()
     topics = _fetch_topics(workspace_root)
     rows = []
     for conv_id, entry in _active_defers(workspace_root).items():

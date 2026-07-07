@@ -32,6 +32,24 @@ x-heading-capability:
   when: >
     Use to clear the pending-draft backlog. For what is overdue workspace-wide use
     /radar; to draft cold nudges use /cold-sweep; for inbox triage use /email-intel.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - queue
+    - action queue
+    - show my drafts
+    - what's waiting to send
+    - approve/send the first one
+    - retry that failed send
+    - dismiss a queued card
+  exclusions:
+    - Workspace-wide overdue -> /radar
+    - draft cold nudges -> /cold-sweep
+    - inbox triage -> /email-intel
+    - new outbound draft -> /email-draft. Terminal-native approve/send surface (synchronous, daemon-free)
+    - the send-gate holds.
+  compound: 'No'
+  router: auto
 ---
 # /queue
 

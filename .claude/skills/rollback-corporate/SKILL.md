@@ -24,6 +24,15 @@ x-heading-capability:
   when: >
     Use only when a published corporate build broke something the canary missed. For a routine publish
     use /push-updates; for the promote-to-main gate use /promote-corporate.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - 'NEVER auto-trigger. Explicit `/rollback-corporate [--dry-run]` only. CEO-only R16 Layer 2: forward-revert corporate `main` to the previous BUILD (no force-push)'
+    - execs pull the reverted state next sync.
+  exclusions:
+    - 'All natural language (`disable-model-invocation: true`)'
+  compound: 'No'
+  router: manual
 ---
 # Rollback Corporate (main -> previous BUILD)
 

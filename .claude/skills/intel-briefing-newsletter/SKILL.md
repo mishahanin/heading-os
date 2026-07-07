@@ -24,6 +24,17 @@ x-heading-capability:
     Run /intel-briefing-newsletter [focus]. Forked-context research, then a confidentiality scrub, then HTML + PDF generated into outputs/intel/newsletters/YYYY-MM-DD/.
   when: >
     Use to produce the external newsletter. For the CEO-only version that names partners and deals and adds action items use /ceo-intel.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - newsletter
+    - intel briefing
+    - publish intelligence brief
+    - external intel brief
+  exclusions:
+    - Internal-only brief -> /ceo-intel
+  compound: 'No'
+  router: auto
 ---
 # Intel Briefing Newsletter
 

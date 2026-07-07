@@ -29,6 +29,17 @@ x-heading-capability:
     Use when you want an actual picture produced. For crafting the text prompt
     only (no image) use /image-prompt; for a full multi-asset design pipeline
     (mockups, infographics, logos) use /design.
+x-heading-routing:
+  category: Content
+  triggers:
+    - generate image
+    - create image
+    - make a picture
+    - flux
+  exclusions:
+    - Prompt generation only -> /image-prompt
+  compound: 'No'
+  router: auto
 ---
 # AI Image Generator
 

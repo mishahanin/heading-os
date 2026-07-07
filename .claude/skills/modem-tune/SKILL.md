@@ -25,6 +25,15 @@ x-heading-capability:
   when: >
     Use to rotate or check the router IMEI for work testing. There is no
     alternative skill - this is the sole owner of the IMEI ledger.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - NEVER auto-trigger. Explicit `/modem-tune [status \| revert]` only. Changes the reported IMEI on the GL.iNet GL-XE300 travel router over SSH. CEO-only
+    - never synced to executives.
+  exclusions:
+    - 'All natural language (`disable-model-invocation: true`)'
+  compound: 'No'
+  router: manual
 ---
 
 # Modem Tune -- IMEI Reconfiguration

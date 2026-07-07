@@ -28,6 +28,18 @@ x-heading-capability:
     Use to prepare for a negotiation, difficult talk, or sensitive call. Note
     the Voss principles also run always-on across all outbound comms via the
     voss rule; this skill is the deep per-conversation prep.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - negotiation prep
+    - tactical empathy
+    - accusation audit
+    - difficult conversation
+    - negotiation playbook
+  exclusions:
+    - N/A
+  compound: 'Yes: Meeting Prep, Deal Intel'
+  router: auto
 ---
 # Voss Tactical Coaching Engine
 

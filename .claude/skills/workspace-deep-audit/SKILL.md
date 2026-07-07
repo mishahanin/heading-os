@@ -43,6 +43,18 @@ x-heading-capability:
     Use at a major milestone or when checking ecosystem drift. For a single-skill
     review use /evaluate; to apply fixes use /scrutinize; for a quick operational
     health check use /state-check.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - 'NEVER auto-trigger. Explicit `/workspace-deep-audit` or "deep audit"/"run a full audit"/"audit the entire workspace"/"do the same deep audit" only. Produces v1/v2-equivalent 8-section comprehensive workspace audit. Flags: `--mode={full\|quick\|focus}`'
+    - '`--focus={skills\|rules\|deps\|security\|architecture}`'
+    - '`--vs=<prev_audit>`'
+  exclusions:
+    - All general "audit" requests without explicit invocation -> /scrutinize or /state-check
+    - single-skill review -> /evaluate
+    - specific fix scrutiny -> /scrutinize
+  compound: 'No'
+  router: manual
 ---
 
 # Workspace Deep Audit

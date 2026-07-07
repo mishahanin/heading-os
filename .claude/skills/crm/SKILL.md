@@ -35,6 +35,20 @@ x-heading-capability:
     Use to record or query a relationship. For drafting nudges to many
     overdue contacts use /cold-sweep; for Google address book use
     /google-contacts.
+x-heading-routing:
+  category: CRM
+  triggers:
+    - crm add
+    - crm log
+    - crm radar
+    - crm find
+    - crm update
+    - check CRM
+    - contact health
+  exclusions:
+    - N/A
+  compound: 'No'
+  router: auto
 ---
 # Personal CRM
 

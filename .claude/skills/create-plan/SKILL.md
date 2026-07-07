@@ -26,6 +26,16 @@ x-heading-capability:
   when: >
     Use before any significant or structural workspace change. To carry the
     plan out use /implement; to stress-test it before approval use /scrutinize.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - create plan
+    - plan for [change]
+    - design the approach
+  exclusions:
+    - Execute plan -> /implement
+  compound: 'No'
+  router: auto
 ---
 # Plan
 

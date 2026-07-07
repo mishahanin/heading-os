@@ -6,7 +6,7 @@
       "source": "ast-grep/agent-skill",
       "sourceType": "github",
       "skillPath": ".claude/skills/ast-grep/SKILL.md",
-      "computedHash": "37406cddc9fea3929bbae55521b4f396287d31fc0fe05702fccc7165b3b487fa"
+      "computedHash": "0a34084d2b0e62f9b5b823d653e08d23fd34ae464428a6a3d2509fd59d515776"
     },
     "frontend-design": {
       "source": "anthropics/skills",

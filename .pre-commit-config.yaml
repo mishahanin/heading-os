@@ -83,15 +83,17 @@ repos:
         files: '^(scripts/sentinel\.py|tests/integration/)'
         pass_filenames: false
 
-  # Skill-router sync -- enforces that every local skill has a matching router entry.
-  # Closes documentation drift gap from the 2026-05-14 workspace deep audit (P0.2c).
+  # Skill-router registry generation (F-5.1) -- the registry tables in skill-router.md are
+  # generated from each SKILL.md's x-heading-routing frontmatter; this fails on content drift
+  # (regenerate with `python scripts/generate-skill-router.py`). Replaces the old presence-only
+  # check-skill-router-sync.py (drift gap from the 2026-05-14 workspace deep audit, P0.2c).
   - repo: local
     hooks:
       - id: skill-router-sync
-        name: Verify every .claude/skills/*/SKILL.md has a matching skill-router.md entry
-        entry: python3 scripts/check-skill-router-sync.py --quiet
+        name: Skill-router registry generated from SKILL.md frontmatter (no drift)
+        entry: python3 scripts/generate-skill-router.py --check
         language: system
-        files: '^\.claude/(skills/.*/SKILL\.md|rules/skill-router\.md)$'
+        files: '^(\.claude/(skills/.*/SKILL\.md|rules/skill-router\.md)|scripts/generate-skill-router\.py)$'
         pass_filenames: false
 
   # Version-sync guard (F-1.1): pyproject.toml is the single source of truth;

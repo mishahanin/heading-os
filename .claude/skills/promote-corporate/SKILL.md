@@ -26,6 +26,16 @@ x-heading-capability:
   when: >
     Use to promote a soaked staging build to all execs. For a routine publish
     use /push-updates; to undo a bad build use /rollback-corporate.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - 'NEVER auto-trigger. Explicit `/promote-corporate [--force] [--dry-run]` only. CEO-only R16 Layer 2 gate: runs canary soak/freshness/smoke gates'
+    - then `--ff-only` merges corporate `staging` -> `main`. Never bumps BUILD.json.
+  exclusions:
+    - 'All natural language (`disable-model-invocation: true`)'
+    - routine publish -> /push-updates
+  compound: 'No'
+  router: manual
 ---
 # Promote Corporate (staging -> main)
 

@@ -28,6 +28,16 @@ x-heading-capability:
   when: >
     Use to pull updates or back up between sessions. To publish corporate changes
     out to all execs use /push-updates; for a backup alone use /backup (push-all).
+x-heading-routing:
+  category: Operations
+  triggers:
+    - sync
+    - full corp sync
+    - pull updates
+  exclusions:
+    - Push to execs -> /push-updates
+  compound: 'No'
+  router: auto
 ---
 # Workspace Sync
 

@@ -35,6 +35,26 @@ x-heading-capability:
     Use for comprehensive recon on a specific named target. For competitor
     comparison use /competitor-intel; for a sector or region use
     /market-brief; for global geopolitics use /ceo-intel.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - investigate
+    - research
+    - dig into
+    - dossier
+    - background on
+    - due diligence on
+    - who is [named person]
+    - intelligence on [named company]
+  exclusions:
+    - '"validate" -> /validate'
+    - '"brief" without target -> /market-brief'
+    - '"competitor" -> /competitor-intel'
+    - '"market for [sector]" -> /market-brief'
+    - '"world intel"/"global" -> /ceo-intel'
+    - competitor earnings/quarterly -> /competitor-intel
+  compound: 'Yes: Meeting Prep, Deal Intel'
+  router: auto
 ---
 # OSINT - Open Source Intelligence
 

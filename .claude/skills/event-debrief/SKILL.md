@@ -28,6 +28,16 @@ x-heading-capability:
     Use after a conference, summit, or VIP launch to capture leads and lessons.
     To then send follow-ups to everyone met, use /follow-up or the Post-Event
     compound pattern.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - event debrief
+    - post-event recap
+    - debrief [event]
+  exclusions:
+    - N/A
+  compound: 'Yes: Post-Event (trigger)'
+  router: auto
 ---
 # Event Debrief
 

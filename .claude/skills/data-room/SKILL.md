@@ -29,6 +29,17 @@ x-heading-capability:
     Use when preparing for investor conversations or answering diligence
     questions. For a live pitch deck use /investor-pitch; for a recurring
     progress note to existing investors use /investor-update.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - data room
+    - due diligence
+    - DD response
+    - investor materials
+  exclusions:
+    - Pitch deck -> /investor-pitch
+  compound: 'No'
+  router: auto
 ---
 # Data Room - Investor Due Diligence & Fundraising Preparation
 

@@ -31,6 +31,17 @@ x-heading-capability:
     Use for the morning operational briefing. For a full context load at session
     start use /prime; for the logical next action use /next; for the end-of-week
     review use /weekly-review.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - dashboard
+    - morning dashboard
+    - daily brief
+    - bridge view
+  exclusions:
+    - Full prime -> /prime
+  compound: 'No'
+  router: auto
 ---
 # CEO Morning Dashboard
 

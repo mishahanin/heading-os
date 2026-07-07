@@ -36,6 +36,17 @@ x-heading-capability:
   when: >
     Use for YouTube content discovery and analysis in any domain. For non-YouTube target research use
     /osint; for an X/Twitter scan use /x-pulse.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - youtube pulse
+    - youtube trends
+    - what's trending on YouTube
+    - scan YouTube for
+  exclusions:
+    - Non-YouTube research -> /osint
+  compound: 'No'
+  router: auto
 ---
 # YT Pulse - YouTube Intelligence Scanner
 

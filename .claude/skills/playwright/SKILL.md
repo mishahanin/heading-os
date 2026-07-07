@@ -36,6 +36,17 @@ x-heading-capability:
     Run /playwright; it shells to .claude/skills/playwright/scripts/pw.py with subcommands screenshot, extract, fill, click, pdf, youtube, monitor, batch-screenshots. Outputs land in outputs/browser/. The youtube subcommand needs the VPN pre-flight (Proton).
   when: >
     Use when a task needs a real browser or YouTube understanding. For a simple URL fetch use WebFetch; for importing auth cookies use /setup-browser-cookies.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - screenshot this site
+    - scrape this page
+    - browse to
+    - headless browser
+  exclusions:
+    - N/A
+  compound: 'No'
+  router: auto
 ---
 # Playwright Browser Automation
 

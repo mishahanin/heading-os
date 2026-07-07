@@ -32,6 +32,20 @@ x-heading-capability:
     Use to drain the whole overdue-CRM backlog into ready drafts. For a single
     follow-up use /follow-up; for pipeline review use /crm. It never sends -
     the human-approved executor does that.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - cold sweep
+    - cold-sweep
+    - drain cold contacts
+    - sweep overdue contacts
+    - drain the red debt
+  exclusions:
+    - Single follow-up -> /follow-up
+    - pipeline review -> /crm
+    - sending -> human-approved executor (never this skill). CEO-only, not synced to executives.
+  compound: 'No'
+  router: auto
 ---
 
 # /cold-sweep

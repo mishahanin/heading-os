@@ -27,6 +27,15 @@ x-heading-capability:
   when: >
     Use when you need a capability the workspace does not have yet. Building or
     editing skills directly is the CEO-only /skill-creator.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - request skill
+    - I need a new skill
+  exclusions:
+    - Create directly -> /skill-creator (CEO only)
+  compound: 'No'
+  router: auto
 ---
 # Request New Skill
 

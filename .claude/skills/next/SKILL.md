@@ -34,6 +34,21 @@ x-heading-capability:
   when: >
     Use at a mid-session lull or "where were we". For a full context load at session start use /prime;
     for function-health diagnosis use /state-check; for the daily briefing use /dashboard.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - what next
+    - what should I do now
+    - logical next step
+    - where were we
+    - recommend next
+  exclusions:
+    - Full context load -> /prime
+    - function health -> /state-check
+    - morning briefing -> /dashboard
+    - 'weekly review -> /weekly-review. Read-only: names the next command, never runs it.'
+  compound: 'No'
+  router: auto
 ---
 # Next (state-aware recommender)
 

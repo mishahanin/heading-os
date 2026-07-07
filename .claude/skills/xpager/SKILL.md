@@ -26,6 +26,21 @@ x-heading-capability:
     Run /xpager [product] [audience]; it drafts cover tagline, 4 stats, capability cards, and proof cards, waits for approval, then renders PDF + HTML via scripts/render-doctype.py into outputs/documents/{sender}/xpager/.
   when: >
     Use for a single concise branded summary of a product or module. For a multi-page client deck use /pptx-generator; for a commercial proposal with pricing use /proposal.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - xPager
+    - x-pager
+    - onepager
+    - one-pager
+    - 1-pager
+    - product one-pager
+    - capability sheet
+  exclusions:
+    - Multi-page client deck -> /pptx-generator
+    - simple render -> /marp
+  compound: 'No'
+  router: auto
 ---
 # xPager (OnePager)
 

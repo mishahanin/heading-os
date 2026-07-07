@@ -34,6 +34,26 @@ x-heading-capability:
     Run /council <question> for independent mode, or /council --critique <draft> to stress-test a draft. Transcript saved to outputs/operations/council/ unless --no-log. Flags --gemini-only / --grok-only / --kimi-only (run one) or --no-gemini / --no-grok / --no-kimi (skip one).
   when: >
     Use for a hard or high-stakes call where cross-model disagreement is itself signal. For Claude reasoning alone use /deep-think; for Claude plus the curated knowledge brain use /odin.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - second opinion
+    - consult the council
+    - what would Gemini say
+    - what would Grok say
+    - what would Kimi say
+    - stress-test with Gemini
+    - stress-test with Grok
+    - stress-test with Kimi
+    - gemini council
+    - kimi council
+    - council vote
+    - second opinion on
+  exclusions:
+    - Reasoning alone -> /deep-think
+    - Claude + curated knowledge brain -> /odin
+  compound: 'No'
+  router: auto
 ---
 
 # Council - Independent Second Opinions (Gemini + Grok + Kimi)

@@ -31,6 +31,19 @@ x-heading-capability:
     Use to check whether memory has accumulated objective rot, on demand or on a
     weekly cadence. For consolidation/merge/delete use /dream; to recall a fact
     use /recall; for function health use /state-check.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - memory hygiene
+    - check memory health
+    - memory rot
+    - scan memory for defects
+  exclusions:
+    - Consolidate/merge/delete memory -> /dream
+    - recall a fact -> /recall
+    - function health -> /state-check
+  compound: 'No'
+  router: auto
 ---
 # Memory Hygiene
 

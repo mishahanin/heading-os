@@ -31,6 +31,18 @@ x-heading-capability:
     Use for structural code search across a codebase. For plain text or
     filename matching use Grep; for a semantic "what does this do" question
     just answer it.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - structural code search
+    - AST pattern
+    - find code by structure
+    - ast-grep
+  exclusions:
+    - Plain text search -> Grep
+    - semantic question -> just answer
+  compound: 'No'
+  router: auto
 ---
 
 # ast-grep Code Search

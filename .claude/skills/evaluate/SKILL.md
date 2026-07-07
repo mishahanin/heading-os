@@ -31,6 +31,17 @@ x-heading-capability:
     Run /evaluate <artifact-path> [--plan <plan-path>]. Runs scripts/artifact-evaluator.py then applies skeptical judgment. Report rendered inline.
   when: >
     Use to grade an artifact against a fixed rubric after /implement or standalone. For fact-checking a draft against the DataStore use /validate; for a multi-phase stress-test with proposed fixes use /scrutinize.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - evaluate
+    - grade
+    - review quality
+    - check this artifact
+  exclusions:
+    - Fact-check -> /validate
+  compound: 'No'
+  router: auto
 ---
 # Evaluate
 

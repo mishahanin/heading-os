@@ -36,6 +36,18 @@ x-heading-capability:
     Run /telegram [send|read|search] [contact] [message], driving .claude/skills/telegram/scripts/telegram_client.py. Always confirms before sending to other people; sending to Saved Messages is safe.
   when: >
     Use to interact with Telegram as a user. For the VIRAID capture channel use /viraid; not for other messaging platforms or for building Telegram bots.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - telegram
+    - send telegram to
+    - read telegram
+    - check telegram
+    - what's new on telegram
+  exclusions:
+    - Viraid channel -> /viraid
+  compound: 'No'
+  router: auto
 ---
 # Telegram Client
 

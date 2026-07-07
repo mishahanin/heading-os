@@ -38,6 +38,22 @@ x-heading-capability:
     Use when you need spatially-grounded citations or to show where a document
     says something. For plain text extraction use datastore-extract.py; for
     email use /email-intel; for web pages use /playwright.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - parse this document
+    - extract from this PDF
+    - docparse
+    - document analysis with citations
+    - visual citation report
+    - show me where it says
+    - parse with bounding boxes
+  exclusions:
+    - Plain text extraction -> datastore-extract.py
+    - email analysis -> /email-intel
+    - web scraping -> /playwright
+  compound: 'No'
+  router: auto
 ---
 # DocParse - Document Parsing with Visual Citations
 

@@ -24,6 +24,16 @@ x-heading-capability:
   when: >
     Use for one post. For a multi-post plan across the week use /linkedin-series; to archive a post
     after publishing use /linkedin-archive.
+x-heading-routing:
+  category: Content
+  triggers:
+    - linkedin post
+    - draft a post about
+    - write a post
+  exclusions:
+    - Multi-post planning -> /linkedin-series
+  compound: 'Yes: Weekly Content'
+  router: auto
 ---
 # LinkedIn Post
 

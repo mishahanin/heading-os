@@ -57,6 +57,37 @@ x-heading-capability:
     Use to advise from or grow the curated brain, or to log episodes. For
     structured reasoning without the brain use /deep-think; for a generic note
     use /zk.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - Odin
+    - what would Odin say
+    - ask Odin
+    - Odin learn
+    - Odin teach
+    - Odin log
+    - log this episode
+    - Odin remember that happened
+    - Odin collect
+    - scan threads for episodes
+    - harvest episodes
+    - find episodes I forgot to log
+    - Odin what do you think
+    - Odin study this
+    - Odin remember
+    - what does Odin know
+    - compile the brain
+    - knowledge check
+    - Odin compile
+    - skill-proposal
+    - propose a skill step from this principle
+    - turn this principle into a checklist step
+  exclusions:
+    - '"think through" without Odin address -> /deep-think'
+    - '"add a note" -> /zk'
+    - '"research [company]" -> /osint'
+  compound: 'No'
+  router: auto
 ---
 # Odin - Virtual Advisor
 

@@ -39,6 +39,20 @@ x-heading-capability:
   when: >
     Use to monitor specific X accounts. For topic-based YouTube discovery use
     /yt-pulse.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - x-pulse
+    - twitter pulse
+    - what's on X
+    - scan X for
+    - X account monitor
+    - what are [accounts] saying
+  exclusions:
+    - Topic-based YouTube -> /yt-pulse
+    - brand mention monitoring (future) -> separate skill
+  compound: 'No'
+  router: auto
 ---
 
 # X Pulse - X.com Account-Monitoring Intelligence

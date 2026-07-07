@@ -27,6 +27,17 @@ x-heading-capability:
     Run /viraid to process new messages, or /viraid sweep to triage active tasks. State lives in outputs/operations/viraid/state.json and tasks.md; a STOP gate halts before any execution.
   when: >
     Use to drain the VIRAID inbox or triage its task backlog. For general Telegram messaging use /telegram; for the email inbox use /email-intel.
+x-heading-routing:
+  category: CRM
+  triggers:
+    - viraid
+    - check viraid
+    - process viraid
+    - viraid sweep
+  exclusions:
+    - General telegram -> /telegram
+  compound: 'Yes: Morning Comms'
+  router: auto
 ---
 # Viraid -- Virtual Assistant for Telegram Task Capture
 

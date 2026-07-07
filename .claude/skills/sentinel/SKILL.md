@@ -30,6 +30,17 @@ x-heading-capability:
   when: >
     Use to start, stop, or check the comms-monitoring daemon. For a one-off
     inbox triage use /email-intel; for ad-hoc Telegram use /telegram.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - sentinel
+    - start sentinel
+    - stop sentinel
+    - comms monitor
+  exclusions:
+    - N/A
+  compound: 'No'
+  router: auto
 ---
 # Sentinel -- Unified Comms Monitor
 

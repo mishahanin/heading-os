@@ -32,6 +32,18 @@ x-heading-capability:
     Use for deep, fact-checked reports on public-web topics. NOT for private
     questions (data leaves to third-party clouds), quick lookups (/osint), or
     Odin-brain recall (/odin).
+x-heading-routing:
+  category: Intel
+  triggers:
+    - deep-research-advance
+    - advanced deep research
+    - deep research with verification on [topic]
+  exclusions:
+    - Private/internal topic -> /recall or /odin
+    - quick lookup -> /osint or WebSearch
+    - Odin-brain recall -> /odin
+  compound: 'No'
+  router: auto
 ---
 # Deep research advance
 

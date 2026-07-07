@@ -37,6 +37,19 @@ x-heading-capability:
     Run /mullvad to disconnect, measure (scripts/mullvad-fastest.py --owned-only), and show the top 3; reply "connect 1/2/3" to switch. Results saved to outputs/operations/mullvad_fastest_YYYY-MM-DD.json.
   when: >
     Use to find and switch to the fastest Mullvad relay. For general VPN questions or Mullvad help pages use WebFetch; for the YouTube/Google residential-exit need use Proton, not Mullvad.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - /mullvad
+    - fastest mullvad server
+    - switch mullvad server
+    - check mullvad speed
+    - mullvad connect
+  exclusions:
+    - Generic VPN questions -> just answer
+    - Mullvad help page lookup -> WebFetch
+  compound: 'No'
+  router: auto
 ---
 # /mullvad — Fastest Relay Benchmark & Connect
 

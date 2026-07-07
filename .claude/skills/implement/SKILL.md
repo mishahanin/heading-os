@@ -24,6 +24,16 @@ x-heading-capability:
   when: >
     Use to build out an approved plan. To write the plan first use /create-plan; to audit a finished
     run use /scrutinize trajectory:<run_id>.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - implement
+    - execute the plan
+    - build it
+  exclusions:
+    - Planning -> /create-plan
+  compound: 'No'
+  router: auto
 ---
 # Implement
 

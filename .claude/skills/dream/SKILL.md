@@ -41,6 +41,17 @@ x-heading-capability:
     Use at the end of a productive session or for periodic memory hygiene. For a
     simple one-off memory write use the auto-memory system; for knowledge-base
     notes use /zk; for session resume snapshots use /checkpoint.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - dream
+    - consolidate memories
+    - memory cleanup
+    - reflect
+  exclusions:
+    - N/A
+  compound: 'No'
+  router: auto
 ---
 # Dream - Reflective Memory Consolidation
 

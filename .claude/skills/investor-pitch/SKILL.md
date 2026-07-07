@@ -28,6 +28,16 @@ x-heading-capability:
     Use to prepare materials for an investor meeting or fundraise. For a progress
     update to existing investors use /investor-update; to render slides as PPTX
     use /pptx-generator.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - investor pitch
+    - pitch deck
+    - fundraising deck
+  exclusions:
+    - Existing investor update -> /investor-update
+  compound: 'No'
+  router: auto
 ---
 # Investor Pitch
 

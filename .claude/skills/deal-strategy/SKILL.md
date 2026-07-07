@@ -30,6 +30,17 @@ x-heading-capability:
   when: >
     Use to build the win plan for a specific opportunity. For competitor
     comparison alone use /competitor-intel; for market intel use /market-brief.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - deal strategy
+    - how do we win
+    - competitive positioning for [prospect]
+    - pricing strategy
+  exclusions:
+    - General market intel -> /market-brief
+  compound: 'Yes: Deal Intel (synthesis)'
+  router: auto
 ---
 # Deal Strategy
 

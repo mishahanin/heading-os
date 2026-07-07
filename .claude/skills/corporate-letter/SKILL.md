@@ -31,6 +31,23 @@ x-heading-capability:
     Use for formal correspondence to customers, partners, regulators, or investors. For peer CEO
     correspondence use /ceo-to-ceo; for a commercial offer with pricing use /proposal; for an
     MOU/LOI use /partnership-doc.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - write a letter to
+    - external letter
+    - formal letter
+    - letter of introduction
+    - letter of interest
+    - letter of thanks
+    - letter to [recipient]
+  exclusions:
+    - Peer CEO correspondence -> /ceo-to-ceo
+    - email body (not letter) -> /email-draft
+    - proposal with pricing -> /proposal
+    - MOU/LOI -> /partnership-doc
+  compound: 'No'
+  router: auto
 ---
 # External Letter (31C Branded)
 

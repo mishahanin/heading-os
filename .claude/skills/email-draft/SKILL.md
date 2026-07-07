@@ -26,6 +26,16 @@ x-heading-capability:
     Use for a new outbound email. To reply to an email you received use
     /email-respond; for peer-CEO correspondence use /ceo-to-ceo; for a formal
     letter use /corporate-letter.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - draft email to
+    - write email to
+    - email [person] about
+  exclusions:
+    - Responding to existing email -> /email-respond
+  compound: 'No'
+  router: auto
 ---
 # Email Draft
 

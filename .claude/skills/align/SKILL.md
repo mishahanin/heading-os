@@ -30,6 +30,15 @@ x-heading-capability:
     Use before a high-stakes or ambiguous task where a wrong assumption is
     expensive. Skip it for simple requests - the always-on prompt-refinement
     rule already handles those.
+x-heading-routing:
+  category: Operations
+  label: /align [N]
+  triggers:
+    - NEVER auto-trigger. Explicit `/align [N]` only.
+  exclusions:
+    - All natural language
+  compound: 'No'
+  router: manual
 ---
 # /align - Force N numbered clarifying questions before doing any work
 

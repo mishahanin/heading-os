@@ -33,6 +33,22 @@ x-heading-capability:
     Run /notebooklm [status|create|add|query|audio|research|report|describe|download] [args]. CEO-only, not synced to execs. Outputs land under outputs/content/notebooklm/; requires nlm login first.
   when: >
     Use for NotebookLM-specific notebook work and AI audio overviews. For general target research use /osint; for atomic knowledge notes use /zk; for topic-based YouTube podcasts use /yt-pulse.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - notebooklm
+    - audio overview
+    - podcast from sources
+    - create a notebook
+    - notebook research
+    - add sources to notebook
+  exclusions:
+    - '"research [company]" -> /osint'
+    - '"add a note" -> /zk'
+    - '"podcast" alone -> /yt-pulse'
+    - '"presentation" -> /pptx-generator'
+  compound: 'No'
+  router: auto
 ---
 # NotebookLM Integration
 

@@ -34,6 +34,23 @@ x-heading-capability:
     Use to see what is overdue or to ack/crunch. For a full morning brief use
     /dashboard or /prime; for the single next action use /next; for function
     health use /state-check.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - radar
+    - ops radar
+    - what's overdue
+    - what am I forgetting to run
+    - what manual actions are due
+    - ack a radar item
+    - crunch mode on/off
+  exclusions:
+    - Morning brief -> /dashboard or /prime
+    - single next action -> /next
+    - function-by-function health -> /state-check. Detector that FEEDS those
+    - never executes a manual action. CEO-only data, fleet-safe code.
+  compound: 'No'
+  router: auto
 ---
 # Ops-Radar
 

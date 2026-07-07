@@ -30,6 +30,18 @@ x-heading-capability:
   when: >
     Use to prepare for an external meeting with a named counterpart. For raw recon
     on a target use /osint; for a full win plan on a deal use /deal-strategy.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - meeting prep for [named counterpart]
+    - prepare for meeting with [named person or company]
+    - briefing for [named person + company]
+  exclusions:
+    - Depth signals present -> Orchestrator Pattern 1
+    - internal sync without external counterpart -> just answer
+    - generic "briefing" without named target -> /market-brief or /dashboard
+  compound: 'Yes: Meeting Depth'
+  router: auto
 ---
 # Meeting Prep
 

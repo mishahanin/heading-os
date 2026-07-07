@@ -30,6 +30,16 @@ x-heading-capability:
     Use for targeted selective publishing to executives. For a full versioned
     push including BUILD.json and CRM aggregate use /push-updates; for a personal
     workspace backup use /backup.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - publish corporate
+    - publish to executives
+    - push to corporate
+  exclusions:
+    - Full push with CRM -> /push-updates
+  compound: 'No'
+  router: auto
 ---
 # Publish Corporate Content
 

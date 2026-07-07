@@ -41,7 +41,7 @@ from scripts.utils.colors import BOLD, GRAY, GREEN, RED, RESET, YELLOW
 
 # Four deterministic checks. All paths are relative to the workspace root.
 SMOKE_CHECKS = [
-    ("skill-router-sync", ["scripts/check-skill-router-sync.py"]),
+    ("skill-router-sync", ["scripts/generate-skill-router.py", "--check"]),
     ("crm-schema", ["scripts/validate-crm-schema.py"]),
     (
         "workspace-health",

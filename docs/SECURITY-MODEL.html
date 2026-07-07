@@ -61,7 +61,7 @@
 <main class="content">
   <h1>Security model</h1>
   <p class="page-meta">How HEADING OS protects your data and your principal. The controls here are</p>
-  <!-- version: 1.0.2 | last-updated: 2026-07-07 -->
+  <!-- version: 1.1.0 | last-updated: 2026-07-08 -->
 
 <p>How HEADING OS protects your data and your principal. The controls here are
 mechanical, enforced by code and tests, not by policy prose. This page explains the
@@ -239,6 +239,32 @@ ever exposed, treat it as compromised: rotate it first, then scrub it from histo
 </tr>
 </tbody>
 </table>
+<hr />
+<h2 id="manual-security-drills">Manual security drills</h2>
+<p>Some enforcement layers cannot be exercised headlessly, so they are verified by
+a periodic manual drill rather than a green test. Listing them here keeps the
+gap explicit rather than silent. The mechanical leak-path matrix
+(<a href="https://github.com/mishahanin/heading-os/blob/main/tests/security/test_leak_path_matrix.py"><code>tests/security/test_leak_path_matrix.py</code></a>)
+attacks every headless-testable segregation layer on purpose (write-vector by
+data-class-target, asserting each leak is blocked by the expected layer); the
+drills below cover the layers it cannot reach.</p>
+<h3 id="data-path-redirect-hook-pretooluse-writeedit">data-path-redirect hook (PreToolUse Write/Edit)</h3>
+<p>The <code>data-path-redirect</code> hook fires only inside the Claude Code runtime, so no
+pytest cell can exercise it without asserting a simulation instead of the
+control. Drill it by hand, on a cadence:</p>
+<ol>
+<li>In a live Claude Code session on an engine clone, attempt to write a
+   data-class path inside the engine tree (for example, ask Claude to create
+   <code>crm/contacts/drill-check.md</code>).</li>
+<li>Confirm the write is redirected into the data overlay
+   (<code>.heading-os-data/crm/contacts/drill-check.md</code>), not created under the
+   engine clone.</li>
+<li>Confirm the engine working tree stays clean: <code>git status</code> shows nothing under
+   <code>crm/</code>.</li>
+<li>Remove the drill file from the overlay afterward.</li>
+</ol>
+<p>Expected observable: the file lands in the data overlay, never in the engine
+clone; the engine tree remains code-only.</p>
 <hr />
 <p><em>HEADING OS · Security model · maintained by Misha Hanin · see also
 <a href="EXTENDING.html">Extending the engine</a> for the developer-side gates and

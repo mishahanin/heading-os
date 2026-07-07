@@ -61,7 +61,7 @@
 <main class="content">
   <h1>Threat model</h1>
   <p class="page-meta">This page maps each threat HEADING OS defends against to the concrete control</p>
-  <!-- version: 1.0.0 | last-updated: 2026-07-07 -->
+  <!-- version: 1.0.1 | last-updated: 2026-07-08 -->
 
 <p>This page maps each threat HEADING OS defends against to the concrete control
 that stops it and to the exact test or CI guard that proves the control holds.
@@ -144,7 +144,7 @@ human click.</p>
 <tr>
 <td>Private/corporate content leaves in the public engine repo</td>
 <td>Engine/data segregation + push-time content scan + leak guard</td>
-<td><code>pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py</code>; CI guard <code>Leak guard</code>, <code>Engine tree clean</code></td>
+<td><code>pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py tests/security/test_leak_path_matrix.py</code>; CI guard <code>Leak guard</code>, <code>Engine tree clean</code></td>
 </tr>
 <tr>
 <td>A data directory is joined onto an engine root (path bypass)</td>

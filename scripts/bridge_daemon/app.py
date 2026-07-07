@@ -4,8 +4,9 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import FastAPI, Header, HTTPException, Response
-from fastapi.responses import HTMLResponse
+from urllib.parse import urlsplit
+from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from .auth import validate
 from .auth import _image_nonces as _nonces
@@ -106,6 +107,41 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
               data_root: Path | None = None) -> FastAPI:
     app = FastAPI(title="Bridge daemon", version=__version__)
     started_at = time.time()  # per-app instance; each build_app() gets fresh clock
+
+    # F-9.2 - DNS-rebinding / localhost-CSRF guard. The daemon binds 127.0.0.1
+    # and every authed route already requires a CSPRNG bearer token, but the
+    # unauthenticated surface (/_bootstrap, /health) deserves belt-and-suspenders:
+    # a rebound external hostname that resolves to 127.0.0.1 must not reach the
+    # API, and a hostile cross-origin page must not drive it. We validate by
+    # hostname only (the port is irrelevant on a loopback-only bind), so no
+    # runtime port needs to be threaded in here.
+    _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+    def _bare_host(raw: str) -> str:
+        """Normalize a Host header value to a bare hostname.
+
+        Handles IPv6 bracket form ([::1]:8765 -> ::1) and the common
+        host:port form (127.0.0.1:8765 -> 127.0.0.1). A bare hostname with
+        no port is returned unchanged.
+        """
+        raw = raw.strip()
+        if raw.startswith("["):
+            # IPv6 bracket form: take what is between the brackets.
+            end = raw.find("]")
+            return raw[1:end] if end != -1 else raw[1:]
+        return raw.rsplit(":", 1)[0] if ":" in raw else raw
+
+    @app.middleware("http")
+    async def _host_origin_guard(request: Request, call_next):
+        host = _bare_host(request.headers.get("host", ""))
+        if host and host not in _LOOPBACK_HOSTS:
+            return JSONResponse(status_code=421, content={"detail": "host not allowed"})
+        origin = request.headers.get("origin")
+        if origin:
+            origin_host = urlsplit(origin).hostname or ""
+            if origin_host not in _LOOPBACK_HOSTS:
+                return JSONResponse(status_code=403, content={"detail": "cross-origin blocked"})
+        return await call_next(request)
 
     # ConfigState owns the in-memory merged config. The 60-second
     # reconciliation tick (Phase B / spec 3.6) calls cfg_state.reconcile()

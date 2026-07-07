@@ -1,0 +1,40 @@
+# OpenSSF Scorecard (F-9.6) - supply-chain posture, published as code-scanning
+# SARIF. Runs weekly and on pushes to main. Some checks (branch-protection,
+# code-review) score low on a single-maintainer flow by design; the trend is the
+# value. No badge until the score is respectable (operator decision).
+name: scorecard
+
+on:
+  schedule:
+    # Weekly, Monday 07:00 UTC.
+    - cron: '0 7 * * 1'
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Upload the SARIF result to the code-scanning dashboard.
+      security-events: write
+      # Read the OIDC token Scorecard uses for some checks.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Run analysis
+        uses: ossf/scorecard-action@05b42c624433fc40578a4040d5cf5e36ddca8cde # v2.4.2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: false
+      - name: Upload SARIF to code-scanning
+        uses: github/codeql-action/upload-sarif@192325c86100d080feab897ff886c34abd4c83a3 # v3.30.3
+        with:
+          sarif_file: results.sarif

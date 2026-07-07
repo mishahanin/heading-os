@@ -16,7 +16,7 @@ import json
 import re
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 # Force UTF-8 stdout on Windows (avoids cp1252 encoding errors)
@@ -25,13 +25,13 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
-from scripts.utils.workspace import display_path, get_knowledge_dir, get_shared_knowledge_dir, is_exec_workspace
+from scripts.utils.workspace import display_path, get_default_tz, get_knowledge_dir, get_shared_knowledge_dir, is_exec_workspace
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter
 
 KNOWLEDGE_DIR = get_knowledge_dir()
 INDEX_FILE = KNOWLEDGE_DIR / "INDEX.md"
 SHARED_KNOWLEDGE_DIR = get_shared_knowledge_dir()
-TODAY = datetime.now().date()
+TODAY = datetime.now(get_default_tz()).date()
 
 VALID_TYPES = {"fleeting", "signal", "decision", "meeting", "research", "strategy", "people", "technology"}
 VALID_STATUSES = {"seed", "growing", "evergreen", "archived"}
@@ -95,7 +95,7 @@ def scan_notes():
             is_stale = False
             if status == "seed" and fm.get("created"):
                 try:
-                    created = datetime.strptime(str(fm["created"]), "%Y-%m-%d").date()
+                    created = date.fromisoformat(str(fm["created"]))
                     days_old = (TODAY - created).days
                     if days_old > STALE_SEED_DAYS:
                         is_stale = True

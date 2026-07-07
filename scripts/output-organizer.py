@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, BOLD, RESET
-from scripts.utils.workspace import get_workspace_root, get_outputs_dir
+from scripts.utils.workspace import get_workspace_root, get_outputs_dir, get_default_tz
 
 WORKSPACE = get_workspace_root()
 
@@ -72,7 +72,7 @@ def report():
         cat_size = sum(f.stat().st_size for f in cat_files)
         print(f"  {BOLD}{category}/{RESET} ({len(cat_files)} files, {cat_size / 1024:.0f} KB)")
         for f in cat_files:
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz())
             size = f.stat().st_size
             print(f"    {f.name:50s}  {size/1024:6.0f} KB  {mtime.strftime('%Y-%m-%d')}")
         print()
@@ -121,12 +121,12 @@ def archive(days, execute=False):
         print(f"{RED}outputs/ directory not found{RESET}")
         return
 
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = datetime.now(get_default_tz()) - timedelta(days=days)
     files = [f for f in OUTPUTS_DIR.rglob("*") if f.is_file() and "archive" not in f.parts]
     old_files = []
 
     for f in files:
-        mtime = datetime.fromtimestamp(f.stat().st_mtime)
+        mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz())
         if mtime < cutoff:
             old_files.append(f)
 
@@ -139,7 +139,7 @@ def archive(days, execute=False):
     print(f"\n{BOLD}{'Archiving' if execute else 'Dry Run - Would archive'} {len(old_files)} file(s) older than {days} days:{RESET}\n")
 
     for f in sorted(old_files):
-        mtime = datetime.fromtimestamp(f.stat().st_mtime)
+        mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz())
         rel = f.relative_to(OUTPUTS_DIR)
         target = archive_dir / rel
         print(f"  {rel} (modified {mtime.strftime('%Y-%m-%d')})")

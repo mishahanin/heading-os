@@ -167,12 +167,15 @@ The engine reads two gitignored files at its root: `.workspace-identity.json` an
 ### Solo deploy
 
 No identity file is required — the engine defaults to a single-user workspace. Create
-`.env` from the template and fill in the keys you have:
+`.env` from the template and fill in the keys you have, then set your operator identity
+(one file names who runs the instance; see [MAKE-IT-YOURS](MAKE-IT-YOURS.html) § 3.1):
 
 ```bash
 cd <engine>
 cp .env.example .env
 # edit .env: set the keys you have (Anthropic, and any integrations you use)
+cp scripts/operator.example.yaml <data-root>/config/operator.yaml
+# edit operator.yaml: name / slug / github_org / voice_reference / email
 ```
 
 ### Managed deploy — option A: packet from the administrator

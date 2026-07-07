@@ -22,7 +22,7 @@ from scripts.utils.workspace import (
     get_workspace_root, validate_admin,
     get_corporate_repo_path, load_admin_config,
     get_per_exec_repo_path, get_all_active_exec_slugs,
-    get_crm_contacts_dir,
+    get_crm_contacts_dir, operator_identity_default,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 
@@ -95,7 +95,7 @@ def main() -> None:
         cfg = load_admin_config()
         admin_slugs = set(cfg.get("admin_slugs") or [])
     except Exception:
-        admin_slugs = {"misha-hanin"}
+        admin_slugs = {operator_identity_default("slug", "misha-hanin")}
 
     def _contacts_dir(exec_slug: str) -> Path:
         if exec_slug in admin_slugs:

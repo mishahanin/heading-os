@@ -41,7 +41,11 @@ def test_returns_ceo_default_when_file_missing(tmp_path, monkeypatch):
     _point_workspace_root(monkeypatch, tmp_path)
 
     result = ws.get_workspace_identity()
-    assert result["slug"] == "misha-hanin"
+    # Bootstrap default is de-personalized (F-4.1): a generic "operator" slug,
+    # still the ceo-master admin shape. This is the identity resolver itself, so
+    # it cannot route through the operator seam (which depends on it) - the slug
+    # is a plain generic literal.
+    assert result["slug"] == "operator"
     assert result["type"] == "ceo-master"
     assert result["role"] == "admin"
 

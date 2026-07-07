@@ -146,6 +146,18 @@ the full surface.</p>
 belongs to. For a <strong>solo</strong> clone you can leave it absent: the engine defaults to a
 single-user master workspace. A <strong>managed</strong> (multi-person) deployment uses the
 <code>exec-workspace</code> shape covered in <a href="DEPLOYMENT.html">DEPLOYMENT</a>.</p>
+<p><strong>Operator identity.</strong> One file names who runs this instance, so the engine ships
+operator-agnostic (a fresh clone resolves to a neutral &ldquo;operator&rdquo;). Copy the shipped
+example into your private data overlay and fill it in:</p>
+<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>scripts/operator.example.yaml<span class="w"> </span>&lt;data-root&gt;/config/operator.yaml
+<span class="c1"># then edit name / slug / github_org / voice_reference / email</span>
+</code></pre></div>
+<p><code>operator.yaml</code> is routed private and gitignored. Every identity default in the code
+(bridge user slug, GitHub org, publisher, the email-reply voice clause) reads from it
+through one seam, so you set your identity in exactly one place. You can also override
+any field per-shell with <code>HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}</code>.
+Until you write it, an established instance keeps its historical defaults with a
+one-time deprecation notice; a brand-new clone is generic.</p>
 <h3 id="32-your-facts-and-voice">3.2 Your facts and voice</h3>
 <p>The documents the wizard generates are plain markdown you can keep editing:</p>
 <ul>

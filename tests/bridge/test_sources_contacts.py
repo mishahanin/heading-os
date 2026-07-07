@@ -70,9 +70,12 @@ def test_list_contacts_combines_execs(tmp_path):
     assert exec_row["owner_label"] == "Sam Carter"
 
 
-def test_list_contacts_skips_misha_hanin_snapshot(tmp_path):
-    """The crm-central misha-hanin/ snapshot is excluded - the live
-    crm/contacts/ is authoritative for the CEO's own contacts."""
+def test_list_contacts_skips_misha_hanin_snapshot(tmp_path, monkeypatch):
+    """The crm-central self snapshot is excluded - the live crm/contacts/ is
+    authoritative for the operator's own contacts. The self-dir name resolves
+    through the operator seam; pin it here so the test is independent of the
+    ambient operator identity."""
+    monkeypatch.setattr(contacts_src, "_crm_central_self_dir", lambda: "misha-hanin")
     ws = _ws(tmp_path)
     _ceo_contact(ws, "alice", "Alice", relationship_type="prospect")
     _exec_contact(tmp_path, "misha-hanin", "stale-contact", "Stale",

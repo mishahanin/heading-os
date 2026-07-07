@@ -162,11 +162,18 @@ def _build_initial_prompt(action: str, context: dict | None) -> str:
         ]
         if safe_subject:
             parts.append(f"(subject: {safe_subject})")
+        # Template the whole voice clause off the operator seam: the name AND the
+        # voice-reference path are personalized. The shim keeps the live prompt
+        # byte-identical ("Misha" / "reference/misha-voice.md") on an established
+        # instance and resolves generic on a fresh clone.
+        from scripts.utils.workspace import operator_identity_default
+        op_name = operator_identity_default("name", "Misha")
+        op_voice = operator_identity_default("voice_reference", "reference/misha-voice.md")
         parts.append(
             ". Read outputs/operations/email-intelligence/_latest-fetch.json, "
             "locate this conversation by id, show me the participants + summary + "
-            "proposed actions, then help me draft a reply in Misha's voice "
-            "(reference/misha-voice.md)."
+            f"proposed actions, then help me draft a reply in {op_name}'s voice "
+            f"({op_voice})."
         )
         return "".join(parts)
     return ""

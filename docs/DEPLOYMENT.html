@@ -236,10 +236,13 @@ not yet have access — ask the administrator to grant it.</p>
 <code>.env</code>.</p>
 <h3 id="solo-deploy">Solo deploy</h3>
 <p>No identity file is required — the engine defaults to a single-user workspace. Create
-<code>.env</code> from the template and fill in the keys you have:</p>
+<code>.env</code> from the template and fill in the keys you have, then set your operator identity
+(one file names who runs the instance; see <a href="MAKE-IT-YOURS.html">MAKE-IT-YOURS</a> § 3.1):</p>
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>&lt;engine&gt;
 cp<span class="w"> </span>.env.example<span class="w"> </span>.env
 <span class="c1"># edit .env: set the keys you have (Anthropic, and any integrations you use)</span>
+cp<span class="w"> </span>scripts/operator.example.yaml<span class="w"> </span>&lt;data-root&gt;/config/operator.yaml
+<span class="c1"># edit operator.yaml: name / slug / github_org / voice_reference / email</span>
 </code></pre></div>
 <h3 id="managed-deploy-option-a-packet-from-the-administrator">Managed deploy — option A: packet from the administrator</h3>
 <p>Drop the two files the administrator sends you into the engine root, then fill the

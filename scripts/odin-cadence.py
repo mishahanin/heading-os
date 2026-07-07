@@ -37,14 +37,14 @@ import argparse
 import json
 import re
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 # Workspace import bootstrap (per development-standards.md)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils.workspace import get_data_root  # noqa: E402
+from scripts.utils.workspace import get_data_root, get_default_tz  # noqa: E402
 from scripts.utils.air_gap import is_denied  # noqa: E402
 from scripts.utils import viraid_counterpart  # noqa: E402
 
@@ -97,7 +97,7 @@ def read_marker(root: Path):
         d = date.fromisoformat(raw[:10])
     except ValueError:
         return raw, None
-    return raw, (date.today() - d).days
+    return raw, (datetime.now(get_default_tz()).date() - d).days
 
 
 # ============================================================
@@ -241,7 +241,7 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
     sitting un-graduated that long; one fed yesterday is fresh regardless of how
     old its other member is."""
     if today is None:
-        today = date.today()
+        today = datetime.now(get_default_tz()).date()
     base = root / EPISODES_DIR
     empty = {"count": 0, "stale_count": 0, "oldest_age_days": None, "ages": []}
     if not base.is_dir():

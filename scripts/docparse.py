@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import BOLD, CYAN, GREEN, GRAY, RED, RESET, YELLOW
-from scripts.utils.workspace import get_workspace_root, get_outputs_dir
+from scripts.utils.workspace import get_workspace_root, get_outputs_dir, get_default_tz
 
 WORKSPACE = get_workspace_root()
 CACHE_DIR = WORKSPACE / ".cache" / "docparse"
@@ -910,7 +910,7 @@ def cmd_report(args):
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
         output_dir = DEFAULT_OUTPUT_DIR / date_str
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -972,8 +972,8 @@ def cmd_status(_args):
     print(f"  Cache dir:   {CACHE_DIR}")
     print(f"  Entries:     {len(entries)}")
     print(f"  Total size:  {total_size:,} bytes ({total_size / 1024:.1f} KB)")
-    print(f"  Oldest:      {datetime.fromtimestamp(oldest.stat().st_mtime).isoformat()}")
-    print(f"  Newest:      {datetime.fromtimestamp(newest.stat().st_mtime).isoformat()}")
+    print(f"  Oldest:      {datetime.fromtimestamp(oldest.stat().st_mtime, tz=get_default_tz()).isoformat()}")
+    print(f"  Newest:      {datetime.fromtimestamp(newest.stat().st_mtime, tz=get_default_tz()).isoformat()}")
 
 
 # ============================================================

@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.workspace import get_outputs_dir
+from scripts.utils.workspace import get_default_tz, get_outputs_dir
 
 MULLVAD_API = "https://api.mullvad.net/www/relays/wireguard/"
 
@@ -256,12 +256,12 @@ def main() -> int:
     else:
         out_dir = get_outputs_dir() / "operations"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"mullvad_fastest_{datetime.now().strftime('%Y-%m-%d')}.json"
+        out_path = out_dir / f"mullvad_fastest_{datetime.now(get_default_tz()).strftime('%Y-%m-%d')}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
         json.dumps(
             {
-                "generated": datetime.now().isoformat(timespec="seconds"),
+                "generated": datetime.now(get_default_tz()).isoformat(timespec="seconds"),
                 "filter": {
                     "region": args.region,
                     "countries": args.countries,

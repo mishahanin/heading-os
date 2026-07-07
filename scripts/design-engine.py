@@ -30,7 +30,7 @@ from uuid import uuid4
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.api import load_api_key
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
-from scripts.utils.workspace import get_outputs_dir
+from scripts.utils.workspace import get_default_tz, get_outputs_dir
 
 # ============================================================
 # Configuration
@@ -92,7 +92,7 @@ def _default_output_dir() -> Path:
 
 
 def _timestamp() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
+    return datetime.now(get_default_tz()).strftime("%Y%m%d-%H%M%S")
 
 
 def _api_request(method: str, url: str, token: str, data: dict = None) -> dict:

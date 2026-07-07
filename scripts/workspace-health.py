@@ -20,14 +20,14 @@ import argparse
 import os
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.workspace import (
     get_workspace_root, get_context_dir, get_outputs_dir, get_datastore_dir,
-    get_templates_dir, get_data_root,
+    get_templates_dir, get_data_root, get_default_tz,
 )
 
 WORKSPACE = get_workspace_root()
@@ -97,7 +97,7 @@ def check_context_freshness(max_days=30):
     """Check freshness markers on context files."""
     header("Context Freshness")
     issues = 0
-    today = datetime.now()
+    today = datetime.now(get_default_tz())
 
     context_files = list(CONTEXT_DIR.glob("*.md"))
     if not context_files:
@@ -117,7 +117,7 @@ def check_context_freshness(max_days=30):
             if match:
                 break
         if match:
-            verified_date = datetime.strptime(match.group(1), "%Y-%m-%d")
+            verified_date = datetime.strptime(match.group(1), "%Y-%m-%d").replace(tzinfo=get_default_tz())
             age_days = (today - verified_date).days
             if age_days > max_days:
                 warn(f"{f.name}: Last verified {age_days} days ago ({match.group(1)})")
@@ -126,7 +126,7 @@ def check_context_freshness(max_days=30):
                 ok(f"{f.name}: Verified {age_days} days ago ({match.group(1)})")
         else:
             # Fall back to file modification time
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz())
             age_days = (today - mtime).days
             if age_days > max_days:
                 warn(f"{f.name}: No freshness marker, modified {age_days} days ago")
@@ -410,7 +410,7 @@ def check_doc_versions(max_age_days: int = 90) -> int:
     header(f"Shared Doc Version Markers (freshness threshold: {max_age_days} days)")
     issues = 0
     version_pattern = re.compile(r"<!--\s*version:\s*(\S+?)\s*\|\s*last-updated:\s*(\d{4}-\d{2}-\d{2})\s*-->")
-    today = datetime.now().date()
+    today = datetime.now(get_default_tz()).date()
     templates_dir = get_templates_dir()
     tracked = [
         templates_dir / "GETTING-STARTED.md",
@@ -432,7 +432,7 @@ def check_doc_versions(max_age_days: int = 90) -> int:
             continue
         version, date_str = match.groups()
         try:
-            doc_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            doc_date = date.fromisoformat(date_str)
         except ValueError:
             warn(f"{label}: malformed date {date_str}")
             issues += 1
@@ -486,7 +486,7 @@ def main():
 
     print(f"\n{BOLD}31C Workspace Health Check{RESET}")
     print(f"Workspace: {WORKSPACE}")
-    print(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"Date: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M')}")
 
     total_issues = 0
     checks = {

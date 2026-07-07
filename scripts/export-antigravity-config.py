@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.workspace import get_outputs_dir, get_workspace_root
+from scripts.utils.workspace import get_default_tz, get_outputs_dir, get_workspace_root
 
 
 SENSITIVE_KEY_PATTERNS = [
@@ -215,7 +215,7 @@ def main():
         print(f"        Is Antigravity installed and launched at least once?")
         sys.exit(1)
 
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     if args.output:
         out_zip = args.output.resolve()
         out_zip.parent.mkdir(parents=True, exist_ok=True)

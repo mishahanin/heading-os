@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils import odin_skill_proposal as osp
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.workspace import display_path, get_outputs_dir, get_workspace_root
+from scripts.utils.workspace import display_path, get_default_tz, get_outputs_dir, get_workspace_root
 
 ROOT = get_workspace_root()          # ENGINE root - locates skill files under .claude/skills
 
@@ -48,12 +48,12 @@ def _print_diff(unified_diff: str) -> None:
 def _write_artifact(result: dict) -> Path:
     out_dir = get_outputs_dir() / "operations" / "odin" / "skill-proposals"
     out_dir.mkdir(parents=True, exist_ok=True)
-    date = datetime.now().strftime("%Y-%m-%d")
+    date = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     name = f"{date}_skill-proposal_{result['skill_name']}_{result['principle_slug']}.md"
     path = out_dir / name
     md = (
         f"# Odin skill-proposal: {result['principle_slug']} -> /{result['skill_name']}\n\n"
-        f"Generated: {datetime.now().isoformat(timespec='seconds')}\n\n"
+        f"Generated: {datetime.now(get_default_tz()).isoformat(timespec='seconds')}\n\n"
         f"**Proposal only.** Odin never edits a skill file. Review, then apply by hand if you accept it.\n\n"
         f"## Rationale\n\n{result['rationale']}\n\n"
         f"## Target section\n\n{result.get('target_section') or '(none found - choose placement manually)'}\n\n"

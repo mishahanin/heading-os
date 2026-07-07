@@ -19,13 +19,14 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.image import load_logo_base64
 from scripts.utils.crm import parse_config as _crm_parse_config, scan_contacts as _crm_scan_contacts
 from scripts.utils.workspace import (
+    get_default_tz,
     get_crm_config_path as _get_crm_config_path,
     get_outputs_dir,
     get_knowledge_dir,
@@ -76,8 +77,8 @@ def load_font_b64(path):
         return ""
     return base64.b64encode(path.read_bytes()).decode("ascii")
 
-TODAY = datetime.now().date()
-NOW = datetime.now()
+TODAY = datetime.now(get_default_tz()).date()
+NOW = datetime.now(get_default_tz())
 
 # Calendar times from Exchange are stored in UTC.
 # Convert to CEO local timezone (the configured timezone = UTC+4).
@@ -192,7 +193,7 @@ def collect_crm_health():
                 due = commit.get("due")
                 if due:
                     try:
-                        due_date = datetime.strptime(due, "%Y-%m-%d").date()
+                        due_date = date.fromisoformat(due)
                         if due_date <= TODAY + timedelta(days=7):
                             result["commitments_due"].append({
                                 "name": c["name"],
@@ -266,7 +267,7 @@ def collect_pipeline():
         stage_date_str = d.get("Stage Date", "").strip()
         if stage_date_str:
             try:
-                sd = datetime.strptime(stage_date_str, "%Y-%m-%d").date()
+                sd = date.fromisoformat(stage_date_str)
                 if (TODAY - sd).days > 14:
                     stale_count += 1
             except ValueError:
@@ -334,7 +335,7 @@ def collect_calendar():
         raw_time = m.get("Time", "").strip()
         if raw_time and re.match(r"\d{1,2}:\d{2}", raw_time):
             try:
-                t = datetime.strptime(raw_time, "%H:%M")
+                t = datetime.strptime(raw_time, "%H:%M").replace(tzinfo=timezone.utc)
                 t += timedelta(hours=CALENDAR_UTC_OFFSET_HOURS)
                 m["Time"] = t.strftime("%H:%M")
             except ValueError:
@@ -447,7 +448,7 @@ def collect_freshness():
         match = re.search(r"Last verified:\s*(\d{4}-\d{2}-\d{2})", content)
         if match:
             date_str = match.group(1)
-            verified = datetime.strptime(date_str, "%Y-%m-%d").date()
+            verified = date.fromisoformat(date_str)
             age = (TODAY - verified).days
             health = "green" if age <= 7 else ("yellow" if age <= 14 else "red")
             result.append({"name": name, "date": date_str, "age": age, "health": health})
@@ -513,7 +514,7 @@ def collect_content_cadence():
         for d in NEWSLETTERS_DIR.iterdir():
             if d.is_dir() and re.match(r"\d{4}-\d{2}-\d{2}", d.name):
                 try:
-                    dt = datetime.strptime(d.name, "%Y-%m-%d").date()
+                    dt = date.fromisoformat(d.name)
                     dated_dirs.append(dt)
                 except ValueError:
                     pass
@@ -532,7 +533,7 @@ def collect_content_cadence():
             for f in ldir.iterdir():
                 if f.is_file():
                     # Check by file modification date
-                    mtime = datetime.fromtimestamp(f.stat().st_mtime).date()
+                    mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz()).date()
                     if mtime >= week_ago:
                         linkedin_count += 1
     result["linkedin_count_week"] = linkedin_count
@@ -572,7 +573,7 @@ def collect_viraid():
                 date_match = re.search(r"\*\*(\d{4}-\d{2}-\d{2})\*\*", line)
                 if date_match:
                     try:
-                        task_date = datetime.strptime(date_match.group(1), "%Y-%m-%d").date()
+                        task_date = date.fromisoformat(date_match.group(1))
                         if (TODAY - task_date).days > 3:
                             result["aging"] += 1
                     except ValueError:

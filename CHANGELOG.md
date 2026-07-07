@@ -7,9 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- **/implement typed trajectory flags + self-check:** `scripts/implement-trajectory-log.py --event` now accepts typed flags (`--step`, `--title`, `--file`, `--status`, `--wave`, `--successes`, `--check`, `--passed`/`--failed`, and the rest), so each event emits in one `Bash` call with no temp file. A new `--verify --run-id` mode self-checks a trajectory's structural invariants (step and wave pairing, bracketed `successes`, literal `files_affected`, `run_start` first and `run_end` last) and exits non-zero on a defect. New `tests/test_implement_trajectory_log.py`.
 - **Operator identity seam (F-4.1):** one place names who runs an instance, so the engine ships operator-agnostic (a fresh clone resolves to a neutral "operator"). New `scripts/utils/operator.py` (`get_operator()` / `operator_slug()` / `operator_org()`) resolves identity with precedence env `HEADING_OS_OPERATOR_*` → data-overlay `operator.yaml` → engine-local `config/operator.yaml` → shipped `scripts/operator.example.yaml`. Every load-bearing identity default (bridge user slug, GitHub org, corporate publisher, the email-reply voice clause, admin-slug fallbacks) routes through the seam via `workspace.operator_identity_default()`. `config/operator.yaml` is routed private and gitignored. Regression guard in `tests/test_operator_seam.py`.
 
 ### Changed
+- **/implement trajectory emission (v1.6):** the skill drives emission through the typed flags, runs `--verify` after `run_end` (advisory), and consolidates the v1.3-v1.5 wave contract into one statement. `--data-file`/`--data-stdin`/`--data-json` stay as the arbitrary-payload escape hatch; the event schema and the `/scrutinize` lens are unchanged.
 - **Frontmatter namespace `x-31c-*` → `x-heading-*` (F-4.2):** all 94 skills renamed from the brand-specific namespace to the neutral `x-heading-orchestration` / `x-heading-capability`. Both parsers are dual-key (prefer `x-heading-*`, accept the legacy key with a deprecation notice). New one-shot dev tool `scripts/dev/rename-x31c-namespace.py`.
 
 ### Deprecated

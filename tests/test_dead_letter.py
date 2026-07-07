@@ -134,7 +134,7 @@ def test_backoff_ceiling_monotonic_and_capped():
     base, factor, cap = 60.0, 2.0, 1800.0
     ceilings = [
         dead_letter.backoff_schedule(a, base=base, factor=factor, cap=cap, rng=rng)
-        for a in range(0, 12)
+        for a in range(12)
     ]
     # Monotonic non-decreasing.
     assert all(b >= a for a, b in zip(ceilings, ceilings[1:]))
@@ -148,7 +148,7 @@ def test_backoff_ceiling_monotonic_and_capped():
 
 def test_backoff_jitter_within_bounds_and_deterministic():
     base, factor, cap = 60.0, 2.0, 1800.0
-    for attempt in range(0, 10):
+    for attempt in range(10):
         ceiling = min(cap, base * (factor ** attempt))
         rng = random.Random(42)  # noqa: S311 - deterministic test jitter, not crypto
         delay = dead_letter.backoff_schedule(

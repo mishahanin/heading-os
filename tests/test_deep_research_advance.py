@@ -57,9 +57,8 @@ def test_run_marks_degraded_when_kimi_fails(tmp_path):
 def test_run_exits_3_when_no_corpus(tmp_path):
     with mock.patch.object(dra, "kimi_reason", return_value=json.dumps(["a", "b"])), \
          mock.patch.object(dra, "pplx_research", side_effect=RuntimeError("pplx down")), \
-         mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path):
-        with pytest.raises(SystemExit) as exc:
-            dra.run("q", depth=2)
+         mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path), pytest.raises(SystemExit) as exc:
+        dra.run("q", depth=2)
     assert exc.value.code == 3
     jsons = list((tmp_path / "research").rglob("intermediate.json"))
     assert jsons, "intermediate.json should be written before exit(3)"

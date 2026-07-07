@@ -144,6 +144,19 @@ repos:
         files: '^(requirements\.txt|requirements-dev\.txt)$'
         pass_filenames: false
 
+  # Full-ruleset lint ratchet (F-3.2) -- freezes existing lint debt at the
+  # committed .lint-baseline.json and fails on any NEW violation. Runs the whole
+  # tree (pass_filenames: false) when a .py file is staged. Fixing lint lowers the
+  # baseline via `python scripts/lint-ratchet.py update`. Mirrors the CI lint job.
+  - repo: local
+    hooks:
+      - id: lint-ratchet
+        name: Full-ruleset lint ratchet (fails on new lint debt)
+        entry: python3 -c "import importlib.util, subprocess, sys; sys.exit(0) if importlib.util.find_spec('ruff') is None else sys.exit(subprocess.run([sys.executable, 'scripts/lint-ratchet.py', 'check']).returncode)"
+        language: system
+        files: '\.py$'
+        pass_filenames: false
+
   # 31C custom secret scanner -- workspace-specific credential patterns (see
   # scripts/secret-scanner.py and .claude/rules/security.md). Runs alongside the
   # detect-secrets framework hook above; the two are complementary, not redundant.

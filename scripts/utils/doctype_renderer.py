@@ -113,11 +113,7 @@ def validate_required_fields(doctype: str, data: dict) -> list[str]:
     missing = []
     for field in required:
         value = data.get(field)
-        if value is None:
-            missing.append(field)
-        elif isinstance(value, str) and not value.strip():
-            missing.append(field)
-        elif isinstance(value, list) and not value:
+        if value is None or isinstance(value, str) and not value.strip() or isinstance(value, list) and not value:
             missing.append(field)
     return missing
 

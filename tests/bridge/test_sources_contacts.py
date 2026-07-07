@@ -18,7 +18,7 @@ def _stub_registry(monkeypatch):
     Individual tests override this to inject specific slugs when validating the
     per-exec mirror path.
     """
-    monkeypatch.setattr(contacts_src, "get_all_active_exec_slugs", lambda: [])
+    monkeypatch.setattr(contacts_src, "get_all_active_exec_slugs", list)
 
 
 def _ws(tmp_path):

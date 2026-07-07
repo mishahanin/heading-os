@@ -267,9 +267,8 @@ def test_search_with_fallback_both_keys_absent(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)
     # Also short-circuit load_env so it can't pick up real values
-    with patch.object(search_mod, "load_api_key", return_value=""):
-        with pytest.raises(search_mod.NoBackendsConfigured):
-            search_mod.search_with_fallback("anything", max_results=1)
+    with patch.object(search_mod, "load_api_key", return_value=""), pytest.raises(search_mod.NoBackendsConfigured):
+        search_mod.search_with_fallback("anything", max_results=1)
 
 
 def test_search_with_fallback_tavily_only_returns_tavily(monkeypatch):

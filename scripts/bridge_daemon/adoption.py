@@ -173,9 +173,7 @@ def summarize(workspace_root: Path, days: int = 14, today: date | None = None) -
             per_day_first_event_kind[local_date] = evt or ""
         if evt == PAGE_VIEW:
             per_day_views[local_date].append(rec)
-        elif evt == LAUNCH:
-            per_day_actions[local_date] += 1
-        elif evt == FINALIZE:
+        elif evt == LAUNCH or evt == FINALIZE:
             per_day_actions[local_date] += 1
         elif evt == RETURN_TO_BROWSER:
             per_day_returns[local_date] += 1

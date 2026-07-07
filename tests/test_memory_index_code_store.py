@@ -131,8 +131,8 @@ def test_code_layers_only_in_code_store(two_store):
     assert any("alpha-pos.md" in i for i in content_ids)
     assert not any(".claude/skills" in i or ".claude/rules" in i for i in content_ids)
     # code store holds the skill + rule, no content
-    assert any(".claude/skills/betaskill/SKILL.md" == i for i in code_ids)
-    assert any(".claude/rules/gammarule.md" == i for i in code_ids)
+    assert any(i == ".claude/skills/betaskill/SKILL.md" for i in code_ids)
+    assert any(i == ".claude/rules/gammarule.md" for i in code_ids)
     assert not any("odin-brain" in i for i in code_ids)
 
 

@@ -33,8 +33,8 @@ Snapshot = TypedDict("Snapshot", {
 class State:
     def __init__(self):
         self._lock = threading.Lock()
-        self._versions = {c: 0 for c in COMPONENTS}
-        self._data_times = {c: None for c in COMPONENTS}
+        self._versions = dict.fromkeys(COMPONENTS, 0)
+        self._data_times = dict.fromkeys(COMPONENTS)
 
     def bump(self, component: str) -> int:
         with self._lock:

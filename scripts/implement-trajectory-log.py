@@ -304,7 +304,7 @@ def cmd_event(args: argparse.Namespace) -> int:
         print(f"{YELLOW}WARN: payload is not a JSON object; wrapping under 'value' key.{RESET}",
               file=sys.stderr)
         payload = {"value": payload}
-    step_number = payload.get("step", payload.get("step_number", None))
+    step_number = payload.get("step", payload.get("step_number"))
     record = {
         "timestamp": now_iso(),
         "event_type": args.type,

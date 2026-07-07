@@ -82,9 +82,7 @@ def _regex_parse_yaml(raw_yaml: str) -> Dict[str, Any]:
             continue
         key = line[:colon_idx].strip()
         value: Any = line[colon_idx + 1:].strip()
-        if value.startswith('"') and value.endswith('"'):
-            value = value[1:-1]
-        elif value.startswith("'") and value.endswith("'"):
+        if value.startswith('"') and value.endswith('"') or value.startswith("'") and value.endswith("'"):
             value = value[1:-1]
         elif value.startswith("[") and value.endswith("]"):
             value = [v.strip().strip('"').strip("'") for v in value[1:-1].split(",") if v.strip()]
@@ -191,9 +189,7 @@ def parse_config(text: str, key: str) -> Optional[str]:
         if k != key:
             continue
         value = line[colon_idx + 1:].strip()
-        if value.startswith('"') and value.endswith('"'):
-            value = value[1:-1]
-        elif value.startswith("'") and value.endswith("'"):
+        if value.startswith('"') and value.endswith('"') or value.startswith("'") and value.endswith("'"):
             value = value[1:-1]
         return value
 

@@ -145,9 +145,7 @@ def _parse_status_from_decisions(text: str) -> dict[str, str]:
             status_token: str
             if "first 5" in slot:
                 status_token = "first-5"
-            elif "parallel" in slot and "wave 1" in slot.replace("week ", "week"):
-                status_token = "parallel-week-1-2"
-            elif "parallel" in slot:
+            elif "parallel" in slot and "wave 1" in slot.replace("week ", "week") or "parallel" in slot:
                 status_token = "parallel-week-1-2"
             elif "wave 2" in slot:
                 status_token = "wave-2"

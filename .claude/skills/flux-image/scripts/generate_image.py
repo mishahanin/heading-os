@@ -79,13 +79,12 @@ def api_request(method, path, token, data=None):
 def download_file(url, filepath):
     """Download a file from URL to local path."""
     req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        with open(filepath, "wb") as f:
-            while True:
-                chunk = resp.read(8192)
-                if not chunk:
-                    break
-                f.write(chunk)
+    with urllib.request.urlopen(req, timeout=60) as resp, open(filepath, "wb") as f:
+        while True:
+            chunk = resp.read(8192)
+            if not chunk:
+                break
+            f.write(chunk)
 
 
 def generate_image(prompt, output_path, aspect_ratio="16:9", model="banana",

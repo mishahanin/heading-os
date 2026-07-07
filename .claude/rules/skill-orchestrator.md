@@ -1,5 +1,5 @@
 <!-- audit-skip-start -->
-<!-- version: 2.1.0 | last-updated: 2026-06-08 -->
+<!-- version: 2.1.1 | last-updated: 2026-07-07 -->
 <!-- audit-skip-end -->
 ---
 paths: []
@@ -14,9 +14,9 @@ Detects compound workflows and dispatches parallel agents for research phases wh
 
 ## Parallelization Safety Model
 
-Before dispatching any parallel pattern, read the SKILL.md frontmatter of each skill you plan to dispatch. Orchestration metadata lives under the namespaced `x-31c-orchestration:` block. Decide parallelization based on `x-31c-orchestration.parallel_safe` and `x-31c-orchestration.shared_state`.
+Before dispatching any parallel pattern, read the SKILL.md frontmatter of each skill you plan to dispatch. Orchestration metadata lives under the namespaced `x-heading-orchestration:` block. Decide parallelization based on `x-heading-orchestration.parallel_safe` and `x-heading-orchestration.shared_state`.
 
-The `x-` prefix marks this as a workspace extension, not part of Anthropic's standard SKILL.md spec. See `.claude/rules/development-standards.md` for the full frontmatter contract and an example shape.
+The `x-` prefix marks this as a workspace extension, not part of Anthropic's standard SKILL.md spec. See `.claude/rules/development-standards.md` for the full frontmatter contract and an example shape. The parsers still accept the legacy 31C-prefixed namespace through the v0.5.0 transition; new skills use `x-heading-*`.
 
 ### Parallel Safety Levels
 
@@ -30,15 +30,15 @@ The `x-` prefix marks this as a workspace extension, not part of Anthropic's sta
 
 Before dispatching:
 
-1. Read SKILL.md frontmatter for each skill being dispatched. Look at `x-31c-orchestration.parallel_safe` and `x-31c-orchestration.shared_state`.
-2. If `x-31c-orchestration.parallel_safe: false` - run that skill solo
-3. If `x-31c-orchestration.parallel_safe: partial` - only dispatch its research phase
-4. Check `x-31c-orchestration.shared_state` arrays for path overlaps between agents (substring matching: `crm/contacts/` conflicts with `crm/contacts/john-smith.md`)
-5. If the `x-31c-orchestration` block is missing or has no parallel metadata - treat as `parallel_safe: false` (safe default). Log: "Skill [name] has no parallel metadata. Running sequentially."
+1. Read SKILL.md frontmatter for each skill being dispatched. Look at `x-heading-orchestration.parallel_safe` and `x-heading-orchestration.shared_state`.
+2. If `x-heading-orchestration.parallel_safe: false` - run that skill solo
+3. If `x-heading-orchestration.parallel_safe: partial` - only dispatch its research phase
+4. Check `x-heading-orchestration.shared_state` arrays for path overlaps between agents (substring matching: `crm/contacts/` conflicts with `crm/contacts/john-smith.md`)
+5. If the `x-heading-orchestration` block is missing or has no parallel metadata - treat as `parallel_safe: false` (safe default). Log: "Skill [name] has no parallel metadata. Running sequentially."
 
 ### Default Values for Missing Metadata
 
-If a SKILL.md lacks the `x-31c-orchestration` block (or any of its fields):
+If a SKILL.md lacks the `x-heading-orchestration` block (or any of its fields):
 - `parallel_safe` defaults to `false`
 - `shared_state` defaults to `["UNKNOWN"]`
 - `triggers` defaults to `[]`

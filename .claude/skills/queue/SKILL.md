@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - "outputs/operations/action-queue/"
@@ -19,7 +19,7 @@ x-31c-orchestration:
     - what's waiting to send
     - approve the first one
     - retry that failed send
-x-31c-capability:
+x-heading-capability:
   what: >
     The terminal-native Action Queue: lists drafted actions awaiting go/no-go and
     sends an approved one SYNCHRONOUSLY (the CEO watches it land). Daemon-free; the

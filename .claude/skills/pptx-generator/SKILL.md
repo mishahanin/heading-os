@@ -20,7 +20,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -28,7 +28,7 @@ x-31c-orchestration:
     - generate presentation
     - linkedin carousel
     - edit pptx
-x-31c-capability:
+x-heading-capability:
   what: >
     Generates and edits on-brand presentation slides as PPTX files (PowerPoint/Slides/Keynote compatible),
     builds square LinkedIn carousels exported to PDF, and manages the reusable cookbook layouts.

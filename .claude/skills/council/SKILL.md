@@ -13,7 +13,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state: ["outputs/operations/council/"]
   triggers:
@@ -27,7 +27,7 @@ x-31c-orchestration:
     - stress-test with Grok
     - stress-test with Kimi
     - council vote
-x-31c-capability:
+x-heading-capability:
   what: >
     Independent second opinions from Gemini, Grok AND Kimi in parallel, presented side-by-side with Claude's own view — no synthesized final answer, the CEO decides.
   how: >

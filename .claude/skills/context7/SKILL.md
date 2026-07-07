@@ -8,14 +8,14 @@ metadata:
 argument-hint: "[library] [query]"
 allowed-tools: "Bash(python3:*), Read"
 model: haiku
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - context7
     - look up docs for
     - library documentation
-x-31c-capability:
+x-heading-capability:
   what: >
     Fetches live, version-specific documentation for any library or framework from the Context7 API, formatted for accurate API reference and code validation.
   how: >

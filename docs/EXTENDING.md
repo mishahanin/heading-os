@@ -52,7 +52,7 @@ metadata:
   author: Your Name
   email: you@example.com
   version: "1.0"
-x-31c-orchestration:                    # how the orchestrator may dispatch it
+x-heading-orchestration:                    # how the orchestrator may dispatch it
   parallel_safe: false                  # true | partial | false
   shared_state: []                      # paths it writes to
   triggers: ["example phrase"]          # natural-language triggers, or []

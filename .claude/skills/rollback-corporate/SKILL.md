@@ -9,12 +9,12 @@ metadata:
 argument-hint: "[--dry-run]"
 allowed-tools: "Read, Bash(python3:*), Bash(git:*)"
 model: haiku
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - ../heading-os-corporate/
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     Rolls the corporate main branch back to the previous BUILD via a forward revert (no force-push),
     so branch protection holds and execs pull the reverted state on their next sync. The R16 Layer 2 safety net.

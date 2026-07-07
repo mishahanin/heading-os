@@ -8,7 +8,7 @@ metadata:
 argument-hint: "[prospect]"
 allowed-tools: "WebSearch, WebFetch, Read, Bash(python3:*)"
 model: sonnet
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state:
     - outputs/negotiations/
@@ -18,7 +18,7 @@ x-31c-orchestration:
     - how do we win
     - competitive positioning for
     - pricing strategy
-x-31c-capability:
+x-heading-capability:
   what: >
     Full deal strategy for a named prospect - prospect intelligence,
     competitive positioning, Voss-informed pricing and objection handling,

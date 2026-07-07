@@ -19,7 +19,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers:
@@ -29,7 +29,7 @@ x-31c-orchestration:
     - "editorial pass"
     - "tighten this document"
     - "restructure this draft"
-x-31c-capability:
+x-heading-capability:
   what: >
     A document-level structural editor for long deliverables. It maps a draft's
     argument architecture and proposes CUT / MERGE / MOVE / CONDENSE / SPLIT /

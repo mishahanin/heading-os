@@ -16,7 +16,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state:
     - crm/contacts/
@@ -28,7 +28,7 @@ x-31c-orchestration:
     - email digest
     - check my email
     - inbox
-x-31c-capability:
+x-heading-capability:
   what: >
     Scans incoming and outgoing 31C Exchange email, groups by conversation thread, and proposes CRM logs, tasks, pipeline updates, knowledge notes, and new contacts - all priority-tagged P1/P2/P3.
   how: >

@@ -8,7 +8,7 @@ metadata:
 argument-hint: "[add|log|radar|find|update|next] [contact] [details]"
 allowed-tools: "Read, Write, Edit, Glob"
 model: sonnet
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state:
     - crm/contacts/
@@ -23,7 +23,7 @@ x-31c-orchestration:
     - crm next
     - check CRM
     - contact health
-x-31c-capability:
+x-heading-capability:
   what: >
     The personal CRM - add contacts, log interactions, update records, find
     people, and surface a health radar of who has gone overdue across your

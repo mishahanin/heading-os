@@ -9,12 +9,12 @@ metadata:
 argument-hint: "[--force] [--dry-run]"
 allowed-tools: "Read, Bash(python3:*), Bash(git:*)"
 model: haiku
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - ../heading-os-corporate/
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     CEO-only R16 Layer 2 gate that fast-forward merges the corporate staging
     branch to main after the canary soak, freshness, and smoke gates pass, so

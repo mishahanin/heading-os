@@ -10,11 +10,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     Queries specialized OSINT databases that base /osint does not reach -
     sanctions and compliance lists, corporate registries, breach databases,

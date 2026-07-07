@@ -7,7 +7,7 @@ metadata:
   version: "1.1"
 argument-hint: "[name] [subject]"
 allowed-tools: "Read"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -15,7 +15,7 @@ x-31c-orchestration:
     - write to [CEO name]
     - peer correspondence
     - executive letter
-x-31c-capability:
+x-heading-capability:
   what: >
     Drafts a 150-300 word CEO-to-CEO email to a partner, peer executive, or key
     institutional contact - written peer-to-peer, direct about the objective,

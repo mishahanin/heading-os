@@ -15,7 +15,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -24,7 +24,7 @@ x-31c-orchestration:
     - "logical next step"
     - "where were we"
     - "recommend next"
-x-31c-capability:
+x-heading-capability:
   what: >
     State-aware "what's next" recommender - reads the session handoff, newest outputs, recent commits,
     and active business threads, then names 2-4 ranked next steps and the exact slash-command to run.

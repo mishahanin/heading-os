@@ -7,14 +7,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - respond to this email
     - reply to this
     - draft reply
-x-31c-capability:
+x-heading-capability:
   what: >
     Drafts a reply to an incoming email in Misha's voice - reads the sender's real intent,
     applies Voss tactical empathy, leads with the key point, and closes with a clear next step.

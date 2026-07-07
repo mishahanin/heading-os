@@ -7,14 +7,14 @@ metadata:
   version: "1.1"
 argument-hint: "[to] [purpose]"
 allowed-tools: "Read"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - draft email to
     - write email to
     - email [person] about
-x-31c-capability:
+x-heading-capability:
   what: >
     Drafts a new outbound CEO email in Misha's voice - direct opener, ordered
     key points, clear next step, plus 2-3 subject line options and any

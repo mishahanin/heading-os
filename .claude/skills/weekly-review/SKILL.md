@@ -12,7 +12,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "2.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state:
     - outputs/operations/reviews/
@@ -20,7 +20,7 @@ x-31c-orchestration:
     - weekly review
     - end of week review
     - friday review
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces the CEO weekly review - sea state, heading, pipeline movement, Tribe
     state, content cadence, top-3 priorities, and course corrections - with

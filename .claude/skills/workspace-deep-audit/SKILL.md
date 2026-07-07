@@ -22,13 +22,13 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - outputs/operations/workspace/
     - threads/business/
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     The heaviest workspace skill - a comprehensive 8-section deep audit (executive
     summary, inventory matrix, architectural findings, Context7 dependency
@@ -97,7 +97,7 @@ Dispatch parallel inventory agents per `references/inventory-streams.md`. Each a
 
 Streams:
 
-1. **Skills inventory** — count by category, line counts, frontmatter compliance, references/ coverage, evals/ coverage, x-31c-orchestration metadata
+1. **Skills inventory** — count by category, line counts, frontmatter compliance, references/ coverage, evals/ coverage, x-heading-orchestration metadata
 2. **Rules inventory** — count, Last Verified dates, scope (always-active / path-scoped / contextual), drift detection
 3. **Hooks inventory** — PreToolUse checks, PostToolUse advisors, pre-commit IDs, hook timing
 4. **Scripts inventory** — count, sizes, naming-convention compliance, utility coverage, top-10 largest

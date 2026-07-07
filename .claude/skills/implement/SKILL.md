@@ -7,14 +7,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.5"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers:
     - implement
     - execute the plan
     - build it
-x-31c-capability:
+x-heading-capability:
   what: >
     Executes an implementation plan created by /create-plan step by step, writing complete files
     and emitting a structured JSONL trajectory for every phase so the run can be audited later.

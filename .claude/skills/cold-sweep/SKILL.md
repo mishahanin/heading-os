@@ -14,11 +14,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state: ["outputs/operations/action-queue/"]
   triggers: ["cold sweep", "cold-sweep", "drain cold contacts", "sweep overdue contacts", "drain the red debt"]
-x-31c-capability:
+x-heading-capability:
   what: >
     Turns the overdue-contact "red debt" from crm-health into ~150-word
     voice-drafted nudges and deposits them in the Action Queue as email_send

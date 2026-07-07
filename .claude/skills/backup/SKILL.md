@@ -9,14 +9,14 @@ metadata:
   version: "1.3"
 allowed-tools: "Bash(git:*), Bash(python3:*)"
 model: haiku
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers:
     - backup
     - push to github
     - save workspace
-x-31c-capability:
+x-heading-capability:
   what: >
     Commits all workspace changes and pushes them to GitHub origin/main, so the
     entire workspace is backed up off-machine.

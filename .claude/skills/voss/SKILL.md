@@ -7,7 +7,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -16,7 +16,7 @@ x-31c-orchestration:
     - accusation audit
     - difficult conversation
     - negotiation playbook
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces a situation-specific tactical playbook for a high-stakes
     conversation using Voss's FBI method - counterpart profile, accusation

@@ -9,7 +9,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -17,7 +17,7 @@ x-31c-orchestration:
     - intel briefing
     - publish intelligence brief
     - external intel brief
-x-31c-capability:
+x-heading-capability:
   what: >
     A branded, public-facing 31C Intelligence Briefing newsletter with live world-intel research - hero, indicators, Sea State, Cyber Front, regional Navigation Chart, Market Depth - carrying zero confidential information, safe for Tribe and external sharing.
   how: >

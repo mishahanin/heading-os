@@ -21,7 +21,7 @@ metadata:
   version: "1.3"
 argument-hint: "[problem]"
 allowed-tools: "Read"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -30,7 +30,7 @@ x-31c-orchestration:
     - reason through
     - what are we missing
     - analyze carefully
-x-31c-capability:
+x-heading-capability:
   what: >
     Breaks a complex decision into visible, numbered thought steps - surfacing assumptions, exploring paths, and ending with a maritime-framed Course recommendation with confidence, key risk, and course correction.
   how: >

@@ -8,14 +8,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers:
     - interview prep
     - interview questions
     - hiring framework
-x-31c-capability:
+x-heading-capability:
   what: >
     Builds a complete interview kit for a role - a 20-question bank (warm-up,
     technical, Five Core Principles behavioral, culture), a 1-5 scoring rubric,

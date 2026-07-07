@@ -9,11 +9,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     Read-only rollup health check on the bridge daemon fleet - heartbeat
     staleness, version drift, config drift, active sessions, and the optional

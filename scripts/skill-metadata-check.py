@@ -7,16 +7,18 @@ orchestrator in .claude/rules/skill-orchestrator.md:
 
 Required (top-level):
   name, description, metadata.author, metadata.version
-Required (under x-31c-orchestration:):
+Required (under x-heading-orchestration:):
   parallel_safe, shared_state, triggers
 Recommended:
   argument-hint, allowed-tools
 
-The orchestration fields live under a namespaced x-31c-orchestration: block in
-SKILL.md. This signals "workspace extension, not part of Anthropic's standard
-SKILL.md spec" so future stricter validation does not strip them.
+The orchestration fields live under a namespaced x-heading-orchestration: block
+in SKILL.md. This signals "workspace extension, not part of Anthropic's standard
+SKILL.md spec" so future stricter validation does not strip them. The legacy
+x-31c-orchestration: key is still accepted through the v0.5.0 transition; a
+skill still on it is reported as a deprecation, not a failure.
 
-Skills lacking the x-31c-orchestration block (or its fields) default to
+Skills lacking the orchestration block (or its fields) default to
 parallel_safe=false per the orchestrator's safety model, which is invisible.
 This audit surfaces the gap so frontmatter can be filled in deliberately.
 
@@ -43,7 +45,8 @@ REQUIRED_TOP_FIELDS = ["name", "description"]
 REQUIRED_ORCH_FIELDS = ["parallel_safe", "shared_state", "triggers"]
 REQUIRED_METADATA = ["author", "version"]
 RECOMMENDED_FIELDS = ["argument-hint", "allowed-tools"]
-ORCHESTRATION_BLOCK = "x-31c-orchestration"
+ORCHESTRATION_BLOCK = "x-heading-orchestration"
+ORCHESTRATION_BLOCK_LEGACY = "x-31c-orchestration"
 
 VALID_PARALLEL_SAFE = {"true", "false", "partial", True, False}
 
@@ -97,6 +100,7 @@ def check_skill(skill_dir: Path) -> dict:
         "missing_recommended": [],
         "invalid_values": [],
         "error": "",
+        "legacy_namespace": False,
         "status": "UNKNOWN",
     }
 
@@ -127,9 +131,14 @@ def check_skill(skill_dir: Path) -> dict:
         if field not in frontmatter:
             result["missing_recommended"].append(field)
 
-    # Orchestration block (x-31c-orchestration) - workspace extension, namespaced
-    # to signal "not part of Anthropic's standard SKILL.md spec".
+    # Orchestration block (x-heading-orchestration) - workspace extension,
+    # namespaced to signal "not part of Anthropic's standard SKILL.md spec".
+    # Dual-key: prefer x-heading-orchestration, fall back to the legacy
+    # x-31c-orchestration through v0.5.0 (reported as a deprecation).
     orch = frontmatter.get(ORCHESTRATION_BLOCK)
+    if orch is None and ORCHESTRATION_BLOCK_LEGACY in frontmatter:
+        orch = frontmatter.get(ORCHESTRATION_BLOCK_LEGACY)
+        result["legacy_namespace"] = True
     if orch is None:
         result["missing_required"].append(ORCHESTRATION_BLOCK)
     elif not isinstance(orch, dict):
@@ -192,6 +201,13 @@ def print_report(results: list[dict], summary_only: bool = False) -> dict:
     print(f"  {YELLOW}WARN:{RESET}  {counts['WARN']}  (missing recommended fields only)")
     print(f"  {RED}FAIL:{RESET}  {counts['FAIL']}  (missing required fields or invalid values)")
     print(f"  {RED}ERROR:{RESET} {counts['ERROR']} (no SKILL.md or malformed frontmatter)")
+
+    legacy = [r for r in results if r.get("legacy_namespace")]
+    if legacy:
+        print(f"\n{GRAY}deprecation: {len(legacy)} skill(s) still use the legacy "
+              f"{ORCHESTRATION_BLOCK_LEGACY} key (accepted through v0.5.0):{RESET}")
+        for r in legacy:
+            print(f"  {GRAY}- {r['name']}{RESET}")
 
     if summary_only:
         return counts

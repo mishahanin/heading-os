@@ -9,13 +9,13 @@ metadata:
 argument-hint: "[description of the skill you need]"
 allowed-tools: "Read, Bash(python3:*)"
 model: haiku
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers:
     - request skill
     - I need a new skill
-x-31c-capability:
+x-heading-capability:
   what: >
     Lets an executive request a new skill from the CEO - captures what it
     should do, a use case, and expected output, then emails the request to the

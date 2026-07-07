@@ -13,11 +13,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers: ["pre-implementation gate", "gate before implement", "are we ready to implement", "before we implement", "stress-test plan before building", "pre-impl check"]
-x-31c-capability:
+x-heading-capability:
   what: >
     6-phase gate before /implement: success criteria, /devil critique, /council architecture
     review (Kimi as devil's advocate), harness audit, test contract, GO/NO-GO decision.

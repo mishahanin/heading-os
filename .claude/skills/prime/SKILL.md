@@ -9,11 +9,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.3"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     Initializes a working session - loads full workspace context (personal, business, strategy, current data, pipeline, key contacts, datastore index), runs CRM/knowledge/sync/daemon health checks in parallel, surfaces what needs attention, and recommends the day's skills.
   how: >

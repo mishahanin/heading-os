@@ -8,11 +8,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: [".setup/answers.json", ".env", "reference/", "context/", "personal/"]
   triggers: ["setup-wizard", "set up my workspace", "configure my workspace", "onboard me", "finish my setup", "personalize workspace"]
-x-31c-capability:
+x-heading-capability:
   what: >
     Walks a fresh workspace through an interactive per-question setup - about 22
     questions for a public HEADING OS clone or 9 for a 31C exec - enriches short answers

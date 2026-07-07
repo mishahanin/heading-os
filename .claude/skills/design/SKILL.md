@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -17,7 +17,7 @@ x-31c-orchestration:
     - design mockup
     - design illustration
     - design logo
-x-31c-capability:
+x-heading-capability:
   what: >
     Professional design studio for social graphics, infographics, UI mockups, cards, brochures,
     logos, and AI imagery. Routes each task to the optimal pipeline - HTML Studio (free, layout/text),

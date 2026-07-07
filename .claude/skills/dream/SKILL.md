@@ -18,7 +18,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - auto-memory/
@@ -27,7 +27,7 @@ x-31c-orchestration:
     - consolidate memories
     - memory cleanup
     - reflect
-x-31c-capability:
+x-heading-capability:
   what: >
     Reflective memory consolidation - merges recent learnings into durable
     memory files, validates technical claims against Context7, passes a security

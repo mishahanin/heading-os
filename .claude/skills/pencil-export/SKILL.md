@@ -7,7 +7,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: ["outputs/"]
   triggers:
@@ -16,7 +16,7 @@ x-31c-orchestration:
     - "pencil deck to pdf"
     - "convert .pen to pdf"
     - "render pencil deck"
-x-31c-capability:
+x-heading-capability:
   what: >
     Exports a Pencil .pen deck to per-slide PNG, a 16:9 PDF, an EDITABLE PPTX (the
     default: text-less background image plus native, editable text boxes at matching

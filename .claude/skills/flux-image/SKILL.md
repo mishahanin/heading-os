@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -16,7 +16,7 @@ x-31c-orchestration:
     - create image
     - make a picture
     - flux
-x-31c-capability:
+x-heading-capability:
   what: >
     Generates real image files on disk from a text prompt via the Replicate API,
     using Nano Banana 2 (Google DeepMind, default) or FLUX.2 max (Black Forest

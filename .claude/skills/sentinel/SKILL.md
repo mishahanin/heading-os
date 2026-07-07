@@ -9,7 +9,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - .sentinel/
@@ -18,7 +18,7 @@ x-31c-orchestration:
     - start sentinel
     - stop sentinel
     - comms monitor
-x-31c-capability:
+x-heading-capability:
   what: >
     Manages the Sentinel background daemon that watches Exchange email and
     Telegram for urgent messages, scores urgency, evaluates meeting invites

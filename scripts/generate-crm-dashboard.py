@@ -20,7 +20,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -30,6 +30,7 @@ from scripts.utils.workspace import (
     get_crm_contacts_dir,
     get_context_dir,
     get_datastore_dir,
+    get_default_tz,
     get_outputs_dir,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
@@ -55,8 +56,8 @@ LOGO_PATH = (
     / "logos" / "31C_Logo_White_Color.png"
 )
 
-TODAY = datetime.now().date()
-NOW = datetime.now()
+TODAY = datetime.now(get_default_tz()).date()
+NOW = datetime.now(get_default_tz())
 
 
 # ============================================================
@@ -178,7 +179,7 @@ def collect_radar():
         days_since = None
         if last_touch:
             try:
-                lt_date = datetime.strptime(last_touch, "%Y-%m-%d").date()
+                lt_date = date.fromisoformat(last_touch)
                 days_since = (TODAY - lt_date).days
             except ValueError:
                 pass

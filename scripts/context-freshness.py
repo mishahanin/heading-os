@@ -13,12 +13,12 @@ Usage:
 
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, BOLD, RESET
-from scripts.utils.workspace import get_workspace_root, get_context_dir
+from scripts.utils.workspace import get_workspace_root, get_context_dir, get_default_tz
 
 WORKSPACE = get_workspace_root()
 
@@ -32,8 +32,8 @@ def get_freshness(filepath):
     match = re.match(r">\s*Last verified:\s*(\d{4}-\d{2}-\d{2})", first_line)
     if match:
         date_str = match.group(1)
-        verified = datetime.strptime(date_str, "%Y-%m-%d")
-        age_days = (datetime.now() - verified).days
+        verified = date.fromisoformat(date_str)
+        age_days = (datetime.now(get_default_tz()).date() - verified).days
         return date_str, age_days
     return None, None
 
@@ -41,7 +41,7 @@ def get_freshness(filepath):
 def stamp_file(filepath, date_str=None):
     """Add or update the freshness marker on a file."""
     if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
     content = filepath.read_text(encoding="utf-8")
     marker = f"> Last verified: {date_str}"
@@ -82,8 +82,8 @@ def check_all():
             print(f"  {color}{status:6s}{RESET}  {f.name:30s}  Verified: {date_str} ({age_days}d ago)")
         else:
             # Fall back to modification time
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
-            age_days = (datetime.now() - mtime).days
+            mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=get_default_tz())
+            age_days = (datetime.now(get_default_tz()) - mtime).days
             print(f"  {YELLOW}{'No marker':6s}{RESET}  {f.name:30s}  Modified: {mtime.strftime('%Y-%m-%d')} ({age_days}d ago)")
 
 

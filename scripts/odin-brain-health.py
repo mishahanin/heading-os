@@ -11,13 +11,13 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
-from scripts.utils.workspace import get_knowledge_dir
+from scripts.utils.workspace import get_default_tz, get_knowledge_dir
 
 # R11 temporal-validity lint. Imported defensively: odin_brain_lint is ceo-only
 # and not synced to exec workspaces, so on an exec this import is absent and the
@@ -277,7 +277,7 @@ def find_keyword_overlaps(files):
 def find_stale_seeds(files, stale_days=7):
     """Find brain files with status=seed older than stale_days."""
     stale = []
-    today = datetime.now().date()
+    today = datetime.now(get_default_tz()).date()
     for subdir in ["sources", "principles", "positions", "reference"]:
         for f in files[subdir]:
             fm = parse_frontmatter(f)
@@ -286,7 +286,7 @@ def find_stale_seeds(files, stale_days=7):
             if fm.get("status") != "seed" or not fm.get("created"):
                 continue
             try:
-                created = datetime.strptime(str(fm["created"]), "%Y-%m-%d").date()
+                created = date.fromisoformat(str(fm["created"]))
                 age = (today - created).days
                 if age > stale_days:
                     stale.append({
@@ -379,7 +379,7 @@ def generate_index(files):
     con_count = len(files["conflicts"])
     open_con = count_open_conflicts(files)
     domains = collect_domains(files)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
     lines = [
         "# Odin's Brain",

@@ -18,11 +18,11 @@ import json
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_workspace_root, get_outputs_dir, get_crm_contacts_dir
+from scripts.utils.workspace import get_workspace_root, get_outputs_dir, get_crm_contacts_dir, get_default_tz
 from scripts.utils.colors import GREEN, YELLOW, RED, BOLD, RESET
 
 _ENTRY_RE = re.compile(r"^(?:###\s+|-\s+)(\d{4}-\d{2}-\d{2}\b.*)$", re.MULTILINE)
@@ -42,7 +42,7 @@ STAGE_TIER = {
 def rank_candidates(contacts: list, top_n: int = 3, today=None) -> list:
     """Rank RED contacts by (stage_tier, -days_overdue). Filters frozen contacts and non-REDs."""
     if today is None:
-        today_date = date.today()
+        today_date = datetime.now(get_default_tz()).date()
     else:
         today_date = date.fromisoformat(today)
     filtered = []
@@ -141,7 +141,7 @@ def generate_queue(today=None) -> Path:
 
     candidates = rank_candidates(contacts, top_n=3, today=today)
 
-    today_str = today or date.today().isoformat()
+    today_str = today or datetime.now(get_default_tz()).date().isoformat()
     out_dir = get_outputs_dir() / "operations" / "crm"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"next-{today_str}.md"

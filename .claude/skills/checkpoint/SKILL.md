@@ -27,6 +27,17 @@ x-heading-capability:
     checkpoint-offer hook fires at 25/30 percent context. For reflective
     end-of-session capture use /calibrate; for cross-session memory consolidation
     use /dream.
+x-heading-routing:
+  category: Operations
+  label: /checkpoint [note]
+  triggers:
+    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/` without running /compact. Surfaces from the two-tier checkpoint-offer hook at 25%/30% used context.
+  exclusions:
+    - Auto-resume after /compact handled by checkpoint-save.py (PostCompact)
+    - reflective end-of-session -> /calibrate
+    - cross-session memory consolidation -> /dream
+  compound: 'No'
+  router: manual
 ---
 
 # /checkpoint

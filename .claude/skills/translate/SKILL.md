@@ -24,6 +24,16 @@ x-heading-capability:
   when: >
     Use to render a message or document in the other language in Misha's voice.
     Leaves ODUN.ONE, 31C, DPI+, and proper nouns untranslated.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - translate
+    - '[Russian text needing English]'
+    - translate this to Russian/English
+  exclusions:
+    - N/A
+  compound: 'No'
+  router: auto
 ---
 # Translate
 

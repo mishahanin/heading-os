@@ -23,6 +23,17 @@ x-heading-capability:
     Run /state-check [function]; it reads the operational-state-model, current-data, and pipeline, then answers the four State Check questions with an on-heading / drift assessment.
   when: >
     Use to diagnose whether a function is holding its operational state. For the morning briefing use /dashboard; for the full context load use /prime; for the end-of-week review use /weekly-review.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - state check
+    - how are we doing
+    - operational state
+    - function health
+  exclusions:
+    - Dashboard -> /dashboard
+  compound: 'No'
+  router: auto
 ---
 # State Check
 

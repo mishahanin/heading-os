@@ -35,6 +35,23 @@ x-heading-capability:
   when: >
     Use for internal decks, runbooks, state checks, and knowledge renders. For an
     editable brand-heavy client deck or a LinkedIn carousel use /pptx-generator.
+x-heading-routing:
+  category: Design
+  triggers:
+    - marp
+    - render as slides
+    - turn this into slides
+    - slides from this doc
+    - render this as a deck
+    - internal deck about
+    - runbook deck
+    - quick slides
+    - md to slides
+  exclusions:
+    - Brand-heavy client deck -> /pptx-generator
+    - Carousel -> /pptx-generator
+  compound: 'No'
+  router: auto
 ---
 # /marp - Markdown Presentation Pipeline
 

@@ -28,6 +28,16 @@ x-heading-capability:
     Use to save the whole workspace to GitHub. To publish content to executives
     use /publish-corporate; for a full versioned push with CRM aggregate use
     /push-updates.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - backup
+    - push to github
+    - save workspace
+  exclusions:
+    - Corporate publish -> /publish-corporate
+  compound: 'No'
+  router: auto
 ---
 Backup the entire workspace to GitHub.
 

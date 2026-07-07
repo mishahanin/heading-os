@@ -25,6 +25,18 @@ x-heading-capability:
     Run /ceo-intel [focus]. Forked-context research pass that writes an HTML + PDF brief to outputs/intel/briefs/world-intel-YYYY-MM-DD.html. Names partners, deals, and investors - never shared externally.
   when: >
     Use for internal world/geopolitical situational awareness with 31C action items. For the public-safe version use /intel-briefing-newsletter; for a specific company or person use /osint.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - world intel
+    - geopolitical brief
+    - what's happening globally
+    - global threats
+    - CEO intelligence brief
+  exclusions:
+    - Specific company/person -> /osint
+  compound: 'No'
+  router: auto
 ---
 # CEO Intelligence Brief
 

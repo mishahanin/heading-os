@@ -27,6 +27,17 @@ x-heading-capability:
   when: >
     Use for event and conference speaking decks. For an investor fundraising
     deck use /investor-pitch; to render slides as a PPTX use /pptx-generator.
+x-heading-routing:
+  category: Content
+  triggers:
+    - keynote
+    - event presentation
+    - conference slides
+    - speaking deck
+  exclusions:
+    - Investor-specific -> /investor-pitch
+  compound: 'No'
+  router: auto
 ---
 # Keynote Deck
 

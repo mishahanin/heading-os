@@ -30,6 +30,20 @@ x-heading-capability:
   when: >
     Use for a sector, region, or TAM question. For a specific named company use
     /osint or /competitor-intel; for global geopolitics use /ceo-intel.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - market intel
+    - market for [sector]
+    - regional analysis
+    - sector overview
+    - TAM for [sector]
+    - market size for [sector]
+  exclusions:
+    - Specific named company -> /competitor-intel or /osint
+    - global/geopolitical -> /ceo-intel
+  compound: 'No'
+  router: auto
 ---
 # Market Brief
 

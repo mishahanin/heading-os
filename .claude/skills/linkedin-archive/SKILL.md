@@ -25,6 +25,21 @@ x-heading-capability:
     Auto-fires on "I published it on LinkedIn" (English or Russian), or run /linkedin-archive. Resolves type and images, shows a dry-run plan, and waits for approval before moving via scripts/linkedin-archive.py (optional auto-commit).
   when: >
     Use right after publishing to file the content. For drafting a post use /linkedin-post; this skill never drafts, it only archives one piece per invocation.
+x-heading-routing:
+  category: Content
+  triggers:
+    - i published this on linkedin
+    - linkedin post is live
+    - live on linkedin
+    - опубликовал на linkedin
+    - выложил на linkedin
+    - запостил на linkedin
+  exclusions:
+    - Drafting -> /linkedin-post
+    - analytics question -> just answer
+    - profile/banner topic -> just answer
+  compound: 'No'
+  router: auto
 ---
 
 # LinkedIn Archive

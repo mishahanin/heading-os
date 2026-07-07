@@ -22,6 +22,16 @@ x-heading-capability:
     Run /validate <content or file path>; it reads datastore/INDEX.md plus source documents (DataStore wins over context/ over reference/) and returns a structured report with prioritized corrections.
   when: >
     Use to verify facts, numbers, and superlatives before external-facing content ships. For grading an artifact's craft and quality use /evaluate.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - validate
+    - fact-check
+    - verify claims
+  exclusions:
+    - Quality grade -> /evaluate
+  compound: 'No'
+  router: auto
 ---
 # Validate
 

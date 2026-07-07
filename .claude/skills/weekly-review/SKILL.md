@@ -32,6 +32,16 @@ x-heading-capability:
   when: >
     Use at the end of the week (Friday) or start of the next. For a single
     function's health use /state-check; for the daily briefing use /dashboard.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - weekly review
+    - end of week review
+    - friday review
+  exclusions:
+    - Single function -> /state-check
+  compound: 'No'
+  router: auto
 ---
 # Weekly Review
 

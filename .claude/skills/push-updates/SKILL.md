@@ -33,6 +33,16 @@ x-heading-capability:
     Use to propagate shared updates to the whole fleet. For a personal GitHub
     backup of ceo-main only, use /backup; to publish corporate files without the
     full CRM and exec-sync tail, use /publish-corporate.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - push updates
+    - update all executives
+    - sync to everyone
+  exclusions:
+    - Personal backup -> /backup
+  compound: 'No'
+  router: auto
 ---
 # Push Updates to All Executives
 

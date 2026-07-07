@@ -24,6 +24,16 @@ x-heading-capability:
   when: >
     Use to reply to an email you received. For a new outbound email use /email-draft; to triage
     the whole inbox use /email-intel.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - respond to this email
+    - reply to this
+    - draft reply
+  exclusions:
+    - New outbound email -> /email-draft
+  compound: 'No'
+  router: auto
 ---
 # Email Response
 

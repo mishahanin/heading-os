@@ -37,6 +37,18 @@ x-heading-capability:
     Run /deep-think <problem>, or it engages proactively on multi-variable or high-stakes reasoning. Depth is quick/standard/deep. Strategic sessions save to outputs/thinking/.
   when: >
     Use before generating a deliverable when reasoning quality matters (feeds /deal-strategy, /create-plan, /meeting-prep). For a simple question just answer it; for a second opinion from other models use /council.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - think through this
+    - break this down
+    - reason through
+    - what are we missing
+    - analyze carefully
+  exclusions:
+    - Simple question -> just answer it
+  compound: 'Yes: Deal Intel'
+  router: auto
 ---
 # Deep Think
 

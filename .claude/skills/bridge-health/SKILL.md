@@ -26,6 +26,17 @@ x-heading-capability:
     Use when the dashboard feels stale, the sync-pill is amber or red, or
     before scaling phases (--gate). For a single-machine liveness probe use
     python scripts/bridge-daemon.py --health directly.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - NEVER auto-trigger. Explicit `/bridge-health [--stale N] [--gate] [--json]` only. Wraps `scripts/daemon-fleet-health.py` + `scripts/bridge-daemon.py --health` + the `/telemetry/summary` endpoint. Use when the sync-pill is amber/red
+    - the dashboard feels stale
+    - or before scaling Phase 1 -> Phase 2 (need `--gate`). CEO-only
+    - not synced to executives.
+  exclusions:
+    - All natural language
+  compound: 'No'
+  router: manual
 ---
 
 # Bridge daemon health check

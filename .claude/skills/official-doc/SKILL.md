@@ -33,6 +33,21 @@ x-heading-capability:
     Use for documents issued under corporate authority. For an external partner
     letter use /corporate-letter; for a commercial proposal with pricing use
     /proposal; for an MOU/LOI/term sheet use /partnership-doc.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - board resolution
+    - formal notice
+    - letter of position
+    - certificate of authority
+    - official document
+    - official letter
+    - corporate resolution
+  exclusions:
+    - External partner letter -> /corporate-letter
+    - commercial proposal -> /proposal
+  compound: 'No'
+  router: auto
 ---
 # Official Document
 

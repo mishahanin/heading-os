@@ -38,6 +38,17 @@ x-heading-capability:
   when: >
     Use for editable branded decks, carousels, or layout work. For non-slide visuals use /design; for a
     quick markdown-driven internal deck use /marp.
+x-heading-routing:
+  category: Design
+  triggers:
+    - create slides
+    - generate presentation
+    - linkedin carousel
+    - edit pptx
+  exclusions:
+    - Non-slide design -> /design
+  compound: 'No'
+  router: auto
 ---
 # PPTX Slide Generator
 

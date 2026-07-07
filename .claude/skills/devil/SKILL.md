@@ -28,6 +28,15 @@ x-heading-capability:
     Explicit-invocation only (disable-model-invocation). Type /devil for 5 points, /devil N for N (range 1-10), or /devil N: <inline claim>. Single-shot, conversational, nothing persisted.
   when: >
     Use to pressure-test a recent decision cheaply. For external Gemini+Grok views use /council; for a multi-phase principal-engineer review use /scrutinize.
+x-heading-routing:
+  category: Operations
+  label: /devil [N]
+  triggers:
+    - 'NEVER auto-trigger. Explicit `/devil [N]` or `/devil [N]: <claim>` only.'
+  exclusions:
+    - All natural language
+  compound: 'No'
+  router: manual
 ---
 # /devil - Force N contrarian critique points
 

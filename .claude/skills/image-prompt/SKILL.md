@@ -22,6 +22,16 @@ x-heading-capability:
     Run /image-prompt after producing content - it reads the preceding text and returns the core theme, the prompt, parameters, and a Midjourney suffix. Text only, no image file.
   when: >
     Use to get a prompt for a visual companion to content. To actually render the image use /flux-image; for full design work (mockups, infographics, logos) use /design.
+x-heading-routing:
+  category: Content
+  triggers:
+    - image prompt
+    - visualize this
+    - generate image prompt
+  exclusions:
+    - Actual image generation -> /flux-image
+  compound: 'No'
+  router: auto
 ---
 # Image Prompt Generator
 

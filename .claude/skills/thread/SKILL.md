@@ -37,6 +37,23 @@ x-heading-capability:
     Use for a multi-step situation that follows through across sessions. For a
     single email use /email-draft; for a note use /zk; for a contact log use
     /crm.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - open a thread
+    - log to thread
+    - close thread
+    - hold thread
+    - reopen
+    - thread list
+    - thread find
+    - what threads are active
+  exclusions:
+    - Single email -> /email-draft
+    - knowledge note -> /zk
+    - CRM log -> /crm
+  compound: 'No'
+  router: auto
 ---
 
 # /thread - Operational Threads Registry

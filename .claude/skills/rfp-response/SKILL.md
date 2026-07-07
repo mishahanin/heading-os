@@ -22,6 +22,17 @@ x-heading-capability:
     Run /rfp-response [client] and paste the RFP requirements; it grounds claims in context/business-info.md and the DataStore, then drafts the full response for your review before submission.
   when: >
     Use for a formal RFP, ITT, or procurement bid. For an informal commercial proposal with pricing use /proposal; for an MOU or term sheet use /partnership-doc.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - RFP response
+    - tender response
+    - bid response
+    - government tender
+  exclusions:
+    - Informal proposal -> /proposal
+  compound: 'No'
+  router: auto
 ---
 # RFP Response
 

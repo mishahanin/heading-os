@@ -27,6 +27,18 @@ x-heading-capability:
     Use for peer-level correspondence to another CEO or senior executive. For a
     non-CEO recipient use /email-draft; for a formal branded external letter use
     /corporate-letter.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - CEO letter
+    - write to [CEO name]
+    - peer correspondence
+    - executive letter
+  exclusions:
+    - Non-CEO recipient -> /email-draft
+    - formal external letter -> /corporate-letter
+  compound: 'No'
+  router: auto
 ---
 # CEO-to-CEO Correspondence
 

@@ -34,6 +34,17 @@ x-heading-capability:
     Use whenever a skill synthesizes an answer over multiple sources and needs a
     freshness, coverage, and contradiction check. It is a leaf primitive - it
     never synthesizes or writes; the composing skill does that.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - NEVER auto-trigger from natural language. Invoked by composing synthesis skills (`/meeting-prep`
+    - '`/odin consult`'
+    - '`/deal-strategy`) via the Skill tool'
+    - or explicitly by CEO for ad-hoc audits.
+  exclusions:
+    - All natural language
+  compound: 'No'
+  router: manual
 ---
 
 # /brain-audit - post-synthesis audit primitive

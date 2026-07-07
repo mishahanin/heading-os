@@ -27,6 +27,15 @@ x-heading-capability:
   when: >
     Use before QA-testing or scraping pages that require an authenticated session.
     For the browser automation itself use /playwright.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - setup browser cookies
+    - import cookies
+  exclusions:
+    - N/A
+  compound: 'No'
+  router: auto
 ---
 
 # Setup Browser Cookies

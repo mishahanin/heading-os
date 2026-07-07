@@ -28,6 +28,19 @@ x-heading-capability:
   when: >
     Use for any branded visual asset. For a simple one-off image from a prompt use /flux-image;
     for presentation slides use /pptx-generator.
+x-heading-routing:
+  category: Design
+  triggers:
+    - design social
+    - design infographic
+    - design mockup
+    - design illustration
+    - design logo
+  exclusions:
+    - Presentations -> /pptx-generator
+    - image from prompt -> /flux-image
+  compound: 'No'
+  router: auto
 ---
 # Design System
 

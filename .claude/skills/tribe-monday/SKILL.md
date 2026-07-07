@@ -25,6 +25,16 @@ x-heading-capability:
   when: >
     Use for the weekly Monday cadence message. For an off-cadence or one-off
     Tribe message use /tribe-message.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - monday message
+    - weekly tribe message
+    - monday tribe
+  exclusions:
+    - Not Monday-specific -> /tribe-message
+  compound: 'No'
+  router: auto
 ---
 # Monday Tribe Message
 

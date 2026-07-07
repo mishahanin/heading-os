@@ -22,6 +22,16 @@ x-heading-capability:
     Run /context7 <library> <query> - it calls scripts/context7.py with the workspace CONTEXT7_API_KEY. Flags: --list, --version, --json, --limit. Returns docs inline.
   when: >
     Use when writing or validating code against an external library and you need current docs instead of training data. Not for general web research (use /osint) or workspace notes (use /zk).
+x-heading-routing:
+  category: Operations
+  triggers:
+    - context7
+    - look up docs for [library]
+    - library documentation
+  exclusions:
+    - N/A
+  compound: 'No'
+  router: auto
 ---
 # Context7 - Library Documentation
 

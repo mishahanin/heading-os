@@ -44,6 +44,24 @@ x-heading-capability:
     Use on a long proposal, brief, or report whose argument arc needs checking.
     For sentence-level "make this sound human" work use the humanization rule;
     for fact-checking use /validate; for artifact grading use /evaluate.
+x-heading-routing:
+  category: Operations
+  label: /editorial-review [file:<path>]
+  triggers:
+    - editorial pass
+    - structural review
+    - review the structure of this
+    - tighten this document
+    - restructure this draft
+  exclusions:
+    - Sentence-level prose / "make this human" -> humanization.md
+    - typo or grammar fix -> sanitize-text + humanization-check
+    - fact-check -> /validate
+    - artifact grade -> /evaluate
+    - atomic note -> /zk. Document-structure only
+    - hands all prose work to humanization.md.
+  compound: 'No'
+  router: auto
 ---
 # Editorial Review (structural pass)
 

@@ -44,6 +44,18 @@ x-heading-capability:
   when: >
     Use at the end of a working session to capture learnings. For cross-session memory
     consolidation use /dream; for grading a single artifact use /evaluate.
+x-heading-routing:
+  category: Operations
+  label: /calibrate [light]
+  triggers:
+    - calibrate
+    - self-improve agent
+    - end of session capture
+  exclusions:
+    - Cross-session memory hygiene -> /dream
+    - quality grade on a single artifact -> /evaluate
+  compound: 'No'
+  router: auto
 ---
 # /calibrate - End-of-Session Self-Improvement
 

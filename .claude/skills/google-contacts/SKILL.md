@@ -37,6 +37,16 @@ x-heading-capability:
     Use for managing contacts inside Google. For workspace relationship
     tracking and interaction logs use /crm; not for Exchange or Outlook
     contacts.
+x-heading-routing:
+  category: CRM
+  triggers:
+    - google contacts
+    - look up contact number
+    - add to google contacts
+  exclusions:
+    - CRM operations -> /crm
+  compound: 'No'
+  router: auto
 ---
 # Google Contacts
 

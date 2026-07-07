@@ -29,6 +29,16 @@ x-heading-capability:
     Use for one-off post-meeting follow-ups. For sweeping many overdue contacts
     at once use /cold-sweep; for mass event follow-ups the orchestrator runs the
     post-event pattern.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - follow up with
+    - send follow-up
+    - follow-up email after
+  exclusions:
+    - Mass follow-ups from event -> Orchestrator Pattern 3
+  compound: 'Yes: Post-Event'
+  router: auto
 ---
 # Follow-Up Email
 

@@ -44,6 +44,23 @@ x-heading-capability:
     Use to surface something the workspace already knows. For Odin-brain advice use
     /odin recall; for external intel use /osint; to capture a new note use /zk; for
     exact-string search use Grep.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - recall
+    - what do we know about
+    - where did we decide
+    - search my memory for
+    - have we touched [X] before
+    - find what we said about
+    - surface past notes on [X]
+  exclusions:
+    - Odin-brain-only advice / episode dedup -> /odin recall (brain-scoped)
+    - external/world intel on a company or person -> /osint
+    - capture a NEW note -> /zk
+    - exact-string file search -> Grep. CEO-only, not synced to execs.
+  compound: 'No'
+  router: auto
 ---
 # Recall (workspace-wide semantic memory)
 

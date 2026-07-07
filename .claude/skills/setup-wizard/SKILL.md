@@ -25,6 +25,19 @@ x-heading-capability:
   when: >
     Use on a newly provisioned exec workspace or a public HEADING OS clone to personalize
     it, or re-run anytime to edit answers. Not for the CEO master workspace.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - set up my workspace
+    - configure my workspace
+    - onboard me
+    - setup wizard
+    - finish setup
+  exclusions:
+    - Refuses to run on CEO master workspace
+    - intended for fresh exec workspaces and HEADING OS clones
+  compound: 'No'
+  router: auto
 ---
 # Setup Wizard
 

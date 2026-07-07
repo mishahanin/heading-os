@@ -26,6 +26,16 @@ x-heading-capability:
   when: >
     Use when preparing to interview a candidate or building a hiring evaluation
     framework. Not for general research on a person - use /osint for that.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - interview prep
+    - interview questions
+    - hiring framework
+  exclusions:
+    - N/A
+  compound: No (deliberate; no compound depth pattern yet -- CEO approval required to promote)
+  router: auto
 ---
 # Interview Prep
 

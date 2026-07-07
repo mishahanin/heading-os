@@ -29,6 +29,15 @@ x-heading-capability:
     Explicit invocation only - type /burst, /burst N, or /burst N: <inline seed>. Walks back to the latest assistant content turn (or uses the inline seed), returns the variants plus a recommended pick. Purely conversational, nothing written to disk.
   when: >
     Use to compare directions, escape a stuck draft, or run the convergence pattern (pick one, /burst again). For N clarifying questions use /align; for contrarian critique use /devil.
+x-heading-routing:
+  category: Operations
+  label: /burst [N]
+  triggers:
+    - 'NEVER auto-trigger. Explicit `/burst [N]` or `/burst [N]: <seed>` only.'
+  exclusions:
+    - All natural language
+  compound: 'No'
+  router: manual
 ---
 # /burst - Force N variants of a content artifact
 

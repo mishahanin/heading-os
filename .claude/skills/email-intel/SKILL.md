@@ -35,6 +35,20 @@ x-heading-capability:
     Run /email-intel (last 24h) with optional --hours N, --inbox-only, --sent-only. Presents context blocks plus one flat numbered action list; you approve by number (1,3,5 | all crm | 2 edit: ... | 4 go | rest skip), then it writes. The numbered list + per-action status persist in sweep-actions-YYYY-MM-DD.json (scripts/email-sweep.py), so an interrupted run is resumable.
   when: >
     Use to triage the inbox. It proposes every action; only the numbers you approve execute. Sends (reply/reply-all/forward) are human-gated and go through send-email.py with full threading. For a multi-channel "what's new" sweep use Morning Comms; for a single ad-hoc reply use /email-respond.
+x-heading-routing:
+  category: Communication
+  triggers:
+    - process emails
+    - process my inbox
+    - email digest
+    - check my email
+    - triage my email
+    - inbox
+  exclusions:
+    - Single email draft/reply -> /email-draft or /email-respond
+    - channel-agnostic "check everything"/"what came in"/"process my comms" (email + telegram together) -> Morning Comms (Pattern 2)
+  compound: 'Yes: Morning Comms'
+  router: auto
 ---
 # Email Intelligence -- Exchange Inbox Processor
 

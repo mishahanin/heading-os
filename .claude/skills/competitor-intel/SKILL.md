@@ -29,6 +29,20 @@ x-heading-capability:
   when: >
     Use for head-to-head against a named competitor. For a person or company
     recon use /osint; for market sizing use /market-brief.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - competitor analysis
+    - competing vendor
+    - how does [company] compare to [competitor]
+    - competitive advantage vs [named competitor]
+    - competitive landscape for [sector]
+  exclusions:
+    - Target is a person -> /osint
+    - generic "vs" without explicit 2nd party -> ask for disambiguation
+    - market sizing -> /market-brief
+  compound: 'Yes: Deal Intel'
+  router: auto
 ---
 # Competitor Intelligence
 

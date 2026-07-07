@@ -28,6 +28,14 @@ x-heading-capability:
     Use after /osint has run and a specific dimension still needs depth -
     compliance screening for a deal, breach exposure, infrastructure recon. For
     the first broad pass on any target, use /osint.
+x-heading-routing:
+  category: Intel
+  triggers:
+    - NEVER auto-trigger. Explicit `/osint-advanced` only.
+  exclusions:
+    - All natural language
+  compound: 'No'
+  router: manual
 ---
 # OSINT-Advanced -- Specialized Database Investigation
 

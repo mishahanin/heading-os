@@ -27,6 +27,16 @@ x-heading-capability:
     Use for a recurring quarterly or milestone update to people already invested.
     For a first pitch to new investors use /investor-pitch; for a formal diligence
     package use /data-room.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - investor update
+    - board update
+    - quarterly update
+  exclusions:
+    - New investor pitch -> /investor-pitch
+  compound: 'No'
+  router: auto
 ---
 # Investor Update
 

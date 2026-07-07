@@ -33,6 +33,19 @@ x-heading-capability:
     Run /zk [add|enrich|find|connect|distill|garden|stats|brief] [target]. On the CEO workspace /zk is dormant - durable CEO capture instead flows to /odin log, /thread, and the auto-memory system.
   when: >
     Primary capture tool for the executive fleet. On the CEO workspace prefer /odin for learned knowledge, /thread for situations, auto-memory for cross-session facts.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - zk
+    - add a note
+    - knowledge base
+    - distill
+    - garden
+    - what do we know about
+  exclusions:
+    - Primary capture tool for the executive fleet. On the CEO workspace `/zk` is dormant -- durable CEO capture flows to `/odin log`, `/thread`, and auto-memory.
+  compound: 'No'
+  router: auto
 ---
 # Zettelkasten Knowledge Base
 

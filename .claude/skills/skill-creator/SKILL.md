@@ -27,6 +27,16 @@ x-heading-capability:
   when: >
     Use to author or refine a skill directly. Executives who want a new skill
     instead use /request-skill to email the request to the CEO.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - create a skill
+    - improve this skill
+    - eval this skill
+  exclusions:
+    - N/A
+  compound: 'No'
+  router: auto
 ---
 # Skill Creator
 

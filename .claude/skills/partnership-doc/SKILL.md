@@ -31,6 +31,22 @@ x-heading-capability:
   when: >
     Use for a legal-adjacent collaboration framework. For a commercial offer
     with pricing use /proposal; for a formal letter use /corporate-letter.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - MOU
+    - LOI
+    - memorandum of understanding
+    - letter of intent
+    - term sheet
+    - partnership agreement
+    - partnership document
+  exclusions:
+    - Commercial proposal with pricing -> /proposal
+    - RFP -> /rfp-response
+    - letter of introduction -> /corporate-letter
+  compound: 'No'
+  router: auto
 ---
 # Partnership Document (MOU / LOI / Term Sheet)
 

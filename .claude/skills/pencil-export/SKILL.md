@@ -32,6 +32,24 @@ x-heading-capability:
   when: >
     Use to export or convert a Pencil .pen deck. For MARP markdown decks use
     /marp; for editable brand PPTX authored from scratch use /pptx-generator.
+x-heading-routing:
+  category: Design
+  triggers:
+    - export pencil deck
+    - export the .pen deck
+    - pencil deck to pdf
+    - convert .pen to pdf
+    - render pencil deck
+    - editable version of a pencil deck
+    - same-look editable pptx from a .pen
+    - shareable flat pptx of a .pen
+  exclusions:
+    - MARP markdown deck -> /marp
+    - editable brand PPTX authored from scratch -> /pptx-generator (a Pencil deck's PPTX is editable by default here, brand fonts embedded
+    - the locked-look image deck is opt-in via `--formats pptx-flat`)
+    - native Pencil export_nodes on WSL is broken (this is the workaround)
+  compound: 'No'
+  router: auto
 ---
 # /pencil-export - Export a Pencil deck (WSL-safe)
 

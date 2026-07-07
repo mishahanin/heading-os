@@ -20,6 +20,14 @@ x-heading-capability:
     Explicit-invocation only (disable-model-invocation) - type /prime. Health block runs in-process via scripts/prime-health-parallel.py; ends by asking what to work on today.
   when: >
     Use once at the start of every working session. Mid-session, for a next-step recommendation use /next; for the daily briefing alone use /dashboard.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - NEVER auto-trigger. Explicit `/prime` or "prime" only.
+  exclusions:
+    - All natural language
+  compound: 'No'
+  router: manual
 ---
 # Prime
 
@@ -174,7 +182,7 @@ The canonical skill registry lives in `.claude/rules/skill-router.md` (already l
 2. Suggest the 2-3 most contextually relevant skills for today, drawing on the pipeline pulse and active threads loaded earlier.
 3. For a state-aware next-step recommendation mid-session, point the CEO at `/next` (reads what just happened and names the logical next command).
 
-This section deliberately defers to the router rather than duplicating the catalog inline - the router is the single source of truth and the only file that updates when a new skill is added. Drift between this catalog and the actual `.claude/skills/` directory is exactly the failure mode the workspace-deep-audit (2026-05-14) flagged; `scripts/check-skill-router-sync.py` now enforces that every directory in `.claude/skills/` has a matching router entry.
+This section deliberately defers to the router rather than duplicating the catalog inline - the router is the single source of truth and the only file that updates when a new skill is added. Drift between this catalog and the actual `.claude/skills/` directory is exactly the failure mode the workspace-deep-audit (2026-05-14) flagged; the registry tables are now generated from each skill's `x-heading-routing` frontmatter, and `scripts/generate-skill-router.py --check` enforces (in CI and pre-commit) that the router matches its source with no content drift.
 
 ### 7. Ready
 

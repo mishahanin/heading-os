@@ -30,6 +30,19 @@ x-heading-capability:
     Use for a commercial offer with pricing. For an MOU/LOI/term sheet use
     /partnership-doc; for a formal letter without pricing use
     /corporate-letter; for an RFP or tender use /rfp-response.
+x-heading-routing:
+  category: Strategy
+  triggers:
+    - write a proposal
+    - partnership proposal
+    - sales proposal
+    - commercial proposal
+  exclusions:
+    - RFP/tender -> /rfp-response
+    - MOU/LOI/term sheet -> /partnership-doc
+    - formal letter without pricing -> /corporate-letter
+  compound: 'No'
+  router: auto
 ---
 # Proposal (31C Branded)
 

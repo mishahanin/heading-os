@@ -22,6 +22,17 @@ x-heading-capability:
     Run /linkedin-series [theme]. Keeps an append-only memlog at outputs/content/linkedin/[theme-slug]/.memlog.md so the plan survives across sessions.
   when: >
     Use to plan several connected posts around a strategic moment. For a single standalone post use /linkedin-post.
+x-heading-routing:
+  category: Content
+  triggers:
+    - linkedin series
+    - content series
+    - plan posts for the week
+    - 3 posts
+  exclusions:
+    - Single post -> /linkedin-post
+  compound: 'Yes: Weekly Content (trigger)'
+  router: auto
 ---
 # LinkedIn Content Series
 

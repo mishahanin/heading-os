@@ -28,6 +28,21 @@ x-heading-capability:
   when: >
     After /create-plan approval, before /implement, for any non-trivial work. Skip for
     one-liner fixes and trivial config changes. Full chain: /create-plan -> /pre-impl -> /implement -> /scrutinize.
+x-heading-routing:
+  category: Operations
+  triggers:
+    - pre-implementation gate
+    - gate before implement
+    - are we ready to implement
+    - before we implement
+    - stress-test plan before building
+    - pre-impl check
+  exclusions:
+    - Trivial one-liner fixes -> skip
+    - typo corrections -> skip
+    - 'config-only changes -> skip. For non-trivial work: run after /create-plan approval, before /implement. Full chain: /create-plan -> /pre-impl -> /implement -> /scrutinize'
+  compound: 'No'
+  router: auto
 ---
 
 # Pre-Implementation Gate

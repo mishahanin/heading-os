@@ -10,7 +10,7 @@ paths:
 
 # Development Standards
 
-Last Verified: 2026-05-28
+Last Verified: 2026-07-08
 
 Quality gates for every workspace artifact -- skills, scripts, reference files, rules, and components. These standards apply to ALL development work, not just specific features.
 
@@ -147,6 +147,13 @@ x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers: ["example phrase", "another trigger"]
+x-heading-routing:
+  category: Operations
+  triggers: ["example phrase", "another trigger"]
+  exclusions: ["<signal> -> /<other-skill>"]   # or ["N/A"]
+  compound: "No"
+  router: auto                                  # or manual (NEVER auto-trigger skills)
+  # label: "/name [args]"                       # only when the Skill cell is not the plain /name
 x-heading-capability:
   what: >
     Plain one-to-two-sentence statement of what the skill produces or does.
@@ -160,6 +167,16 @@ x-heading-capability:
 
 Capability self-explanation (under `x-heading-capability:` namespaced block, recommended):
 - `what` / `how` / `when` -- plain-language folded scalars rendered on the bridge dashboard's Capabilities page (`scripts/bridge_daemon/sources/capabilities.py` reads them via `yaml.safe_load`; the page falls back to the `description` when the block is absent). Keep each field 1-2 sentences, ASCII-only, grounded in the skill's real behaviour and router exclusions. This is the field that makes the Capabilities page a genuine "what does each skill do and how do I use it" reference rather than a bare list.
+
+Router registry (under `x-heading-routing:` namespaced block, required for every routable skill; F-5.1):
+- `category` -- one of `Intel | Communication | Content | CRM | Design | Strategy | Operations`; which registry table the skill's row lands in.
+- `triggers` -- list of the router-cell trigger phrases (the Triggers column). Distinct from `x-heading-orchestration.triggers`, which is the orchestrator's compound-dispatch subset; the two serve different consumers and may differ.
+- `exclusions` -- list of the router-cell disambiguation rules (the Exclusions column), e.g. `["\"validate\" -> /validate"]`, or `["N/A"]`.
+- `compound` -- the Compound column string, e.g. `"No"` or `"Yes: Meeting Prep, Deal Intel"`.
+- `router` -- `auto` (routable from natural language) or `manual` (NEVER auto-trigger / `disable-model-invocation` skills).
+- `label` -- OPTIONAL; only when the Skill-column cell is not the plain `/name` (e.g. an arg-hint like `/scrutinize [target] ...`).
+
+**The seven registry tables in `.claude/rules/skill-router.md` are GENERATED from these blocks** by `scripts/generate-skill-router.py` (between the `<!-- BEGIN GENERATED REGISTRY -->` / `<!-- END GENERATED REGISTRY -->` markers). Never hand-edit the marked region: edit the skill's `x-heading-routing` frontmatter, then run `python scripts/generate-skill-router.py`. CI and pre-commit run `--check` (regen -> diff), which fails on any content drift; a skill missing the block fails the check with the file path and a paste-ready fix-it snippet. The migration that first populated these blocks is `scripts/dev/extract-router-rows.py` (one-shot, kept for provenance).
 
 **Body:**
 - Under 500 lines. Use `references/` subdirectory for overflow content.

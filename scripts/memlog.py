@@ -67,7 +67,9 @@ MEMLOG = ".memlog.md"
 
 
 def now() -> str:
-    return datetime.now().strftime("%Y-%m-%dT%H:%M")
+    # Standalone PEP-723 script (no workspace deps): attach the system-local
+    # tzinfo via .astimezone() to stay tz-aware without importing get_default_tz.
+    return datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
 
 
 def memlog_path(workspace: str) -> Path:

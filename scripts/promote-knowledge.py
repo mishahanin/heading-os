@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
     get_workspace_root, validate_admin,
-    get_corporate_repo_path, load_admin_config,
+    get_corporate_repo_path, load_admin_config, get_default_tz,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 
@@ -130,7 +130,7 @@ def main() -> None:
     text = source.read_text(encoding="utf-8")
     fm_raw, body = parse_frontmatter_raw(text)
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
     # Prepare promoted version
     promoted_fields = {

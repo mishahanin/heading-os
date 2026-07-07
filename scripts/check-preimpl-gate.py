@@ -24,7 +24,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_plans_dir
+from scripts.utils.workspace import get_default_tz, get_plans_dir
 from scripts.utils.colors import GREEN, YELLOW, GRAY, BOLD, RESET
 
 STALE_DAYS_DEFAULT = 14
@@ -52,7 +52,7 @@ def _artifact_date(path: Path) -> date | None:
     stem = path.stem
     if len(stem) >= 10 and stem[4] == "-" and stem[7] == "-":
         try:
-            return datetime.strptime(stem[:10], "%Y-%m-%d").date()
+            return date.fromisoformat(stem[:10])
         except ValueError:
             return None
     return None
@@ -88,7 +88,7 @@ def check_gate(plan_path, plans_dir=None, today=None, stale_days=STALE_DAYS_DEFA
     ad = _artifact_date(newest)
     detail = f"{newest.name}"
     if ad is not None:
-        ref = today or date.today()
+        ref = today or datetime.now(get_default_tz()).date()
         age = (ref - ad).days
         if age > stale_days:
             detail += f" (stale: {age} days)"

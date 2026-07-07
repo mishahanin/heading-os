@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils import trace
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET
-from scripts.utils.workspace import get_workspace_root
+from scripts.utils.workspace import get_default_tz, get_workspace_root
 
 ROOT = get_workspace_root()
 SKILLS_DIR = ROOT / ".claude" / "skills"
@@ -133,7 +133,7 @@ def _stage_draft(skill: str, draft: dict) -> Path:
 
 def _new_draft(description: str, input_text: str, trace_id: str, source: str,
                case_type: str) -> dict:
-    ts = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    ts = datetime.now(get_default_tz()).strftime("%Y-%m-%dT%H%M%S")
     draft: dict = {
         "id": f"flag-{ts}-{_slugify(description)}",
         "description": description or "(untitled)",

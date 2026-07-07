@@ -21,10 +21,10 @@ import subprocess
 import argparse
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_workspace_root
+from scripts.utils.workspace import get_default_tz, get_workspace_root
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 
 ROOT = get_workspace_root()
@@ -572,7 +572,7 @@ def print_report(artifact_path, artifact_type, checks, plan_criteria=None):
     print(f"\n{BOLD}Artifact Evaluation{RESET}")
     print(f"  Path: {CYAN}{artifact_path}{RESET}")
     print(f"  Type: {artifact_type}")
-    print(f"  Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Time: {datetime.now(get_default_tz()).strftime('%Y-%m-%d %H:%M:%S')}")
     print()
 
     passed = sum(1 for c in checks if c["status"] in ("pass", "accepted"))
@@ -657,7 +657,7 @@ def build_json_output(artifact_path, artifact_type, checks, plan_criteria=None):
     output = {
         "artifact_path": str(artifact_path),
         "artifact_type": artifact_type,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
         "summary": {
             "total": total,

@@ -163,9 +163,9 @@ def test_write_report_single_file(tmp_path, monkeypatch):
     mod = _load_hygiene()
     out_root = tmp_path / "out"
     monkeypatch.setattr(mod, "get_outputs_dir", lambda: out_root)
-    from datetime import datetime
+    from datetime import datetime, timezone
 
-    path = mod.write_report("# report\n", datetime(2026, 6, 26, 12, 0, 0))
+    path = mod.write_report("# report\n", datetime(2026, 6, 26, 12, 0, 0, tzinfo=timezone.utc))
     report_dir = out_root / "operations" / "memory-hygiene"
     files = list(report_dir.iterdir())
     assert files == [path]

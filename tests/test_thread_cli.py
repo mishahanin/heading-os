@@ -1,7 +1,6 @@
 """Tests for scripts.thread CLI."""
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 from scripts.utils.threads_lib import parse_thread_file
 
@@ -139,7 +138,9 @@ def test_thread_find_matches_title_substring(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_thread_archive_scan_moves_old_closed_threads(tmp_path: Path, monkeypatch) -> None:
-    from datetime import timedelta
+    from datetime import datetime, timedelta
+
+    from scripts.utils.workspace import get_default_tz
     threads_root = tmp_path / "threads"
     memory_md = tmp_path / "MEMORY.md"
     memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
@@ -153,7 +154,7 @@ def test_thread_archive_scan_moves_old_closed_threads(tmp_path: Path, monkeypatc
 
     # Backdate the file's last_touched to 100 days ago
     parsed = parse_thread_file(files[0])
-    old_date = (date.today() - timedelta(days=100)).isoformat()
+    old_date = (datetime.now(get_default_tz()).date() - timedelta(days=100)).isoformat()
     parsed.last_touched = old_date
     from scripts.utils.threads_lib import write_thread_file
     write_thread_file(files[0], parsed)

@@ -14,7 +14,7 @@ the invariants the cadence nudge must never break:
 import json
 import sys
 import tempfile
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,6 +29,7 @@ oc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(oc)
 
 from scripts.utils.air_gap import is_denied
+from scripts.utils.workspace import get_default_tz
 
 SENTINEL = "ZZSENTINELZZ-do-not-leak-9173"
 
@@ -106,7 +107,7 @@ def _snapshot(root: Path):
 
 def main():
     ok = True
-    today = date.today()
+    today = datetime.now(get_default_tz()).date()
     iso = lambda d: d.isoformat()  # noqa: E731
 
     # ============================================================

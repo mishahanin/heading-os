@@ -31,18 +31,19 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
+    get_default_tz,
     get_workspace_root, load_admin_config, get_data_root,
     get_crm_contacts_dir, get_crm_config_path, get_personal_root,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter
 
-TODAY = datetime.now().date()
+TODAY = datetime.now(get_default_tz()).date()
 
 # ============================================================
 # Configuration
@@ -138,7 +139,7 @@ def calculate_health(last_touch_str: str, config_entry: dict) -> tuple:
         return "red", None
 
     try:
-        last_touch = datetime.strptime(last_touch_str, "%Y-%m-%d").date()
+        last_touch = date.fromisoformat(last_touch_str)
     except ValueError:
         return "gray", None
 

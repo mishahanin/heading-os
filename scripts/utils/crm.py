@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 # Workspace utilities (lazy-imported via the public functions; we resolve
@@ -40,6 +40,7 @@ if str(_WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(_WORKSPACE_ROOT))
 
 from scripts.utils.workspace import (  # noqa: E402
+    get_default_tz,
     get_crm_contacts_dir,
     get_corporate_root,
     is_exec_workspace,
@@ -119,7 +120,7 @@ def parse_commitments(content: str) -> list:
             due_date = None
             if due_match:
                 try:
-                    due_date = datetime.strptime(due_match.group(1), "%Y-%m-%d").date()
+                    due_date = date.fromisoformat(due_match.group(1))
                 except ValueError:
                     pass
             commitments.append({"text": text, "due": due_date})
@@ -135,13 +136,13 @@ def calculate_health(last_touch_str: str, cadence_days: int, yellow_days: int,
     a touch could not be parsed.
     """
     if today is None:
-        today = datetime.now().date()
+        today = datetime.now(get_default_tz()).date()
 
     if not last_touch_str or last_touch_str in ("-", "n/a", ""):
         return "red", None
 
     try:
-        last_touch = datetime.strptime(last_touch_str, "%Y-%m-%d").date()
+        last_touch = date.fromisoformat(last_touch_str)
     except ValueError:
         return "gray", None
 
@@ -165,13 +166,13 @@ def is_radar_frozen(radar_freeze_until, today=None) -> bool:
     if not radar_freeze_until or not str(radar_freeze_until).strip():
         return False
     if today is None:
-        today = datetime.now().date()
+        today = datetime.now(get_default_tz()).date()
     raw = str(radar_freeze_until).strip()
     try:
         freeze = datetime.fromisoformat(raw).date()
     except ValueError:
         try:
-            freeze = datetime.strptime(raw, "%Y-%m-%d").date()
+            freeze = date.fromisoformat(raw)
         except ValueError:
             return False
     return freeze > today
@@ -219,7 +220,7 @@ def scan_contacts(config: dict, today=None, contacts_dir: Path | None = None,
         re-parsing.
     """
     if today is None:
-        today = datetime.now().date()
+        today = datetime.now(get_default_tz()).date()
     if contacts_dir is None:
         contacts_dir = get_crm_contacts_dir()
 
@@ -667,9 +668,8 @@ def find_dormancy_candidates(contacts: list, today=None, threshold_days: int = 9
     Returns the subset that meet all criteria. CEO approves the batch
     before any status flip happens (this function only proposes).
     """
-    from datetime import date as _date
     if today is None:
-        today = _date.today()
+        today = datetime.now(get_default_tz()).date()
     candidates = []
     for c in contacts:
         if c.get("status", "active") in DORMANCY_EXCLUDED_STATUSES:
@@ -680,7 +680,7 @@ def find_dormancy_candidates(contacts: list, today=None, threshold_days: int = 9
         if not lt_str:
             continue
         try:
-            lt = _date.fromisoformat(lt_str)
+            lt = date.fromisoformat(lt_str)
         except (ValueError, TypeError):
             continue
         delta = (today - lt).days

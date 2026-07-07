@@ -20,7 +20,9 @@ import os
 import re
 import stat
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
+
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 from typing import Optional
 
@@ -72,10 +74,10 @@ def _logs_dir(workspace_root: Optional[Path] = None) -> Path:
 def _audit_log(event: dict, workspace_root: Optional[Path] = None) -> None:
     """Append a JSONL audit entry. Best-effort; never raises into the caller."""
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
         log_path = _logs_dir(workspace_root) / f"crm-autolog-{today}.jsonl"
         with open(log_path, "a", encoding="utf-8") as f:
-            f.write(_json.dumps({**event, "ts": datetime.now().isoformat()}) + "\n")
+            f.write(_json.dumps({**event, "ts": datetime.now(timezone.utc).isoformat()}) + "\n")
     except OSError as e:
         # Best-effort: never raise into the caller. Surface to stderr so
         # daemon logs capture the failure for operator review.
@@ -255,7 +257,7 @@ def log_outbound(
             "matched": False,
         }, workspace_root=workspace_root)
         return False
-    date = date or datetime.now().strftime("%Y-%m-%d")
+    date = date or datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     text = rel_path.read_text(encoding="utf-8")
     text = bump_last_touch_in_text(text, date)
     snippet = plain_snippet(body_excerpt)
@@ -292,7 +294,7 @@ def bump_inbound(
             "matched": False,
         }, workspace_root=workspace_root)
         return False
-    date = date or datetime.now().strftime("%Y-%m-%d")
+    date = date or datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     text = rel_path.read_text(encoding="utf-8")
     new_text = bump_last_touch_in_text(text, date)
     if new_text != text:

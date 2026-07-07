@@ -25,7 +25,7 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.paths import get_workspace_root, load_env
-from scripts.utils.workspace import get_crm_contacts_dir, get_data_config_dir, get_outputs_dir
+from scripts.utils.workspace import get_crm_contacts_dir, get_data_config_dir, get_outputs_dir, get_default_tz
 
 # ===========================================================================
 # Constants
@@ -691,7 +691,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     days = max(1, args.days)
-    today = date.today()
+    today = datetime.now(get_default_tz()).date()
     window_start = today - timedelta(days=days - 1)
 
     workspace_root = get_workspace_root()

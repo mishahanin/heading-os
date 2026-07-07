@@ -14,6 +14,7 @@ machine - this keeps the bridge sources portable to any future
 per-exec workspace.
 """
 from datetime import date, datetime, timezone
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 # Re-use the pulse.py constants + parser so we have one source of truth.
@@ -76,7 +77,7 @@ def list_active_threads(workspace_root: Path) -> dict:
             "threads": [], "counts": {}, "bucket_order": [],
             "total": 0, "data_time": None,
         }
-    today = date.today()
+    today = datetime.now(get_default_tz()).date()
     raw_threads: list[dict] = []
     most_recent_mtime: float = 0.0
     for p in biz_dir.glob("*.md"):

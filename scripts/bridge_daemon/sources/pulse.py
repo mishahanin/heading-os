@@ -39,7 +39,7 @@ IN_FLIGHT_WINDOW_DAYS = 7
 def days_to_odin_5(target_iso: str | None = None) -> int:
     """Days remaining until the ODIN-5 target date. Negative if already past."""
     target = date.fromisoformat(target_iso or ODIN_5_TARGET_DEFAULT)
-    return (target - date.today()).days
+    return (target - datetime.now(get_default_tz()).date()).days
 
 
 def pipeline_value_and_deals(workspace_root: Path, data_root: "Path | None" = None) -> tuple[int, int]:
@@ -401,7 +401,7 @@ def next_items(workspace_root: Path, now: datetime | None = None, limit: int = 5
         from .tasks import list_active_tasks
         # Phase 1.80: pass the caller's notion of "today" through so
         # is_overdue is evaluated consistently with `now`. Without this,
-        # list_active_tasks would use date.today() and disagree with the
+        # list_active_tasks would use datetime.now(get_default_tz()).date() and disagree with the
         # caller across the UTC midnight boundary.
         tasks = list_active_tasks(workspace_root, today=now_local.date(), data_root=data_root)
         for t in tasks.get("tasks", []):
@@ -639,7 +639,7 @@ def _days_at_stage(stage_date_iso: str, today: date | None = None) -> int | None
         d = date.fromisoformat(stage_date_iso[:10])
     except ValueError:
         return None
-    today = today or date.today()
+    today = today or datetime.now(get_default_tz()).date()
     delta = (today - d).days
     return delta if delta >= 0 else None
 
@@ -666,7 +666,7 @@ def signals(workspace_root: Path, today: date | None = None, cap: int | None = N
     """
     if data_root is None:
         data_root = get_data_root()
-    today = today or date.today()
+    today = today or datetime.now(get_default_tz()).date()
     try:
         pipe = list_pipeline(data_root, today=today)
     except Exception:
@@ -795,7 +795,7 @@ def threads_state_preview(workspace_root: Path, data_root: "Path | None" = None)
     if not biz_dir.is_dir():
         return None
     threads: list[dict] = []
-    today = date.today()
+    today = datetime.now(get_default_tz()).date()
     for p in biz_dir.glob("*.md"):
         if not p.is_file():
             continue
@@ -975,7 +975,7 @@ def today_activity(workspace_root: Path, today: date | None = None,
     """
     if data_root is None:
         data_root = get_data_root()
-    today_iso = (today or date.today()).isoformat()
+    today_iso = (today or datetime.now(get_default_tz()).date()).isoformat()
     inv_entries: list[dict] = []
     pipe_entries: list[dict] = []
     inbox_entries: list[dict] = []
@@ -1200,7 +1200,7 @@ def suggestions(workspace_root: Path, today: date | None = None,
         })
 
     # Today is Monday in local time - tribe-monday is the standing weekly post.
-    today_local = today or date.today()
+    today_local = today or datetime.now(get_default_tz()).date()
     if today_local.weekday() == 0:  # Monday
         out.append({
             "agent": "/tribe-monday",

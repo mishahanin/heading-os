@@ -40,13 +40,13 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.workspace import get_data_root
+from scripts.utils.workspace import get_data_root, get_default_tz
 
 # ============================================================
 # Configuration
@@ -107,7 +107,7 @@ def _state_path(root: Path, date: str) -> Path:
 def _today() -> str:
     # the configured timezone is the workspace default; the skill passes --date explicitly
     # on every call, so this fallback only matters for ad-hoc CLI use.
-    return datetime.now().strftime("%Y-%m-%d")
+    return datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
 
 def _load(root: Path, date: str) -> dict | None:
@@ -127,7 +127,7 @@ def _load(root: Path, date: str) -> dict | None:
 def _save(root: Path, date: str, data: dict) -> None:
     p = _state_path(root, date)
     p.parent.mkdir(parents=True, exist_ok=True)
-    data["updated_at"] = datetime.now().isoformat()
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, p)
@@ -154,7 +154,7 @@ def cmd_propose(root: Path, args) -> int:
     date = args.date or _today()
     data = _load(root, date) or {
         "date": date,
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "actions": [],
     }
     next_id = max((a.get("id", 0) for a in data["actions"]), default=0) + 1
@@ -175,7 +175,7 @@ def cmd_propose(root: Path, args) -> int:
             "detail": raw.get("detail", {}),
             "status": "proposed",
             "note": "",
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         data["actions"].append(action)
         next_id += 1
@@ -268,7 +268,7 @@ def _mutate_ids(root: Path, date: str, ids: list[int], target_status: str,
         a["status"] = target_status
         if note is not None:
             a["note"] = note
-        a["updated_at"] = datetime.now().isoformat()
+        a["updated_at"] = datetime.now(timezone.utc).isoformat()
         changed += 1
     _save(root, date, data)
     print(f"{GREEN}{target_status}{RESET} {changed} action(s): {', '.join(f'#{i}' for i in ids)}")

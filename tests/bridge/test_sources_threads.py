@@ -1,5 +1,6 @@
 """Unit tests for /threads source (Phase 1.76)."""
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.bridge_daemon.sources.threads import (
@@ -57,7 +58,7 @@ def test_skips_closed_threads(tmp_path):
 
 
 def test_bucket_today_for_zero_days(tmp_path):
-    today = date.today().isoformat()
+    today = datetime.now(get_default_tz()).date().isoformat()
     _write_thread(tmp_path, "now", last_touched=today)
     r = list_active_threads(tmp_path)
     assert r["threads"][0]["bucket"] == "today"
@@ -65,14 +66,14 @@ def test_bucket_today_for_zero_days(tmp_path):
 
 
 def test_bucket_this_week_for_recent(tmp_path):
-    recent = (date.today() - timedelta(days=3)).isoformat()
+    recent = (datetime.now(get_default_tz()).date() - timedelta(days=3)).isoformat()
     _write_thread(tmp_path, "recent", last_touched=recent)
     r = list_active_threads(tmp_path)
     assert r["threads"][0]["bucket"] == "this_week"
 
 
 def test_bucket_older_for_eight_plus_days(tmp_path):
-    old = (date.today() - timedelta(days=30)).isoformat()
+    old = (datetime.now(get_default_tz()).date() - timedelta(days=30)).isoformat()
     _write_thread(tmp_path, "old", last_touched=old)
     r = list_active_threads(tmp_path)
     assert r["threads"][0]["bucket"] == "older"
@@ -80,7 +81,7 @@ def test_bucket_older_for_eight_plus_days(tmp_path):
 
 def test_bucket_order_omits_empty_buckets(tmp_path):
     """bucket_order only lists buckets that actually have threads."""
-    today = date.today().isoformat()
+    today = datetime.now(get_default_tz()).date().isoformat()
     _write_thread(tmp_path, "now", last_touched=today)
     r = list_active_threads(tmp_path)
     assert r["bucket_order"] == ["today"]
@@ -89,7 +90,7 @@ def test_bucket_order_omits_empty_buckets(tmp_path):
 
 def test_bucket_order_follows_canonical_order(tmp_path):
     """When all three buckets exist, order is today -> this_week -> older."""
-    today = date.today()
+    today = datetime.now(get_default_tz()).date()
     _write_thread(tmp_path, "now", last_touched=today.isoformat())
     _write_thread(tmp_path, "recent", last_touched=(today - timedelta(days=3)).isoformat())
     _write_thread(tmp_path, "old", last_touched=(today - timedelta(days=30)).isoformat())
@@ -99,7 +100,7 @@ def test_bucket_order_follows_canonical_order(tmp_path):
 
 def test_sort_by_days_since_asc(tmp_path):
     """Most recently touched threads sort first."""
-    today = date.today()
+    today = datetime.now(get_default_tz()).date()
     _write_thread(tmp_path, "old", title="Old", last_touched=(today - timedelta(days=30)).isoformat())
     _write_thread(tmp_path, "now", title="Now", last_touched=today.isoformat())
     _write_thread(tmp_path, "recent", title="Recent", last_touched=(today - timedelta(days=3)).isoformat())

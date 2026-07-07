@@ -13,6 +13,7 @@ disables - clicking twice must not write two entries.
 import json
 import re
 from datetime import datetime
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.bridge_daemon.sources.inbox import (
@@ -88,7 +89,7 @@ def log_to_crm(workspace_root: Path, conv_id: str, data_root: "Path | None" = No
     # latest_datetime is ISO; take the date portion as the interaction
     # date, falling back to today if it is missing or malformed.
     raw_dt = conv.get("latest_datetime") or ""
-    log_date = raw_dt[:10] if len(raw_dt) >= 10 else datetime.now().strftime("%Y-%m-%d")
+    log_date = raw_dt[:10] if len(raw_dt) >= 10 else datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
     try:
         text = contact_file.read_text(encoding="utf-8")

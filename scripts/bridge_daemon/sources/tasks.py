@@ -16,6 +16,7 @@ import json
 import re
 import threading
 from datetime import date, datetime, timezone
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
@@ -163,7 +164,7 @@ def mark_done(workspace_root: Path, task_key: str, note: str = "") -> dict:
     now = datetime.now(timezone.utc)
     entry = {
         "task_key": task_key,
-        "date": date.today().isoformat(),  # local day per Phase 1.80
+        "date": datetime.now(get_default_tz()).date().isoformat(),  # local day per Phase 1.80
         "ts": now.isoformat(),
         "note": safe_note,
     }
@@ -269,7 +270,7 @@ def list_active_tasks(workspace_root: Path, today: date | None = None,
     """
     if data_root is None:
         data_root = get_data_root()
-    today = today or date.today()
+    today = today or datetime.now(get_default_tz()).date()
     tasks_md = data_root / "outputs" / "operations" / "viraid" / "tasks.md"
     if not tasks_md.exists():
         return {"tasks": [], "counts": {}, "overdue_count": 0, "data_time": None}

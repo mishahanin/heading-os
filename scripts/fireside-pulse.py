@@ -369,7 +369,9 @@ def poll_age_minutes(last_poll_ts):
         return None
     try:
         t = datetime.fromisoformat(last_poll_ts)
-        now = datetime.now(t.tzinfo) if t.tzinfo else datetime.now()
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=get_default_tz())
+        now = datetime.now(t.tzinfo)
         return int((now - t).total_seconds() / 60)
     except Exception:
         return None

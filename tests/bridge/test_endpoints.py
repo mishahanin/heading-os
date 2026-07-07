@@ -140,7 +140,8 @@ def test_inbox_empty_state_returns_zero(workspace_root):
 
 def test_inbox_defer_and_undo(workspace_root):
     """Phase 1.33: POST /inbox/defer hides the conversation; undo-defer restores it."""
-    from datetime import date, timedelta
+    from datetime import datetime, timedelta
+    from scripts.utils.workspace import get_default_tz
     fetch = workspace_root / "outputs/operations/email-intelligence/_latest-fetch.json"
     fetch.write_text(json.dumps({
         "run_info": {"timestamp": "2026-05-20T10:00:00+00:00"},
@@ -151,7 +152,7 @@ def test_inbox_defer_and_undo(workspace_root):
     }))
     client, _ = _make_client(workspace_root, token="t1")
     h = {"Authorization": "Bearer t1"}
-    future = (date.today() + timedelta(days=3)).isoformat()
+    future = (datetime.now(get_default_tz()).date() + timedelta(days=3)).isoformat()
     r = client.post("/inbox/defer", headers=h, json={"conv_id": "c1", "defer_until": future})
     assert r.status_code == 200
     assert client.get("/inbox", headers=h).json()["counts"]["needs-you"] == 0

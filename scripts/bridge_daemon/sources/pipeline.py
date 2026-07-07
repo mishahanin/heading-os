@@ -12,6 +12,7 @@ import json
 import re
 import threading
 from datetime import date, datetime, timezone
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
@@ -74,7 +75,7 @@ def _parse_due(s: str, today: date | None = None) -> tuple[str | None, int | Non
         due = date.fromisoformat(m.group(1))
     except ValueError:
         return None, None, False
-    today = today or date.today()
+    today = today or datetime.now(get_default_tz()).date()
     delta = (due - today).days
     return m.group(1), delta, delta < 0
 
@@ -149,7 +150,7 @@ def mark_touched(workspace_root: Path, company: str, note: str = "") -> dict:
     entry = {
         "company": company.strip(),
         "company_key": key,
-        "date": date.today().isoformat(),
+        "date": datetime.now(get_default_tz()).date().isoformat(),
         "ts": now.isoformat(),
         "note": safe_note,
     }
@@ -268,7 +269,7 @@ def list_pipeline(workspace_root: Path, today: date | None = None) -> dict:
 
     # Phase 1.55: join touch log so the UI + signal analyzer can see
     # the CEO's last touch on each deal.
-    today_resolved = today or date.today()
+    today_resolved = today or datetime.now(get_default_tz()).date()
     touch_log = read_touch_log(workspace_root)
     counts: dict = {}
     overdue_count = 0

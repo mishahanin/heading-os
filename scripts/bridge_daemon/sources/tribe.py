@@ -13,6 +13,7 @@ alert state. We DO NOT mark anyone stale or red based on touch age.
 import logging
 import re
 from datetime import date, datetime, timezone
+from scripts.utils.workspace import get_default_tz
 from pathlib import Path
 
 from scripts.utils.paths import get_data_root
@@ -83,7 +84,7 @@ def _days_since(date_str: str | None, today: date | None = None) -> int | None:
         d = date.fromisoformat(date_str)
     except ValueError:
         return None
-    return ((today or date.today()) - d).days
+    return ((today or datetime.now(get_default_tz()).date()) - d).days
 
 
 def _norm_name(s: str | None) -> str:

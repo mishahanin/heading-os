@@ -507,7 +507,7 @@ def check_rate_limit(payload: dict) -> Optional[dict]:
     file_path = tool_input.get("file_path", "") or tool_input.get("notebook_path", "")
 
     state = _load_rate_state()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().astimezone().strftime("%Y-%m-%d")
     if state.get("date") != today:
         state = {"date": today, "count": 0, "recent": []}
 

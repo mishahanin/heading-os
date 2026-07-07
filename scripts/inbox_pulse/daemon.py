@@ -41,7 +41,7 @@ import os
 import signal
 import sys
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,8 @@ def _domain_of(addr: str) -> str:
 
 def _today_str() -> str:
     """Return today's date as YYYY-MM-DD (used for log file naming)."""
-    return date.today().isoformat()
+    from scripts.utils.workspace import get_default_tz
+    return datetime.now(get_default_tz()).date().isoformat()
 
 
 # ---------------------------------------------------------------------------

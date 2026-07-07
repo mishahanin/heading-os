@@ -26,7 +26,7 @@ import re
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -36,7 +36,7 @@ from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.html import strip_html
 from scripts.utils.llm_fallback import call_anthropic_with_fallback
 from scripts.utils.observability import observe
-from scripts.utils.workspace import get_workspace_root, load_env, resolve_config_with_example, get_outputs_dir, get_crm_contacts_dir, get_context_dir
+from scripts.utils.workspace import get_workspace_root, load_env, resolve_config_with_example, get_outputs_dir, get_crm_contacts_dir, get_context_dir, get_default_tz
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.untrusted_input import format_untrusted_emails
 
@@ -478,8 +478,8 @@ def enrich_conversation(conv: dict, crm_map: dict[str, dict], pipeline_text: str
             days_since = None
             if last_touch:
                 try:
-                    lt = datetime.strptime(str(last_touch), "%Y-%m-%d")
-                    days_since = (datetime.now() - lt).days
+                    lt = date.fromisoformat(str(last_touch))
+                    days_since = (datetime.now(get_default_tz()).date() - lt).days
                 except ValueError:
                     pass
             crm_context = {

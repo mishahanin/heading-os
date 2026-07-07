@@ -138,7 +138,7 @@ def _last_job_ok() -> str | None:
                 m = pattern.match(line)
                 if m:
                     try:
-                        last_ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+                        last_ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.now().astimezone().tzinfo)
                     except ValueError:
                         pass
     except OSError:
@@ -146,7 +146,7 @@ def _last_job_ok() -> str | None:
     if last_ts is None:
         return None
     # last_ts is naive (logs are written in local/local time by default).
-    delta = datetime.now() - last_ts
+    delta = datetime.now().astimezone() - last_ts
     mins = int(delta.total_seconds() / 60)
     if mins < 1:
         return "just now"

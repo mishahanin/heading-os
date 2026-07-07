@@ -33,6 +33,20 @@ updates:
         versions: [">=1.0.0"]
       - dependency-name: "wrapt"
         versions: [">=2.0.0"]
+      # Transitive deps whose version uv resolves FROM a parent, not independently:
+      # pydantic-core is lockstep with pydantic; onnxruntime/mammoth/mpmath are held
+      # by magika/markitdown/sympy. Dependabot reads the flat requirements.txt export
+      # and proposes leaf bumps uv cannot satisfy (closed 2026-07-06 as #21). Ignore
+      # the version-update noise; security updates and the pip-audit gate still apply.
+      # Root cause (Dependabot bumping a generated export) is tracked for a decision.
+      - dependency-name: "pydantic-core"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "onnxruntime"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "mammoth"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "mpmath"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
   # Bridge daemon's own requirements.
   - package-ecosystem: "pip"

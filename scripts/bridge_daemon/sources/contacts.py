@@ -138,12 +138,13 @@ def list_contacts(workspace_root: Path, today: date | None = None,
     # registry drives the enumeration so a stale or partial crm-central
     # snapshot cannot mask an exec who has migrated.
     seen_owners: set[str] = set()
+    self_dir = _crm_central_self_dir()  # resolve once, not per loop iteration
     try:
         registry_slugs = get_all_active_exec_slugs()
     except Exception:
         registry_slugs = []
     for owner in registry_slugs:
-        if not _OWNER_RE.match(owner) or owner == _crm_central_self_dir():
+        if not _OWNER_RE.match(owner) or owner == self_dir:
             continue
         target = _resolve_exec_contacts_dir(workspace_root, owner)
         if target is None:
@@ -160,7 +161,7 @@ def list_contacts(workspace_root: Path, today: date | None = None,
             if not exec_dir.is_dir():
                 continue
             owner = exec_dir.name
-            if owner == _crm_central_self_dir() or not _OWNER_RE.match(owner):
+            if owner == self_dir or not _OWNER_RE.match(owner):
                 continue
             if owner in seen_owners:
                 continue

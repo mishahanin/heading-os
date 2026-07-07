@@ -7,7 +7,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -15,7 +15,7 @@ x-31c-orchestration:
     - event presentation
     - conference slides
     - speaking deck
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces a full slide-by-slide presentation script for an event, VIP, or
     government engagement - opening hook, problem, solution, proof, future, and

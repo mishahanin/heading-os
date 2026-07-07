@@ -9,14 +9,14 @@ metadata:
   version: "2.0"
 allowed-tools: "Bash(python3:*), Bash(git:*), Read"
 model: haiku
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers:
     - sync
     - full corp sync
     - pull updates
-x-31c-capability:
+x-heading-capability:
   what: >
     Manually syncs the workspace with plain git: pulls the latest code (and data)
     with `git pull --ff-only`, then backs up via `scripts/push-all.py`. This

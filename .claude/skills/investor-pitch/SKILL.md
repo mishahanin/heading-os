@@ -7,14 +7,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - investor pitch
     - pitch deck
     - fundraising deck
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces full investor pitch deck content - the investment narrative arc,
     a 14-slide structure with key messages and speaker notes, and a data

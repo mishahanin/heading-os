@@ -7,7 +7,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - "threads/"
@@ -24,7 +24,7 @@ x-31c-orchestration:
     - "thread find"
     - "show me the thread"
     - "thread for"
-x-31c-capability:
+x-heading-capability:
   what: >
     Maintains the operational threads registry - the running state of business
     and personal situations across sessions, with decisions, follow-ups, and

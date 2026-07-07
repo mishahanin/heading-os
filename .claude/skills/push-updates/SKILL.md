@@ -9,7 +9,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - ../heading-os-corporate/
@@ -19,7 +19,7 @@ x-31c-orchestration:
     - push updates
     - update all executives
     - sync to everyone
-x-31c-capability:
+x-heading-capability:
   what: >
     The one CEO command that ships workspace changes to every executive - commits
     ceo-main, classifies and publishes corporate-classified files to ../heading-os-corporate/

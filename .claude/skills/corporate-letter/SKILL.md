@@ -7,7 +7,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state:
    - outputs/documents/
@@ -19,7 +19,7 @@ x-31c-orchestration:
    - letter of interest
    - letter of thanks
    - letter to
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces a branded 31C external letter (PDF + DOCX) from the locked corporate template,
     with letterhead, signature block, confidentiality footer, and a 31C-LET reference number

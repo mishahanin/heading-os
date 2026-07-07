@@ -9,7 +9,7 @@ argument-hint: "[focus]"
 context: fork
 allowed-tools: "WebSearch, WebFetch, Read, Bash(python3:*)"
 model: sonnet
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -18,7 +18,7 @@ x-31c-orchestration:
     - what's happening globally
     - global threats
     - CEO intelligence brief
-x-31c-capability:
+x-heading-capability:
   what: >
     A confidential CEO-eyes-only world intelligence brief - geopolitics, cybersecurity, markets, and the priority regions regional intel, each section framed through 31C's lens with direct business implications and action items.
   how: >

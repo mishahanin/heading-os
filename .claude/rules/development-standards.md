@@ -1,4 +1,4 @@
-<!-- version: 1.3.0 | last-updated: 2026-05-21 -->
+<!-- version: 1.3.1 | last-updated: 2026-07-07 -->
 ---
 paths:
   - ".claude/skills/**"
@@ -125,12 +125,12 @@ Invocation control flags (optional, harness-enforced — verified against curren
 
 Both flags are top-level frontmatter fields (siblings of `name`, `description`, `allowed-tools`). They are harness-enforced and supersede any prose policy ("NEVER auto-trigger") written into `description`.
 
-Workspace orchestration extension (under `x-31c-orchestration:` namespaced block, required):
+Workspace orchestration extension (under `x-heading-orchestration:` namespaced block, required):
 - `parallel_safe` -- `true`, `partial`, or `false`. Controls orchestrator dispatch safety. `true` = read-only or isolated outputs, `partial` = safe research phase + unsafe write phase, `false` = shared state or inherently sequential.
 - `shared_state` -- list of file/directory paths this skill writes to, e.g., `["crm/contacts/", "context/pipeline.md"]`. Empty list `[]` if read-only.
 - `triggers` -- list of natural-language phrases that should invoke this skill, e.g., `["investigate", "research", "dig into"]`. Empty list `[]` if not auto-routable.
 
-The `x-` prefix signals "workspace extension, not part of Anthropic's standard SKILL.md spec." Anthropic's tooling ignores unknown frontmatter fields today; the namespaced block keeps that contract intact even if a future release tightens validation.
+The `x-` prefix signals "workspace extension, not part of Anthropic's standard SKILL.md spec." Anthropic's tooling ignores unknown frontmatter fields today; the namespaced block keeps that contract intact even if a future release tightens validation. New skills use the `x-heading-*` namespace; the parsers (`scripts/skill-metadata-check.py`, `scripts/bridge_daemon/sources/capabilities.py`) still accept the legacy 31C-prefixed key through the v0.5.0 transition, when it is removed.
 
 Example shape:
 
@@ -143,11 +143,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers: ["example phrase", "another trigger"]
-x-31c-capability:
+x-heading-capability:
   what: >
     Plain one-to-two-sentence statement of what the skill produces or does.
   how: >
@@ -158,7 +158,7 @@ x-31c-capability:
 ---
 ```
 
-Capability self-explanation (under `x-31c-capability:` namespaced block, recommended):
+Capability self-explanation (under `x-heading-capability:` namespaced block, recommended):
 - `what` / `how` / `when` -- plain-language folded scalars rendered on the bridge dashboard's Capabilities page (`scripts/bridge_daemon/sources/capabilities.py` reads them via `yaml.safe_load`; the page falls back to the `description` when the block is absent). Keep each field 1-2 sentences, ASCII-only, grounded in the skill's real behaviour and router exclusions. This is the field that makes the Capabilities page a genuine "what does each skill do and how do I use it" reference rather than a bare list.
 
 **Body:**

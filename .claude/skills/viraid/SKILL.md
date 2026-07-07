@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "2.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state:
     - crm/contacts/
@@ -20,7 +20,7 @@ x-31c-orchestration:
     - check viraid
     - process viraid
     - viraid sweep
-x-31c-capability:
+x-heading-capability:
   what: >
     Reads new messages from M's VIRAID Telegram channel, categorizes each (CRM action, calendar, task, research, note), enriches with workspace context, proposes priority-tagged actions for approval, then executes - so nothing falls through the cracks.
   how: >

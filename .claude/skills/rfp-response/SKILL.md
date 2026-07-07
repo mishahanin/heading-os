@@ -7,7 +7,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -15,7 +15,7 @@ x-31c-orchestration:
     - tender response
     - bid response
     - government tender
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces a structured response to a formal RFP or government tender - requirements-to-ODUN.ONE mapping, executive summary, technical response, company credentials, commercial proposal, and a compliance matrix.
   how: >

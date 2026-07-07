@@ -21,7 +21,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers:
@@ -29,7 +29,7 @@ x-31c-orchestration:
     - scrape this page
     - browse to
     - headless browser
-x-31c-capability:
+x-heading-capability:
   what: >
     Drives a real headless browser for screenshots, scraping JS-rendered pages, form filling, PDF generation, and website monitoring - plus YouTube content extraction (title, description, chapters, full transcript).
   how: >

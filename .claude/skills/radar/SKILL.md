@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state:
     - "outputs/operations/ops-radar/"
@@ -19,7 +19,7 @@ x-31c-orchestration:
     - what am I forgetting
     - ack this radar item
     - crunch mode on
-x-31c-capability:
+x-heading-capability:
   what: >
     Deterministic detector of overdue sovereign manual actions (backup, publish,
     weekly-review, cold-sweep, Odin) and degraded machine-health (ollama,

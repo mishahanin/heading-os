@@ -7,14 +7,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - investor update
     - board update
     - quarterly update
-x-31c-capability:
+x-heading-capability:
   what: >
     Drafts a ready-to-send progress update for existing investors - opening
     captain's note, a key-metrics table, milestones (said vs did), wins, honest

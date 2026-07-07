@@ -8,7 +8,7 @@ metadata:
   email: misha.hanin@odinix.com
   version: "1.0"
   upstream: ast-grep/agent-skill
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -19,7 +19,7 @@ x-31c-orchestration:
     - "find calls to"
     - "find code matching"
     - "structural pattern"
-x-31c-capability:
+x-heading-capability:
   what: >
     Translates a plain-language code query into ast-grep AST patterns or YAML
     rules and runs them, finding code by structure (node kind, has/inside

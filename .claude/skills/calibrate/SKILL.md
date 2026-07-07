@@ -17,7 +17,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - "memory/"
@@ -31,7 +31,7 @@ x-31c-orchestration:
     - "end of session capture"
     - "/calibrate"
     - "/calibrate light"
-x-31c-capability:
+x-heading-capability:
   what: >
     Reflective end-of-session self-improvement - scans the session for corrections,
     preferences, errors, and voice violations, then proposes numbered patches to memory,

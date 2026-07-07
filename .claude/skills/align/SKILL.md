@@ -14,11 +14,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     Forces exactly N numbered clarifying questions - each with lettered
     options and a recommendation - before any work begins, so scope is

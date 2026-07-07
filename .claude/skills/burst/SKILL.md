@@ -18,11 +18,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces N variants (default 3, range 2-5) of the latest content artifact - each attacking a distinct axis (opener, tone, structure, lens, length), with one mandatory "swing-the-other-way" variant that inverts a defining property.
   how: >

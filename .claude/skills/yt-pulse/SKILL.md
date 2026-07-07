@@ -17,7 +17,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.3"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -25,7 +25,7 @@ x-31c-orchestration:
     - youtube trends
     - what's trending on YouTube
     - scan YouTube for
-x-31c-capability:
+x-heading-capability:
   what: >
     Domain-agnostic YouTube intelligence scanner - searches for videos in any topic, clusters the
     hot topics creators are discussing, deep-analyzes the top video by transcript, scores 31C relevance,

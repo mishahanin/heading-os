@@ -17,7 +17,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -26,7 +26,7 @@ x-31c-orchestration:
     - what's on X
     - scan X for
     - X account monitor
-x-31c-capability:
+x-heading-capability:
   what: >
     Account-centric X.com intelligence scan - fetches recent posts from a
     curated YAML account list, applies an engagement-then-judgement filter via

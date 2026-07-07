@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.4"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state:
     - outputs/intel/cases/
@@ -22,7 +22,7 @@ x-31c-orchestration:
     - who is
     - intelligence on
     - deep dive on
-x-31c-capability:
+x-heading-capability:
   what: >
     Deep multi-source intelligence on a company, person, market, or
     technology - produces an executive brief with confidence ratings, source

@@ -7,7 +7,7 @@ metadata:
   version: "1.2"
 argument-hint: "[type] [investor_type]"
 allowed-tools: "Read, WebSearch"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -15,7 +15,7 @@ x-31c-orchestration:
     - due diligence
     - DD response
     - investor materials
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces investor data room material - company overview, financial summary,
     market analysis, team and technology briefs, competitive landscape,

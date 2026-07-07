@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: ["datastore/content/linkedin-archive/", "outputs/content/linkedin/"]
   triggers:
@@ -18,7 +18,7 @@ x-31c-orchestration:
     - "опубликовал на linkedin"
     - "выложил на linkedin"
     - "запостил на linkedin"
-x-31c-capability:
+x-heading-capability:
   what: >
     Moves a just-published LinkedIn piece (article, post, or comment) plus any attached images out of staging and into the typed datastore archive at datastore/content/linkedin-archive/.
   how: >

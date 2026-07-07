@@ -7,7 +7,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -15,7 +15,7 @@ x-31c-orchestration:
     - content series
     - plan posts for the week
     - 3 posts
-x-31c-capability:
+x-heading-capability:
   what: >
     A multi-post LinkedIn content series plan in Misha's voice around one theme - series overview, per-post angle/hook/proof-point/hashtags, the narrative arc, plus a ready-to-publish draft of Post 1.
   how: >

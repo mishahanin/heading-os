@@ -21,7 +21,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "2.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state:
     - outputs/operations/scrutiny/
@@ -34,7 +34,7 @@ x-31c-orchestration:
     - review the plan before I approve
     - audit what you just did
     - ultrathink review
-x-31c-capability:
+x-heading-capability:
   what: >
     Jordanum-effort principal-engineer review gate over a target - a plan, just-executed work, a file/dir, the whole workspace, or a past /implement trajectory - producing evidence-backed findings with confidence scores and concrete proposed fixes, after an adversarial refutation layer drops false positives. Blocks forward progress until approved.
   how: >
@@ -222,7 +222,7 @@ For each approved finding, in order:
 2. Run post-apply checks for the edited file:
    - **Hidden-chars:** `python3 scripts/sanitize-text.py <file> --scan`
    - **Python syntax:** `python3 -m py_compile <file>` (only for `.py`)
-   - **Frontmatter:** YAML parse + required fields (`name`, `description`, `metadata.author`, `metadata.version`, plus `x-31c-orchestration.parallel_safe`, `x-31c-orchestration.shared_state`, `x-31c-orchestration.triggers`) - only for `SKILL.md`
+   - **Frontmatter:** YAML parse + required fields (`name`, `description`, `metadata.author`, `metadata.version`, plus `x-heading-orchestration.parallel_safe`, `x-heading-orchestration.shared_state`, `x-heading-orchestration.triggers`) - only for `SKILL.md`
 3. If all checks pass, print `"[OK] <file> - applied and checks passed."`
 4. If any check fails, halt further applies. Print the failure, ask the user whether to continue or rollback.
 

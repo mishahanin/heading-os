@@ -8,14 +8,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state: []
   triggers:
     - create a skill
     - improve this skill
     - eval this skill
-x-31c-capability:
+x-heading-capability:
   what: >
     Creates new skills, improves and optimizes existing ones, and benchmarks
     skill performance with evals and description-trigger tuning. CEO-only -
@@ -86,12 +86,12 @@ Check available MCPs - if useful for research (searching docs, finding similar s
 
 ### Write the SKILL.md
 
-Read `references/anthropic-skill-spec.md` for the full SKILL.md spec - frontmatter field-by-field walkthrough (name, description, the namespaced `x-31c-orchestration:` workspace extension, compatibility), skill anatomy (skill-name/SKILL.md + scripts/ + references/ + assets/), progressive-disclosure rules (three-level loading, <500 lines, domain-organized references), the Principle of Lack of Surprise, writing patterns (output format templates, examples pattern), and writing-style guidance. Apply that spec when filling in the draft.
+Read `references/anthropic-skill-spec.md` for the full SKILL.md spec - frontmatter field-by-field walkthrough (name, description, the namespaced `x-heading-orchestration:` workspace extension, compatibility), skill anatomy (skill-name/SKILL.md + scripts/ + references/ + assets/), progressive-disclosure rules (three-level loading, <500 lines, domain-organized references), the Principle of Lack of Surprise, writing patterns (output format templates, examples pattern), and writing-style guidance. Apply that spec when filling in the draft.
 
 The two most important fields:
 
 - **description**: The primary triggering mechanism. Include both what the skill does AND specific when-to-use contexts. Be a little "pushy" to combat Claude's tendency to undertrigger - e.g., "Make sure to use this skill whenever the user mentions dashboards, data visualization, internal metrics, or wants to display any kind of company data, even if they don't explicitly ask for a 'dashboard.'"
-- **`x-31c-orchestration:`**: Namespaced workspace extension carrying `parallel_safe`, `shared_state`, `triggers`. See the reference for the full contract. When in doubt on `parallel_safe`, use `false`.
+- **`x-heading-orchestration:`**: Namespaced workspace extension carrying `parallel_safe`, `shared_state`, `triggers`. See the reference for the full contract. When in doubt on `parallel_safe`, use `false`.
 
 ### Test Cases
 

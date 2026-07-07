@@ -17,14 +17,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state: []
   triggers:
     - google contacts
     - look up contact number
     - add to google contacts
-x-31c-capability:
+x-heading-capability:
   what: >
     Search, add, edit, list, get, and delete contacts in Google Contacts via
     the People API. A standalone connector, completely separate from the

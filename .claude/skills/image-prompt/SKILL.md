@@ -8,14 +8,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - image prompt
     - visualize this
     - generate image prompt
-x-31c-capability:
+x-heading-capability:
   what: >
     Turns content you just produced (post, article, email, slide copy) into a 50-150 word photorealistic text-to-image prompt for Midjourney, DALL-E, or Stable Diffusion, with 31C visual language and brand palette.
   how: >

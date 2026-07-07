@@ -8,14 +8,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "2.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - outputs/browser/cookies.json
   triggers:
     - setup browser cookies
     - import cookies
-x-31c-capability:
+x-heading-capability:
   what: >
     Imports logged-in cookies from a real Chromium-family browser (Brave, Chrome,
     Chromium, Edge) into the workspace cookie store at outputs/browser/cookies.json

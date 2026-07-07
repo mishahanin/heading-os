@@ -9,7 +9,7 @@ argument-hint: "[company]"
 context: fork
 allowed-tools: "WebSearch, WebFetch, Read, Bash(python3:*)"
 model: sonnet
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -17,7 +17,7 @@ x-31c-orchestration:
     - competing vendor
     - how does [company] compare
     - competitive landscape
-x-31c-capability:
+x-heading-capability:
   what: >
     Deep competitive analysis of a named vendor against ODUN.ONE - product
     comparison table, geographic overlap, honest strengths, exploitable

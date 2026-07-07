@@ -9,7 +9,7 @@ metadata:
 argument-hint: "[description of what to publish]"
 allowed-tools: "Read, Write, Edit, Bash(python3:*), Bash(git:*), Glob, Grep"
 model: haiku
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - ../heading-os-corporate/
@@ -17,7 +17,7 @@ x-31c-orchestration:
     - publish corporate
     - publish to executives
     - push to corporate
-x-31c-capability:
+x-heading-capability:
   what: >
     CEO-only: copies corporate-classified content from the DATA overlay
     (.heading-os-data) to the ../heading-os-corporate/ repo and pushes, so execs

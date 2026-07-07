@@ -14,11 +14,11 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.0"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers: []
-x-31c-capability:
+x-heading-capability:
   what: >
     Runs three checks over a set of cited source files and returns a stable
     "## Brain audit" footer: newest modified date per source (flagging anything

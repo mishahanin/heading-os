@@ -8,14 +8,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - validate
     - fact-check
     - verify claims
-x-31c-capability:
+x-heading-capability:
   what: >
     Fact-checks a draft against the 31C DataStore, extracting every claim and bucketing it Validated / Unverified / Contradicted with a forensic evidence grade (Confirmed / Deduced / Hypothesized) and a risk level.
   how: >

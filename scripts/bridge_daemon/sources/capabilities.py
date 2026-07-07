@@ -83,7 +83,7 @@ def _parse_frontmatter(text: str) -> dict:
     """Parse the YAML frontmatter block into a dict.
 
     Uses yaml.safe_load so block scalars (`description: >`), nested maps
-    (`metadata:`, `x-31c-capability:`), and quoted values all parse
+    (`metadata:`, `x-heading-capability:`), and quoted values all parse
     correctly. Returns {} when there is no frontmatter or it is malformed
     (the skill still lists with its directory name as a fallback)."""
     m = _FRONTMATTER_RE.match(text)
@@ -157,10 +157,15 @@ def list_capabilities(workspace_root: Path) -> dict:
         meta = fm.get("metadata") if isinstance(fm.get("metadata"), dict) else {}
         version = _clean(meta.get("version"))
         author = _clean(meta.get("author"))
-        # New: x-31c-capability block (what / how / when) - the plain-language
+        # x-heading-capability block (what / how / when) - the plain-language
         # self-explanation rendered on the Capabilities page. Absent on skills
-        # not yet annotated; the page falls back to the description.
-        cap = fm.get("x-31c-capability") if isinstance(fm.get("x-31c-capability"), dict) else {}
+        # not yet annotated; the page falls back to the description. Dual-key:
+        # prefer x-heading-capability, fall back to the legacy x-31c-capability
+        # through the v0.5.0 transition.
+        cap_raw = fm.get("x-heading-capability")
+        if not isinstance(cap_raw, dict):
+            cap_raw = fm.get("x-31c-capability")
+        cap = cap_raw if isinstance(cap_raw, dict) else {}
         capability = {
             "what": _clean(cap.get("what")),
             "how": _clean(cap.get("how")),

@@ -7,14 +7,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.2"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - linkedin post
     - draft a post about
     - write a post
-x-31c-capability:
+x-heading-capability:
   what: >
     Drafts a single LinkedIn post in Misha's authentic voice - standalone hook, observation-to-insight
     arc, and a thought-provoking close (no CTA). Returns alt openers, hashtags, and a posting-time suggestion.

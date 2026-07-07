@@ -7,14 +7,14 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
     - tribe message
     - message to the tribe
     - write to the tribe
-x-31c-capability:
+x-heading-capability:
   what: >
     Drafts a 100-250 word message from Misha to the 31C Tribe in the captain's
     voice - any day of the week - using operational vocabulary (sea state, heading,

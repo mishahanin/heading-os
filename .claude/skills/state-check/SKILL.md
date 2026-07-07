@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.1"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: true
   shared_state: []
   triggers:
@@ -16,7 +16,7 @@ x-31c-orchestration:
     - how are we doing
     - operational state
     - function health
-x-31c-capability:
+x-heading-capability:
   what: >
     Runs a structured Operational State Check for one function (sales, product, partnerships, tribe, research) or company-wide - Sea State, Current State, Heading Check, and behavioral Course Corrections, in one page max.
   how: >

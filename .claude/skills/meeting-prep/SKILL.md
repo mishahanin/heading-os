@@ -8,7 +8,7 @@ metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
   version: "1.4"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state:
     - crm/contacts/
@@ -16,7 +16,7 @@ x-31c-orchestration:
     - meeting prep
     - prepare for meeting with
     - briefing for
-x-31c-capability:
+x-heading-capability:
   what: >
     Produces a pre-meeting briefing - counterpart profile, their world right now,
     our objective, 5-7 talking points, anticipated questions, competitive context,

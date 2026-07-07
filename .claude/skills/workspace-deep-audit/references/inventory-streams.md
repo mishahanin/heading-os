@@ -20,7 +20,7 @@ All streams are READ-ONLY. None modifies workspace files. Each returns an inline
 > 1. Total active skill count (skip `archive/`)
 > 2. Per-category breakdown using the categories from `.claude/rules/skill-router.md` (Content, Operations, Business/Strategy, Intelligence, Communication, CRM, Design, Other)
 > 3. Per-skill line counts (use `wc -l` on each `SKILL.md`)
-> 4. Frontmatter compliance: count skills with name / description / allowed-tools / metadata.author / metadata.version / x-31c-orchestration block
+> 4. Frontmatter compliance: count skills with name / description / allowed-tools / metadata.author / metadata.version / x-heading-orchestration block
 > 5. References coverage: count skills with `references/` directory and total reference file count
 > 6. Evals coverage: count skills with `evals/cases/` and `evals/benchmark.json` files
 > 7. Skills exceeding 300 inline lines (flag for refactor queue)

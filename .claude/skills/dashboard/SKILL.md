@@ -9,7 +9,7 @@ metadata:
 context: fork
 allowed-tools: "Bash(python3:*), Read"
 model: sonnet
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: partial
   shared_state:
     - outputs/operations/dashboard/
@@ -18,7 +18,7 @@ x-31c-orchestration:
     - morning dashboard
     - daily brief
     - bridge view
-x-31c-capability:
+x-heading-capability:
   what: >
     Generates the daily CEO Morning Dashboard - a single-page HTML + PDF briefing
     aggregating CRM health, pipeline, calendar, email, strategy, and data

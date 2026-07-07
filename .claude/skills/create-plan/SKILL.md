@@ -7,7 +7,7 @@ metadata:
   version: "1.2"
 argument-hint: "[describe what to plan]"
 allowed-tools: "Read, Glob, Grep"
-x-31c-orchestration:
+x-heading-orchestration:
   parallel_safe: false
   shared_state:
     - plans/
@@ -15,7 +15,7 @@ x-31c-orchestration:
     - create plan
     - plan for
     - design the approach
-x-31c-capability:
+x-heading-capability:
   what: >
     Researches the workspace and produces a thorough implementation plan
     document - Spec Core, current state, proposed changes, step-by-step tasks,

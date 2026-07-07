@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Threat model</title>
+<meta name="description" content="This page maps each threat HEADING OS defends against to the concrete control">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html" class="active">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Threat model</h1>
+  <p class="page-meta">This page maps each threat HEADING OS defends against to the concrete control</p>
+  <!-- version: 1.0.0 | last-updated: 2026-07-07 -->
+
+<p>This page maps each threat HEADING OS defends against to the concrete control
+that stops it and to the exact test or CI guard that proves the control holds.
+It is the auditable companion to the <a href="SECURITY-MODEL.html">Security model</a>: that
+page explains the design in prose; this one is the evidence table.</p>
+<p>The rule for every row: it resolves to a runnable test ID, a runnable CI guard,
+or an explicitly-marked manual drill. Rows that resolve to nothing are listed
+honestly in the gap list at the end. That honesty is the point: a security story
+is only as credible as the parts of it you can run, plus a truthful account of
+the parts you cannot.</p>
+<p>Test IDs are pytest node paths (<code>pytest &lt;path&gt;</code>); CI guards are the named steps
+in <code>.github/workflows/ci.yml</code> (each is a shell command you can run locally too).</p>
+<hr />
+<h2 id="1-lethal-trifecta-leg-3-outbound-send">1. Lethal trifecta: leg 3 (outbound send)</h2>
+<p>The one control the whole design refuses to weaken: nothing leaves without a
+human click.</p>
+<table>
+<thead>
+<tr>
+<th>Threat / attack class</th>
+<th>Control</th>
+<th>Test / guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent sends outbound (email/telegram) without human approval</td>
+<td>Send-gate invariant: any send-capable <code>action_type</code> floors to the <code>gated</code> tier regardless of the ledger</td>
+<td><code>pytest tests/test_tool_risk.py tests/test_action_queue_tiers.py</code></td>
+</tr>
+<tr>
+<td>Tampered risk ledger tries to auto-send</td>
+<td><code>tier_for()</code> resolves unknown/tampered types to <code>gated</code></td>
+<td><code>pytest tests/test_action_queue_tiers.py</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="2-lethal-trifecta-leg-2-untrusted-content-prompt-injection">2. Lethal trifecta: leg 2 (untrusted content / prompt injection)</h2>
+<table>
+<thead>
+<tr>
+<th>Threat / attack class</th>
+<th>Control</th>
+<th>Test / guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prompt injection via inbound email fields (sender/subject/body)</td>
+<td>Untrusted-input isolation before analysis</td>
+<td><code>pytest tests/security/test_email_injection_corpus.py</code>; SEC-001 <code>pytest tests/security/test_SEC_001_email_html_injection.py</code></td>
+</tr>
+<tr>
+<td>Prompt-injection payloads in ingest-path files (knowledge, datastore, CRM)</td>
+<td>PostToolUse prompt-guard advisory detection</td>
+<td><code>pytest tests/security/test_protect_corporate_and_prompt_guard.py</code></td>
+</tr>
+<tr>
+<td>Adversarial injection corpus regressions</td>
+<td>Curated attack corpus replayed on every commit</td>
+<td><code>python tests/security/prompt-injection/run-adversarial-suite.py --dry-run</code> (pre-commit)</td>
+</tr>
+<tr>
+<td>Trojan Source / hidden bidirectional Unicode smuggled into text</td>
+<td>Sanitizer detects bidi isolates + zero-width characters</td>
+<td>SEC-005 <code>pytest tests/security/test_SEC_005_sanitizer_trojan_source.py</code>; <code>pytest tests/security/test_sanitize_text_subprocess.py</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-lethal-trifecta-leg-1-private-data-plus-exfiltration-channels">3. Lethal trifecta: leg 1 (private data) plus exfiltration channels</h2>
+<table>
+<thead>
+<tr>
+<th>Threat / attack class</th>
+<th>Control</th>
+<th>Test / guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Private/corporate content leaves in the public engine repo</td>
+<td>Engine/data segregation + push-time content scan + leak guard</td>
+<td><code>pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py</code>; CI guard <code>Leak guard</code>, <code>Engine tree clean</code></td>
+</tr>
+<tr>
+<td>A data directory is joined onto an engine root (path bypass)</td>
+<td>Data-root seam refuses engine-root joins</td>
+<td><code>pytest tests/test_data_root_no_bypass.py</code>; CI guard <code>HEADING OS data-root guard</code></td>
+</tr>
+<tr>
+<td>Read of CEO-only personal thread files by a subagent</td>
+<td>PreToolUse dispatch read-guard blocks the read</td>
+<td><code>pytest tests/security/test_dispatch_read_guard.py</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="4-secret-exfiltration">4. Secret exfiltration</h2>
+<table>
+<thead>
+<tr>
+<th>Threat / attack class</th>
+<th>Control</th>
+<th>Test / guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A credential is committed</td>
+<td>detect-secrets + workspace secret-scanner + push content scan</td>
+<td>CI guard <code>detect-secrets baseline drift (F-9.4)</code>; SEC-004 <code>pytest tests/security/test_SEC_004_credential_patterns.py</code></td>
+</tr>
+<tr>
+<td>A sensitive path is not gitignored</td>
+<td><code>.gitignore</code> coverage assertion</td>
+<td>SEC-003 <code>pytest tests/security/test_SEC_003_gitignore_coverage.py</code></td>
+</tr>
+<tr>
+<td>Session/OAuth files world-readable</td>
+<td><code>.sessions/</code> permission enforcement (0700/0600)</td>
+<td>SEC-006 <code>pytest tests/security/test_SEC_006_oauth_dir_permissions.py</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="5-hook-bypass-and-silent-failure">5. Hook bypass and silent failure</h2>
+<table>
+<thead>
+<tr>
+<th>Threat / attack class</th>
+<th>Control</th>
+<th>Test / guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A hook swallows an exception and fails open</td>
+<td>No bare-except; log-or-raise</td>
+<td>SEC-002 <code>pytest tests/security/test_SEC_002_hook_silent_failure.py</code></td>
+</tr>
+<tr>
+<td>A hook hangs and its timeout is swallowed</td>
+<td>Timeouts are logged, not swallowed</td>
+<td>SEC-007 <code>pytest tests/security/test_SEC_007_hook_timeout_logging.py</code></td>
+</tr>
+<tr>
+<td>The consolidated dispatch hook mis-routes or skips a branch</td>
+<td>Branch-coverage regression on <code>_dispatch.py</code></td>
+<td>SEC-017 <code>pytest tests/security/test_SEC_017_dispatch_check_branches.py</code>; <code>pytest tests/security/test_dispatch_routing.py</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="6-daemon-compromise-and-dashboard-exposure">6. Daemon compromise and dashboard exposure</h2>
+<table>
+<thead>
+<tr>
+<th>Threat / attack class</th>
+<th>Control</th>
+<th>Test / guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DNS-rebinding / localhost-CSRF reaches the local dashboard</td>
+<td>Host/Origin guard (421 non-loopback Host, 403 cross-origin)</td>
+<td><code>pytest tests/bridge/test_host_origin_guard.py</code></td>
+</tr>
+<tr>
+<td>Bearer-token file drifts to world-readable</td>
+<td>Token file is 0600; health check catches drift</td>
+<td><code>python scripts/workspace-health.py --section daemon-token</code>; SEC-006</td>
+</tr>
+<tr>
+<td>Daemon state corrupts on crash/kill</td>
+<td>Atomic write-then-replace, interruptible sleep, try/finally save, PID lock</td>
+<td>SEC-010..016 <code>pytest tests/security/test_SEC_01*_sentinel_*.py</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="7-supply-chain-and-integrity">7. Supply chain and integrity</h2>
+<table>
+<thead>
+<tr>
+<th>Threat / attack class</th>
+<th>Control</th>
+<th>Test / guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A vendored skill tree is tampered</td>
+<td><code>skills-lock.json</code> hash verifier (sha256-tree-v1)</td>
+<td>CI guard <code>Vendored-skill hashes (F-9.5)</code> = <code>python scripts/verify-skills-lock.py --check</code></td>
+</tr>
+<tr>
+<td>A dependency ships a known CVE</td>
+<td>pip-audit on the pinned requirements</td>
+<td>pre-commit / CI <code>pip-audit</code>; SBOM job publishes a CycloneDX bill of materials (F-9.6)</td>
+</tr>
+<tr>
+<td>Overall supply-chain posture regresses</td>
+<td>OpenSSF Scorecard, weekly, SARIF to code-scanning</td>
+<td><code>.github/workflows/scorecard.yml</code> (F-9.6)</td>
+</tr>
+<tr>
+<td>A write lands on an un-migrated data overlay</td>
+<td>Migration framework + <code>require_writable_data_root()</code> refusal</td>
+<td><code>pytest tests/test_data_migrations.py</code> (F-9.7)</td>
+</tr>
+<tr>
+<td>A file drifts into the wrong classification/routing</td>
+<td>routing-map resolution health</td>
+<td>CI guard <code>Classification health (F-9.3)</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="8-governance-integrity">8. Governance integrity</h2>
+<table>
+<thead>
+<tr>
+<th>Threat / attack class</th>
+<th>Control</th>
+<th>Test / guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The Security Constitution goes missing</td>
+<td>Existence regression</td>
+<td><code>pytest tests/security/test_security_constitution_exists.py</code></td>
+</tr>
+<tr>
+<td>An open security finding ships unresolved</td>
+<td>Findings registry well-formed and zero-open (acceptance)</td>
+<td><code>pytest tests/security/test_findings_registry.py</code></td>
+</tr>
+<tr>
+<td>General security regressions creep back</td>
+<td>Permanent regression suite</td>
+<td><code>pytest tests/security/test_regression.py</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="coverage">Coverage</h2>
+<p>Of the rows above, every one resolves to a runnable pytest node or a runnable CI
+guard. The mapped fraction is 100% of listed rows; the value of the table is that
+the list is honest about what it does <em>not</em> claim below.</p>
+<h2 id="the-honest-gap-list-threats-not-mechanically-tested-here">The honest gap list (threats not mechanically tested here)</h2>
+<p>These are real and deliberately out of scope for a mechanical test. They are
+managed by process, not by a green check, and are named so the table does not
+imply coverage it lacks.</p>
+<ul>
+<li><strong>Operator social engineering.</strong> A human tricked into approving a gated send is
+  outside the send-gate&rsquo;s reach. Mitigation: the approval surface shows the full
+  draft; process, not code.</li>
+<li><strong>Physical/host compromise.</strong> An attacker with the machine and the <code>.env</code> has
+  the keys. Mitigation: disk encryption and OS-level controls, out of engine scope.</li>
+<li><strong>A pinned action&rsquo;s upstream compromise before the SHA changes.</strong> SHA-pinning
+  stops tag-mutation, not a compromise published at the pinned SHA. Mitigation:
+  Scorecard trend + Dependabot review; a manual drill, not a test.</li>
+<li><strong>A zero-day in a third-party dependency with no published advisory.</strong> pip-audit
+  only knows published CVEs. Mitigation: SBOM makes the exposure enumerable when
+  an advisory lands.</li>
+</ul>
+<hr />
+<p><em>HEADING OS · Threat model · maintained by Misha Hanin · companion to the
+<a href="SECURITY-MODEL.html">Security model</a>. Run the whole evidence set with
+<code>pytest tests/security -q</code> plus the named CI guards in
+<a href="https://github.com/mishahanin/heading-os/blob/main/.github/workflows/ci.yml"><code>ci.yml</code></a>.</em></p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

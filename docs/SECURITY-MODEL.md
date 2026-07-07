@@ -1,4 +1,4 @@
-<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
+<!-- version: 1.0.2 | last-updated: 2026-07-07 -->
 # Security model
 
 How HEADING OS protects your data and your principal. The controls here are
@@ -149,6 +149,7 @@ The engine enforces a great deal, but the first line of defense is you:
 
 | File | Role |
 |---|---|
+| [`THREAT-MODEL.md`](THREAT-MODEL.html) | Threat to control to test evidence map (every control, the test that proves it) |
 | [`SECURITY.md`](https://github.com/mishahanin/heading-os/blob/main/SECURITY.md) | Reporting policy + posture summary |
 | [`engine-data-segregation-contract.md`](engine-data-segregation-contract.html) | The engine/data guarantee, layers, and proof |
 | `scripts/action-queue.py` | The terminal-native approval surface |

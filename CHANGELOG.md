@@ -15,6 +15,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Deprecated
 - The legacy `x-31c-*` frontmatter key and the operator-identity compatibility shim (`operator_identity_default()` legacy fallbacks) are accepted through a transition window and **removed in v0.5.0**. Write `config/operator.yaml` and re-stamp any skill still on `x-31c-*` before then.
 
+### Security
+- **Dashboard Host/Origin guard (F-9.2):** a FastAPI middleware on the bridge daemon rejects non-loopback `Host` (421) and cross-origin `Origin` (403), a belt-and-suspenders defense against DNS-rebinding and localhost-CSRF on the unauthenticated surface. `workspace-health.py` gains a `daemon-token` check asserting the bearer-token file is 0600. Proven by `tests/bridge/test_host_origin_guard.py`.
+- **Threat model published (F-9.1):** `docs/THREAT-MODEL.md` maps every threat to its control and the exact test or CI guard that proves it, with an honest gap list. Linked from the Security model reference.
+- **Vendored-skill hash verifier (F-9.5):** `scripts/verify-skills-lock.py` recomputes the `skills-lock.json` hashes (recipe `sha256-tree-v1`, LF-normalized) and fails on drift; wired into CI guards and pre-commit. `frontend-design` is marked plugin-managed (not vendored in-repo).
+- **CI hardening (F-9.3, F-9.6):** the `audit-skill-bash-paths` and `classification-health` audits now run in the guards job; a CycloneDX SBOM is generated on push and tags; an OpenSSF Scorecard workflow runs weekly. detect-secrets baseline drift (F-9.4) confirmed in place.
+- **Data-overlay migration framework (F-9.7):** `scripts/migrations/` + `scripts/migrate-data.py` (`--status` / `--apply` / `--stamp` / `--dry-run`); `require_writable_data_root()` refuses writes to an overlay behind the engine schema. Proven by `tests/test_data_migrations.py`.
+
 ## [0.3.0] - 2026-07-06
 
 ### Added

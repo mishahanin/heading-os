@@ -247,6 +247,7 @@ SITE_NAV_GROUPS = [
         ("HOOKS-REFERENCE.html", "Hooks reference"),
         ("CONFIGURATION.html", "Configuration"),
         ("SECURITY-MODEL.html", "Security model"),
+        ("THREAT-MODEL.html", "Threat model"),
         ("engine-data-segregation-contract.html", "Engine/data contract"),
         ("EXTENDING.html", "Extending the engine"),
         ("GLOSSARY.html", "Glossary"),

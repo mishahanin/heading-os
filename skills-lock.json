@@ -1,16 +1,18 @@
 {
   "version": 1,
+  "recipe": "sha256-tree-v1",
   "skills": {
     "ast-grep": {
       "source": "ast-grep/agent-skill",
       "sourceType": "github",
-      "skillPath": "ast-grep/skills/ast-grep/SKILL.md",
-      "computedHash": "74e1f29217c771ff5321e10e89fd64db144a4116f15df7af6c01a994ef062458"
+      "skillPath": ".claude/skills/ast-grep/SKILL.md",
+      "computedHash": "37406cddc9fea3929bbae55521b4f396287d31fc0fe05702fccc7165b3b487fa"
     },
     "frontend-design": {
       "source": "anthropics/skills",
       "sourceType": "github",
-      "computedHash": "516bd2154eb843a8240e43d5b285229129853114ad7075a5e141e1c08e408c84"
+      "vendored": false,
+      "note": "plugin-managed (frontend-design plugin); not vendored in this repo, integrity owned by the plugin system"
     }
   }
 }

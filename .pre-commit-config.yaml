@@ -105,6 +105,18 @@ repos:
         files: '^(README\.md|CHANGELOG\.md|pyproject\.toml)$'
         pass_filenames: false
 
+  # Vendored-skill integrity (F-9.5). Recompute the sha256-tree-v1 hashes in
+  # skills-lock.json and block a commit that drifts a vendored skill tree
+  # without re-locking. CI runs the same check in the guards job.
+  - repo: local
+    hooks:
+      - id: verify-skills-lock
+        name: Verify vendored-skill hashes against skills-lock.json
+        entry: python3 scripts/verify-skills-lock.py --check --quiet
+        language: system
+        files: '^(skills-lock\.json|\.claude/skills/ast-grep/)'
+        pass_filenames: false
+
   # CRM schema enforcement -- closes P2.4 from the 2026-05-14 workspace deep audit.
   # Blocks commits that introduce malformed CRM contact frontmatter (missing name/type/
   # last_touch, invalid YAML, bad date format). Permissive on phone/email/type quality -

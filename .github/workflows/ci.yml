@@ -57,6 +57,8 @@ jobs:
         run: uv run python scripts/check-version-sync.py --quiet
       - name: detect-secrets baseline drift (F-9.4)
         run: uv run detect-secrets scan --baseline .secrets.baseline
+      - name: Vendored-skill hashes (F-9.5)
+        run: uv run python scripts/verify-skills-lock.py --check
 
   lint:
     name: ruff + bandit

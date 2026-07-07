@@ -19,11 +19,11 @@ import html
 import re
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.image import load_logo_base64
-from scripts.utils.workspace import get_outputs_dir
+from scripts.utils.workspace import get_default_tz, get_outputs_dir
 
 
 # ============================================================
@@ -1431,14 +1431,14 @@ def generate_newsletter(data, image_paths=None):
     """Generate the complete HTML newsletter from structured JSON data."""
     image_paths = image_paths or {}
     logo_uri = load_logo_base64(LOGO_PATH)
-    date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    date_str = data.get("date", datetime.now(get_default_tz()).strftime("%Y-%m-%d"))
     issue_num = data.get("issue_number", 1)
     threat_level = data.get("threat_level", "ELEVATED")
     regions = data.get("regions", ["GCC", "CIS", "Africa"])
 
     # Format display date
     try:
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        dt = date.fromisoformat(date_str)
         display_date = dt.strftime("%d %B %Y")
     except ValueError:
         display_date = date_str
@@ -1607,7 +1607,7 @@ def main():
                 image_paths[section] = path
 
     # Determine output directory
-    date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    date_str = data.get("date", datetime.now(get_default_tz()).strftime("%Y-%m-%d"))
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:

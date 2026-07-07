@@ -24,11 +24,11 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_outputs_dir, get_workspace_root
+from scripts.utils.workspace import get_default_tz, get_outputs_dir, get_workspace_root
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter_text
 
@@ -255,7 +255,7 @@ def inject_frontmatter(source_text: str, title: str = "", mode: str = "dark",
         "class": mode,
         "title": title or "Untitled",
         "author": "Misha Hanin",
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "date": datetime.now(get_default_tz()).strftime("%Y-%m-%d"),
         "classification": classification,
         "footer": DEFAULT_FOOTER,
     }
@@ -333,7 +333,7 @@ def get_workspace_defaults(source_path: Path) -> dict:
     for prefix, defaults in WORKSPACE_DEFAULTS.items():
         if rel.startswith(prefix):
             subtitle = defaults["subtitle"]
-            subtitle = subtitle.replace("{date}", datetime.now().strftime("%Y-%m-%d"))
+            subtitle = subtitle.replace("{date}", datetime.now(get_default_tz()).strftime("%Y-%m-%d"))
             subtitle = subtitle.replace("{filename}", source_path.stem)
             return {"mode": defaults["mode"], "subtitle": subtitle}
 
@@ -620,7 +620,7 @@ def transform_workspace_md(source: Path, break_at: str = "h2", mode: str = None,
             f"# {doc_title}\n"
             f"## {slide_subtitle}\n\n"
             f"Source: {rel_path}\n"
-            f"{datetime.now().strftime('%Y-%m-%d')}"
+            f"{datetime.now(get_default_tz()).strftime('%Y-%m-%d')}"
         )
         slides.append(cover)
 
@@ -661,7 +661,7 @@ def transform_workspace_md(source: Path, break_at: str = "h2", mode: str = None,
 
     try:
         # Build a meaningful output stem from title and date
-        date_str = datetime.now().strftime("%d-%b-%Y")
+        date_str = datetime.now(get_default_tz()).strftime("%d-%b-%Y")
         title_slug = generate_slug(doc_title)
         meaningful_stem = f"31C-{title_slug}-{date_str}"
 
@@ -747,7 +747,7 @@ def watch_start(source: Path) -> dict:
         "url": "http://localhost:8080",
         "source_path": str(source),
         "theme_path": str(theme_path),
-        "started_at": datetime.now().isoformat(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
     }
     WATCH_STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 

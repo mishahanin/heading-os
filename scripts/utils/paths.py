@@ -185,6 +185,22 @@ def require_writable_data_root() -> Path:
             "No private data folder found - running on read-only examples. "
             "Run `python scripts/init-data.py` to create your data folder."
         )
+    # F-9.7: refuse when the overlay schema is behind the engine (pending
+    # migrations), so a write can never land on an un-migrated overlay. On the
+    # live workspace this is a strict no-op: with no .schema-version file,
+    # read_data_schema_version() returns the current DATA_SCHEMA_VERSION and the
+    # only registered migration is the v1 baseline, so nothing is pending. The
+    # refusal fires only once a future migration bumps max_version() above a
+    # stamped overlay's recorded version. Local import avoids an import cycle
+    # (scripts.migrations is discovered at call time, not module load).
+    from scripts.migrations import max_version
+    data_v = read_data_schema_version()
+    target = max_version()
+    if data_v < target:
+        raise DataRootError(
+            f"Data overlay schema v{data_v} is behind engine v{target}; pending "
+            "migrations must run first. Run: python scripts/migrate-data.py --apply"
+        )
     return get_data_root()
 
 

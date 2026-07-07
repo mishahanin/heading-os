@@ -15,7 +15,8 @@ def _make_client(workspace_root, token="testtoken"):  # noqa: S107  test fixture
     state = State()
     app = build_app(workspace_root=workspace_root, state=state, token=token,
                     user_slug="misha", data_root=workspace_root)
-    return TestClient(app), state
+    # base_url loopback: the F-9.2 host-origin guard rejects a non-loopback Host.
+    return TestClient(app, base_url="http://127.0.0.1"), state
 
 
 # --- module-level nonce store + helpers (plan Step 11.1) ---

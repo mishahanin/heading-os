@@ -470,6 +470,35 @@ def check_build_sync() -> int:
     return issues
 
 
+def check_daemon_token_perms() -> int:
+    """F-9.2: verify the bridge-daemon bearer token file is 0600.
+
+    The daemon writes .daemon-state/token with 0o600 (auth.mint), but a backup
+    or restore can lose permission bits. Absence is not a failure - the token
+    exists only after the daemon has run at least once - so a missing file is a
+    skip-with-notice, not an ACTION. This check catches external drift, not
+    non-start.
+    """
+    import stat as _stat
+    header("Daemon token permissions")
+    token_file = WORKSPACE / ".daemon-state" / "token"
+    if not token_file.exists():
+        ok("daemon token absent (daemon never started); skipping perms check")
+        return 0
+    issues = 0
+    mode = _stat.S_IMODE(token_file.stat().st_mode)
+    if mode != 0o600:
+        action(f".daemon-state/token has mode {oct(mode)}, expected 0o600 (run: chmod 600 {token_file})")
+        issues += 1
+    else:
+        ok(".daemon-state/token is 0600")
+    parent_mode = _stat.S_IMODE(token_file.parent.stat().st_mode)
+    if parent_mode & 0o002:
+        action(f".daemon-state/ is world-writable (mode {oct(parent_mode)})")
+        issues += 1
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="31C Workspace Health Check")
     parser.add_argument(
@@ -477,6 +506,7 @@ def main():
         choices=[
             "refs", "context", "counts", "pipeline", "people", "outputs",
             "datastore", "docs-sync", "skill-router", "doc-versions", "build",
+            "daemon-token",
         ],
         help="Run only a specific check section",
     )
@@ -501,6 +531,7 @@ def main():
         "skill-router": check_skill_router_coverage,
         "doc-versions": check_doc_versions,
         "build": check_build_sync,
+        "daemon-token": check_daemon_token_perms,
     }
 
     if args.section:

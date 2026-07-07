@@ -45,7 +45,8 @@ def root(tmp_path):
 @pytest.fixture
 def client(root):
     app = build_app(root, State(), TOKEN, "misha", data_root=root)
-    return TestClient(app)
+    # base_url loopback: the F-9.2 host-origin guard rejects a non-loopback Host.
+    return TestClient(app, base_url="http://127.0.0.1")
 
 
 def _email_card(to="jane@acme.com", contact="crm/contacts/jane.md", title="Nudge Jane"):

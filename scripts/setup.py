@@ -50,13 +50,16 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 # Constants
 # ---------------------------------------------------------------------------
 
-# Try to load GitHub org from admin config; fall back to default for bootstrap
+# Load the GitHub org through the operator seam (operator.yaml/env -> admin.json
+# -> shim). The bootstrap fallback is empty (not a personal literal) because the
+# operator seam cannot be imported here if this except fired; on a healthy fresh
+# clone load_github_org() already returns "" until the operator sets one.
 try:
     sys.path.insert(0, str(WORKSPACE_ROOT))
     from scripts.utils.workspace import load_github_org
     GITHUB_ORG = load_github_org()
 except (ImportError, OSError):
-    GITHUB_ORG = "mishahanin"
+    GITHUB_ORG = ""
 CORPORATE_REPO = "heading-os-corporate"
 CRM_CENTRAL_REPO = "31c-crm-central"
 

@@ -71,6 +71,12 @@ LauncherFolder
 MyDocuments
 slash/
 
+# Per-instance operator identity (name/slug/github_org/voice/email). The real
+# file is private data; the engine ships scripts/operator.example.yaml (tracked).
+# The engine-local config/operator.yaml is the data-less-clone fallback and must
+# never be committed.
+config/operator.yaml
+
 # Multi-user HEADING OS ecosystem
 .workspace-identity.json
 # ...but test fixtures ship their own identity files on purpose -- the broad rule

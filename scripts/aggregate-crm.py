@@ -39,6 +39,7 @@ from scripts.utils.workspace import (
     get_default_tz,
     get_workspace_root, load_admin_config, get_data_root,
     get_crm_contacts_dir, get_crm_config_path, get_personal_root,
+    operator_identity_default,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter
@@ -214,7 +215,7 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
 
     # CEO own
     admin_config = load_admin_config()
-    admin_slug = (admin_config.get("admin_slugs") or ["misha-hanin"])[0]
+    admin_slug = (admin_config.get("admin_slugs") or [operator_identity_default("slug", "misha-hanin")])[0]
     ceo_dir = get_crm_contacts_dir()
     if ceo_dir.exists():
         for file_path in sorted(ceo_dir.glob("*.md")):
@@ -240,7 +241,7 @@ def scan_all_contacts(workspace_root: Path, exec_slugs: list, config: dict,
                 slug_errors.append(f"Skip-clone mode and {repo_path} missing for {slug}")
                 return slug_contacts, slug_errors
             try:
-                org = admin_config.get("github_org") or "mishahanin"
+                org = admin_config.get("github_org") or operator_identity_default("github_org", "mishahanin")
                 result = subprocess.run(
                     ["gh", "repo", "clone", f"{org}/heading-os-data-{slug}", str(repo_path)],
                     capture_output=True, text=True, timeout=120,

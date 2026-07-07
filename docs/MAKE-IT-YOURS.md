@@ -81,6 +81,22 @@ belongs to. For a **solo** clone you can leave it absent: the engine defaults to
 single-user master workspace. A **managed** (multi-person) deployment uses the
 `exec-workspace` shape covered in [DEPLOYMENT](DEPLOYMENT.html).
 
+**Operator identity.** One file names who runs this instance, so the engine ships
+operator-agnostic (a fresh clone resolves to a neutral "operator"). Copy the shipped
+example into your private data overlay and fill it in:
+
+```bash
+cp scripts/operator.example.yaml <data-root>/config/operator.yaml
+# then edit name / slug / github_org / voice_reference / email
+```
+
+`operator.yaml` is routed private and gitignored. Every identity default in the code
+(bridge user slug, GitHub org, publisher, the email-reply voice clause) reads from it
+through one seam, so you set your identity in exactly one place. You can also override
+any field per-shell with `HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}`.
+Until you write it, an established instance keeps its historical defaults with a
+one-time deprecation notice; a brand-new clone is generic.
+
 ### 3.2 Your facts and voice
 
 The documents the wizard generates are plain markdown you can keep editing:

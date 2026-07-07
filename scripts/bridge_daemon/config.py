@@ -35,7 +35,9 @@ DEFAULTS = {
     },
     "stop_prompt_timeout_s": 5,   # locked 2026-05-17
     "port_range_start": 31415,
-    "user_slug": "misha",
+    # Resolved through the operator seam in load_config() (see below); empty here
+    # so no operator-identity literal lives in the engine defaults.
+    "user_slug": "",
     # R2 (2026-06-03): spine daemon jobs - default OFF fleet-wide (scrutiny H1).
     # The shared daemon ships to execs where the CEO-only core is absent; these
     # flags keep the jobs unscheduled there. Enable only on the CEO workspace
@@ -63,6 +65,12 @@ def load_config(workspace_root: Path) -> dict[str, Any]:
     user = workspace_root / ".daemon-state" / "config.yaml"
     if user.exists():
         cfg = _deep_merge(cfg, yaml.safe_load(user.read_text()) or {})
+    # Resolve the operator's slug through the identity seam when no config layer
+    # set it. Established instance -> legacy "misha" (byte-identical); fresh clone
+    # -> generic "operator". Shim removed in v0.5.0.
+    if not cfg.get("user_slug"):
+        from scripts.utils.workspace import operator_identity_default
+        cfg["user_slug"] = operator_identity_default("slug", "misha")
     return cfg
 
 

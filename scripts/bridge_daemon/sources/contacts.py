@@ -26,17 +26,22 @@ from scripts.bridge_daemon.sources.tribe import (
     _parse_frontmatter,
 )
 from scripts.utils.paths import get_data_root
-from scripts.utils.workspace import get_all_active_exec_slugs
+from scripts.utils.workspace import get_all_active_exec_slugs, operator_identity_default
 
 CRM_CENTRAL_DIRNAME = "31c-crm-central"
 PER_EXEC_REPO_PREFIX = "31c-crm-"
 CEO_OWNER = "ceo"
 CEO_OWNER_LABEL = "Misha Hanin"
-# crm-central holds a stale snapshot of the CEO's own contacts in this
-# folder; the live crm/contacts/ is used instead, so it is skipped.
-_CRM_CENTRAL_SELF_DIR = "misha-hanin"
 _OWNER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 CONTACT_FILE_MAX_BYTES = 500_000
+
+
+def _crm_central_self_dir() -> str:
+    """The operator's own contacts folder inside the deprecated crm-central
+    mirror; it holds a stale snapshot (the live crm/contacts/ is used instead),
+    so it is skipped. Resolved through the operator seam: established instance ->
+    legacy 'misha-hanin' (byte-identical), fresh clone -> generic 'operator'."""
+    return operator_identity_default("slug", "misha-hanin")
 
 
 def _resolve_exec_contacts_dir(workspace_root: Path, owner: str) -> Path | None:
@@ -138,7 +143,7 @@ def list_contacts(workspace_root: Path, today: date | None = None,
     except Exception:
         registry_slugs = []
     for owner in registry_slugs:
-        if not _OWNER_RE.match(owner) or owner == _CRM_CENTRAL_SELF_DIR:
+        if not _OWNER_RE.match(owner) or owner == _crm_central_self_dir():
             continue
         target = _resolve_exec_contacts_dir(workspace_root, owner)
         if target is None:
@@ -155,7 +160,7 @@ def list_contacts(workspace_root: Path, today: date | None = None,
             if not exec_dir.is_dir():
                 continue
             owner = exec_dir.name
-            if owner == _CRM_CENTRAL_SELF_DIR or not _OWNER_RE.match(owner):
+            if owner == _crm_central_self_dir() or not _OWNER_RE.match(owner):
                 continue
             if owner in seen_owners:
                 continue
@@ -202,7 +207,7 @@ def _contacts_base(workspace_root: Path, owner: str,
         data_root = get_data_root()
     if owner == CEO_OWNER:
         return data_root / "crm" / "contacts"
-    if owner == _CRM_CENTRAL_SELF_DIR or not _OWNER_RE.match(owner):
+    if owner == _crm_central_self_dir() or not _OWNER_RE.match(owner):
         return None
     return _resolve_exec_contacts_dir(workspace_root, owner)
 

@@ -60,6 +60,7 @@ rules:
   # intelligence and must never ship in a public engine. Engine ships examples at cutover.
   "config/exec-registry.json": private       # full executive roster: names, @31c.io/@odinix.com emails, repos, github users
   "config/admin.json": private               # per-instance admin identity (slugs, org, corporate repo)
+  "config/operator.yaml": private            # per-instance operator identity (name/slug/github_org/voice/email); data-config (engine ships scripts/operator.example.yaml). Real file lives in the data overlay at <data-root>/config/operator.yaml.
   "config/email-triage-rules.yaml": private  # real internal sender addresses + deal-keyword overrides
   "config/service-manifest.json": private     # this instance's service-host publish allowlist (integration topology + tribe roster path)
   "config/sentinel_config.yaml": private       # real VIP-sender list (real partners + internal contacts); data-config (engine ships scripts/sentinel_config.example.yaml)

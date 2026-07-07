@@ -16,7 +16,7 @@ from pathlib import Path
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
-from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_env
+from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_env, operator_identity_default
 from scripts.utils.paths import get_data_root
 
 from scripts.bridge_daemon._atomic import atomic_write_text
@@ -439,7 +439,9 @@ def start_daemon(explicit_port: int | None = None):
         token = get_or_create_token(WORKSPACE_ROOT)
         state = State()
         _prime_all_components(state)
-        user_slug = cfg.get("user_slug", "misha")
+        # cfg["user_slug"] is resolved through the operator seam in load_config;
+        # the defensive fallback also routes through it (never a bare literal).
+        user_slug = cfg.get("user_slug") or operator_identity_default("slug", "misha")
         if explicit_port is not None:
             port = _verify_port_free(explicit_port)
             logging.info(f"using explicit port {port} (from --port flag)")

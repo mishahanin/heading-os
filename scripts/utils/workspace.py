@@ -15,6 +15,7 @@ too for callers that already import from this module.
 
 import json
 import os
+import warnings
 from pathlib import Path
 
 # Re-export the canonical root resolver and helpers from paths.py.
@@ -77,7 +78,14 @@ def get_workspace_identity() -> dict:
         return _IDENTITY_CACHE[key]
     identity_file = root / ".workspace-identity.json"
     if not identity_file.exists():
-        identity = {"role": "admin", "slug": "misha-hanin", "type": "ceo-master"}
+        # Bootstrap identity: this IS the identity resolver, and the operator seam
+        # (scripts.utils.operator) is built ON TOP of it -- it resolves through
+        # get_data_config_dir() -> get_personal_root() -> is_ceo_workspace() ->
+        # get_workspace_identity(), so calling it here would recurse. The
+        # de-personalized generic slug is therefore a plain literal, not a seam
+        # call. The live ceo-master ships a real .workspace-identity.json, so this
+        # fallback is only hit by a fresh clone (which wants "operator" anyway).
+        identity = {"role": "admin", "slug": "operator", "type": "ceo-master"}
     else:
         try:
             identity = json.loads(identity_file.read_text(encoding="utf-8"))
@@ -528,20 +536,69 @@ def get_ceo_only_references() -> set:
 
 ADMIN_SLUGS = None
 
+_SHIM_WARNED: set = set()
+
+
+def _is_established_instance() -> bool:
+    """True when this instance already carries real per-instance identity data
+    (config/admin.json in the data overlay). Distinguishes the live, pre-migration
+    workspace from a fresh public clone, so the operator-identity compat shim
+    restores historical defaults on the former and resolves generic on the latter.
+    Cannot be called from get_workspace_identity() (it routes through the data
+    config dir, which routes back through identity)."""
+    return (get_data_config_dir() / "admin.json").exists()
+
+
+def operator_identity_default(field: str, legacy: str) -> str:
+    """Resolve a load-bearing identity DEFAULT through the operator seam.
+
+    Returns the configured operator value when operator.yaml / env set the
+    instance identity. Otherwise, on an established instance (pre-migration),
+    returns the historical `legacy` literal with a one-time DeprecationWarning so
+    the live workspace stays byte-identical until an operator.yaml is written; on
+    a fresh clone it returns the generic operator value. Scheduled for removal in
+    v0.5.0. Safe here (not the bootstrap identity resolver)."""
+    from scripts.utils.operator import get_operator, operator_is_default
+    if not operator_is_default():
+        return get_operator()[field]
+    if _is_established_instance():
+        if field not in _SHIM_WARNED:
+            warnings.warn(
+                f"operator identity default for '{field}' fell back to the legacy "
+                f"literal '{legacy}'. Write config/operator.yaml (see "
+                f"scripts/operator.example.yaml) to set it explicitly; this "
+                f"compatibility shim is removed in v0.5.0.",
+                DeprecationWarning, stacklevel=2,
+            )
+            _SHIM_WARNED.add(field)
+        return legacy
+    return get_operator()[field]
+
 
 def get_admin_slugs() -> list:
     """Get list of admin slugs from config."""
     global ADMIN_SLUGS
     if ADMIN_SLUGS is None:
         config = load_admin_config()
-        ADMIN_SLUGS = config.get("admin_slugs", ["misha-hanin"])
+        if "admin_slugs" in config:
+            ADMIN_SLUGS = config["admin_slugs"]
+        else:
+            # Fleet admins is a distinct concept (plural); the singular operator
+            # slug is the sensible one-instance default when admin.json is absent.
+            ADMIN_SLUGS = [operator_identity_default("slug", "misha-hanin")]
     return ADMIN_SLUGS
 
 
 def load_github_org() -> str:
-    """Load GitHub org from admin.json, fallback to 'mishahanin'."""
+    """Load the GitHub org: operator.yaml/env, then admin.json, then legacy shim."""
+    from scripts.utils.operator import operator_org
+    org = operator_org()
+    if org:
+        return org
     config = load_admin_config()
-    return config.get("github_org") or "mishahanin"
+    if config.get("github_org"):
+        return config["github_org"]
+    return operator_identity_default("github_org", "mishahanin")
 
 
 def validate_admin() -> bool:

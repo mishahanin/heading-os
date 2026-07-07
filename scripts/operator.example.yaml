@@ -1,0 +1,33 @@
+# Operator identity - EXAMPLE / TEMPLATE
+# =======================================
+# Who runs this HEADING OS instance. The engine ships this generic example so a
+# fresh public clone resolves to a neutral "operator" with no personal defaults.
+#
+# This is the engine-shipped EXAMPLE. The real file is private per-instance DATA:
+# copy it to your data overlay at  <data-root>/config/operator.yaml
+# (resolved via get_data_config_dir(), the same place admin.json lives) and fill
+# in your own values. That file is gitignored / routed private and never ships in
+# the engine.
+#
+# Resolution precedence (highest wins), see scripts/utils/operator.py:
+#   1. environment  HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}
+#   2. data overlay <data-root>/config/operator.yaml
+#   3. engine-local config/operator.yaml   (gitignored; for a data-less clone)
+#   4. this shipped example (the generic defaults below)
+
+# Display name, e.g. "Ada Lovelace".
+name: "Operator"
+
+# Short kebab-case handle used for per-instance paths and identity, e.g. "ada-lovelace".
+slug: "operator"
+
+# GitHub org / owner that hosts your private data + corporate repos, e.g. "adalovelace".
+# Leave empty on a fresh clone; set it when you create your repos.
+github_org: ""
+
+# Workspace-relative path to your voice reference file. The accessor only surfaces
+# this path; it never dereferences it. Supply your own via the data overlay.
+voice_reference: "reference/voice.md"
+
+# Operator email used in generated correspondence, e.g. "ada@example.com".
+email: ""

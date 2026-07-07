@@ -25,9 +25,8 @@ def test_missing_required_key_raises_value_error():
 def test_missing_required_key_does_not_sys_exit():
     """A missing required key must raise ValueError, not SystemExit."""
     env = {k: v for k, v in os.environ.items() if k != ABSENT_KEY}
-    with patch.dict(os.environ, env, clear=True), patch("scripts.utils.api.load_env"):
-        with pytest.raises(ValueError):
-            load_api_key(ABSENT_KEY)
+    with patch.dict(os.environ, env, clear=True), patch("scripts.utils.api.load_env"), pytest.raises(ValueError):
+        load_api_key(ABSENT_KEY)
         # If sys.exit were called, pytest would surface SystemExit, not ValueError.
 
 

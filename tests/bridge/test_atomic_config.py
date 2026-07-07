@@ -17,9 +17,8 @@ def test_snapshot_config_is_atomic(tmp_path):
     def _fail(src, dst):
         raise OSError("disk full")
 
-    with patch.object(bridge_atomic_mod.os, "replace", side_effect=_fail):
-        with pytest.raises(OSError):
-            snapshot_config(tmp_path, {"key": "original"})
+    with patch.object(bridge_atomic_mod.os, "replace", side_effect=_fail), pytest.raises(OSError):
+        snapshot_config(tmp_path, {"key": "original"})
 
     # No partial snapshot file must exist
     snap_files = list(history_dir.iterdir())
@@ -40,8 +39,7 @@ def test_revert_config_is_atomic(tmp_path):
     def _fail(src, dst):
         raise OSError("disk full")
 
-    with patch.object(bridge_atomic_mod.os, "replace", side_effect=_fail):
-        with pytest.raises(OSError):
-            revert_config_to(tmp_path, snap.name)
+    with patch.object(bridge_atomic_mod.os, "replace", side_effect=_fail), pytest.raises(OSError):
+        revert_config_to(tmp_path, snap.name)
 
     assert user_cfg.read_text(encoding="utf-8") == "key: current\n"

@@ -230,7 +230,7 @@ def personalized_pagerank(
     if total > 0:
         p = {k: pos[k] / total for k in nodes}
     else:
-        p = {k: 1.0 / n for k in nodes}
+        p = dict.fromkeys(nodes, 1.0 / n)
 
     rank = dict(p)
     out_deg = {k: graph.out_degree(k) for k in nodes}

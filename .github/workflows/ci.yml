@@ -70,8 +70,8 @@ jobs:
       - run: uv sync --dev --frozen
       - name: ruff - blocking security subset (mirror of the pre-commit gate)
         run: uv run ruff check . --select S --ignore S101,S105,S310,S603,S607
-      - name: ruff - full-ruleset report (advisory ratchet baseline for F-3.2)
-        run: uv run ruff check . --statistics || true
+      - name: ruff - full-ruleset ratchet (F-3.2, fails on NEW lint debt)
+        run: uv run python scripts/lint-ratchet.py check
       - name: bandit
         run: uv run bandit -c pyproject.toml -r scripts .claude/hooks -q --severity-level medium --confidence-level medium
 

@@ -94,7 +94,7 @@ def main() -> None:
         quotas = {lyr: int(quota_cfg.get(lyr, 0) or 0) for lyr in layers}
     else:
         even = max(1, top_k // len(layers))
-        quotas = {lyr: even for lyr in layers}
+        quotas = dict.fromkeys(layers, even)
 
     # Defensive air-gap (the index never stores denied paths, but belt-and-braces).
     try:

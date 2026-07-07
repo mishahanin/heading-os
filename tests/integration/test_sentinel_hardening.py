@@ -294,12 +294,11 @@ def test_status_prints_on_corrupt_state(tmp_state_dir, capsys):
     pid_file.write_text(str(os.getpid()))
     state_file.write_text("{ not valid json")
 
-    with patch("scripts.sentinel.PID_FILE", pid_file):
-        with patch("scripts.sentinel.STATE_FILE", state_file):
-            # Also patch _is_pid_alive so the "RUNNING" branch is taken
-            with patch("scripts.sentinel._is_pid_alive", return_value=True):
-                from scripts.sentinel import check_status
-                check_status()  # must not raise
+    with patch("scripts.sentinel.PID_FILE", pid_file), patch("scripts.sentinel.STATE_FILE", state_file):
+        # Also patch _is_pid_alive so the "RUNNING" branch is taken
+        with patch("scripts.sentinel._is_pid_alive", return_value=True):
+            from scripts.sentinel import check_status
+            check_status()  # must not raise
 
     captured = capsys.readouterr()
     # The fallback print goes to stderr with "state file unreadable" text

@@ -51,9 +51,8 @@ def test_reason_raises_on_content_filter():
     client = mock.MagicMock()
     client.chat.completions.create.return_value = _choice("", "content_filter")
     with mock.patch.object(kt, "_make_client", return_value=client), \
-         mock.patch.object(kt, "load_api_key", return_value="key"):
-        with pytest.raises(RuntimeError, match="content_filter"):
-            kt.reason("prompt")
+         mock.patch.object(kt, "load_api_key", return_value="key"), pytest.raises(RuntimeError, match="content_filter"):
+        kt.reason("prompt")
 
 
 def test_reason_raises_on_generic_empty():

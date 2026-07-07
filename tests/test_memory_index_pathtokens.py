@@ -144,7 +144,7 @@ def test_path_match_channel_rarity_cap():
     mod = load_module()
     ids = [f"outputs/intel/f{i}.md" for i in range(30)] + \
           ["datastore/projects/meridian/brief.md"]
-    cos = {i: 0.1 for i in ids}
+    cos = dict.fromkeys(ids, 0.1)
     got = mod._path_match_ids("meridian intel outputs", ids, cos, lambda i: True, df_cap=25)
     assert "datastore/projects/meridian/brief.md" in got, got        # rare -> admitted
     assert all("outputs/intel" not in g for g in got), got          # common -> filtered

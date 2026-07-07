@@ -103,6 +103,5 @@ def test_research_converts_socket_timeout_to_runtimeerror():
         raise TimeoutError("The read operation timed out")
 
     with mock.patch.object(pc, "load_api_key", return_value="key"), \
-         mock.patch("urllib.request.urlopen", side_effect=boom):
-        with pytest.raises(RuntimeError, match="timeout/socket"):
-            pc.research("q")
+         mock.patch("urllib.request.urlopen", side_effect=boom), pytest.raises(RuntimeError, match="timeout/socket"):
+        pc.research("q")

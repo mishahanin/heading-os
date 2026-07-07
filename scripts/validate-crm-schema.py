@@ -133,9 +133,7 @@ def parse_frontmatter(path: Path) -> dict | None:
             continue
 
         # String values - strip surrounding quotes
-        if value.startswith('"') and value.endswith('"'):
-            value = value[1:-1]
-        elif value.startswith("'") and value.endswith("'"):
+        if value.startswith('"') and value.endswith('"') or value.startswith("'") and value.endswith("'"):
             value = value[1:-1]
 
         # Coerce obvious integers - but NOT phone/telegram fields which may look numeric

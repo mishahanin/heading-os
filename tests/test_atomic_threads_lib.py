@@ -33,9 +33,8 @@ def test_write_thread_file_is_atomic(tmp_path):
         raise OSError("disk full")
 
     import scripts.utils.atomic as atomic_mod
-    with patch.object(atomic_mod.os, "replace", side_effect=_fail):
-        with pytest.raises(OSError):
-            write_thread_file(target, _make_thread())
+    with patch.object(atomic_mod.os, "replace", side_effect=_fail), pytest.raises(OSError):
+        write_thread_file(target, _make_thread())
 
     assert target.read_text(encoding="utf-8") == "old content"
 

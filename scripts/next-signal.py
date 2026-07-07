@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import skill_graph  # noqa: E402
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import (  # noqa: E402
+    get_default_tz,
     get_outputs_dir,
     get_threads_dir,
     get_workspace_root,
@@ -53,7 +54,7 @@ HANDOFF_LATEST_SUFFIX = "operations/handoff-archive/.latest/summary.md"
 
 
 def _iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    return datetime.fromtimestamp(ts, tz=get_default_tz()).strftime("%Y-%m-%d %H:%M")
 
 
 # ============================================================

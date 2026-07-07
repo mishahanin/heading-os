@@ -38,7 +38,7 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from scripts.utils.colors import CYAN, GREEN, RESET  # noqa: E402
-from scripts.utils.workspace import get_outputs_dir  # noqa: E402
+from scripts.utils.workspace import get_default_tz, get_outputs_dir  # noqa: E402
 
 SCRUTINY_DIR = get_outputs_dir() / "operations" / "scrutiny"
 FP_LOG_PATH = SCRUTINY_DIR / "_fp_log.jsonl"
@@ -140,7 +140,7 @@ def fp_rate(fp_count: int, total: int) -> str:
 
 
 def render(fp_records: list[dict], totals: dict) -> str:
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     fp_by_severity: Counter[str] = Counter()
     fp_by_target: Counter[str] = Counter()
     fp_by_conf_band: Counter[str] = Counter()

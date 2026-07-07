@@ -49,7 +49,7 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from scripts.utils.colors import CYAN, GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.workspace import get_outputs_dir  # noqa: E402
+from scripts.utils.workspace import get_default_tz, get_outputs_dir  # noqa: E402
 
 SCRUTINY_DIR = get_outputs_dir() / "operations" / "scrutiny"
 FP_LOG_PATH = SCRUTINY_DIR / "_fp_log.jsonl"
@@ -82,7 +82,7 @@ def _parse_report_date(stem: str) -> datetime | None:
     if not m:
         return None
     try:
-        return datetime.strptime(m.group(1), "%Y-%m-%d")
+        return datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=get_default_tz())
     except ValueError:
         return None
 
@@ -183,7 +183,7 @@ def quarter_label(date: datetime) -> str:
 def render_scoring_sheet(samples: list[FindingSample],
                          date_from: datetime,
                          date_to: datetime) -> str:
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     by_sev: Counter[str] = Counter(s.severity for s in samples)
     lines: list[str] = []
     lines.append(f"# /scrutinize Human-Agreement Scoring Sheet")
@@ -338,8 +338,8 @@ def compute_kappa_from_sheet(sheet_path: Path) -> int:
 def parse_date_arg(s: str) -> datetime:
     if s.endswith("d"):
         days = int(s[:-1])
-        return datetime.now() - timedelta(days=days)
-    return datetime.strptime(s, "%Y-%m-%d")
+        return datetime.now(get_default_tz()) - timedelta(days=days)
+    return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=get_default_tz())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -365,15 +365,15 @@ def main(argv: list[str] | None = None) -> int:
     # Resolve date range
     if args.since:
         date_from = parse_date_arg(args.since)
-        date_to = datetime.now()
+        date_to = datetime.now(get_default_tz())
     elif args.date_from and args.date_to:
         date_from = parse_date_arg(args.date_from)
         date_to = parse_date_arg(args.date_to)
     else:
         # Default: current quarter
-        now = datetime.now()
+        now = datetime.now(get_default_tz())
         q_start_month = ((now.month - 1) // 3) * 3 + 1
-        date_from = datetime(now.year, q_start_month, 1)
+        date_from = datetime(now.year, q_start_month, 1, tzinfo=get_default_tz())
         date_to = now
 
     reports = list_reports_in_range(date_from, date_to)

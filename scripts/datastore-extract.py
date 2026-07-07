@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, BOLD, RESET
-from scripts.utils.workspace import get_workspace_root, get_datastore_dir
+from scripts.utils.workspace import get_workspace_root, get_datastore_dir, get_default_tz
 
 WORKSPACE = get_workspace_root()
 
@@ -42,7 +42,7 @@ def extract_xlsx(filepath):
     lines = []
     lines.append(f"# Extract: {filepath.name}")
     lines.append(f"")
-    lines.append(f"> Auto-extracted from `{filepath.name}` on {datetime.now().strftime('%Y-%m-%d')}")
+    lines.append(f"> Auto-extracted from `{filepath.name}` on {datetime.now(get_default_tz()).strftime('%Y-%m-%d')}")
     lines.append(f"> This is a companion file for Claude to read. The original XLSX is the source of truth.")
     lines.append(f"")
 
@@ -102,7 +102,7 @@ def extract_pptx(filepath):
     lines = []
     lines.append(f"# Extract: {filepath.name}")
     lines.append(f"")
-    lines.append(f"> Auto-extracted from `{filepath.name}` on {datetime.now().strftime('%Y-%m-%d')}")
+    lines.append(f"> Auto-extracted from `{filepath.name}` on {datetime.now(get_default_tz()).strftime('%Y-%m-%d')}")
     lines.append(f"> This is a companion file for Claude to read. The original PPTX is the source of truth.")
     lines.append(f"")
     lines.append(f"Total slides: {len(prs.slides)}")
@@ -185,7 +185,7 @@ def update_index(extracted_files):
         return
 
     content = INDEX_FILE.read_text(encoding="utf-8")
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
 
     new_rows = []
     for orig, companion in extracted_files:

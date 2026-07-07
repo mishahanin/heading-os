@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
-from scripts.utils.workspace import get_workspace_root, get_context_dir
+from scripts.utils.workspace import get_workspace_root, get_context_dir, get_default_tz
 
 WORKSPACE = get_workspace_root()
 
@@ -89,7 +89,7 @@ def parse_date(text):
     text = text.strip()
     for fmt in ("%Y-%m-%d", "%Y-%m", "%b %Y", "%B %Y"):
         try:
-            return datetime.strptime(text, fmt)
+            return datetime.strptime(text, fmt).replace(tzinfo=get_default_tz())
         except ValueError:
             continue
     return None
@@ -167,7 +167,7 @@ def normalize_stage(stage_text):
 def analyze_stale_deals(deals, today=None):
     """Identify deals with no stage movement in >STALE_THRESHOLD_DAYS days."""
     if today is None:
-        today = datetime.now()
+        today = datetime.now(get_default_tz())
     stale = []
     for deal in deals:
         stage_date = deal.get("stage_date")
@@ -185,7 +185,7 @@ def analyze_stale_deals(deals, today=None):
 
 def generate_summary(content):
     """Generate pipeline summary metrics from pipeline.md content."""
-    today = datetime.now()
+    today = datetime.now(get_default_tz())
 
     # Parse Active Deals table
     deal_rows = parse_table_rows(content, "Active Deals")

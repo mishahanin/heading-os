@@ -27,7 +27,7 @@ from urllib.request import Request, urlopen
 # Workspace utilities
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.workspace import get_outputs_dir, get_workspace_root
+from scripts.utils.workspace import get_default_tz, get_outputs_dir, get_workspace_root
 
 WORKSPACE_ROOT = get_workspace_root()
 TOOLKIT_PATH = WORKSPACE_ROOT / "reference" / "osint-advanced-toolkit.md"
@@ -204,7 +204,7 @@ def validate_all(local_tools):
 
 def generate_report_md(diff, validation, report_dir):
     """Generate Markdown report."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     lines = [
         f"# OSINT-Advanced Sync Report -- {today}",
         "",
@@ -252,7 +252,7 @@ def generate_report_md(diff, validation, report_dir):
 
 def generate_report_html(diff, validation, report_dir):
     """Generate branded HTML report."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     working = sum(1 for r in validation if r["status"] == "WORKING")
     blocked = sum(1 for r in validation if r["status"] == "BLOCKED")
     cli = sum(1 for r in validation if r["status"] == "CLI")

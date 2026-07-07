@@ -1,4 +1,4 @@
-<!-- version: 1.0.2 | last-updated: 2026-07-07 -->
+<!-- version: 1.1.0 | last-updated: 2026-07-08 -->
 # Security model
 
 How HEADING OS protects your data and your principal. The controls here are
@@ -156,6 +156,37 @@ The engine enforces a great deal, but the first line of defense is you:
 | `scripts/utils/tool_risk.py`, `config/tool-risk.json` | The tier model and the send-gate invariant |
 | `scripts/push-all.py` | The push path with the unbypassable content scan |
 | `scripts/sanitize-text.py` | Hidden-character scanner |
+
+---
+
+## Manual security drills
+
+Some enforcement layers cannot be exercised headlessly, so they are verified by
+a periodic manual drill rather than a green test. Listing them here keeps the
+gap explicit rather than silent. The mechanical leak-path matrix
+([`tests/security/test_leak_path_matrix.py`](https://github.com/mishahanin/heading-os/blob/main/tests/security/test_leak_path_matrix.py))
+attacks every headless-testable segregation layer on purpose (write-vector by
+data-class-target, asserting each leak is blocked by the expected layer); the
+drills below cover the layers it cannot reach.
+
+### data-path-redirect hook (PreToolUse Write/Edit)
+
+The `data-path-redirect` hook fires only inside the Claude Code runtime, so no
+pytest cell can exercise it without asserting a simulation instead of the
+control. Drill it by hand, on a cadence:
+
+1. In a live Claude Code session on an engine clone, attempt to write a
+   data-class path inside the engine tree (for example, ask Claude to create
+   `crm/contacts/drill-check.md`).
+2. Confirm the write is redirected into the data overlay
+   (`.heading-os-data/crm/contacts/drill-check.md`), not created under the
+   engine clone.
+3. Confirm the engine working tree stays clean: `git status` shows nothing under
+   `crm/`.
+4. Remove the drill file from the overlay afterward.
+
+Expected observable: the file lands in the data overlay, never in the engine
+clone; the engine tree remains code-only.
 
 ---
 

@@ -9,6 +9,7 @@ from datetime import date, datetime
 import re
 import yaml
 from scripts.utils.atomic import atomic_write_text
+from scripts.utils.workspace import get_default_tz
 
 REQUIRED_FIELDS = (
     "id", "title", "status", "type", "classification",
@@ -243,7 +244,7 @@ class ArchiveCandidate:
 
 def scan_for_archive(threads_root: Path, *, today: date | None = None) -> list[ArchiveCandidate]:
     """Find threads to archive (closed >90 days) or propose on-hold for (active >60 days)."""
-    today = today or date.today()
+    today = today or datetime.now(get_default_tz()).date()
     candidates: list[ArchiveCandidate] = []
     for type_ in ("business", "personal"):
         type_dir = threads_root / type_
@@ -255,7 +256,7 @@ def scan_for_archive(threads_root: Path, *, today: date | None = None) -> list[A
             except (ValueError, yaml.YAMLError):
                 continue
             try:
-                last = datetime.strptime(t.last_touched, "%Y-%m-%d").date()
+                last = date.fromisoformat(t.last_touched)
             except (ValueError, TypeError):
                 continue
             age = (today - last).days

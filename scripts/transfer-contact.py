@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
+    get_default_tz,
     get_workspace_root, validate_admin,
     get_corporate_repo_path, load_admin_config,
     get_per_exec_repo_path, get_all_active_exec_slugs,
@@ -49,7 +50,7 @@ def update_owner_in_frontmatter(text: str, new_owner: str) -> str:
 
 def append_transfer_note(text: str, from_exec: str, to_exec: str) -> str:
     """Append a transfer note to the interaction log section."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     note = (
         f"\n### {today} | Note | Contact Transferred\n"
         f"Transferred from {from_exec} to {to_exec} by admin.\n"
@@ -160,7 +161,7 @@ def main() -> None:
             print(f"  {exc.stderr.decode().strip() if exc.stderr else exc}")
 
     # Confirmation
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(get_default_tz()).strftime("%Y-%m-%d")
     print(f"\n{BOLD}Transfer complete:{RESET}")
     print(f"  Contact:  {args.contact}")
     print(f"  From:     {args.from_exec}")

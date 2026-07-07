@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.colors import GREEN, YELLOW, RED, GRAY, BOLD, RESET
 from scripts.utils.workspace import (
+    get_default_tz,
     get_crm_contacts_dir, get_crm_config_path, get_people_file,
     get_workspace_root,
 )
@@ -40,7 +41,7 @@ CONTACTS_DIR = get_crm_contacts_dir()
 CONFIG_FILE = get_crm_config_path()
 PEOPLE_FILE = get_people_file()
 
-TODAY = datetime.now().date()
+TODAY = datetime.now(get_default_tz()).date()
 
 
 def format_terminal_report(contacts, tribe_warnings=None):
@@ -226,7 +227,7 @@ def main():
     if _unmatched:
         _log_dir = WORKSPACE / ".sync" / "logs"
         _log_dir.mkdir(parents=True, exist_ok=True)
-        _log_path = _log_dir / f"crm-unmatched-pipeline-{_dt.datetime.now().strftime('%Y-%m-%d')}.log"
+        _log_path = _log_dir / f"crm-unmatched-pipeline-{_dt.datetime.now(get_default_tz()).strftime('%Y-%m-%d')}.log"
         _log_path.write_text(
             "Pipeline.md companies with no matching CRM contact:\n" +
             "\n".join(f"  - {c}" for c in sorted(_unmatched)) + "\n",
@@ -262,9 +263,8 @@ def main():
     if args.demote_candidates:
         from scripts.utils.crm import find_dormancy_candidates
         from scripts.utils.crm_autolog import atomic_write
-        from datetime import date as _date
         import re as _re
-        candidates = find_dormancy_candidates(contacts, today=_date.today(), threshold_days=args.demote_threshold)
+        candidates = find_dormancy_candidates(contacts, today=datetime.now(get_default_tz()).date(), threshold_days=args.demote_threshold)
         if not candidates:
             print(f"{GREEN}No dormancy candidates - all active contacts within {args.demote_threshold}d.{RESET}")
         else:

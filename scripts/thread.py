@@ -6,11 +6,11 @@ import os
 import re
 import shutil
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_threads_dir, get_data_root  # noqa: E402
+from scripts.utils.workspace import get_threads_dir, get_data_root, get_default_tz  # noqa: E402
 from scripts.utils.threads_lib import (  # noqa: E402
     ThreadFile, write_thread_file, new_thread_path,
     ensure_active_threads_section, add_thread_to_index,
@@ -122,7 +122,7 @@ def _tick_followup(body: str, index: int) -> str:
 
 
 def cmd_open(args: argparse.Namespace) -> int:
-    today = date.today().isoformat()
+    today = datetime.now(get_default_tz()).date().isoformat()
     threads_root = _threads_root()
     threads_root.mkdir(parents=True, exist_ok=True)
     path = new_thread_path(threads_root, args.type, args.title, today)
@@ -170,7 +170,7 @@ def cmd_log(args: argparse.Namespace) -> int:
     if not memory_md.exists():
         raise FileNotFoundError(f"MEMORY.md does not exist at {memory_md}")
     thread = parse_thread_file(path)
-    today = date.today().isoformat()
+    today = datetime.now(get_default_tz()).date().isoformat()
 
     log_entry = f"### {today} - {event}\n"
     thread.body = _prepend_log_entry(thread.body, log_entry)
@@ -212,7 +212,7 @@ def _set_status(thread_id: str, new_status: str, index_action: str) -> int:
     path = _find_thread_by_id(threads_root, thread_id)
     thread = parse_thread_file(path)
     thread.status = new_status
-    thread.last_touched = date.today().isoformat()
+    thread.last_touched = datetime.now(get_default_tz()).date().isoformat()
     write_thread_file(path, thread)
     rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
     memory_md = _memory_md()
@@ -286,7 +286,7 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 
 def cmd_archive_scan(args: argparse.Namespace) -> int:
-    today = date.today()
+    today = datetime.now(get_default_tz()).date()
     candidates = scan_for_archive(_threads_root(), today=today)
     if not candidates:
         print("no archive candidates")

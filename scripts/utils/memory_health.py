@@ -23,6 +23,8 @@ import datetime
 import math
 from pathlib import Path
 
+from scripts.utils.workspace import get_default_tz
+
 # Budget + staleness thresholds (kept identical to the prior inlined values).
 MEMORY_BUDGET_LINES = 200
 STALE_DAYS = 45
@@ -66,14 +68,14 @@ def compute_memory_defects(memory_dir: Path) -> dict:
     else:
         lines = 0
 
-    # Stale: mtime older than STALE_DAYS (naive local time, matching prior behavior).
-    now = datetime.datetime.now()
+    # Stale: mtime older than STALE_DAYS (tz-aware local time via get_default_tz).
+    now = datetime.datetime.now(get_default_tz())
     stale: list[tuple[str, int]] = []
     for p in files:
         if p.name == "MEMORY.md":
             continue
         try:
-            mtime = datetime.datetime.fromtimestamp(p.stat().st_mtime)
+            mtime = datetime.datetime.fromtimestamp(p.stat().st_mtime, tz=get_default_tz())
         except OSError:
             continue
         age = (now - mtime).days

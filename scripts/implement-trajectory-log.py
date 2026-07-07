@@ -7,7 +7,7 @@ review accuracy from 70% to 90% vs outcome-only. This helper is the
 emission side of that pattern. /scrutinize trajectory:<run_id> is the
 audit side (see .claude/skills/scrutinize/references/trajectory-evaluation.md).
 
-Two subcommands:
+Three subcommands:
 
   --new --plan <plan-path>
       Mint a new run_id and create the trajectory JSONL with an opening
@@ -20,14 +20,32 @@ Two subcommands:
         -> slug=r12-trajectory-evaluation
         -> run_id=2026-05-27_134522_r12-trajectory-evaluation
 
-  --event --run-id <id> --type <event-type>
-            [--data-file <path> | --data-stdin | --data-json <json-string>]
-      Append one event record to the trajectory JSONL. Exactly one of
-      --data-file, --data-stdin, --data-json must be provided.
+  --event --run-id <id> --type <event-type> (typed flags | --data-*)
+      Append one event record to the trajectory JSONL. The payload comes
+      from EITHER typed flags OR one --data-* mode; the two are mutually
+      exclusive.
 
-      Cross-platform safety: /implement MUST use --data-file (writes JSON
-      via the Write tool, passes the path). --data-stdin is OK for bash /
-      PowerShell pipelines. --data-json is bash-only / hand-runs only.
+      Typed flags (preferred, single call, no temp file): --step, --title,
+      --file (repeatable), --status, --notes, --wave, --step-count,
+      --parallel/--no-parallel, --successes, --failures, --check,
+      --passed/--failed, --detail, --reason, --what-changed, --scope,
+      --artefact, --grade, --iteration, --summary, --plan-status. Only set
+      flags contribute a key; type-aware defaults fill step_end
+      (files_affected=[], status=ok) and run_end (run_id, trajectory_path,
+      plan_status=Implemented). Plain string args avoid JSON quoting, so
+      this path is cross-platform safe.
+
+      Escape hatch for an arbitrary payload: exactly one of --data-file
+      (writes JSON via the Write tool, passes the path), --data-stdin (bash
+      / PowerShell pipe), or --data-json (bash-only / hand-runs only).
+
+  --verify --run-id <id>
+      Structurally self-check an existing trajectory: run_start present and
+      first, run_end present and last, step_start/step_end pairing,
+      wave_start/wave_end pairing, each wave's bracketed successes count,
+      and literal files_affected paths. Prints defects and exits 1 on any
+      defect, 0 when clean. Read-only; never mutates the audit record.
+      /implement calls this in Phase 5 after run_end (advisory).
 
 Event types: run_start, step_start, step_end, validation_check,
               evaluation_result, deviation, wave_start, wave_end, run_end.
@@ -197,6 +215,67 @@ def trajectory_path(run_id: str) -> Path:
     return TRAJECTORY_DIR / f"_trajectory_{run_id}.jsonl"
 
 
+# ============================================================
+# Typed-flag payload assembly (single-call emission path)
+# ============================================================
+# Maps each argparse dest to its payload key. List order defines the
+# serialization order of flag-supplied keys. The payload dict is equal
+# (same keys and values) to the legacy hand-authored --data-file JSON;
+# key ORDER may differ when type-aware defaults are appended below, which
+# is fine - the /scrutinize trajectory lens reads payload by key.
+_FLAG_TO_PAYLOAD_KEY = [
+    ("step", "step"),
+    ("title", "title"),
+    ("files", "files_affected"),
+    ("status", "status"),
+    ("notes", "notes"),
+    ("wave", "wave"),
+    ("step_count", "step_count"),
+    ("parallel", "parallel"),
+    ("successes", "successes"),
+    ("failures", "failures"),
+    ("check", "check"),
+    ("passed", "passed"),
+    ("detail", "detail"),
+    ("reason", "reason"),
+    ("what_changed", "what_changed"),
+    ("scope", "scope"),
+    ("artefact", "artefact"),
+    ("grade", "grade"),
+    ("iteration", "iteration"),
+    ("summary", "summary"),
+    ("plan_status", "plan_status"),
+]
+
+# The set of argparse dests that constitute the typed-flag mode. Shared by
+# the mutual-exclusion guard in cmd_event and the payload builder.
+TYPED_FLAG_DESTS = [dest for dest, _ in _FLAG_TO_PAYLOAD_KEY]
+
+
+def build_payload_from_flags(event_type: str, args: argparse.Namespace) -> dict:
+    """Assemble an event payload from typed flags, type-awarely.
+
+    Only flags whose value is not None contribute a key. Then per-type
+    defaults are applied so the emitted record matches the legacy shape:
+      - step_end always carries files_affected (default []) and status (ok)
+      - run_end auto-fills run_id, trajectory_path, plan_status (Implemented)
+    """
+    payload: dict[str, Any] = {}
+    for dest, key in _FLAG_TO_PAYLOAD_KEY:
+        val = getattr(args, dest, None)
+        if val is not None:
+            payload[key] = val
+
+    if event_type == "step_end":
+        payload.setdefault("files_affected", [])
+        payload.setdefault("status", "ok")
+    elif event_type == "run_end":
+        payload.setdefault("run_id", args.run_id)
+        payload.setdefault("trajectory_path", str(trajectory_path(args.run_id)))
+        payload.setdefault("plan_status", "Implemented")
+    return payload
+
+
 def write_run_start(run_id: str, plan_path: str) -> Path:
     path = trajectory_path(run_id)
     if path.exists():
@@ -299,11 +378,22 @@ def cmd_event(args: argparse.Namespace) -> int:
         print(f"{RED}ERROR: trajectory not found: {path}. "
               f"Did you call --new first?{RESET}", file=sys.stderr)
         return 3
-    payload = load_data(args)
-    if not isinstance(payload, dict):
-        print(f"{YELLOW}WARN: payload is not a JSON object; wrapping under 'value' key.{RESET}",
-              file=sys.stderr)
-        payload = {"value": payload}
+
+    any_data_mode = bool(args.data_file or args.data_stdin or args.data_json)
+    typed_present = any(getattr(args, d, None) is not None for d in TYPED_FLAG_DESTS)
+    if any_data_mode and typed_present:
+        print(f"{RED}ERROR: typed flags and --data-file/--data-stdin/--data-json "
+              f"are mutually exclusive.{RESET}", file=sys.stderr)
+        return 2
+
+    if any_data_mode:
+        payload = load_data(args)
+        if not isinstance(payload, dict):
+            print(f"{YELLOW}WARN: payload is not a JSON object; wrapping under 'value' key.{RESET}",
+                  file=sys.stderr)
+            payload = {"value": payload}
+    else:
+        payload = build_payload_from_flags(args.type, args)
     step_number = payload.get("step", payload.get("step_number"))
     record = {
         "timestamp": now_iso(),
@@ -319,6 +409,136 @@ def cmd_event(args: argparse.Namespace) -> int:
     return 0
 
 
+# ============================================================
+# Self-check (--verify)
+# ============================================================
+_GLOB_CHARS = ("*", "{", "}")
+
+
+def verify_trajectory(run_id: str) -> list[str]:
+    """Structurally self-check a trajectory JSONL; return defect strings.
+
+    Empty list means clean. The checks are order-tolerant: they assert
+    pairing and bracket membership, NOT step-bracket non-overlap, because
+    parallel waves legitimately interleave their member steps. The M1
+    interleave-ordering judgment stays with /scrutinize.
+
+    Checks: run_start present and first; run_end present and last; every
+    step_start paired with a step_end (open-stack per step_number, so a
+    number reused across waves still reconciles); every wave_start paired
+    with a wave_end; each wave bracket's wave_end.successes equals the
+    bracketed count of step_end with status ok/deviation; every
+    files_affected entry is a literal path (no glob/shorthand/count token).
+    """
+    path = trajectory_path(run_id)
+    defects: list[str] = []
+    events: list[dict] = []
+    for i, raw in enumerate(path.read_text(encoding="utf-8").splitlines()):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            events.append(json.loads(raw))
+        except json.JSONDecodeError as exc:
+            defects.append(f"line {i + 1}: malformed JSON ({exc})")
+    if not events:
+        defects.append("trajectory is empty")
+        return defects
+
+    types = [e.get("event_type") for e in events]
+
+    # run_start present and first.
+    if "run_start" not in types:
+        defects.append("run_start event is missing")
+    elif types[0] != "run_start":
+        defects.append("run_start is not the first event")
+
+    # run_end present and last (a trajectory missing run_end is incomplete).
+    if "run_end" not in types:
+        defects.append("run_end event is missing (incomplete trajectory)")
+    elif types[-1] != "run_end":
+        defects.append("run_end is not the last event")
+
+    # step_start / step_end pairing via an open-stack per step number.
+    open_steps: dict[Any, int] = {}
+    for idx, e in enumerate(events):
+        et = e.get("event_type")
+        sn = e.get("step_number")
+        if et == "step_start":
+            open_steps[sn] = open_steps.get(sn, 0) + 1
+        elif et == "step_end":
+            if open_steps.get(sn, 0) > 0:
+                open_steps[sn] -= 1
+            else:
+                defects.append(
+                    f"step_end for step {sn} at position {idx} has no open step_start")
+    for sn, count in open_steps.items():
+        if count > 0:
+            defects.append(
+                f"step {sn}: {count} step_start(s) never closed by a step_end")
+
+    # wave_start / wave_end pairing + bracketed successes count.
+    wave_starts: dict[Any, int] = {}
+    for idx, e in enumerate(events):
+        et = e.get("event_type")
+        payload = e.get("payload") or {}
+        if et == "wave_start":
+            wave_starts[payload.get("wave")] = idx
+        elif et == "wave_end":
+            w = payload.get("wave")
+            start_idx = wave_starts.pop(w, None)
+            if start_idx is None:
+                defects.append(
+                    f"wave_end for wave {w} at position {idx} has no matching wave_start")
+                continue
+            bracket = events[start_idx + 1:idx]
+            ok_ends = sum(
+                1 for b in bracket
+                if b.get("event_type") == "step_end"
+                and (b.get("payload") or {}).get("status") in ("ok", "deviation")
+            )
+            declared = payload.get("successes")
+            if declared != ok_ends:
+                defects.append(
+                    f"wave {w}: wave_end.successes={declared} but bracketed "
+                    f"ok/deviation step_end count={ok_ends}")
+    for w in wave_starts:
+        defects.append(f"wave {w}: wave_start never closed by a wave_end")
+
+    # files_affected literal-path check (catches the N1 glob/shorthand defect).
+    for idx, e in enumerate(events):
+        if e.get("event_type") != "step_end":
+            continue
+        for entry in (e.get("payload") or {}).get("files_affected") or []:
+            s = str(entry)
+            is_count = s[:1] == "+" and s[1:2].isdigit()
+            if any(c in s for c in _GLOB_CHARS) or is_count:
+                defects.append(
+                    f"step_end at position {idx}: files_affected entry "
+                    f"'{s}' is not a literal path (glob/shorthand/count)")
+
+    return defects
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    if not args.run_id:
+        print(f"{RED}ERROR: --verify requires --run-id <id>{RESET}", file=sys.stderr)
+        return 2
+    path = trajectory_path(args.run_id)
+    if not path.exists():
+        print(f"{RED}ERROR: trajectory not found: {path}.{RESET}", file=sys.stderr)
+        return 3
+    defects = verify_trajectory(args.run_id)
+    if not defects:
+        print(f"{GREEN}trajectory clean: {path.name}{RESET}")
+        return 0
+    print(f"{RED}trajectory has {len(defects)} structural defect(s):{RESET}",
+          file=sys.stderr)
+    for d in defects:
+        print(f"{RED}  - {d}{RESET}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Emit structured trajectory events for /implement runs.",
@@ -328,6 +548,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="Mint a new run_id and write the run_start event.")
     sub.add_argument("--event", action="store_true",
                      help="Append one event to an existing trajectory.")
+    sub.add_argument("--verify", action="store_true",
+                     help="Structurally self-check an existing trajectory "
+                          "(exit 1 on any defect, 0 when clean).")
 
     parser.add_argument("--plan", help="Plan file path (required with --new).")
     parser.add_argument("--run-id", help="Existing run_id (required with --event).")
@@ -341,6 +564,47 @@ def main(argv: list[str] | None = None) -> int:
                         help="Inline JSON payload. Bash-only / hand-runs only. "
                              "/implement MUST NOT use this mode.")
 
+    # Typed convenience flags (single-call emission, no temp file). Mutually
+    # exclusive with the --data-* modes above. All default None so an unset
+    # flag contributes no payload key.
+    typed = parser.add_argument_group(
+        "typed event flags",
+        "Build the payload directly from flags instead of --data-file. "
+        "Mutually exclusive with --data-file/--data-stdin/--data-json.")
+    typed.add_argument("--step", type=int, help="Step number.")
+    typed.add_argument("--title", help="Step or event title.")
+    typed.add_argument("--file", dest="files", action="append",
+                       help="A literal file path touched by the step (repeatable). "
+                            "No globs, brace-shorthand, or count strings.")
+    typed.add_argument("--status", help="step_end status: ok | issues | deviation.")
+    typed.add_argument("--notes", help="Optional free-text note.")
+    typed.add_argument("--wave", type=int, help="Wave number.")
+    typed.add_argument("--step-count", type=int, dest="step_count",
+                       help="wave_start step count.")
+    typed.add_argument("--parallel", action=argparse.BooleanOptionalAction,
+                       default=None, help="wave_start parallel flag (--parallel/--no-parallel).")
+    typed.add_argument("--successes", type=int, help="wave_end successes count.")
+    typed.add_argument("--failures", type=int, help="wave_end failures count.")
+    typed.add_argument("--check", help="validation_check name.")
+    passed_group = typed.add_mutually_exclusive_group()
+    passed_group.add_argument("--passed", dest="passed", action="store_const",
+                              const=True, default=None,
+                              help="validation_check passed (sets passed=true).")
+    passed_group.add_argument("--failed", dest="passed", action="store_const",
+                              const=False,
+                              help="validation_check failed (sets passed=false).")
+    typed.add_argument("--detail", help="validation_check one-line detail.")
+    typed.add_argument("--reason", help="deviation reason.")
+    typed.add_argument("--what-changed", dest="what_changed",
+                       help="deviation: what changed vs the plan.")
+    typed.add_argument("--scope", help="deviation scope, e.g. 'wave' for a whole-wave deferral.")
+    typed.add_argument("--artefact", help="evaluation_result artefact path.")
+    typed.add_argument("--grade", help="evaluation_result grade.")
+    typed.add_argument("--iteration", type=int, help="evaluation_result iteration.")
+    typed.add_argument("--summary", help="run_end one-line summary.")
+    typed.add_argument("--plan-status", dest="plan_status",
+                       help="run_end plan status (default Implemented).")
+
     args = parser.parse_args(argv)
 
     if args.new:
@@ -353,6 +617,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{RED}ERROR: --event requires --type <event-type>{RESET}", file=sys.stderr)
             return 2
         return cmd_event(args)
+    if args.verify:
+        return cmd_verify(args)
     return 2
 
 

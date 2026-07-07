@@ -6,7 +6,7 @@ allowed-tools: "Read, Write, Edit, Bash(python3:*), Bash(python:*), Glob, Grep"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.5"
+  version: "1.6"
 x-heading-orchestration:
   parallel_safe: false
   shared_state: []
@@ -29,11 +29,17 @@ x-heading-capability:
 
 Execute an implementation plan created by `/create-plan`. Read the plan thoroughly, execute each step in order, emit a structured trajectory for every phase boundary, and report on the completed work.
 
-**v1.3 (2026-05-27):** Trajectory emission added per R12 of the /scrutinize meta-review. Every run writes structured JSONL events to `outputs/operations/implement/_trajectory_<run_id>.jsonl` unless `--no-trajectory` is passed. The trajectory is the input for `/scrutinize trajectory:<run_id>` audits (Agent-as-a-Judge pattern, DevAI benchmark).
+**v1.6 (2026-07-07):** Emission now uses typed flags on the helper (one `Bash` call per event, no temp file, no `_tmp/` cleanup): `--step`, `--title`, `--file` (repeatable), `--status`, `--wave`, `--successes`, `--check`, `--passed`/`--failed`, and the rest. `--data-file`/`--data-stdin` remain the escape hatch for an arbitrary payload; `--data-json` is still forbidden from `/implement`. After `run_end`, Phase 5 runs `--verify` to self-check the trajectory (advisory). The **Trajectory emission contract** below is the single consolidated statement of the invariants that the prior per-version notes (v1.3 emission, v1.4 M1/L1/N1 pairing and literal-path discipline, v1.5 whole-wave deferral) built up; the event schema and the `/scrutinize` lens are unchanged.
 
-**v1.4 (2026-06-04):** Emission-discipline tightening from the BMAD Wave-1 trajectory scrutiny (M1/L1/N1). Sequential waves now require each `step_end` before the next `step_start` and `wave_end` after all member `step_end`s (M1); `wave_start` must precede the wave's first `step_start` and `wave_end.successes` must equal the bracketed `step_end` count (L1); `files_affected` must be literal paths, no globs/shorthand/counts (N1). Instruction-only change — the helper script and event schema are unchanged.
+## Trajectory emission contract
 
-**v1.5 (2026-06-16):** Whole-wave deferrals are now first-class structured records. From the L1 finding of the engine-to-ideal trajectory scrutiny: a wave deferred entirely (not executed this run) emits one wave-scoped `deviation` event keyed to the wave's first step (`scope: "wave"`, `wave: N`) instead of being recorded only in the `run_end` summary string. Wave-execution mode step 6. Instruction-only change — the helper accepts the `deviation` type and arbitrary payload already; the scrutinize trajectory lens recognises the `scope: "wave"` form.
+The trajectory (`outputs/operations/implement/_trajectory_<run_id>.jsonl`) is the input to `/scrutinize trajectory:<run_id>` audits (Agent-as-a-Judge, DevAI benchmark) and a verbatim audit record: emit through the helper only, never edit it. All emission is skipped under `--no-trajectory`. The invariants, enforced by the phases below and self-checked by `--verify`:
+
+- **Pairing.** Every `step_start` has a matching `step_end` (same step number); step 0 (plan-load) is paired too. Every `wave_start` has a `wave_end`.
+- **Sequencing (sequential waves / no-wave runs).** Emit each `step_end` before the next `step_start`; never open step N+1 while step N is open. If work genuinely reorders, emit a `deviation` recording the swap (the M1 discipline). Parallel-wave member steps may legitimately interleave inside their wave bracket.
+- **Wave bracketing.** `wave_start` precedes the wave's first `step_start`; `wave_end` follows all member `step_end`s; `wave_end.successes` equals the count of bracketed `step_end` with status `ok`/`deviation` (not the declared membership).
+- **Literal paths.** `--file` takes one literal path per real file touched: no globs, brace-shorthand, or count strings (the N1 discipline).
+- **Whole-wave deferral.** A wave not executed at all emits no `wave_start`/`wave_end`; instead one wave-scoped `deviation` keyed to the wave's first step (`--scope wave --wave N`).
 
 ## Variables
 
@@ -96,9 +102,8 @@ Runs whenever a `plan_path` is supplied — **independent of `--no-trajectory`**
    - All sections should be filled out (no placeholder text remaining)
 
 4. **Emit the step-0 (plan-load) summary as a PAIRED `step_start`/`step_end`** — unless `--no-trajectory`:
-   - Write JSON to a temp file at `outputs/operations/implement/_tmp/{run_id}_001_plan_load.json` via the `Write` tool: `{"step": 0, "title": "plan loaded", "plan_path": "<plan_path>", "status_field": "<plan Status value>"}`
-   - Call `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type step_start --data-file <temp-path>`
-   - Immediately emit the matching `step_end` so step 0 is paired like every real step (the trajectory audit lens flags any unpaired `step_start`). Write a temp file `{run_id}_001_plan_load_end.json`: `{"step": 0, "files_affected": [], "status": "ok", "notes": "plan-load marker; no work performed"}` and call `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type step_end --data-file <temp-path>`
+   - `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type step_start --step 0 --title "plan loaded"`
+   - Immediately emit the matching `step_end` so step 0 is paired like every real step (the trajectory audit lens flags any unpaired `step_start`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type step_end --step 0 --status ok --notes "plan-load marker; no work performed"` (`files_affected` defaults to `[]`).
 
 ---
 
@@ -119,16 +124,16 @@ Scan the plan for `### Wave` headers.
    - If a step involves modifying a file, read the file first, then apply changes precisely
 
 2. **For each task — trajectory emission discipline** (skip if `--no-trajectory`):
-   - **At step start**: Write JSON to a temp file at `outputs/operations/implement/_tmp/{run_id}_step{N}_start.json`: `{"step": N, "title": "<step title from plan>"}`. Call `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type step_start --data-file <temp-path>`.
+   - **At step start**: `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type step_start --step N --title "<step title from plan>"`.
    - **Read any files that will be affected**
    - **Make the changes specified**
    - **Verify the change is correct before proceeding**
-   - **At step end**: Write JSON to a temp file at `outputs/operations/implement/_tmp/{run_id}_step{N}_end.json`: `{"step": N, "files_affected": [<list>], "status": "ok|issues|deviation", "notes": "<optional>"}`. Call `--event --type step_end --data-file <temp-path>`. **`files_affected` MUST list literal, fully-qualified paths** — one entry per file actually touched. No globs (`.claude/skills/*/triggers.json`), no brace-shorthand (`{a,b,c}/SKILL.md`), no count strings (`+3 customize.toml`). Expand to the real paths so the deterministic file-diff audit can reconcile them (the N1 emission defect).
+   - **At step end**: `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type step_end --step N --file <path> --file <path> --status ok|issues|deviation [--notes "<optional>"]`. Pass **one `--file` per literal, fully-qualified path** actually touched. No globs (`.claude/skills/*/triggers.json`), no brace-shorthand (`{a,b,c}/SKILL.md`), no count strings (`+3 customize.toml`); the deterministic file-diff audit reconciles literal paths (the N1 discipline). Omit `--file` entirely for a no-file step (`files_affected` defaults to `[]`).
 
 3. **Handle issues gracefully:**
    - If a step can't be completed as written, note the issue and adapt if the intent is clear
    - If you're unsure how to proceed, ask the user rather than guessing
-   - **Emit a `deviation` event** when adapting a step: write JSON `{"step": N, "reason": "<why>", "what_changed": "<vs plan>"}` to temp file, call `--event --type deviation --data-file <temp-path>`.
+   - **Emit a `deviation` event** when adapting a step: `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type deviation --step N --reason "<why>" --what-changed "<vs plan>"`.
 
 **Wave execution mode:**
 
@@ -136,12 +141,12 @@ Execute waves in order. For each wave:
 
 1. **Parse all steps** (`####` headings) within the wave.
 
-2. **Emit `wave_start` event** (skip if `--no-trajectory`): write JSON `{"wave": N, "step_count": <count>, "parallel": <true|false>}` to temp file, call `--event --type wave_start --data-file <temp-path>`. **`wave_start` MUST be emitted before the wave's first `step_start`** — never after a member step has already opened. A step whose `step_start`/`step_end` fall outside its wave's brackets cannot be reconstructed from the bracketed record (the L1 emission defect).
+2. **Emit `wave_start` event** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type wave_start --wave N --step-count <count> --parallel|--no-parallel`. **`wave_start` MUST be emitted before the wave's first `step_start`** — never after a member step has already opened. A step whose `step_start`/`step_end` fall outside its wave's brackets cannot be reconstructed from the bracketed record (the L1 emission defect).
 
 3. **If the wave is marked `(parallel)` AND has 2+ steps:**
    - Announce: "Executing Wave N: {count} parallel tasks"
    - Dispatch each step as an independent agent using `superpowers:dispatching-parallel-agents`
-   - **Each child sub-agent brief MUST include**: (a) the `run_id`, (b) the path `scripts/implement-trajectory-log.py`, (c) instructions to emit its own `step_start` / `step_end` / `deviation` events via `--data-file` only (never `--data-json`), (d) a reminder that the JSONL is shared state and the helper handles atomic-append concurrency.
+   - **Each child sub-agent brief MUST include**: (a) the `run_id`, (b) the path `scripts/implement-trajectory-log.py`, (c) instructions to emit its own `step_start` / `step_end` / `deviation` events via the typed flags (never `--data-json`), (d) a reminder that the JSONL is shared state and the helper handles atomic-append concurrency.
    - Each agent receives: the step's full text (not a file reference), relevant context files, and instructions to commit its work atomically
    - Wait for ALL agents in the wave to complete
    - Collect results (successes and failures)
@@ -153,11 +158,11 @@ Execute waves in order. For each wave:
 
 5. **After a wave completes successfully:**
    - Verify all files mentioned in the wave's steps exist
-   - **Emit `wave_end` event** (skip if `--no-trajectory`): write JSON `{"wave": N, "successes": <count>, "failures": <count>}` to temp file, call `--event --type wave_end --data-file <temp-path>`. Emit `wave_end` only *after* every member step's `step_end` has been emitted. `successes` MUST equal the number of `step_end` events with `status` ok/deviation that fall inside this wave's `wave_start`/`wave_end` brackets — not the plan's declared membership count. The two must reconcile from the bracketed record alone.
+   - **Emit `wave_end` event** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type wave_end --wave N --successes <count> --failures <count>`. Emit `wave_end` only *after* every member step's `step_end` has been emitted. `successes` MUST equal the number of `step_end` events with `status` ok/deviation that fall inside this wave's `wave_start`/`wave_end` brackets — not the plan's declared membership count. The two must reconcile from the bracketed record alone.
    - Report: "Wave N complete: {count} tasks done"
    - Proceed to the next wave
 
-6. **If an entire wave is deferred — not executed at all this run** (deferred to a focused session, blocked, or descoped): do NOT emit `wave_start`/`wave_end` for it (no steps ran, so there would be no bracketed `step_end`s to reconcile against). Instead emit exactly ONE **wave-scoped `deviation` event keyed to the wave's first step number**, so a whole-wave skip is a first-class structured record rather than only a `run_end` summary string (the L1 trajectory-audit defect, 2026-06-16). Skip if `--no-trajectory`. Write JSON `{"step": <first step number of the deferred wave>, "scope": "wave", "wave": N, "reason": "<why deferred>", "what_changed": "wave N (steps X-Y) deferred — not executed this run"}` to a temp file, call `--event --type deviation --data-file <temp-path>`. The `run_end` summary should still mention the deferral, but the wave-scoped deviation event is the authoritative structured record. (A per-step deviation per skipped step is also acceptable when only part of a wave is deferred; the `scope: "wave"` form is for the whole-wave case.)
+6. **If an entire wave is deferred — not executed at all this run** (deferred to a focused session, blocked, or descoped): do NOT emit `wave_start`/`wave_end` for it (no steps ran, so there would be no bracketed `step_end`s to reconcile against). Instead emit exactly ONE **wave-scoped `deviation` event keyed to the wave's first step number**, so a whole-wave skip is a first-class structured record rather than only a `run_end` summary string (the L1 trajectory-audit defect, 2026-06-16). Skip if `--no-trajectory`. Emit: `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type deviation --step <first step number of the deferred wave> --scope wave --wave N --reason "<why deferred>" --what-changed "wave N (steps X-Y) deferred, not executed this run"`. The `run_end` summary should still mention the deferral, but the wave-scoped deviation event is the authoritative structured record. (A per-step deviation per skipped step is also acceptable when only part of a wave is deferred; the `scope: "wave"` form is for the whole-wave case.)
 
 ---
 
@@ -166,7 +171,7 @@ Execute waves in order. For each wave:
 1. **Run through the Validation Checklist** from the plan
    - Check off each item
    - Note any that fail
-   - **For each check** (skip if `--no-trajectory`): write JSON `{"check": "<name>", "passed": true|false, "detail": "<one-line>"}` to a temp file, call `--event --type validation_check --data-file <temp-path>`.
+   - **For each check** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type validation_check --check "<name>" --passed|--failed --detail "<one-line>"`.
 
 2. **Verify Success Criteria** are met
    - Confirm each criterion is satisfied
@@ -192,7 +197,7 @@ If the user included `--evaluate` in the arguments or explicitly requested evalu
    - Maximum 3 rework cycles. If still NEEDS REWORK after 3 cycles, report remaining issues to the user.
 4. **If grade is FAIL**: Stop and report the full evaluation to the user. Do not attempt automatic rework on FAIL grades.
 5. **Track iteration count** in the Implementation Notes section.
-6. **For each evaluation** (skip if `--no-trajectory`): write JSON `{"artefact": "<path>", "grade": "PASS|PASS WITH NOTES|NEEDS REWORK|FAIL", "iteration": <n>}` to temp file, call `--event --type evaluation_result --data-file <temp-path>`.
+6. **For each evaluation** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type evaluation_result --artefact "<path>" --grade "PASS|PASS WITH NOTES|NEEDS REWORK|FAIL" --iteration <n>`.
 
 ---
 
@@ -227,7 +232,9 @@ After implementation (and optional evaluation), update the plan file:
 `outputs/operations/implement/_trajectory_<run_id>.jsonl` — audit with `/scrutinize trajectory:<run_id>`.
 ```
 
-**Final emission** (skip if `--no-trajectory`): write JSON `{"run_id": "<id>", "trajectory_path": "<path>", "plan_status": "Implemented", "summary": "<one-line>"}` to temp file, call `--event --type run_end --data-file <temp-path>`. Then clean up any leftover temp files under `outputs/operations/implement/_tmp/{run_id}_*.json`.
+**Final emission** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type run_end --summary "<one-line>" --plan-status Implemented` (`run_id` and `trajectory_path` auto-fill).
+
+**Self-check** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --verify --run-id {run_id}`. This is **advisory**. If it exits non-zero, surface the reported defects to the CEO in the Report as a note; do NOT hard-fail the completed run (CEO sovereignty holds, matching the soft pre-impl gate). No temp files are written anymore, so there is no `_tmp/` cleanup step.
 
 ---
 
@@ -293,5 +300,5 @@ Updated `plans/YYYY-MM-DD-{name}.md` status to "Implemented"
 - Never proceed past a blocker or ambiguity without asking the user - guessing at unclear steps produces wrong work
 - Never skip documentation propagation - if you created or modified a skill, script, reference file, or rule, update CLAUDE.md, templates/GETTING-STARTED.md, and any other affected documentation targets before declaring done
 - Never skip trajectory emission unless `--no-trajectory` was explicitly passed - trajectory is the input to `/scrutinize trajectory:<run_id>` audits
-- Never call `scripts/implement-trajectory-log.py` with `--data-json` from inside `/implement` - that mode is bash-only / hand-runs only; `/implement` MUST use `--data-file` for cross-platform safety
+- Never call `scripts/implement-trajectory-log.py` with `--data-json` from inside `/implement` - that mode is bash-only / hand-runs only. Prefer the typed flags (`--step`, `--file`, `--status`, ...) for every event; `--data-file` / `--data-stdin` remain the escape hatch for a genuinely arbitrary payload
 - Never write to `outputs/operations/implement/_trajectory_*.jsonl` directly - only through the helper script (it handles atomic-append concurrency on POSIX + Windows)

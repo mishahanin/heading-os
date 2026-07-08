@@ -1,0 +1,14 @@
+[Unit]
+Description=Nightly HEADING OS router-accuracy trend (03:00, configured timezone)
+
+[Timer]
+# Nightly 03:00 in the configured timezone, deliberately after the eval-drift daily
+# run (02:00) so the two judge-heavy jobs do not overlap. The installer substitutes
+# {{TZ}} from HEADING_OS_TZ (default UTC); the trailing timezone pins the fire even
+# when the host's local timezone differs (systemd >= 252). Persistent=true catches a
+# fire missed because the host was off, running it on next boot.
+OnCalendar=*-*-* 03:00:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

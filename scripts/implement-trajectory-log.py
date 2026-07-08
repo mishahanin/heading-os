@@ -43,7 +43,12 @@ Three subcommands:
       Structurally self-check an existing trajectory: run_start present and
       first, run_end present and last, step_start/step_end pairing,
       wave_start/wave_end pairing, each wave's bracketed successes count,
-      and literal files_affected paths. Prints defects and exits 1 on any
+      and literal files_affected paths. Plus a run-level files reconciliation
+      (advisory): the current engine working tree is diffed against
+      run_start.git_head and any changed file recorded in no step's
+      files_affected is flagged; this is meaningful only immediately after the
+      run (before any commit / git pull) and degrades to a no-op when git_head
+      is "unknown" or git is unavailable. Prints defects and exits 1 on any
       defect, 0 when clean. Read-only; never mutates the audit record.
       /implement calls this in Phase 5 after run_end (advisory).
 
@@ -74,6 +79,8 @@ Exit codes:
   2  bad args (missing required, mutually-exclusive violation)
   3  filesystem error (cannot write, locking timeout)
   4  JSON parse error on supplied data
+  5  sequencing violation (step_start opened while another step is open
+     outside a parallel wave, or step_end for an unopened step)
 """
 from __future__ import annotations
 
@@ -347,6 +354,63 @@ def load_data(args: argparse.Namespace) -> Any:
 
 
 # ============================================================
+# Emit-time sequencing state (guard support)
+# ============================================================
+def _read_events(path: Path) -> list[dict]:
+    """Tolerant JSONL read: return event dicts, silently skipping bad lines.
+
+    Used by the emit-time sequencing guard to reconstruct open-step state from
+    the trajectory written so far. Malformed lines are ignored here (verify
+    surfaces them as defects); the guard only needs the well-formed events.
+    """
+    events: list[dict] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return events
+    for raw in text.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            events.append(obj)
+    return events
+
+
+def _open_state(events: list[dict]) -> tuple[set, bool]:
+    """Reduce a trajectory's events to (open_step_numbers, in_open_parallel_wave).
+
+    Open steps are tracked with an open-stack per step_number (a number reused
+    across waves still reconciles). A parallel wave is "open" while a
+    wave_start with payload.parallel is True has no matching wave_end; tracked
+    by wave number so a non-parallel wave_end never clears a parallel wave.
+    """
+    open_counts: dict[Any, int] = {}
+    parallel_waves_open: set = set()
+    for e in events:
+        et = e.get("event_type")
+        payload = e.get("payload") or {}
+        if et == "step_start":
+            sn = e.get("step_number")
+            open_counts[sn] = open_counts.get(sn, 0) + 1
+        elif et == "step_end":
+            sn = e.get("step_number")
+            if open_counts.get(sn, 0) > 0:
+                open_counts[sn] -= 1
+        elif et == "wave_start":
+            if payload.get("parallel") is True:
+                parallel_waves_open.add(payload.get("wave"))
+        elif et == "wave_end":
+            parallel_waves_open.discard(payload.get("wave"))
+    open_steps = {sn for sn, c in open_counts.items() if c > 0}
+    return open_steps, bool(parallel_waves_open)
+
+
+# ============================================================
 # CLI
 # ============================================================
 def cmd_new(args: argparse.Namespace) -> int:
@@ -395,6 +459,26 @@ def cmd_event(args: argparse.Namespace) -> int:
     else:
         payload = build_payload_from_flags(args.type, args)
     step_number = payload.get("step", payload.get("step_number"))
+
+    # Emit-time sequencing guard: reject a mis-ordered step marker the moment
+    # it is emitted (exit 5), so a bad marker cannot land silently. Wave-aware:
+    # an open parallel wave suspends the guard (its member steps legitimately
+    # interleave). This rejects a single --event call, never the run.
+    if args.type in ("step_start", "step_end"):
+        open_steps, parallel_open = _open_state(_read_events(path))
+        if args.type == "step_start" and open_steps and not parallel_open:
+            print(f"{RED}ERROR: sequencing violation: cannot open step "
+                  f"{step_number} while step(s) {sorted(open_steps)} are still "
+                  f"open. Emit their step_end first, or open a parallel "
+                  f"wave_start for legitimate interleaving.{RESET}",
+                  file=sys.stderr)
+            return 5
+        if args.type == "step_end" and step_number not in open_steps:
+            print(f"{RED}ERROR: sequencing violation: step_end for step "
+                  f"{step_number} has no open step_start.{RESET}",
+                  file=sys.stderr)
+            return 5
+
     record = {
         "timestamp": now_iso(),
         "event_type": args.type,
@@ -415,6 +499,36 @@ def cmd_event(args: argparse.Namespace) -> int:
 _GLOB_CHARS = ("*", "{", "}")
 
 
+def _git_changed_files(git_head: str) -> set[str]:
+    """Engine working-tree change set since git_head: tracked diff ∪ untracked.
+
+    Returns repo-relative POSIX paths (what git prints and what /implement
+    records). Runs in WORKSPACE_ROOT. Returns an empty set on any git failure
+    so the run-level reconciliation degrades gracefully to "no defect". Named
+    (not inlined) so tests can monkeypatch exactly this seam.
+    """
+    import subprocess
+
+    changed: set[str] = set()
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", git_head],
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
+        )
+        if diff.returncode != 0:
+            return set()
+        changed.update(p.strip() for p in diff.stdout.splitlines() if p.strip())
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
+        )
+        if untracked.returncode == 0:
+            changed.update(p.strip() for p in untracked.stdout.splitlines() if p.strip())
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return changed
+
+
 def verify_trajectory(run_id: str) -> list[str]:
     """Structurally self-check a trajectory JSONL; return defect strings.
 
@@ -429,6 +543,17 @@ def verify_trajectory(run_id: str) -> list[str]:
     with a wave_end; each wave bracket's wave_end.successes equals the
     bracketed count of step_end with status ok/deviation; every
     files_affected entry is a literal path (no glob/shorthand/count token).
+
+    Plus a run-level files reconciliation (advisory): the current engine
+    working tree is diffed against run_start.git_head, and any changed engine
+    file absent from every step's files_affected is flagged "(advisory) ...".
+    This is meaningful ONLY immediately after the run, against a tree holding
+    just this run's changes (before any commit / git pull); re-run later on a
+    historical trajectory with a stale-but-valid git_head it will over-flag
+    pulled/committed files - expected, and harmless because advisory. It skips
+    entirely (no defect) when git_head is "unknown" or any git call fails, so
+    verify never becomes environment-fragile. The structural checks above stay
+    pure-JSONL and are unaffected by repo state.
     """
     path = trajectory_path(run_id)
     defects: list[str] = []
@@ -516,6 +641,29 @@ def verify_trajectory(run_id: str) -> list[str]:
                 defects.append(
                     f"step_end at position {idx}: files_affected entry "
                     f"'{s}' is not a literal path (glob/shorthand/count)")
+
+    # Run-level files reconciliation (advisory). Compare the current engine
+    # working tree against run_start.git_head; flag any changed engine file
+    # recorded in no step's files_affected. Graceful degrade: skip on git_head
+    # "unknown" or any git failure (empty change set). See the docstring for
+    # the "meaningful only immediately after the run" precondition.
+    git_head = ""
+    for e in events:
+        if e.get("event_type") == "run_start":
+            git_head = str((e.get("payload") or {}).get("git_head") or "")
+            break
+    if git_head and git_head != "unknown":
+        changed = _git_changed_files(git_head)
+        if changed:
+            recorded: set = set()
+            for e in events:
+                if e.get("event_type") == "step_end":
+                    for entry in (e.get("payload") or {}).get("files_affected") or []:
+                        recorded.add(str(entry))
+            for path_str in sorted(changed - recorded):
+                defects.append(
+                    f"(advisory) {path_str} was modified in this run but "
+                    f"appears in no step's files_affected")
 
     return defects
 

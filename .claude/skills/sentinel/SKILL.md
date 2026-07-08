@@ -33,14 +33,11 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - sentinel
-    - start sentinel
-    - stop sentinel
-    - comms monitor
+    - NEVER auto-trigger. Explicit `/sentinel` only.
   exclusions:
     - N/A
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Sentinel -- Unified Comms Monitor
 

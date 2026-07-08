@@ -31,18 +31,13 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - pre-implementation gate
-    - gate before implement
-    - are we ready to implement
-    - before we implement
-    - stress-test plan before building
-    - pre-impl check
+    - NEVER auto-trigger. Explicit `/pre-impl` only.
   exclusions:
     - Trivial one-liner fixes -> skip
     - typo corrections -> skip
     - 'config-only changes -> skip. For non-trivial work: run after /create-plan approval, before /implement. Full chain: /create-plan -> /pre-impl -> /implement -> /scrutinize'
   compound: 'No'
-  router: auto
+  router: manual
 ---
 
 # Pre-Implementation Gate

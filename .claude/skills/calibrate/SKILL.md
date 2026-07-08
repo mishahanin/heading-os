@@ -48,14 +48,12 @@ x-heading-routing:
   category: Operations
   label: /calibrate [light]
   triggers:
-    - calibrate
-    - self-improve agent
-    - end of session capture
+    - NEVER auto-trigger. Explicit `/calibrate [light]` only.
   exclusions:
     - Cross-session memory hygiene -> /dream
     - quality grade on a single artifact -> /evaluate
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # /calibrate - End-of-Session Self-Improvement
 

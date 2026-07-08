@@ -33,13 +33,11 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - publish corporate
-    - publish to executives
-    - push to corporate
+    - NEVER auto-trigger. Explicit `/publish-corporate` only.
   exclusions:
     - Full push with CRM -> /push-updates
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Publish Corporate Content
 

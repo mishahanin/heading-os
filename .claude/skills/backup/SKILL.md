@@ -31,13 +31,11 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - backup
-    - push to github
-    - save workspace
+    - NEVER auto-trigger. Explicit `/backup` only.
   exclusions:
     - Corporate publish -> /publish-corporate
   compound: 'No'
-  router: auto
+  router: manual
 ---
 Backup the entire workspace to GitHub.
 

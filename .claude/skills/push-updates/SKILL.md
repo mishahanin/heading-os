@@ -36,13 +36,11 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - push updates
-    - update all executives
-    - sync to everyone
+    - NEVER auto-trigger. Explicit `/push-updates` only.
   exclusions:
     - Personal backup -> /backup
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Push Updates to All Executives
 

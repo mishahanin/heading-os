@@ -1,0 +1,11 @@
+[
+  { "query": "import my logged-in cookies so the headless browser can reuse my session", "should_trigger": true },
+  { "query": "set up browser cookies for Nimbus before I scrape their portal", "should_trigger": true },
+  { "query": "pull my Brave cookies into the workspace cookie store", "should_trigger": true },
+  { "query": "load my Chrome login cookies into cookies.json for PartnerCo", "should_trigger": true },
+  { "query": "get my authenticated session cookies imported so Playwright stays logged in", "should_trigger": true },
+
+  { "query": "screenshot the ExampleTelco homepage for me", "should_trigger": false },
+  { "query": "scrape the pricing page on PartnerCo's site", "should_trigger": false },
+  { "query": "fill out this web form and submit it", "should_trigger": false }
+]

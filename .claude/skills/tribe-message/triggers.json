@@ -1,0 +1,11 @@
+[
+  { "query": "write to the Tribe about the new deployment milestone", "should_trigger": true },
+  { "query": "draft an all-hands message for the Tribe", "should_trigger": true },
+  { "query": "message to the Tribe declaring Crunch Mode", "should_trigger": true },
+  { "query": "I need a heading-setting note for the whole Tribe on the PartnerCo win", "should_trigger": true },
+  { "query": "put together a Tribe-wide update on where we're headed this quarter", "should_trigger": true },
+
+  { "query": "draft this week's Monday tribe message", "should_trigger": false },
+  { "query": "write a LinkedIn post about our sovereignty stance", "should_trigger": false },
+  { "query": "write a formal letter to ExampleTelco's CEO", "should_trigger": false }
+]

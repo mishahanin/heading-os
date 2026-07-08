@@ -1,0 +1,11 @@
+[
+  { "query": "draft a board resolution approving the ExampleTelco deployment", "should_trigger": true },
+  { "query": "we need a formal notice issued under corporate authority", "should_trigger": true },
+  { "query": "write a letter of position on our data sovereignty stance", "should_trigger": true },
+  { "query": "produce a certificate of authority for Sara Okonkwo to sign on our behalf", "should_trigger": true },
+  { "query": "prepare an official document declaring the board's decision", "should_trigger": true },
+
+  { "query": "write a formal letter to PartnerCo introducing 31C", "should_trigger": false },
+  { "query": "put together a commercial proposal with pricing for Nimbus", "should_trigger": false },
+  { "query": "draft an MOU defining mutual obligations between us and PartnerCo", "should_trigger": false }
+]

@@ -1,0 +1,11 @@
+[
+  { "query": "evaluate this new skill I just built and tell me if it meets our standards", "should_trigger": true },
+  { "query": "grade the quality of scripts/generate-dashboard.py", "should_trigger": true },
+  { "query": "review the quality of this reference file against the workspace rubric", "should_trigger": true },
+  { "query": "check this artifact and give it a pass or needs-rework verdict", "should_trigger": true },
+  { "query": "run a skeptical quality assessment on the rule I just added", "should_trigger": true },
+
+  { "query": "fact-check the numbers in this proposal draft against our datastore", "should_trigger": false },
+  { "query": "stress-test what I just implemented and apply the fixes you find", "should_trigger": false },
+  { "query": "do a structural editorial pass to tighten this document", "should_trigger": false }
+]

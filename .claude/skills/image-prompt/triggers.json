@@ -1,0 +1,11 @@
+[
+  { "query": "give me an image prompt to go with this LinkedIn post", "should_trigger": true },
+  { "query": "visualize the announcement I just wrote", "should_trigger": true },
+  { "query": "write a photorealistic prompt for a visual companion to this article", "should_trigger": true },
+  { "query": "I need an image prompt for the email I just drafted", "should_trigger": true },
+  { "query": "what visual would pair with this slide copy - draft me a Midjourney prompt", "should_trigger": true },
+
+  { "query": "actually generate the image from that prompt now", "should_trigger": false },
+  { "query": "render this prompt into a real picture file with flux", "should_trigger": false },
+  { "query": "create the actual image on disk from the description", "should_trigger": false }
+]

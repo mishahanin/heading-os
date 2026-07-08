@@ -1,0 +1,11 @@
+[
+  { "query": "what's on X from the peer CEOs today", "should_trigger": true },
+  { "query": "run a twitter pulse over the last 72 hours", "should_trigger": true },
+  { "query": "scan X for what the DPI competitors are posting", "should_trigger": true },
+  { "query": "what are the sovereign-tech accounts saying this week on X", "should_trigger": true },
+  { "query": "monitor my X account list and give me a brief", "should_trigger": true },
+
+  { "query": "what's trending on YouTube about DPI this week", "should_trigger": false },
+  { "query": "scan YouTube for videos on sovereign AI policy", "should_trigger": false },
+  { "query": "find YouTube content creators talking about deep packet inspection", "should_trigger": false }
+]

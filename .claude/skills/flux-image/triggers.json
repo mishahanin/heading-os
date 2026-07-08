@@ -1,0 +1,11 @@
+[
+  { "query": "generate an image of a sovereign data platform for my post", "should_trigger": true },
+  { "query": "create a picture of a lighthouse over a stormy sea, 16:9", "should_trigger": true },
+  { "query": "make me an actual image file from this prompt using flux", "should_trigger": true },
+  { "query": "produce a branded hero visual for the Nimbus announcement", "should_trigger": true },
+  { "query": "turn this description into a real image on disk", "should_trigger": true },
+
+  { "query": "just write me a detailed image prompt, don't generate anything yet", "should_trigger": false },
+  { "query": "design a full logo and infographic set for the PartnerCo campaign", "should_trigger": false },
+  { "query": "draft a LinkedIn post about our launch this week", "should_trigger": false }
+]

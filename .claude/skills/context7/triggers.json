@@ -1,0 +1,11 @@
+[
+  { "query": "look up the current docs for the requests library", "should_trigger": true },
+  { "query": "context7 the FastAPI dependency injection API", "should_trigger": true },
+  { "query": "get up-to-date documentation for pydantic v2 validators", "should_trigger": true },
+  { "query": "pull the latest library docs so I can validate this exchangelib call", "should_trigger": true },
+  { "query": "fetch version-specific reference for the httpx async client", "should_trigger": true },
+
+  { "query": "investigate the company behind this open-source project", "should_trigger": false },
+  { "query": "save a note in the knowledge base about how we use asyncio", "should_trigger": false },
+  { "query": "research the general history of the Python packaging ecosystem", "should_trigger": false }
+]

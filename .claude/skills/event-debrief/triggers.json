@@ -1,0 +1,11 @@
+[
+  { "query": "debrief the summit I just got back from, here are my messy notes", "should_trigger": true },
+  { "query": "do a post-event recap of the conference with the contacts I met", "should_trigger": true },
+  { "query": "event debrief for the PartnerCo launch, capture the leads before I forget", "should_trigger": true },
+  { "query": "help me write up outcomes and action items from the expo this week", "should_trigger": true },
+  { "query": "recap the VIP dinner with Sara Okonkwo and log the follow-ups I owe", "should_trigger": true },
+
+  { "query": "send the follow-up emails to everyone I met at the summit", "should_trigger": false },
+  { "query": "prep me for my upcoming meeting with the ExampleTelco team next week", "should_trigger": false },
+  { "query": "run my end-of-week review across pipeline and threads", "should_trigger": false }
+]

@@ -1,0 +1,11 @@
+[
+  { "query": "make an audio overview from these three articles", "should_trigger": true },
+  { "query": "spin up a NotebookLM notebook on the Middle East DPI market", "should_trigger": true },
+  { "query": "generate an AI podcast from the sources I dropped in the notebook", "should_trigger": true },
+  { "query": "add these URLs as sources to my sovereign-AI notebook", "should_trigger": true },
+  { "query": "run notebook research to discover new sources on sovereign AI governance", "should_trigger": true },
+
+  { "query": "research ExampleTelco before our call and give me a dossier", "should_trigger": false },
+  { "query": "add a quick note about Sara Okonkwo's pricing objection", "should_trigger": false },
+  { "query": "what's trending on YouTube podcasts about DPI this week", "should_trigger": false }
+]

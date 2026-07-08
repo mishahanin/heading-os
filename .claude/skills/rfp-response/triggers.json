@@ -1,0 +1,11 @@
+[
+  { "query": "help me respond to this government tender for network monitoring", "should_trigger": true },
+  { "query": "we got an ITT from ExampleTelco, put together our bid", "should_trigger": true },
+  { "query": "draft our RFP response for the Nimbus procurement", "should_trigger": true },
+  { "query": "here are the tender requirements, map them to ODUN.ONE and write the response", "should_trigger": true },
+  { "query": "we need to submit a formal procurement bid for PartnerCo", "should_trigger": true },
+
+  { "query": "put together an informal commercial proposal with pricing for ExampleTelco", "should_trigger": false },
+  { "query": "draft an MOU with PartnerCo defining our mutual obligations", "should_trigger": false },
+  { "query": "write a board resolution authorizing the ODUN.ONE deployment", "should_trigger": false }
+]

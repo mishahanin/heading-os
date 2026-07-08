@@ -1,0 +1,11 @@
+[
+  { "query": "scan YouTube for what's trending in AI agents this week", "should_trigger": true },
+  { "query": "what are creators talking about on YouTube around deep packet inspection", "should_trigger": true },
+  { "query": "find recent YouTube videos about sovereign cybersecurity", "should_trigger": true },
+  { "query": "youtube pulse on 5G network security", "should_trigger": true },
+  { "query": "pull the hot YouTube content on data sovereignty from the last 72 hours", "should_trigger": true },
+
+  { "query": "dig into ExampleTelco and give me a full intelligence dossier", "should_trigger": false },
+  { "query": "scan X for what people are saying about PartnerCo", "should_trigger": false },
+  { "query": "run background research on Sara Okonkwo before our meeting", "should_trigger": false }
+]

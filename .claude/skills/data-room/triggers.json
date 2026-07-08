@@ -1,0 +1,11 @@
+[
+  { "query": "prepare the data room documents for our upcoming raise", "should_trigger": true },
+  { "query": "draft a response to this due diligence questionnaire from a VC", "should_trigger": true },
+  { "query": "put together investor materials for the strategic round", "should_trigger": true },
+  { "query": "I need a company overview and financial summary for the DD process", "should_trigger": true },
+  { "query": "build out the full data room table of contents for Nimbus", "should_trigger": true },
+
+  { "query": "build me a live pitch deck to present to investors next week", "should_trigger": false },
+  { "query": "write the quarterly progress update for our existing investors", "should_trigger": false },
+  { "query": "run due diligence on PartnerCo before we sign with them", "should_trigger": false }
+]

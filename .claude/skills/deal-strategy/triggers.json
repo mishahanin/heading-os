@@ -1,0 +1,11 @@
+[
+  { "query": "work up a deal strategy for ExampleTelco", "should_trigger": true },
+  { "query": "how do we win this opportunity with Nimbus", "should_trigger": true },
+  { "query": "build the competitive positioning for the PartnerCo deal", "should_trigger": true },
+  { "query": "what's our pricing strategy for this telco procurement", "should_trigger": true },
+  { "query": "analyze this new deal and give me a plan to close it", "should_trigger": true },
+
+  { "query": "give me a market brief on the DPI sector in the region", "should_trigger": false },
+  { "query": "how does Nimbus compare to ODUN.ONE feature by feature", "should_trigger": false },
+  { "query": "investigate ExampleTelco's leadership and background", "should_trigger": false }
+]

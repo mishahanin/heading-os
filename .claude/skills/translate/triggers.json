@@ -1,0 +1,11 @@
+[
+  { "query": "translate this paragraph into Russian, keep the tone", "should_trigger": true },
+  { "query": "I have a Russian email from Sara Okonkwo, put it into English", "should_trigger": true },
+  { "query": "render this English draft in Russian for the Tribe", "should_trigger": true },
+  { "query": "give me an English version of this Russian document", "should_trigger": true },
+  { "query": "convert this note to English but preserve the register", "should_trigger": true },
+
+  { "query": "draft a new email to ExampleTelco in Russian", "should_trigger": false },
+  { "query": "write a LinkedIn post in English about data sovereignty", "should_trigger": false },
+  { "query": "compose a message to the Tribe about the milestone", "should_trigger": false }
+]

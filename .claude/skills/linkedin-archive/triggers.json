@@ -1,0 +1,11 @@
+[
+  { "query": "I just published this on LinkedIn, file it away", "should_trigger": true },
+  { "query": "the post is live on LinkedIn now", "should_trigger": true },
+  { "query": "опубликовал на LinkedIn, заархивируй", "should_trigger": true },
+  { "query": "выложил статью на LinkedIn, убери её в архив", "should_trigger": true },
+  { "query": "that article went live on LinkedIn, move it to the datastore", "should_trigger": true },
+
+  { "query": "draft a new LinkedIn post about data sovereignty", "should_trigger": false },
+  { "query": "how many likes and impressions did my last LinkedIn post get", "should_trigger": false },
+  { "query": "what should I put in my LinkedIn banner and headline", "should_trigger": false }
+]

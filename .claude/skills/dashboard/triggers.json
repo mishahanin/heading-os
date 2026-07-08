@@ -1,0 +1,11 @@
+[
+  { "query": "give me my morning dashboard", "should_trigger": true },
+  { "query": "pull up the daily brief for today", "should_trigger": true },
+  { "query": "show me the bridge view of where things stand this morning", "should_trigger": true },
+  { "query": "generate the CEO operational briefing for today", "should_trigger": true },
+  { "query": "I need the single-page dashboard with pipeline and calendar", "should_trigger": true },
+
+  { "query": "prime the session and load all my context", "should_trigger": false },
+  { "query": "what should I do next right now", "should_trigger": false },
+  { "query": "run my end-of-week review for Friday", "should_trigger": false }
+]

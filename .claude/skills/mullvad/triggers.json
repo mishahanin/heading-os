@@ -1,0 +1,11 @@
+[
+  { "query": "find the fastest Mullvad relay from here and hook me up", "should_trigger": true },
+  { "query": "benchmark my Mullvad servers and switch to the quickest one", "should_trigger": true },
+  { "query": "my Mullvad feels slow, can you check the latency and reconnect", "should_trigger": true },
+  { "query": "get me on a faster Mullvad exit please", "should_trigger": true },
+  { "query": "run a mullvad speed test and connect me to the best one", "should_trigger": true },
+
+  { "query": "is it safe to use a VPN on hotel wifi?", "should_trigger": false },
+  { "query": "open the Mullvad setup guide page and summarize the install steps", "should_trigger": false },
+  { "query": "how much time is left on my Mullvad account and how do I add credit?", "should_trigger": false }
+]

@@ -22,11 +22,21 @@ Skills lacking the orchestration block (or its fields) default to
 parallel_safe=false per the orchestrator's safety model, which is invisible.
 This audit surfaces the gap so frontmatter can be filled in deliberately.
 
+Size budget (F-5.3): every SKILL.md is also checked against a mechanical size
+budget - a hard cap of 500 lines and 18432 bytes (18 KB), with a warn threshold
+at 16384 bytes (16 KB). A file over either hard cap is a HARD violation; a file
+in the warn band prints a non-blocking advisory. The size gate is UNCONDITIONAL:
+any HARD size violation makes this script exit 1 regardless of --fail-on-missing,
+so the flagless CI invocation ("Skill metadata contract") enforces it with no
+workflow-file change. Size WARN/HARD lines always print, even under --summary.
+The frontmatter-completeness gate keeps its existing --fail-on-missing semantics;
+only the size gate is unconditional.
+
 Usage:
-  python scripts/skill-metadata-check.py              # full audit with per-skill detail
-  python scripts/skill-metadata-check.py --summary    # counts only, no per-skill output
-  python scripts/skill-metadata-check.py --fail-on-missing  # exit 1 if any required field missing (for CI)
-  python scripts/skill-metadata-check.py --json       # machine-readable JSON output
+  python scripts/skill-metadata-check.py              # full audit with per-skill detail (+ unconditional size gate)
+  python scripts/skill-metadata-check.py --summary    # counts only, no per-skill output (size lines still print)
+  python scripts/skill-metadata-check.py --fail-on-missing  # ALSO exit 1 if any required field missing (for CI)
+  python scripts/skill-metadata-check.py --json       # machine-readable JSON output (includes size fields)
 """
 import argparse
 import json
@@ -49,6 +59,20 @@ ORCHESTRATION_BLOCK = "x-heading-orchestration"
 ORCHESTRATION_BLOCK_LEGACY = "x-31c-orchestration"
 
 VALID_PARALLEL_SAFE = {"true", "false", "partial", True, False}
+
+# Size budget (F-5.3). Hard caps fail the check; the warn threshold is advisory.
+LINE_HARD_CAP = 500
+BYTE_HARD_CAP = 18432  # 18 KB
+BYTE_WARN = 16384      # 16 KB
+
+
+def classify_size(size_lines: int, size_bytes: int) -> str:
+    """Classify a SKILL.md's size against the budget: HARD | WARN | OK."""
+    if size_lines > LINE_HARD_CAP or size_bytes > BYTE_HARD_CAP:
+        return "HARD"
+    if size_bytes >= BYTE_WARN:
+        return "WARN"
+    return "OK"
 
 
 def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
@@ -102,10 +126,25 @@ def check_skill(skill_dir: Path) -> dict:
         "error": "",
         "legacy_namespace": False,
         "status": "UNKNOWN",
+        "size_lines": 0,
+        "size_bytes": 0,
+        "size_status": "OK",
     }
 
     if not skill_md.exists():
         result["error"] = "SKILL.md not found"
+        result["status"] = "ERROR"
+        return result
+
+    # Size budget: measured independently of frontmatter status so a HARD size
+    # violation is caught even on a skill that also fails frontmatter checks.
+    try:
+        raw = skill_md.read_text(encoding="utf-8")
+        result["size_bytes"] = len(raw.encode("utf-8"))
+        result["size_lines"] = raw.count("\n")
+        result["size_status"] = classify_size(result["size_lines"], result["size_bytes"])
+    except OSError as e:
+        result["error"] = f"read failed: {e}"
         result["status"] = "ERROR"
         return result
 
@@ -209,6 +248,24 @@ def print_report(results: list[dict], summary_only: bool = False) -> dict:
         for r in legacy:
             print(f"  {GRAY}- {r['name']}{RESET}")
 
+    # Size budget (F-5.3). Always printed, even under --summary, so the pre-commit
+    # hook (which runs with --summary) still surfaces every WARN/HARD line.
+    size_hard = [r for r in results if r.get("size_status") == "HARD"]
+    size_warn = [r for r in results if r.get("size_status") == "WARN"]
+    if size_hard or size_warn:
+        print(f"\n{BOLD}SKILL.md size budget{RESET} "
+              f"{GRAY}(hard: <= {LINE_HARD_CAP} lines and <= {BYTE_HARD_CAP} bytes; "
+              f"warn: >= {BYTE_WARN} bytes){RESET}")
+        for r in size_hard:
+            reasons = []
+            if r["size_lines"] > LINE_HARD_CAP:
+                reasons.append(f"{r['size_lines']} > {LINE_HARD_CAP} lines")
+            if r["size_bytes"] > BYTE_HARD_CAP:
+                reasons.append(f"{r['size_bytes']} > {BYTE_HARD_CAP} bytes")
+            print(f"  {RED}HARD{RESET} {BOLD}{r['name']}{RESET}: {'; '.join(reasons)}  ({r['path']})")
+        for r in size_warn:
+            print(f"  {YELLOW}WARN{RESET} {r['name']}: {r['size_bytes']} bytes, {r['size_lines']} lines")
+
     if summary_only:
         return counts
 
@@ -230,7 +287,10 @@ def print_report(results: list[dict], summary_only: bool = False) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Audit SKILL.md frontmatter completeness.")
+    parser = argparse.ArgumentParser(
+        description="Audit SKILL.md frontmatter completeness and enforce the size budget "
+                    "(hard: <=500 lines and <=18432 bytes; warn >=16384 bytes). A HARD size "
+                    "violation always exits 1, independent of --fail-on-missing.")
     parser.add_argument("--summary", action="store_true", help="Counts only, no per-skill detail")
     parser.add_argument("--fail-on-missing", action="store_true", help="Exit 1 if any skill has missing required fields")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of human report")
@@ -259,6 +319,13 @@ def main() -> int:
                   "ERROR": sum(1 for r in results if r["status"] == "ERROR")}
         if counts["FAIL"] > 0 or counts["ERROR"] > 0:
             return 1
+
+    # Size budget is an UNCONDITIONAL gate (F-5.3): any HARD size violation exits 1
+    # regardless of flags, so the flagless CI invocation enforces it with no
+    # workflow-file change. This is the deliberate change to the flagless exit
+    # contract (previously always 0 without --fail-on-missing).
+    if any(r.get("size_status") == "HARD" for r in results):
+        return 1
 
     return 0
 

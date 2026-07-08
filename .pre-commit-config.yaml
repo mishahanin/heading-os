@@ -96,6 +96,20 @@ repos:
         files: '^(\.claude/(skills/.*/SKILL\.md|rules/skill-router\.md)|reference/skill-router/.*\.md|scripts/generate-skill-router\.py)$'
         pass_filenames: false
 
+  # SKILL.md size budget (F-5.3) -- mechanical byte + line cap on every SKILL.md.
+  # skill-metadata-check.py hard-fails (exit 1) on any HARD violation (>500 lines
+  # or >18432 bytes) regardless of flags; WARN lines (>=16384 bytes) print but do
+  # not block. Runs the full audit (whole tree, pass_filenames: false) whenever a
+  # SKILL.md is staged. CI enforces the same gate via the flagless invocation.
+  - repo: local
+    hooks:
+      - id: skill-size-budget
+        name: SKILL.md size budget (<=500 lines, <=18432 bytes; warn >=16384)
+        entry: python3 scripts/skill-metadata-check.py --summary
+        language: system
+        files: '^\.claude/skills/.*/SKILL\.md$'
+        pass_filenames: false
+
   # Version-sync guard (F-1.1): pyproject.toml is the single source of truth;
   # README § Status and the newest CHANGELOG heading must agree with it.
   - repo: local

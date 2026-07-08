@@ -4,5 +4,8 @@ contact_links:
     url: https://github.com/mishahanin/heading-os/security/advisories/new
     about: Please report vulnerabilities privately, not as a public issue. See SECURITY.md.
   - name: Setup help
-    url: https://github.com/mishahanin/heading-os/blob/main/docs/SETUP-GUIDE.md
+    url: https://github.com/mishahanin/heading-os/blob/main/docs/DEPLOYMENT.md
     about: The zero-to-running setup guide answers most installation questions.
+  - name: Questions and how-it-works
+    url: https://github.com/mishahanin/heading-os/discussions/categories/q-a
+    about: Ask setup and how-it-works questions in Discussions Q&A, not as an issue.

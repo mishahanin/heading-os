@@ -233,6 +233,7 @@ SITE_NAV_GROUPS = [
     ("Operate", [
         ("daemons.html", "Daemons &amp; scheduled tasks"),
         ("memory-odin.html", "Memory &amp; ODIN"),
+        ("memory-lifecycle.html", "Memory lifecycle"),
         ("MODELS-SETUP.html", "AI models"),
         ("INTEGRATIONS-SETUP.html", "Integrations &amp; credentials"),
         ("TELEGRAM-AND-ALERTS.html", "Telegram &amp; alerts"),
@@ -567,6 +568,42 @@ def strip_first_h1(md_text: str) -> str:
     return "\n".join(out)
 
 
+# Mermaid diagrams: the docs site renders ```mermaid fences client-side via a
+# vendored assets/mermaid.min.js. Each fence is extracted to a placeholder BEFORE
+# markdown runs (so codehilite never touches it), then restored as a
+# <pre class="mermaid"> block the mermaid runtime picks up. The runtime script is
+# injected per-page (only when a fence is present), so non-diagram pages stay
+# byte-identical and zero-JS.
+_MERMAID_FENCE_RE = re.compile(r"(?ms)^```mermaid[ \t]*\n(.*?)\n```[ \t]*$")
+_MERMAID_PLACEHOLDER = "xmermaidblock{}x"
+MERMAID_SCRIPT = (
+    '\n<script src="assets/mermaid.min.js"></script>'
+    '\n<script>mermaid.initialize({ startOnLoad: true });</script>'
+)
+
+
+def _extract_mermaid(md_text: str) -> tuple[str, list[str]]:
+    """Pull every ```mermaid fence out to a bare placeholder token, returning the
+    stripped text and the list of raw diagram sources in order."""
+    blocks: list[str] = []
+
+    def _sub(m: "re.Match[str]") -> str:
+        blocks.append(m.group(1))
+        return f"\n\n{_MERMAID_PLACEHOLDER.format(len(blocks) - 1)}\n\n"
+
+    return _MERMAID_FENCE_RE.sub(_sub, md_text), blocks
+
+
+def _restore_mermaid(html: str, blocks: list[str]) -> str:
+    """Swap each placeholder token back to a <pre class="mermaid"> block carrying the
+    HTML-escaped diagram source (the mermaid runtime reads its textContent)."""
+    for i, src in enumerate(blocks):
+        token = _MERMAID_PLACEHOLDER.format(i)
+        pre = f'<pre class="mermaid">{html_stdlib.escape(src)}</pre>'
+        html = html.replace(f"<p>{token}</p>", pre).replace(token, pre)
+    return html
+
+
 def md_to_html(md_text: str) -> str:
     md = markdown.Markdown(extensions=MD_EXTENSIONS, extension_configs=MD_EXT_CONFIGS)
     return md.convert(md_text)
@@ -581,7 +618,9 @@ def regenerate(md_path: Path, quiet: bool = False) -> bool:
     md_text = md_path.read_text(encoding="utf-8")
     display_title, subtitle = extract_title(md_text, fallback=md_path.stem)
     body_md = strip_first_h1(md_text)
+    body_md, mermaid_blocks = _extract_mermaid(body_md)
     body_html = md_to_html(body_md)
+    body_html = _restore_mermaid(body_html, mermaid_blocks)
 
     if md_path.parent == SITE_DIR:
         # Public docs-site page: shared sidebar + assets/docs.css (light).
@@ -596,7 +635,7 @@ def regenerate(md_path: Path, quiet: bool = False) -> bool:
             search_box=SEARCH_BOX,
             nav=_site_nav(html_path.name),
             body=body_html,
-            search_script=SEARCH_SCRIPT,
+            search_script=SEARCH_SCRIPT + (MERMAID_SCRIPT if mermaid_blocks else ""),
         )
     else:
         # Portable self-contained guide (templates/, CEO guides): inline theme.

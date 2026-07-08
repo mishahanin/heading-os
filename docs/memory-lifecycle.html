@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memory lifecycle</title>
+<meta name="description" content="One map of the six memory stores and the exact script or hook that moves data between them, with the trigger and cadence on every edge.">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="memory-lifecycle.html" class="active">Memory lifecycle</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Memory lifecycle</h1>
+  <p class="page-meta">One map of the six memory stores and the exact script or hook that moves data between them, with the trigger and cadence on every edge.</p>
+  <p>One map of the six memory stores and the exact script or hook that moves data between them, with the trigger and cadence on every edge.</p>
+<p>Last Updated: 2026-07-08</p>
+<p>HEADING OS keeps memory in six mechanisms. Each is documented on its own; what this page adds is the lifecycle: where a fact is written, how it is indexed for recall, when it is retired, and how the per-launch store stays in sync with the durable one. The diagram is the mechanism only. It names stores and the scripts that move data, never any real memory content.</p>
+<h2 id="the-map">The map</h2>
+<pre class="mermaid">flowchart TD
+    SESS([Session: Write tool]) --&gt;|on demand| AM[auto-memory&lt;br/&gt;data-root/auto-memory + MEMORY.md]
+    DREAM([/dream: manual, human-gated]) --&gt;|consolidate: merge, reword, resolve| AM
+    DREAM --&gt;|consolidate| ODIN[ODIN brain&lt;br/&gt;knowledge/odin-brain]
+
+    AM &lt;--&gt;|memory-reconcile.py&lt;br/&gt;SessionStart hook, newest-wins, no delete-propagation| NAT[native harness store&lt;br/&gt;per-launch, ephemeral]
+
+    AM --&gt;|memory-auto-retire.py&lt;br/&gt;daily 07:20, expires past-due| RET(((retired&lt;br/&gt;all stores)))
+    AM --&gt;|retire-memory.py&lt;br/&gt;manual, the delete that sticks| RET
+
+    AM --&gt;|memory-index.py build&lt;br/&gt;daily 03:30 incremental| IDX[(semantic recall index&lt;br/&gt;.memory-index)]
+    ODIN --&gt;|memory-index.py build| IDX
+    THR[threads&lt;br/&gt;threads/business, personal] --&gt;|memory-index.py build| IDX
+
+    KB[knowledge base&lt;br/&gt;knowledge/] --&gt;|promote-knowledge.py&lt;br/&gt;manual| COR[corporate knowledge&lt;br/&gt;knowledge/shared]
+
+    HYG([memory-hygiene.py: weekly Mon 07:34]) -.-&gt;|detect only, never mutates| AM
+    HYG -.-&gt;|detect only| ODIN</pre>
+<h2 id="the-stores">The stores</h2>
+<table>
+<thead>
+<tr>
+<th>Store</th>
+<th>Location</th>
+<th>Side</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>auto-memory</td>
+<td><code>data-root/auto-memory/*.md</code> + <code>MEMORY.md</code></td>
+<td>DATA (private)</td>
+</tr>
+<tr>
+<td>native harness store</td>
+<td>per-launch Claude Code native memory dir</td>
+<td>DATA (ephemeral)</td>
+</tr>
+<tr>
+<td>semantic recall index</td>
+<td><code>data-root/.memory-index/</code>, plus engine <code>.memory-index-code/</code></td>
+<td>DATA + engine</td>
+</tr>
+<tr>
+<td>ODIN brain</td>
+<td><code>data-root/knowledge/odin-brain/</code></td>
+<td>DATA (private)</td>
+</tr>
+<tr>
+<td>knowledge base</td>
+<td><code>data-root/knowledge/</code> (+ <code>knowledge/shared/</code>)</td>
+<td>DATA (private)</td>
+</tr>
+<tr>
+<td>threads</td>
+<td><code>data-root/threads/business</code>, <code>personal</code></td>
+<td>DATA (private)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-edges-one-by-one">The edges, one by one</h2>
+<ul>
+<li><strong>Write during a session (on demand).</strong> A fact is written to auto-memory (<code>data-root/auto-memory/*.md</code>) with a one-line pointer added to <code>MEMORY.md</code>. This is the canonical, durable home.</li>
+<li><strong>Reconcile, <code>.claude/hooks/memory-reconcile.py</code> (SessionStart).</strong> The per-launch native harness store and the canonical DATA auto-memory are synced newest-wins. It NEVER propagates deletions, so a file removed on one store alone is resurrected from the other at the next session start. That is why a real delete needs an all-store retire.</li>
+<li><strong>Auto-retire, <code>scripts/memory-auto-retire.py</code> (daily 07:20).</strong> Retires only records whose explicit <code>expires:</code> date has passed, from all stores, then strips the record&rsquo;s pointer from <code>MEMORY.md</code>. It is the safe, deterministic slice of <code>/dream</code>: it touches only facts the author pre-authorized with an expiry date.</li>
+<li><strong>Manual retire, <code>scripts/retire-memory.py</code>.</strong> Removes a named record from ALL stores at once. This is the only delete that sticks, given the reconcile hook&rsquo;s no-deletion-propagation rule.</li>
+<li><strong>Index build, <code>scripts/memory-index.py build</code> (daily 03:30, incremental).</strong> Rebuilds the local semantic recall index over the business memory corpus (Odin brain, business threads, business CRM) and the auto-memory records, computed locally via ollama <code>bge-m3</code>. Recall is hybrid: a dense channel (bge-m3 cosine, threshold-gated) fused with a sparse channel (SQLite FTS5 BM25) by reciprocal rank fusion. Query it with <code>memory-index.py query "&lt;text&gt;"</code>.</li>
+<li><strong>Promote, <code>scripts/promote-knowledge.py</code> (manual).</strong> Copies a personal <code>knowledge/</code> note into corporate <code>knowledge/shared/{type}/</code> with provenance, for sharing down to executives.</li>
+<li><strong>Consolidate, <code>/dream</code> (manual, human-gated).</strong> The judgement pass: merges duplicates, rewords, resolves contradictions, clears orphans across auto-memory and the ODIN brain. Nothing here is automatic.</li>
+<li><strong>Hygiene, <code>scripts/memory-hygiene.py</code> (weekly Monday 07:34).</strong> A detector, never a mutator. It aggregates objective defects (orphan memory files, <code>MEMORY.md</code> over budget, Odin temporal-validity errors) into one dated report and exits non-zero when any is present. A human resolves what it finds, usually via <code>/dream</code>.</li>
+</ul>
+<h2 id="driving-it-from-one-place">Driving it from one place</h2>
+<p>The six operations have one console-first entry point, <code>scripts/memory.py</code>, a thin facade that shells out to the scripts above with no behavior change:</p>
+<div class="highlight"><pre><span></span><code>python scripts/memory.py status      # read-only overview (index stats + knowledge health + count)
+python scripts/memory.py recall &quot;&lt;text&gt;&quot;   # semantic query over the index
+python scripts/memory.py promote --note &lt;path&gt;   # promote a knowledge note to corporate
+python scripts/memory.py retire &lt;name&gt; [&lt;name&gt; ...]   # all-store retire
+python scripts/memory.py reconcile   # sync native store with canonical (CLI mode)
+python scripts/memory.py hygiene     # run the defect detector
+</code></pre></div>
+<p>Each subcommand returns the underlying script&rsquo;s exit code and degrades with a plain message when a backing script or store is absent.</p>
+<h2 id="what-this-map-deliberately-leaves-out">What this map deliberately leaves out</h2>
+<ul>
+<li>Real memory content. The stores are named; nothing private is shown.</li>
+<li>The ODIN brain&rsquo;s internal maintenance (<code>odin</code> compile, pagerank, lint), which operates inside the brain rather than moving data between stores.</li>
+<li>Read-only health detectors (<code>knowledge-health.py</code>, <code>odin-brain-health.py</code>), which report but move nothing.</li>
+</ul>
+<p>See also the <a href="memory-odin.html">Memory and Odin</a> page for how the auto-memory and ODIN brain are used in practice.</p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+<script src="assets/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true });</script>
+</body>
+</html>

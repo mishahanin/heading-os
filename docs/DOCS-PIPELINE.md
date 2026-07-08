@@ -25,7 +25,7 @@ The sidebar nav is defined once in `SITE_NAV_GROUPS`; the light theme lives in
 
 ## Two page classes
 
-### 1. Markdown-sourced (regenerated) - 18 pages
+### 1. Markdown-sourced (regenerated) - 19 pages
 
 The `.md` is the source of truth; the `.html` is generated and must never be
 hand-edited. Editing the `.md` without regenerating is caught by the drift guard.
@@ -34,7 +34,14 @@ hand-edited. Editing the `.md` without regenerating is caught by the drift guard
 `EMERGENCY-PROCEDURES`, `EXTENDING`, `GLOSSARY`, `HOOKS-REFERENCE`,
 `INTEGRATIONS-SETUP`, `MAKE-IT-YOURS`, `MODELS-SETUP`, `QUICKSTART`,
 `RULES-REFERENCE`, `SECURITY-MODEL`, `TELEGRAM-AND-ALERTS`, `THREAT-MODEL`,
-`TROUBLESHOOTING`, `engine-data-segregation-contract`.
+`TROUBLESHOOTING`, `engine-data-segregation-contract`, `memory-lifecycle`.
+
+`memory-lifecycle` carries a Mermaid diagram. The generator renders a ```` ```mermaid ````
+fence to a `<pre class="mermaid">` block and injects the vendored `assets/mermaid.min.js`
+on that page only (a per-page conditional), so every other page stays byte-identical and
+zero-JS. A brand-new md page has no `.html` sibling yet, so it is created once with
+single-file `python scripts/regenerate-docs-html.py docs/<name>.md`; `--all` maintains it
+thereafter.
 
 **To edit:** change the `.md`, run `python scripts/regenerate-docs-html.py <md>`
 (or `--all`), commit both files.

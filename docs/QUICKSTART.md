@@ -1,8 +1,31 @@
-<!-- version: 2.2.0 | last-updated: 2026-07-01 -->
+<!-- version: 2.3.0 | last-updated: 2026-07-09 -->
 # HEADING OS — Quickstart
 
 The one-page version. For the full zero-to-running walk-through, see
 **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
+---
+
+## Try it in 60 seconds (no data, no keys)
+
+Want to see the engine run before installing anything? Open the repository in a
+devcontainer: in VS Code, "Reopen in Container", or launch a **GitHub Codespace**
+from the repo page.
+
+The container defaults to read-only **demo mode**. It sets `HEADING_OS_DATA` to the
+bundled `examples/` tree, installs `uv`, runs a core `uv sync`, and prints demo
+output from `scripts/crm-health.py` (the engine behind `/crm radar`) on first build.
+No `.env`, no API key, no private data repository. Nothing can write, because demo
+mode refuses writes by design.
+
+To run it again yourself inside the container:
+
+```bash
+uv run python scripts/crm-health.py
+```
+
+When you are ready for a real workspace, follow **Install (short form)** below. Details
+live in [`.devcontainer/README.md`](../.devcontainer/README.md).
 
 ---
 

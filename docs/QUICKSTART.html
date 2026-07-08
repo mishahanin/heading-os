@@ -74,10 +74,25 @@
 <main class="content">
   <h1>HEADING OS — Quickstart</h1>
   <p class="page-meta">The one-page version. For the full zero-to-running walk-through, see</p>
-  <!-- version: 2.2.0 | last-updated: 2026-07-01 -->
+  <!-- version: 2.3.0 | last-updated: 2026-07-09 -->
 
 <p>The one-page version. For the full zero-to-running walk-through, see
 <strong><a href="DEPLOYMENT.md">DEPLOYMENT.md</a></strong>.</p>
+<hr />
+<h2 id="try-it-in-60-seconds-no-data-no-keys">Try it in 60 seconds (no data, no keys)</h2>
+<p>Want to see the engine run before installing anything? Open the repository in a
+devcontainer: in VS Code, &ldquo;Reopen in Container&rdquo;, or launch a <strong>GitHub Codespace</strong>
+from the repo page.</p>
+<p>The container defaults to read-only <strong>demo mode</strong>. It sets <code>HEADING_OS_DATA</code> to the
+bundled <code>examples/</code> tree, installs <code>uv</code>, runs a core <code>uv sync</code>, and prints demo
+output from <code>scripts/crm-health.py</code> (the engine behind <code>/crm radar</code>) on first build.
+No <code>.env</code>, no API key, no private data repository. Nothing can write, because demo
+mode refuses writes by design.</p>
+<p>To run it again yourself inside the container:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/crm-health.py
+</code></pre></div>
+<p>When you are ready for a real workspace, follow <strong>Install (short form)</strong> below. Details
+live in <a href="../.devcontainer/README.md"><code>.devcontainer/README.md</code></a>.</p>
 <hr />
 <h2 id="install-short-form">Install (short form)</h2>
 <p>Once you have WSL2/Ubuntu (Windows) or a Unix shell, plus <code>git</code>, <code>gh</code>, <code>uv</code>, Node, and

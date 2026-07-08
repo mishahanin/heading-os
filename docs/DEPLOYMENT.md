@@ -1,4 +1,4 @@
-<!-- version: 1.3.1 | last-updated: 2026-07-03 -->
+<!-- version: 1.4.0 | last-updated: 2026-07-09 -->
 # HEADING OS — Deployment & Setup
 
 The complete, zero-to-running guide for standing up a HEADING OS workspace from a
@@ -78,6 +78,19 @@ found" — that is expected, not an error.
 ---
 
 ## 4. Platform setup
+
+### 4.0 Fastest path: open in a devcontainer (demo mode)
+
+For a zero-setup, read-only look before you install anything, open the repository in
+a devcontainer: VS Code "Reopen in Container", or a **GitHub Codespace** from the repo
+page. The container defaults to demo mode. It sets `HEADING_OS_DATA` to the bundled
+`examples/` tree, installs `uv`, runs a core `uv sync`, and prints demo output from
+`scripts/crm-health.py` on first build. No `.env`, no API key, no private data
+repository, and nothing can write (demo mode refuses writes by design).
+
+This is a demo, not a full workspace. For a real deployment, continue with 4.1 onward
+(WSL2 or a Unix shell, the toolchain, authentication, and your own private data repo).
+The container details are in [`.devcontainer/README.md`](../.devcontainer/README.md).
 
 ### 4.1 Windows only — WSL2 + Ubuntu
 

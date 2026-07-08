@@ -1,0 +1,13 @@
+{
+  "name": "HEADING OS (demo mode)",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "containerEnv": {
+    "HEADING_OS_DATA": "${containerWorkspaceFolder}/examples"
+  },
+  "postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv sync && echo '' && echo 'Demo (read-only, no keys, no models):' && uv run python scripts/crm-health.py",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  }
+}

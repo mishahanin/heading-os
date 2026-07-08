@@ -12,8 +12,8 @@ read it before sending code.
 ## 0. Dev setup
 
 ```bash
-uv sync --group dev      # runtime + dev tools (pytest, ruff, pre-commit)
-pre-commit install       # arm the commit-time gates (once per clone)
+uv sync --all-extras --group dev   # core + all integration extras + dev tools (pytest, ruff, pre-commit)
+pre-commit install                 # arm the commit-time gates (once per clone)
 uv run python scripts/run-tests.py
 ```
 

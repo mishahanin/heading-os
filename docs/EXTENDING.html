@@ -70,8 +70,8 @@ an issue first; pull requests are by invitation) lives in
 read it before sending code.</p>
 <hr />
 <h2 id="0-dev-setup">0. Dev setup</h2>
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--group<span class="w"> </span>dev<span class="w">      </span><span class="c1"># runtime + dev tools (pytest, ruff, pre-commit)</span>
-pre-commit<span class="w"> </span>install<span class="w">       </span><span class="c1"># arm the commit-time gates (once per clone)</span>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--all-extras<span class="w"> </span>--group<span class="w"> </span>dev<span class="w">   </span><span class="c1"># core + all integration extras + dev tools (pytest, ruff, pre-commit)</span>
+pre-commit<span class="w"> </span>install<span class="w">                 </span><span class="c1"># arm the commit-time gates (once per clone)</span>
 uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/run-tests.py
 </code></pre></div>
 <p>A green test run on a fresh clone means your environment is sound.</p>

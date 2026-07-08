@@ -329,7 +329,7 @@ hard-scoped to public topics. Details in MODELS-SETUP.</p>
 <hr />
 <h2 id="7-install-dependencies-arm-the-secret-gate">7. Install dependencies &amp; arm the secret gate</h2>
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>&lt;engine&gt;
-uv<span class="w"> </span>sync<span class="w">               </span><span class="c1"># Python + all dependencies into the project environment</span>
+uv<span class="w"> </span>sync<span class="w">               </span><span class="c1"># core deps only - the light always-on set</span>
 pre-commit<span class="w"> </span>install<span class="w">    </span><span class="c1"># commit-time secret scanner (run once per fresh clone)</span>
 </code></pre></div>
 <blockquote>
@@ -337,6 +337,25 @@ pre-commit<span class="w"> </span>install<span class="w">    </span><span class=
 <code>.git/hooks</code>, which git does not clone. Run it once on every fresh clone. The
 authoritative, unbypassable secret scan runs again at push time regardless.</p>
 </blockquote>
+<h3 id="two-install-paths-core-vs-all-extras-f-71">Two install paths: core vs. all extras (F-7.1)</h3>
+<p>Heavy integrations (Exchange email, Telegram, browser automation, document and
+deck generation, media/YouTube, the dashboard daemon, the Google/GenAI stack,
+observability, research scraping) live in <strong>optional-dependency extras</strong>, so the
+default <code>uv sync</code> stays small.</p>
+<ul>
+<li><strong>Adopter (recommended start):</strong> <code>uv sync</code> installs core only. Arm a capability
+  when you first need it: <code>uv sync --extra email</code>, <code>uv sync --extra browser</code>,
+  <code>uv sync --extra documents</code>, and so on. Any script that needs a dormant extra
+  prints the exact <code>uv sync --extra &lt;name&gt;</code> command to run.</li>
+<li><strong>Operator / full fleet:</strong> <code>uv sync --all-extras</code> installs the entire
+  integration surface at once - this is what the CEO instance, CI, and the
+  provisioning path use, so their environment is unchanged by the split.</li>
+</ul>
+<p>The extras and their marker modules: <code>email</code>, <code>telegram</code>, <code>browser</code>, <code>documents</code>,
+<code>media</code>, <code>dashboard</code>, <code>ai-extra</code>, <code>observability</code>, <code>research</code> (plus a meta <code>all</code>).
+Check which are live on this install with
+<code>uv run python scripts/workspace-health.py --section extras</code> - it prints an
+<strong>Armed / Dormant</strong> ladder, one line per extra.</p>
 <hr />
 <h2 id="8-install-plugins-machine-local-not-cloned">8. Install plugins (machine-local; not cloned)</h2>
 <p>Plugins are activated in the engine&rsquo;s <code>.claude/settings.json</code>, but the marketplace

@@ -1,5 +1,6 @@
 ---
 name: email-intel
+x-heading-requires: ["email", "ai-extra"]   # F-7.1: optional-dependency extras this skill needs
 description: >
   Daily email intelligence processor. Scans incoming + outgoing 31C Exchange emails
   (ceo@31c.io via exchangelib/EWS), groups by conversation thread, categorizes

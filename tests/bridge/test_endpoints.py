@@ -4,6 +4,9 @@ from unittest.mock import patch
 # Note: wt.exe paths in launch tests below use Windows-shaped strings
 # (e.g. r"C:\Windows\System32\wt.exe") but the values flow only through
 # mocked shutil.which calls - tests run cross-platform.
+import pytest
+pytest.importorskip("fastapi")  # F-7.1: skip on a core-only clone (needs the dashboard extra)
+
 from fastapi.testclient import TestClient
 from scripts.bridge_daemon.app import build_app
 from scripts.bridge_daemon.state import State

@@ -1,5 +1,6 @@
 ---
 name: meeting-prep
+x-heading-requires: ["research"]   # F-7.1: optional-dependency extras this skill needs
 description: Produce a deep pre-meeting brief on an external counterpart - OSINT dossier, CRM relationship history, prior comms, a Voss tactical-empathy plan, and three calibrated questions. Use before any meeting with a named external person and/or company. Trigger when the user says "meeting prep for [counterpart]", "prepare for meeting with [person or company]", or "briefing for [named person + company]". Do NOT use for internal syncs without an external counterpart (just answer), generic briefings without a named target (use /market-brief or /dashboard); deep multi-signal prep escalates to the orchestrator's Deep Meeting Prep pattern.
 argument-hint: "[with] [purpose]"
 allowed-tools: "WebSearch, WebFetch, Read, Bash(python3:*)"

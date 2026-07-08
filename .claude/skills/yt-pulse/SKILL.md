@@ -1,5 +1,6 @@
 ---
 name: yt-pulse
+x-heading-requires: ["media"]   # F-7.1: optional-dependency extras this skill needs
 description: >
   Domain-agnostic YouTube intelligence scanner. Searches YouTube for videos in any
   topic area (AI, DPI, cybersecurity, markets, sailing, etc.), identifies trending

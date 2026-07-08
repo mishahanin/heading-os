@@ -47,8 +47,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Sync dev dependencies (installs pip-audit + the full lock)
-        run: uv sync --dev --frozen
+      - name: Sync dev dependencies (installs pip-audit + the full lock incl extras)
+        run: uv sync --dev --all-extras --frozen
 
       - name: Audit full locked dependency graph for CVEs
         run: uv run python scripts/audit-deps.py

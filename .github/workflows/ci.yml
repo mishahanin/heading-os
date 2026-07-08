@@ -5,13 +5,13 @@
 # run headless on this data-less engine tree before commit.
 #
 # FIRST-PUSH NOTE (operator): the unit-tests job runs the full non-integration
-# suite. Because the extras split (F-7.1) has NOT landed yet, `uv sync --dev`
-# installs the whole dependency set, so the suite has its deps - EXCEPT browser
-# binaries (playwright) and anything needing live network. The first push is a
-# watched calibration run: if a browser/network test fails, mark it with the
-# capability markers added in F-2.2 (`requires_playwright` / `requires_network`)
-# and exclude it here, then widen. `guards` + `security-tests` are the checks to
-# make required on `main`.
+# suite. Since the extras split (F-7.1) landed, every `uv sync` here uses
+# `--dev --all-extras --frozen` so CI installs the whole dependency set (core +
+# all optional extras) and no capability test is skipped for a missing extra -
+# EXCEPT browser binaries (playwright) and anything needing live network. If a
+# browser/network test fails, mark it with the capability markers added in F-2.2
+# (`requires_playwright` / `requires_network`) and exclude it here, then widen.
+# `guards` + `security-tests` are the checks to make required on `main`.
 name: ci
 
 on:
@@ -45,7 +45,7 @@ jobs:
       - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
           enable-cache: true
-      - run: uv sync --dev --frozen
+      - run: uv sync --dev --all-extras --frozen
       - name: Leak guard (no hardcoded data paths in engine code)
         run: git ls-files '*.py' '*.sh' | xargs uv run python scripts/leak-guard.py check-paths --files
       - name: Engine tree clean (no data-class artifact in the engine clone)
@@ -64,6 +64,12 @@ jobs:
         run: uv run python scripts/audit-skill-bash-paths.py
       - name: Classification health (F-9.3)
         run: uv run python scripts/classification-health.py
+      - name: requirements.txt in sync with the lock (F-7.1)
+        # Byte-identical to the regen command; uv writes a header echoing this
+        # exact argv, so any drift (or a hand-edited header) fails the diff.
+        run: |
+          uv export --no-hashes --no-dev --all-extras --format requirements-txt > /tmp/req.txt
+          diff -u requirements.txt /tmp/req.txt
 
   lint:
     name: ruff + bandit
@@ -74,7 +80,7 @@ jobs:
       - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
           enable-cache: true
-      - run: uv sync --dev --frozen
+      - run: uv sync --dev --all-extras --frozen
       - name: ruff - blocking security subset (mirror of the pre-commit gate)
         run: uv run ruff check . --select S --ignore S101,S105,S310,S603,S607
       - name: ruff - full-ruleset ratchet (F-3.2, fails on NEW lint debt)
@@ -91,7 +97,7 @@ jobs:
       - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         with:
           enable-cache: true
-      - run: uv sync --dev --frozen
+      - run: uv sync --dev --all-extras --frozen
       - run: uv run pytest tests/security -q -p no:cacheprovider
 
   unit-tests:
@@ -108,7 +114,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python }}
-      - run: uv sync --dev --frozen --python ${{ matrix.python }}
+      - run: uv sync --dev --all-extras --frozen --python ${{ matrix.python }}
       - name: unit + capability tests (integration/acceptance excluded)
         run: >
           uv run pytest tests/ -q -p no:cacheprovider

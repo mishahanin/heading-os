@@ -1,6 +1,8 @@
 """F-M6: POST /aq/deposit must validate per-card fields and return 422 on bad input."""
 import pytest
 
+pytest.importorskip("fastapi")  # F-7.1: bridge_daemon.app needs the dashboard extra
+
 
 def test_action_card_model_requires_title():
     from scripts.bridge_daemon.app import ActionCardModel

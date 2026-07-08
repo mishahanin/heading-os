@@ -63,14 +63,17 @@ def _reexec_in_venv_if_needed() -> None:
 
 
 def _export_full_requirements(dest: Path) -> bool:
-    """Export the complete locked dependency graph (incl dev) to ``dest``.
+    """Export the complete locked dependency graph (incl dev + all extras) to ``dest``.
 
     Returns True on success, False if ``uv`` is unavailable or the export fails.
     """
     if shutil.which("uv") is None:
         return False
     proc = subprocess.run(
-        ["uv", "export", "--no-hashes", "--format", "requirements-txt"],
+        # --all-extras: F-7.1 moved heavy deps into optional-dependencies; without
+        # this flag the export (and thus the CVE audit) would silently drop every
+        # optional package. Keep the full graph in scope.
+        ["uv", "export", "--no-hashes", "--all-extras", "--format", "requirements-txt"],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
@@ -106,7 +109,7 @@ def main() -> int:
         reqs = Path(td) / "full-requirements.txt"
         if _export_full_requirements(reqs):
             cmd += ["--requirement", str(reqs)]
-            scope = "full locked graph (uv export -- dev + transitive)"
+            scope = "full locked graph incl extras (uv export --all-extras -- dev + transitive)"
         else:
             scope = "active virtualenv (uv unavailable -- fallback)"
         print(f"pip-audit scope: {scope}")

@@ -1,4 +1,8 @@
 """Unit tests for /tribe CRM frontmatter source."""
+import pytest
+
+pytest.importorskip("openpyxl")  # F-7.1: skip on a core-only clone (needs the documents extra)
+
 from datetime import date
 from pathlib import Path
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+pytest.importorskip("langfuse")  # F-7.1: skip on a core-only clone (needs the observability extra)
 
 # ---------------------------------------------------------------------------
 # Ensure the workspace root is importable from within tests/

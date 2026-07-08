@@ -13,6 +13,9 @@ import zipfile
 from pathlib import Path
 
 from lxml import etree
+import pytest
+pytest.importorskip("pptx")  # F-7.1: skip on a core-only clone (needs the documents extra)
+
 from pptx import Presentation
 from pptx.util import Emu
 

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+pytest.importorskip("openai")  # F-7.1: skip on a core-only clone (needs the ai-extra extra)
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "kimi-consult.py"
 _spec = importlib.util.spec_from_file_location("kimi_consult", SCRIPT)

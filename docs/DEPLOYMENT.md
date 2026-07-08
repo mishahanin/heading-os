@@ -252,13 +252,34 @@ Two more guides cover the rest:
 
 ```bash
 cd <engine>
-uv sync               # Python + all dependencies into the project environment
+uv sync               # core deps only - the light always-on set
 pre-commit install    # commit-time secret scanner (run once per fresh clone)
 ```
 
 > **The commit hook is local and per-clone.** `pre-commit install` writes into
 > `.git/hooks`, which git does not clone. Run it once on every fresh clone. The
 > authoritative, unbypassable secret scan runs again at push time regardless.
+
+### Two install paths: core vs. all extras (F-7.1)
+
+Heavy integrations (Exchange email, Telegram, browser automation, document and
+deck generation, media/YouTube, the dashboard daemon, the Google/GenAI stack,
+observability, research scraping) live in **optional-dependency extras**, so the
+default `uv sync` stays small.
+
+- **Adopter (recommended start):** `uv sync` installs core only. Arm a capability
+  when you first need it: `uv sync --extra email`, `uv sync --extra browser`,
+  `uv sync --extra documents`, and so on. Any script that needs a dormant extra
+  prints the exact `uv sync --extra <name>` command to run.
+- **Operator / full fleet:** `uv sync --all-extras` installs the entire
+  integration surface at once - this is what the CEO instance, CI, and the
+  provisioning path use, so their environment is unchanged by the split.
+
+The extras and their marker modules: `email`, `telegram`, `browser`, `documents`,
+`media`, `dashboard`, `ai-extra`, `observability`, `research` (plus a meta `all`).
+Check which are live on this install with
+`uv run python scripts/workspace-health.py --section extras` - it prints an
+**Armed / Dormant** ladder, one line per extra.
 
 ---
 

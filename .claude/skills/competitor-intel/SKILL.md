@@ -1,5 +1,6 @@
 ---
 name: competitor-intel
+x-heading-requires: ["research"]   # F-7.1: optional-dependency extras this skill needs
 description: Competitive analysis of a named vendor versus 31C/ODUN.ONE - product gaps, geographic overlap, honest strengths, exploitable weaknesses, win strategy, and recommended actions. Use when comparing 31C against a specific competitor or sizing a competitive landscape. Trigger when the user says "competitor analysis", "how does [company] compare to [competitor]", "competitive advantage vs [competitor]", or "competitive landscape for [sector]". Do NOT use when the target is a person (use /osint), for market sizing (use /market-brief), or a generic "vs" with no named second party (ask to disambiguate first).
 metadata:
   author: Misha Hanin

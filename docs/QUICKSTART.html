@@ -76,7 +76,8 @@ git<span class="w"> </span>clone<span class="w"> </span>https://github.com/&lt;o
 <span class="nb">cd</span><span class="w"> </span>.heading-os
 
 <span class="c1"># 2. Install dependencies (Python managed by uv) + arm the secret gate</span>
-uv<span class="w"> </span>sync
+uv<span class="w"> </span>sync<span class="w">                        </span><span class="c1"># core only - small, fast; arm integrations later</span>
+<span class="c1"># uv sync --all-extras         # OR: the full integration surface (operator parity)</span>
 pre-commit<span class="w"> </span>install
 
 <span class="c1"># 3. Create your own private data repository (one command)</span>
@@ -89,6 +90,11 @@ cp<span class="w"> </span>.env.example<span class="w"> </span>.env<span class="w
 uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/workspace-health.py
 claude<span class="w">        </span><span class="c1"># then /prime</span>
 </code></pre></div>
+<p>Core <code>uv sync</code> installs only the light always-on set. Each integration (email,
+Telegram, browser automation, document generation, &hellip;) lives in an optional
+extra you arm on demand - <code>uv sync --extra &lt;name&gt;</code> - and a script that needs a
+dormant extra tells you the exact command to run. Want everything at once? Use
+<code>uv sync --all-extras</code>. See <a href="DEPLOYMENT.md">DEPLOYMENT.md</a> for the extras ladder.</p>
 <p>Full prerequisites, platform setup, authentication, plugins, and troubleshooting are
 in <a href="DEPLOYMENT.md">DEPLOYMENT.md</a>.</p>
 <hr />

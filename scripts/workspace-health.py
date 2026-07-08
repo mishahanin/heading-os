@@ -499,6 +499,51 @@ def check_daemon_token_perms() -> int:
     return issues
 
 
+# F-7.1: one representative installed DISTRIBUTION per optional-dependency extra.
+# Presence of the distribution means the extra is installed ("Armed"); absence
+# means the capability is Dormant on this install. Distribution presence
+# (importlib.metadata) is used deliberately instead of importability: a workspace
+# script like scripts/firecrawl.py sits on sys.path[0] when this file is run as
+# `python scripts/workspace-health.py` and would shadow the real `firecrawl`
+# module, giving a false reading. Distribution names are immune to that shadow.
+_EXTRAS_DISTS = {
+    "email": "exchangelib",
+    "telegram": "Telethon",
+    "browser": "playwright",
+    "documents": "python-pptx",
+    "media": "yt-dlp",
+    "dashboard": "fastapi",
+    "ai-extra": "openai",
+    "observability": "langfuse",
+    "research": "firecrawl-py",
+}
+
+
+def check_extras_importability() -> int:
+    """F-7.1: report which optional-dependency extras are Armed vs Dormant.
+
+    Informational only - always returns 0. Dormant is a legitimate state (an
+    adopter runs `uv sync` core-only and arms a capability with
+    `uv sync --extra <name>`), so a Dormant extra is never an ACTION.
+    """
+    from importlib import metadata as _md
+    header("Capability extras (Armed / Dormant)")
+    armed = 0
+    for extra, dist in _EXTRAS_DISTS.items():
+        try:
+            _md.version(dist)
+            present = True
+        except _md.PackageNotFoundError:
+            present = False
+        if present:
+            ok(f"{extra}: Armed ({dist} installed)")
+            armed += 1
+        else:
+            print(f"  {CYAN}--{RESET}    {extra}: Dormant (uv sync --extra {extra})")
+    print(f"\n  {armed}/{len(_EXTRAS_DISTS)} extras Armed on this install.")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="31C Workspace Health Check")
     parser.add_argument(
@@ -506,7 +551,7 @@ def main():
         choices=[
             "refs", "context", "counts", "pipeline", "people", "outputs",
             "datastore", "docs-sync", "skill-router", "doc-versions", "build",
-            "daemon-token",
+            "daemon-token", "extras",
         ],
         help="Run only a specific check section",
     )
@@ -532,6 +577,7 @@ def main():
         "doc-versions": check_doc_versions,
         "build": check_build_sync,
         "daemon-token": check_daemon_token_perms,
+        "extras": check_extras_importability,
     }
 
     if args.section:

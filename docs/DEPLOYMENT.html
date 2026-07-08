@@ -74,7 +74,7 @@
 <main class="content">
   <h1>HEADING OS — Deployment &amp; Setup</h1>
   <p class="page-meta">The complete, zero-to-running guide for standing up a HEADING OS workspace from a</p>
-  <!-- version: 1.3.1 | last-updated: 2026-07-03 -->
+  <!-- version: 1.4.0 | last-updated: 2026-07-09 -->
 
 <p>The complete, zero-to-running guide for standing up a HEADING OS workspace from a
 clean machine. Every command is generalized — substitute the <code>&lt;placeholders&gt;</code> for
@@ -180,6 +180,16 @@ found&rdquo; — that is expected, not an error.</p>
 </ul>
 <hr />
 <h2 id="4-platform-setup">4. Platform setup</h2>
+<h3 id="40-fastest-path-open-in-a-devcontainer-demo-mode">4.0 Fastest path: open in a devcontainer (demo mode)</h3>
+<p>For a zero-setup, read-only look before you install anything, open the repository in
+a devcontainer: VS Code &ldquo;Reopen in Container&rdquo;, or a <strong>GitHub Codespace</strong> from the repo
+page. The container defaults to demo mode. It sets <code>HEADING_OS_DATA</code> to the bundled
+<code>examples/</code> tree, installs <code>uv</code>, runs a core <code>uv sync</code>, and prints demo output from
+<code>scripts/crm-health.py</code> on first build. No <code>.env</code>, no API key, no private data
+repository, and nothing can write (demo mode refuses writes by design).</p>
+<p>This is a demo, not a full workspace. For a real deployment, continue with 4.1 onward
+(WSL2 or a Unix shell, the toolchain, authentication, and your own private data repo).
+The container details are in <a href="../.devcontainer/README.md"><code>.devcontainer/README.md</code></a>.</p>
 <h3 id="41-windows-only-wsl2-ubuntu">4.1 Windows only — WSL2 + Ubuntu</h3>
 <p>All work runs inside Linux. On Windows that means WSL2. In an <strong>Administrator</strong>
 PowerShell:</p>

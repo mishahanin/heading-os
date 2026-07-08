@@ -1,0 +1,11 @@
+[
+  { "query": "prep me for interviewing a senior backend candidate", "should_trigger": true },
+  { "query": "build a hiring framework for a DPI engineer role", "should_trigger": true },
+  { "query": "give me interview questions for a mid-level sales hire", "should_trigger": true },
+  { "query": "put together a candidate evaluation scorecard for this leadership role", "should_trigger": true },
+  { "query": "I'm interviewing a product manager next week, prepare the questions", "should_trigger": true },
+
+  { "query": "dig up background on the candidate Sara Okonkwo before we talk", "should_trigger": false },
+  { "query": "run due diligence on this job applicant's history", "should_trigger": false },
+  { "query": "investigate the PartnerCo founder before our meeting", "should_trigger": false }
+]

@@ -1,0 +1,11 @@
+[
+  { "query": "put together a one-pager for ODUN.ONE aimed at regulators", "should_trigger": true },
+  { "query": "I need a capability sheet for our DPI module", "should_trigger": true },
+  { "query": "make an xPager summarizing the product for PartnerCo", "should_trigger": true },
+  { "query": "single-page branded overview of our offering for an operator", "should_trigger": true },
+  { "query": "build a 1-pager on the platform for Sara Okonkwo", "should_trigger": true },
+
+  { "query": "create a full multi-page client deck about ODUN.ONE for ExampleTelco", "should_trigger": false },
+  { "query": "just render this markdown doc as a set of slides", "should_trigger": false },
+  { "query": "draft a commercial proposal with pricing and modules for Nimbus", "should_trigger": false }
+]

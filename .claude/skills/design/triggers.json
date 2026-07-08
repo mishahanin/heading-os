@@ -1,0 +1,11 @@
+[
+  { "query": "design an infographic showing our market growth numbers", "should_trigger": true },
+  { "query": "make a social graphic for a LinkedIn announcement", "should_trigger": true },
+  { "query": "design a logo concept for a new sub-brand", "should_trigger": true },
+  { "query": "create a UI mockup for the dashboard screen", "should_trigger": true },
+  { "query": "put together a branded stat card for our quarterly numbers", "should_trigger": true },
+
+  { "query": "create a presentation deck about our product for the sales team", "should_trigger": false },
+  { "query": "generate a single image from this prompt of a lighthouse at dawn", "should_trigger": false },
+  { "query": "render this markdown document as a slide deck", "should_trigger": false }
+]

@@ -131,6 +131,12 @@ Read `references/running-evals.md` for the full sequence - this section is one c
 
 Do NOT use `/skill-test` or any other testing skill. Always use `generate_review.py` rather than writing custom HTML. The grading.json expectations array must use the exact fields `text`, `passed`, `evidence` - the viewer depends on these names.
 
+### Router corpus (triggers.json), REQUIRED for auto-routable skills
+
+A new **auto-routable** skill (`x-heading-routing.router: auto` AND NOT `disable-model-invocation: true`) is not finished until it ships a valid `triggers.json`. A `router: manual` or `disable-model-invocation: true` skill is EXEMPT (it never auto-routes). This is a mechanical gate: `scripts/skill-metadata-check.py` exits 1 (CI + the `skill-size-budget` pre-commit hook) on any auto-routable skill lacking a valid corpus that is not grandfathered.
+
+A valid corpus is a JSON array (distinct from `evals/evals.json`) of `>= 6` `{ "query": "...", "should_trigger": true|false }` cases: `>= 4` positives from the skill's `x-heading-routing.triggers`, `>= 2` hard negatives from its `x-heading-routing.exclusions` (each naming the neighbor skill it should route to instead). Illustrative placeholders only. Run `python scripts/skill-metadata-check.py` and confirm exit 0 before declaring done. New skills are never grandfathered, so do not try to add one to `config/triggers-coverage-baseline.json` (`--write-baseline` is shrink-only and refuses).
+
 ---
 
 ## Improving the skill

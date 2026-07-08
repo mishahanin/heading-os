@@ -1,0 +1,11 @@
+[
+  { "query": "put together a plan for adding a new outreach workflow", "should_trigger": true },
+  { "query": "before we build anything, design the approach for restructuring the outputs folder", "should_trigger": true },
+  { "query": "I want a structured plan for this multi-file change", "should_trigger": true },
+  { "query": "map out the steps and success criteria for a new CRM health script", "should_trigger": true },
+  { "query": "draft an implementation plan for the exec provisioning feature", "should_trigger": true },
+
+  { "query": "execute the plan we wrote yesterday and build it", "should_trigger": false },
+  { "query": "run a pre-implementation gate before we start coding this", "should_trigger": false },
+  { "query": "scrutinize this plan and stress-test it before I approve", "should_trigger": false }
+]

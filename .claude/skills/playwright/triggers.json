@@ -1,0 +1,11 @@
+[
+  { "query": "grab a full-page screenshot of the ExampleTelco website", "should_trigger": true },
+  { "query": "scrape the pricing table off this JavaScript-heavy page for me", "should_trigger": true },
+  { "query": "watch this YouTube video and tell me what it covers", "should_trigger": true },
+  { "query": "pull the transcript from this youtu.be link", "should_trigger": true },
+  { "query": "fill and submit this signup form using a headless browser", "should_trigger": true },
+
+  { "query": "just fetch the text of this article URL for me", "should_trigger": false },
+  { "query": "import my logged-in browser cookies so automation can authenticate", "should_trigger": false },
+  { "query": "let me interactively click around this site in a live browser session", "should_trigger": false }
+]

@@ -1,0 +1,11 @@
+[
+  { "query": "parse this PDF deck and answer where it lists the Q3 revenue figure", "should_trigger": true },
+  { "query": "run docparse on the PartnerCo contract and show me the exact page the pricing clause is on", "should_trigger": true },
+  { "query": "I need visual citations pointing to where this datasheet says what its throughput is", "should_trigger": true },
+  { "query": "analyze this proposal document and cite the exact spots each claim comes from", "should_trigger": true },
+  { "query": "extract the key terms from this scanned agreement with bounding boxes on the source pages", "should_trigger": true },
+
+  { "query": "just pull the plain text out of this PDF so I can grep it, no citations needed", "should_trigger": false },
+  { "query": "go through my inbox and give me a digest of what came in from ExampleTelco", "should_trigger": false },
+  { "query": "scrape the pricing page off Nimbus's website for me", "should_trigger": false }
+]

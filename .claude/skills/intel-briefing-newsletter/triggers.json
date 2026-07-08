@@ -1,0 +1,11 @@
+[
+  { "query": "put together the intel briefing newsletter for this month", "should_trigger": true },
+  { "query": "publish an external intelligence brief on GCC cybersecurity", "should_trigger": true },
+  { "query": "draft the newsletter we share with the Tribe and prospects", "should_trigger": true },
+  { "query": "produce a public-facing intel briefing on Africa telecom", "should_trigger": true },
+  { "query": "write up an external intel brief for LinkedIn distribution", "should_trigger": true },
+
+  { "query": "give me a private geopolitical brief just for me this morning", "should_trigger": false },
+  { "query": "what's happening globally that I need to know as CEO", "should_trigger": false },
+  { "query": "internal situational brief on the global threats facing 31C", "should_trigger": false }
+]

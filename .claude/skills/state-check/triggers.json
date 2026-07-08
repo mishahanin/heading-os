@@ -1,0 +1,11 @@
+[
+  { "query": "how are we doing on the sales function right now", "should_trigger": true },
+  { "query": "run an operational state check on partnerships", "should_trigger": true },
+  { "query": "give me a quick read on the health of the product function", "should_trigger": true },
+  { "query": "are we holding our heading across the company", "should_trigger": true },
+  { "query": "state check on research", "should_trigger": true },
+
+  { "query": "generate my morning dashboard for today", "should_trigger": false },
+  { "query": "load up the full workspace context to start the session", "should_trigger": false },
+  { "query": "run the end-of-week review for me", "should_trigger": false }
+]

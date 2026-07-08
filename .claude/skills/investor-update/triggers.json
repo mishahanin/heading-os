@@ -1,0 +1,11 @@
+[
+  { "query": "draft the Q2 progress note for our current investors", "should_trigger": true },
+  { "query": "time for the board update, summarize where we landed this quarter", "should_trigger": true },
+  { "query": "write a shareholder update covering wins, challenges, and next 90 days", "should_trigger": true },
+  { "query": "send our backers a milestone update after the deployment went live", "should_trigger": true },
+  { "query": "put together the monthly note to keep investors in the loop on metrics", "should_trigger": true },
+
+  { "query": "build a fresh pitch deck to raise our next round from new investors", "should_trigger": false },
+  { "query": "assemble the due diligence data room for the fundraise", "should_trigger": false },
+  { "query": "prep me for the board meeting with Sara Okonkwo tomorrow", "should_trigger": false }
+]

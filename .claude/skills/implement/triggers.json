@@ -1,0 +1,11 @@
+[
+  { "query": "go ahead and execute the plan we just wrote", "should_trigger": true },
+  { "query": "build out the plan at plans/2026-07-08-new-export.md step by step", "should_trigger": true },
+  { "query": "implement the approved plan and log the trajectory", "should_trigger": true },
+  { "query": "let's build it now that the plan is ready", "should_trigger": true },
+  { "query": "run the implementation for this plan file", "should_trigger": true },
+
+  { "query": "draft a plan for adding a new export command", "should_trigger": false },
+  { "query": "design the approach before we write any code", "should_trigger": false },
+  { "query": "create a plan for restructuring the CRM directory", "should_trigger": false }
+]

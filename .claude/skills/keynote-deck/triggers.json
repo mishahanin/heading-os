@@ -1,0 +1,11 @@
+[
+  { "query": "I'm speaking at a regional expo, build me the presentation", "should_trigger": true },
+  { "query": "prepare conference slides for my ODUN.ONE talk", "should_trigger": true },
+  { "query": "put together a speaking deck for the government engagement", "should_trigger": true },
+  { "query": "need an event presentation for the telco executives in the room", "should_trigger": true },
+  { "query": "draft a keynote for the cybersecurity summit next month", "should_trigger": true },
+
+  { "query": "build the fundraising pitch deck for our sovereign fund meeting", "should_trigger": false },
+  { "query": "turn my slide outline into an editable PowerPoint file", "should_trigger": false },
+  { "query": "render this internal runbook markdown as a quick slide deck", "should_trigger": false }
+]

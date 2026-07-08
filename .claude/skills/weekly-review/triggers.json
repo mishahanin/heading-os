@@ -1,0 +1,11 @@
+[
+  { "query": "let's do the weekly review, it's Friday", "should_trigger": true },
+  { "query": "wrap up the week - sea state, pipeline movement, and priorities", "should_trigger": true },
+  { "query": "run my end-of-week review before I log off", "should_trigger": true },
+  { "query": "Sunday review to set up the coming week", "should_trigger": true },
+  { "query": "give me the week-over-week continuity review with course corrections", "should_trigger": true },
+
+  { "query": "check the health of just the CRM function right now", "should_trigger": false },
+  { "query": "how is the email intelligence function doing on its own", "should_trigger": false },
+  { "query": "state check on the content pipeline function", "should_trigger": false }
+]

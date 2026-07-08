@@ -1,0 +1,11 @@
+[
+  { "query": "draft this week's Monday message for the Tribe", "should_trigger": true },
+  { "query": "time for the weekly heading-set to the Tribe", "should_trigger": true },
+  { "query": "write our Monday note setting the week's operational state", "should_trigger": true },
+  { "query": "put together the Monday cadence message for the crew this week", "should_trigger": true },
+  { "query": "we're in crunch mode - do the weekly Tribe Monday message", "should_trigger": true },
+
+  { "query": "write a one-off Tribe message announcing we closed the PartnerCo deal", "should_trigger": false },
+  { "query": "send an ad-hoc note to the Tribe about the ExampleTelco milestone today", "should_trigger": false },
+  { "query": "draft an internal all-hands message about Sara Okonkwo joining", "should_trigger": false }
+]

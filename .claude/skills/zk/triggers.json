@@ -1,0 +1,11 @@
+[
+  { "query": "add a note capturing this insight about DPI markets", "should_trigger": true },
+  { "query": "what do we know about sovereign telecom regulation", "should_trigger": true },
+  { "query": "distill this OSINT brief into durable knowledge notes", "should_trigger": true },
+  { "query": "run a garden pass over the knowledge base", "should_trigger": true },
+  { "query": "connect this idea to related notes in the second brain", "should_trigger": true },
+
+  { "query": "Odin, log this episode of what happened on the ExampleTelco deal", "should_trigger": false },
+  { "query": "open a thread to track the PartnerCo negotiation", "should_trigger": false },
+  { "query": "add Sara Okonkwo to the CRM with her contact details", "should_trigger": false }
+]

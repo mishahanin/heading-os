@@ -1,0 +1,11 @@
+[
+  { "query": "turn this runbook markdown into slides", "should_trigger": true },
+  { "query": "render this doc as a deck with the 31C theme", "should_trigger": true },
+  { "query": "make me some quick internal slides about the sync workflow", "should_trigger": true },
+  { "query": "use marp to build a state-check deck from this file", "should_trigger": true },
+  { "query": "convert this knowledge note into a PDF slide presentation", "should_trigger": true },
+
+  { "query": "create a brand-heavy editable PPTX client deck for PartnerCo", "should_trigger": false },
+  { "query": "build a LinkedIn carousel about our five principles", "should_trigger": false },
+  { "query": "prepare a keynote speaking deck for my talk at the expo", "should_trigger": false }
+]

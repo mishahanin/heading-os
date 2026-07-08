@@ -1,0 +1,11 @@
+[
+  { "query": "reply to this email from Sara Okonkwo, here is what she sent", "should_trigger": true },
+  { "query": "draft a response to the message PartnerCo just sent about the pilot timeline", "should_trigger": true },
+  { "query": "write me a reply to this thread, keep it short and warm", "should_trigger": true },
+  { "query": "answer this incoming note from the ExampleTelco procurement team", "should_trigger": true },
+  { "query": "help me respond to what Nimbus wrote back on the contract", "should_trigger": true },
+
+  { "query": "draft a fresh email to Sara Okonkwo introducing our new module", "should_trigger": false },
+  { "query": "process my inbox and give me a triage digest of everything that came in today", "should_trigger": false },
+  { "query": "write a peer CEO-to-CEO letter to the founder of PartnerCo", "should_trigger": false }
+]

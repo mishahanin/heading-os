@@ -1,0 +1,11 @@
+[
+  { "query": "fact-check this proposal draft against our source documents", "should_trigger": true },
+  { "query": "verify the numbers in this deck before it goes out", "should_trigger": true },
+  { "query": "check whether the claims in this letter are actually true", "should_trigger": true },
+  { "query": "validate outputs/content/linkedin/2026-07-01_post.md against the datastore", "should_trigger": true },
+  { "query": "make sure the pricing and team-size figures here are backed by real evidence", "should_trigger": true },
+
+  { "query": "grade the quality and craft of this keynote deck", "should_trigger": false },
+  { "query": "review how good this draft is and score its writing", "should_trigger": false },
+  { "query": "evaluate whether this artifact is well-built enough to ship", "should_trigger": false }
+]

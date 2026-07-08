@@ -1,0 +1,11 @@
+[
+  { "query": "help me build the pitch deck for our Series A raise", "should_trigger": true },
+  { "query": "I'm meeting a sovereign fund next week and need fundraising materials", "should_trigger": true },
+  { "query": "put together an investor presentation for PartnerCo's VC arm", "should_trigger": true },
+  { "query": "draft the narrative and slides to pitch investors on ODUN.ONE", "should_trigger": true },
+  { "query": "we need a deck to raise capital from angels", "should_trigger": true },
+
+  { "query": "write the quarterly progress update for our existing investors", "should_trigger": false },
+  { "query": "prepare the due diligence responses for the investor data room", "should_trigger": false },
+  { "query": "render this pitch outline into an editable PowerPoint file", "should_trigger": false }
+]

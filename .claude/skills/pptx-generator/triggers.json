@@ -1,0 +1,11 @@
+[
+  { "query": "create slides for Nimbus on our DPI roadmap", "should_trigger": true },
+  { "query": "make a LinkedIn carousel about data sovereignty", "should_trigger": true },
+  { "query": "edit this pptx and update the stats on slide three", "should_trigger": true },
+  { "query": "generate a branded presentation for ExampleTelco", "should_trigger": true },
+  { "query": "add a new layout to the cookbook for a two-column comparison", "should_trigger": true },
+
+  { "query": "design an infographic about our five principles", "should_trigger": false },
+  { "query": "turn this markdown runbook into a quick internal deck", "should_trigger": false },
+  { "query": "generate an image of a lighthouse in a storm for the cover", "should_trigger": false }
+]

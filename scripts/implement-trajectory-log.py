@@ -48,7 +48,9 @@ Three subcommands:
       run_start.git_head and any changed file recorded in no step's
       files_affected is flagged; this is meaningful only immediately after the
       run (before any commit / git pull) and degrades to a no-op when git_head
-      is "unknown" or git is unavailable. Prints defects and exits 1 on any
+      is "unknown" or git is unavailable. Plus a validation-gate check
+      (advisory): a completed run with zero validation_check events is flagged so
+      Phase 3 gates are logged as structured events, not only prose. Prints defects and exits 1 on any
       defect, 0 when clean. Read-only; never mutates the audit record.
       /implement calls this in Phase 5 after run_end (advisory).
 
@@ -554,6 +556,10 @@ def verify_trajectory(run_id: str) -> list[str]:
     entirely (no defect) when git_head is "unknown" or any git call fails, so
     verify never becomes environment-fragile. The structural checks above stay
     pure-JSONL and are unaffected by repo state.
+
+    Plus a validation-gate check (advisory): a completed run (run_end present)
+    with zero validation_check events is flagged, so Phase 3 gate outcomes are
+    logged as structured, machine-auditable events rather than only prose notes.
     """
     path = trajectory_path(run_id)
     defects: list[str] = []
@@ -664,6 +670,16 @@ def verify_trajectory(run_id: str) -> list[str]:
                 defects.append(
                     f"(advisory) {path_str} was modified in this run but "
                     f"appears in no step's files_affected")
+
+    # Validation-gate logging (advisory; F-6.1 loose end). A completed run
+    # (run_end present) that recorded zero validation_check events narrated its
+    # Phase 3 gates in prose (step_end notes) instead of structured, machine-
+    # auditable events. Surfaces the gap so gate outcomes are deterministically
+    # checkable, matching the files-reconciliation advisory style.
+    if "run_end" in types and "validation_check" not in types:
+        defects.append(
+            "(advisory) run has a run_end but zero validation_check events; "
+            "Phase 3 gates should emit validation_check events, not only prose notes")
 
     return defects
 

@@ -30,12 +30,11 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - request skill
-    - I need a new skill
+    - NEVER auto-trigger. Explicit `/request-skill` only.
   exclusions:
     - Create directly -> /skill-creator (CEO only)
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Request New Skill
 

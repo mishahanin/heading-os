@@ -28,16 +28,12 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - set up my workspace
-    - configure my workspace
-    - onboard me
-    - setup wizard
-    - finish setup
+    - NEVER auto-trigger. Explicit `/setup-wizard` only.
   exclusions:
     - Refuses to run on CEO master workspace
     - intended for fresh exec workspaces and HEADING OS clones
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Setup Wizard
 

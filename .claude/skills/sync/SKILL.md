@@ -31,13 +31,11 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - sync
-    - full corp sync
-    - pull updates
+    - NEVER auto-trigger. Explicit `/sync` only.
   exclusions:
     - Push to execs -> /push-updates
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Workspace Sync
 

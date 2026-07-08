@@ -149,18 +149,18 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 |---|---|
 | `/align [N]` | NEVER auto-trigger. Explicit `/align [N]` only. |
 | `/ast-grep` | structural code search, AST pattern, find code by structure, ast-grep |
-| `/backup` | backup, push to github, save workspace |
+| `/backup` | NEVER auto-trigger. Explicit `/backup` only. |
 | `/brain-audit` | NEVER auto-trigger from natural language. Invoked by composing synthesis skills (`/meeting-prep`, `/odin consult`, `/deal-strategy`) via the Skill tool, or explicitly by CEO for ad-hoc audits. |
 | `/bridge-health` | NEVER auto-trigger. Explicit `/bridge-health [--stale N] [--gate] [--json]` only. Wraps `scripts/daemon-fleet-health.py` + `scripts/bridge-daemon.py --health` + the `/telemetry/summary` endpoint. Use when the sync-pill is amber/red, the dashboard feels stale, or before scaling Phase 1 -> Phase 2 (need `--gate`). CEO-only, not synced to executives. |
 | `/burst [N]` | NEVER auto-trigger. Explicit `/burst [N]` or `/burst [N]: <seed>` only. |
-| `/calibrate [light]` | calibrate, self-improve agent, end of session capture |
+| `/calibrate [light]` | NEVER auto-trigger. Explicit `/calibrate [light]` only. |
 | `/checkpoint [note]` | NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/` without running /compact. Surfaces from the two-tier checkpoint-offer hook at 25%/30% used context. |
 | `/cold-sweep` | cold sweep, cold-sweep, drain cold contacts, sweep overdue contacts, drain the red debt |
 | `/context7` | context7, look up docs for [library], library documentation |
 | `/create-plan` | create plan, plan for [change], design the approach |
 | `/dashboard` | dashboard, morning dashboard, daily brief, bridge view |
 | `/devil [N]` | NEVER auto-trigger. Explicit `/devil [N]` or `/devil [N]: <claim>` only. |
-| `/dream` | dream, consolidate memories, memory cleanup, reflect |
+| `/dream` | NEVER auto-trigger. Explicit `/dream` only. |
 | `/editorial-review [file:<path>]` | editorial pass, structural review, review the structure of this, tighten this document, restructure this draft |
 | `/evaluate` | evaluate, grade, review quality, check this artifact |
 | `/event-debrief` | event debrief, post-event recap, debrief [event] |
@@ -171,21 +171,21 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 | `/mullvad` | /mullvad, fastest mullvad server, switch mullvad server, check mullvad speed, mullvad connect |
 | `/next` | what next, what should I do now, logical next step, where were we, recommend next |
 | `/playwright` | screenshot this site, scrape this page, browse to, headless browser |
-| `/pre-impl` | pre-implementation gate, gate before implement, are we ready to implement, before we implement, stress-test plan before building, pre-impl check |
+| `/pre-impl` | NEVER auto-trigger. Explicit `/pre-impl` only. |
 | `/prime` | NEVER auto-trigger. Explicit `/prime` or "prime" only. |
 | `/promote-corporate` | NEVER auto-trigger. Explicit `/promote-corporate [--force] [--dry-run]` only. CEO-only R16 Layer 2 gate: runs canary soak/freshness/smoke gates, then `--ff-only` merges corporate `staging` -> `main`. Never bumps BUILD.json. |
-| `/publish-corporate` | publish corporate, publish to executives, push to corporate |
-| `/push-updates` | push updates, update all executives, sync to everyone |
+| `/publish-corporate` | NEVER auto-trigger. Explicit `/publish-corporate` only. |
+| `/push-updates` | NEVER auto-trigger. Explicit `/push-updates` only. |
 | `/queue` | queue, action queue, show my drafts, what's waiting to send, approve/send the first one, retry that failed send, dismiss a queued card |
 | `/radar` | radar, ops radar, what's overdue, what am I forgetting to run, what manual actions are due, ack a radar item, crunch mode on/off |
-| `/request-skill` | request skill, I need a new skill |
+| `/request-skill` | NEVER auto-trigger. Explicit `/request-skill` only. |
 | `/rollback-corporate` | NEVER auto-trigger. Explicit `/rollback-corporate [--dry-run]` only. CEO-only R16 Layer 2: forward-revert corporate `main` to the previous BUILD (no force-push), execs pull the reverted state next sync. |
-| `/scrutinize [target] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous]` | scrutinize, principal review, stress-test this, audit what you just did, validate and improve, ultrathink review. Target may be `plan` / `execution` / `file:<path>` / `dir:<path>` / `workspace` / `trajectory:<run_id>` (audit a past `/implement` run). `--relentless`: auto-apply fixes and re-scrutinize until two consecutive zero-findings iterations OR two consecutive marginal-improvement iterations OR 10-iteration cap OR check-failure OR oscillation. Triggers: "relentless scrutinize", "scrutinize until clean", "loop until fixed", "keep fixing until none left" |
-| `/sentinel` | sentinel, start sentinel, stop sentinel, comms monitor |
+| `/scrutinize [target] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous]` | NEVER auto-trigger. Explicit `/scrutinize [target] ...` only. |
+| `/sentinel` | NEVER auto-trigger. Explicit `/sentinel` only. |
 | `/setup-browser-cookies` | setup browser cookies, import cookies |
-| `/setup-wizard` | set up my workspace, configure my workspace, onboard me, setup wizard, finish setup |
-| `/skill-creator` | create a skill, improve this skill, eval this skill |
-| `/sync` | sync, full corp sync, pull updates |
+| `/setup-wizard` | NEVER auto-trigger. Explicit `/setup-wizard` only. |
+| `/skill-creator` | NEVER auto-trigger. Explicit `/skill-creator` only. |
+| `/sync` | NEVER auto-trigger. Explicit `/sync` only. |
 | `/thread` | open a thread, log to thread, close thread, hold thread, reopen, thread list, thread find, what threads are active |
 | `/validate` | validate, fact-check, verify claims |
 | `/weekly-review` | weekly review, end of week review, friday review |

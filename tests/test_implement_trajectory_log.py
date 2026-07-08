@@ -157,6 +157,8 @@ def _clean_events():
          "payload": {"step": 2, "files_affected": ["y.py"], "status": "ok"}},
         {"event_type": "wave_end", "step_number": None,
          "payload": {"wave": 1, "successes": 1, "failures": 0}},
+        {"event_type": "validation_check", "step_number": None,
+         "payload": {"check": "pytest", "passed": True, "detail": "ok"}},
         {"event_type": "run_end", "step_number": None, "payload": {"summary": "ok"}},
     ]
 
@@ -164,6 +166,14 @@ def _clean_events():
 def test_verify_clean(traj_dir):
     _write_traj("vc", _clean_events())
     assert itl.verify_trajectory("vc") == []
+
+
+def test_verify_flags_zero_validation_check(traj_dir):
+    """A completed run with no validation_check events trips the advisory flag."""
+    events = [e for e in _clean_events() if e["event_type"] != "validation_check"]
+    _write_traj("vzvc", events)
+    defects = itl.verify_trajectory("vzvc")
+    assert any("zero validation_check events" in d for d in defects)
 
 
 def test_verify_missing_step_end(traj_dir):
@@ -294,6 +304,8 @@ def _recon_events(git_head, recorded):
         {"event_type": "step_start", "step_number": 1, "payload": {"step": 1}},
         {"event_type": "step_end", "step_number": 1,
          "payload": {"step": 1, "files_affected": list(recorded), "status": "ok"}},
+        {"event_type": "validation_check", "step_number": None,
+         "payload": {"check": "pytest", "passed": True, "detail": "ok"}},
         {"event_type": "run_end", "step_number": None, "payload": {"summary": "ok"}},
     ]
 

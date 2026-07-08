@@ -44,14 +44,11 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - dream
-    - consolidate memories
-    - memory cleanup
-    - reflect
+    - NEVER auto-trigger. Explicit `/dream` only.
   exclusions:
     - N/A
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Dream - Reflective Memory Consolidation
 

@@ -45,21 +45,13 @@ x-heading-routing:
   category: Operations
   label: /scrutinize [target] [--relentless] [--no-refute] [--include-low-confidence] [--include-ambiguous]
   triggers:
-    - scrutinize
-    - principal review
-    - stress-test this
-    - audit what you just did
-    - validate and improve
-    - 'ultrathink review. Target may be `plan` / `execution` / `file:<path>` / `dir:<path>` / `workspace` / `trajectory:<run_id>` (audit a past `/implement` run). `--relentless`: auto-apply fixes and re-scrutinize until two consecutive zero-findings iterations OR two consecutive marginal-improvement iterations OR 10-iteration cap OR check-failure OR oscillation. Triggers: "relentless scrutinize"'
-    - '"scrutinize until clean"'
-    - '"loop until fixed"'
-    - '"keep fixing until none left"'
+    - NEVER auto-trigger. Explicit `/scrutinize [target] ...` only.
   exclusions:
     - Artifact grading only -> /evaluate
     - fact-check drafts -> /validate
     - reasoning on a decision -> /deep-think
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Scrutinize
 

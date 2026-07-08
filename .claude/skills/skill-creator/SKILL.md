@@ -30,13 +30,11 @@ x-heading-capability:
 x-heading-routing:
   category: Operations
   triggers:
-    - create a skill
-    - improve this skill
-    - eval this skill
+    - NEVER auto-trigger. Explicit `/skill-creator` only.
   exclusions:
     - N/A
   compound: 'No'
-  router: auto
+  router: manual
 ---
 # Skill Creator
 

@@ -32,13 +32,24 @@
     <div class="nav-group">
       <div class="label">Operate</div>
       <a href="daemons.html">Daemons &amp; scheduled tasks</a>
-      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
       <a href="memory-odin.html">Memory &amp; ODIN</a>
       <a href="MODELS-SETUP.html">AI models</a>
       <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
       <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
       <a href="TROUBLESHOOTING.html">Troubleshooting</a>
       <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
     </div>
     <div class="nav-group">
       <div class="label">Reference</div>
@@ -51,6 +62,7 @@
       <a href="THREAT-MODEL.html">Threat model</a>
       <a href="engine-data-segregation-contract.html">Engine/data contract</a>
       <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
       <a href="GLOSSARY.html">Glossary</a>
       <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
       <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
@@ -70,6 +82,8 @@
       <span class="badge">Engine / data separation</span>
     </div>
   </section>
+
+  <p class="lede"><strong>The guarantee:</strong> your data cannot ship with the code. The engine is a shareable, public repository; your data is a private one the engine never contains and never leaks. That separation is enforced by six mechanical layers and a security suite that runs on every commit, not left to intention.</p>
 
   <p class="lede">New here? Start with <a href="prerequisites.html">Prerequisites &amp; install</a> to stand up a working clone, then explore the operate and reference guides below.</p>
 
@@ -119,6 +133,14 @@
   </table>
   </div>
   <p>Routing between the two is declared in <code>config/routing-map.yaml</code> and resolved at runtime by the data-root seam in <code>scripts/utils/workspace.py</code>. A mechanical guard refuses to commit data-class files into the engine, so the split cannot drift. On a public clone the data overlay is simply absent and the engine runs on its defaults and <code>*.example.*</code> templates.</p>
+
+  <h2>By the numbers</h2>
+  <p>Every figure here is produced by CI, not asserted by hand. Counts as of <code>v0.3.0</code>.</p>
+  <ul>
+    <li><strong>231 security tests</strong>, run on every commit by the security suite over <code>tests/security/</code>. This is the suite that proves the guarantee above.</li>
+    <li><strong>6 enforcement layers</strong> hold the engine and data apart: a bypass guard, a leak guard, a data-path redirect, a build partition, a runtime tree-clean check, and an unbypassable push-time wall.</li>
+    <li><strong>Router accuracy</strong>: pending. The nightly router-accuracy trend needs a week of data before a number is published here.</li>
+  </ul>
 
   <div class="callout note">
     <span class="ttl">Built by</span>

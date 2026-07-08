@@ -32,6 +32,7 @@ Keep the bar the engine holds itself to:
 - **Scope discipline.** Change what the issue asks for. Don't refactor adjacent code in the same PR.
 - **No new dependencies** without raising it in the issue first; pin exact versions.
 - **Match the surrounding style.** Read the file before editing it.
+- **Docs stay in sync.** If you touch `docs/`, regenerate the HTML and keep it current. See [`docs/DOCS-PIPELINE.md`](docs/DOCS-PIPELINE.md) for which pages are Markdown-sourced vs hand-authored; the docs-drift guard fails the build otherwise.
 
 ## Development setup
 

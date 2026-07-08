@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRM skills — HEADING OS</title>
+<meta name="description" content="CRM skills in HEADING OS: what each skill is, what it does, how to invoke it, and what you can customize.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3.cat:first-of-type { margin-top: 24px; }
+  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
+  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
+  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
+  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
+  section.skill p { margin: 8px 0; }
+  section.skill pre { margin: 10px 0; }
+  a.cmd-link { text-decoration: none; }
+  a.cmd-link code { color: var(--link); }
+  a.cmd-link:hover code { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html" class="active">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+
+  <h1>CRM skills</h1>
+  <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
+CRM</h3>
+
+<section class="skill">
+<h3 id="s-crm"><code>/crm [add|log|radar|find|update|next] [contact] [details]</code><span class="badge">CRM</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>crm/contacts/</code></p>
+<p><strong>What it is.</strong> The personal relationship CRM: add contacts, log interactions, update records, find people, and surface a health radar of who has gone overdue.</p>
+<p><strong>What it does.</strong> Parses the first argument as the subcommand. <code>radar</code> (default) runs <code>scripts/crm-health.py</code> and presents RED/YELLOW/GREEN contacts by urgency; <code>next</code> runs <code>scripts/crm_next.py</code> to present the top-3 follow-ups as review-ready drafts. <code>add</code> creates an address-book entity plus a relationship record in <code>crm/contacts/</code> and appends to the <code>context/people.md</code> index; <code>log</code>, <code>find</code>, and <code>update</code> operate on those files. It resolves CEO versus exec paths from <code>.workspace-identity.json</code> and, on the CEO workspace only, can stamp Odin <code>relevant_principles</code> when the knowledge brain exists.</p>
+<p><strong>How to use it.</strong> Use to record or query one relationship. To draft nudges for many overdue contacts use <code>/cold-sweep</code>; for the Google address book use <code>/google-contacts</code>.</p>
+<pre><code>/crm add Jane Doe --company "Acme Corp" --email jane@acme.com
+/crm log Jane Doe met at the summit, sending the proposal Monday
+/crm radar
+"check CRM contact health"</code></pre>
+<p><strong>Customize.</strong> Cadence defaults and health thresholds live in <code>crm/config.md</code>. Contact records carry YAML frontmatter (<code>relationship_type</code>, <code>cadence</code>, <code>timezone</code>). Classification rules for new contact files are appended to <code>config/routing-map.yaml</code>. Admin-only company-wide radar reads <code>../31c-crm-central/aggregated/</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-viraid"><code>/viraid [action]</code><span class="badge">CRM</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/viraid/</code></p>
+<p><strong>What it is.</strong> A virtual assistant that drains a dedicated Telegram capture channel: it reads new messages, categorizes each (CRM action, calendar, task, research, note), and turns them into approved actions so nothing falls through the cracks.</p>
+<p><strong>What it does.</strong> The default run fetches new channel messages via the Telegram client, categorizes and priority-tags them (P1/P2/P3), enriches with CRM, calendar policy, and pipeline context, then presents proposed actions behind a mandatory STOP gate before executing (writes tasks, logs CRM interactions). State is the DATA-overlay ledger <code>outputs/operations/viraid/state.json</code> and <code>tasks.md</code>. <code>/viraid sweep</code> triages active tasks with aging flags (AGING &gt;3 days, STALE &gt;7 days). Scheduling messages force a mandatory calendar check, and no meeting is created without explicit slot approval.</p>
+<p><strong>How to use it.</strong> Use to process the capture channel or triage its task backlog. For general Telegram messaging use <code>/telegram</code>; for the email inbox use <code>/email-intel</code>.</p>
+<pre><code>/viraid
+/viraid sweep
+"check viraid"</code></pre>
+<p><strong>Customize.</strong> The channel name is not hardcoded: set <code>VIRAID_CHANNEL_NAME</code> in <code>.env</code> (defaults to the built-in channel). Priority classification signals, task aging thresholds, and per-step flow live in the skill's <code>references/</code> files (<code>message-processing.md</code>, <code>sweep-mode.md</code>, <code>edge-cases.md</code>).</p>
+</section>
+
+<section class="skill">
+<h3 id="s-google-contacts"><code>/google-contacts [search|add|edit] [name]</code><span class="badge">CRM</span></h3>
+<p class="skill-meta">Auto-routes from natural language · standalone connector, no workspace-file writes (Google-side only)</p>
+<p><strong>What it is.</strong> A standalone connector to Google Contacts via the People API for looking up, adding, editing, listing, and deleting contacts in your Google address book.</p>
+<p><strong>What it does.</strong> Drives <code>scripts/google-contacts.py</code> (a Haiku-model skill) with subcommands <code>search</code>, <code>add</code>, <code>get</code>, <code>edit</code>, <code>list</code>, and <code>delete</code>; all support <code>--json</code>. It authenticates over OAuth (first run opens a browser consent), caches the token, and resolves contacts by resource names like <code>people/c1234567890</code>. This is completely separate from the workspace CRM: it writes only to Google, never to <code>crm/contacts/</code>.</p>
+<p><strong>How to use it.</strong> Use to manage contacts inside Google. For workspace relationship tracking and interaction logs use <code>/crm</code>; not for Exchange or Outlook contacts.</p>
+<pre><code>/google-contacts search "Acme"
+/google-contacts add --name "Jane Doe" --email jane@acme.com --company "Acme Corp"
+"find their number in google contacts"</code></pre>
+<p><strong>Customize.</strong> OAuth setup requires the People API enabled and a Desktop OAuth client saved as <code>.sessions/google/credentials.json</code>; the token caches to <code>.sessions/google/token.json</code> (delete it to re-auth). Add-command flags include <code>--email</code>, <code>--phone</code>, <code>--company</code>, <code>--title</code>, <code>--notes</code>, <code>--address</code>, <code>--url</code>.</p>
+</section>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

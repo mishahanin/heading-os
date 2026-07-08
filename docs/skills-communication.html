@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Communication skills — HEADING OS</title>
+<meta name="description" content="Communication skills in HEADING OS: what each skill is, what it does, how to invoke it, and what you can customize.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3.cat:first-of-type { margin-top: 24px; }
+  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
+  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
+  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
+  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
+  section.skill p { margin: 8px 0; }
+  section.skill pre { margin: 10px 0; }
+  a.cmd-link { text-decoration: none; }
+  a.cmd-link code { color: var(--link); }
+  a.cmd-link:hover code { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html" class="active">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+
+  <h1>Communication skills</h1>
+  <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
+Communication</h3>
+
+<section class="skill">
+<h3 id="s-email-draft"><code>/email-draft [to] [purpose]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts a new outbound email in Misha's voice: direct opener, ordered key points, a clear ask, plus subject-line options.</p>
+<p><strong>What it does.</strong> Before drafting it reads <code>reference/misha-voice.md</code>, <code>context/people.md</code>, and <code>context/business-info.md</code> for voice and relationship context, then applies the always-on Voss layer (<code>.claude/rules/voss.md</code>) for calibrated questions and labeling. It returns the draft inline with 2-3 subject lines and a pre-send flag. It never auto-sends: outbound send is human-gated, and sending goes through <code>scripts/send-email.py</code> only after you approve.</p>
+<p><strong>How to use it.</strong> Use for a fresh outbound email to a named recipient. To reply to an email you received use <code>/email-respond</code>; for peer CEO correspondence use <code>/ceo-to-ceo</code>; for a branded letter use <code>/corporate-letter</code>.</p>
+<pre><code>/email-draft Jane Doe intro to our platform
+"draft email to Jane Doe about the pilot timeline"</code></pre>
+<p><strong>Customize.</strong> Voice lives in <code>reference/misha-voice.md</code>; relationship context in <code>context/people.md</code>. The NEVER list (banned openers, passive voice, buried asks) is edited in the SKILL.md body.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-email-respond"><code>/email-respond [notes]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts a reply to an existing email thread in Misha's voice: reads the incoming message, reads the sender's real intent, and answers concisely.</p>
+<p><strong>What it does.</strong> You paste the incoming email below the divider. It reads <code>reference/misha-voice.md</code>, <code>context/people.md</code>, and <code>context/pipeline.md</code>, then runs a Voss tactical-empathy read (<code>.claude/rules/voss.md</code>): surface the emotion, label tension before substance, redirect demands with calibrated questions. It returns the draft, a subject line if re-titling, and one pre-send flag. It never sends and never fabricates commitments not in the thread; outbound send stays human-gated.</p>
+<p><strong>How to use it.</strong> Use to reply to a received email. For a new outbound email use <code>/email-draft</code>; to triage the whole inbox use <code>/email-intel</code>.</p>
+<pre><code>/email-respond keep it short, decline politely
+"reply to this email from Jane Doe"</code></pre>
+<p><strong>Customize.</strong> Voice in <code>reference/misha-voice.md</code>, relationship context in <code>context/people.md</code>, deal context in <code>context/pipeline.md</code>. Optional <code>notes</code> steer the reply per run.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-email-intel"><code>/email-intel [--hours N] [--inbox-only] [--sent-only]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/email-intelligence/</code>, <code>crm/contacts/</code>, <code>context/pipeline.md</code></p>
+<p><strong>What it is.</strong> Daily inbox intelligence processor. Scans incoming and outgoing 31C Exchange email, groups by conversation thread, and proposes CRM logs, tasks, pipeline updates, knowledge notes, and new contacts.</p>
+<p><strong>What it does.</strong> Runs five phases: state check, fetch and process via <code>scripts/email-intelligence.py</code> (Exchange EWS via exchangelib), present a priority-tagged (P1/P2/P3) digest plus one flat numbered action list, mandatory approval, then execute only the numbers you approve. Actions carry tier tags; the numbered list persists in <code>sweep-actions-YYYY-MM-DD.json</code> (via <code>scripts/email-sweep.py</code>) so an interrupted run resumes. Local writes land in <code>crm/contacts/</code>; pipeline changes route as a reversible notify card; <code>[send-gated]</code> replies and forwards send through <code>scripts/send-email.py</code> only after their number is approved (a procedural human gate). It never uses Gmail: Exchange only.</p>
+<p><strong>How to use it.</strong> Use to triage the inbox. For a single ad-hoc reply use <code>/email-respond</code>; for a multi-channel "what's new" sweep use the Morning Comms pattern.</p>
+<pre><code>/email-intel --hours 48
+"process my inbox"</code></pre>
+<p><strong>Customize.</strong> Priority signals and enrichment thresholds (14-day WARNING, 30-day CRITICAL) live in the SKILL.md; digest and execution formats in <code>references/digest-format.md</code> and <code>references/execution-templates.md</code>. Exchange credentials load from <code>.env</code>. State lives under <code>outputs/operations/email-intelligence/</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-follow-up"><code>/follow-up [who] [context]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>crm/contacts/</code></p>
+<p><strong>What it is.</strong> Drafts a single personalized follow-up email after a specific meeting or conversation: under 150 words, one ask, referencing a concrete detail from the exchange.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code>, <code>context/people.md</code>, <code>context/pipeline.md</code>, and <code>context/business-info.md</code>, then builds an opener-thread-value-nextstep-close structure with Voss-style labeling (<code>reference/voss-negotiation.md</code>). It returns the draft and a suggested subject line, and auto-logs the interaction to the contact's <code>crm/contacts/</code> file (updating <code>last_touch</code>). It never sends: outbound send is human-gated, and it will not fabricate what was discussed.</p>
+<p><strong>How to use it.</strong> Use for a one-off post-meeting follow-up. For sweeping many overdue contacts use <code>/cold-sweep</code>; for mass event follow-ups the orchestrator runs the post-event pattern.</p>
+<pre><code>/follow-up Jane Doe met at the Acme Corp booth, discussed pilot
+"send a follow-up to Jane Doe after our call"</code></pre>
+<p><strong>Customize.</strong> Voice in <code>reference/misha-voice.md</code>; the 150-word cap, one-ask rule, and sign-off are set in the SKILL.md body. Relationship and deal context from <code>context/people.md</code> and <code>context/pipeline.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-ceo-to-ceo"><code>/ceo-to-ceo [name] [subject]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts peer-level CEO-to-CEO correspondence in Misha's voice: executive register, relationship-aware, 150-300 words.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code>, <code>context/people.md</code>, <code>context/business-info.md</code>, <code>context/pipeline.md</code>, and validates facts against <code>datastore/INDEX.md</code>. It writes peer-to-peer (not vendor-to-client), proposes a concrete next step, and applies a Voss layer (accusation audit, normative leverage, calibrated next steps). It returns the draft with two subject-line options and one relationship flag. It never auto-sends and never invents shared history; outbound send stays human-gated.</p>
+<p><strong>How to use it.</strong> Use when writing to another company's CEO or founder as a peer. For a non-CEO recipient use <code>/email-draft</code>; for a formal branded letter on letterhead use <code>/corporate-letter</code>.</p>
+<pre><code>/ceo-to-ceo Jane Doe partnership expansion
+"write to the Acme Corp CEO about strategic alignment"</code></pre>
+<p><strong>Customize.</strong> Voice and CEO-to-CEO notes in <code>reference/misha-voice.md</code>; relationship depth in <code>context/people.md</code>. The 150-300 word bound and Voss hooks are set in the SKILL.md.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-corporate-letter"><code>/corporate-letter [recipient] [subject]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/documents/{sender-slug}/letter/</code></p>
+<p><strong>What it is.</strong> Produces a branded 31C external letter (PDF + DOCX) from the locked corporate template, with letterhead, signature block, confidentiality footer, and a 31C-LET reference number applied automatically.</p>
+<p><strong>What it does.</strong> Five phases: load <code>reference/corporate-style-guide.md</code> plus the corporate-docs, terminology, voice, and Voss rules; announce the template selection; draft the body (under 350 words, Voss precision, no round-number pricing); present for approval as a hard stop; then render via <code>scripts/render-doctype.py</code> to HTML, PDF, and DOCX under <code>outputs/documents/{sender-slug}/letter/</code>. Reference IDs increment from <code>outputs/documents/_letter-sequence.txt</code>. It never renders or sends without explicit approval and runs a hidden-character scan before reporting.</p>
+<p><strong>How to use it.</strong> Use for formal correspondence to customers, partners, regulators, or investors. For peer CEO correspondence use <code>/ceo-to-ceo</code>; for a commercial offer with pricing use <code>/proposal</code>; for an MOU or LOI use <code>/partnership-doc</code>.</p>
+<pre><code>/corporate-letter Jane Doe letter of introduction
+"write a formal letter to Acme Corp"</code></pre>
+<p><strong>Customize.</strong> Locked template, colors, typography, and signature live in <code>reference/corporate-style-guide.md</code> and the renderer registry (<code>scripts/utils/doctype_renderer.py</code>); the HTML template under <code>datastore/brand/templates/doctypes/letter.html</code>. Template changes require CEO approval.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-telegram"><code>/telegram [send|read|search] [contact] [message]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · sends and reads live messages (confirmed before send)</p>
+<p><strong>What it is.</strong> A live Telegram client operating as Misha's personal account over MTProto: send and read messages, check unread, search history, forward, reply, send and download files and media, and list chats and contacts.</p>
+<p><strong>What it does.</strong> Drives <code>.claude/skills/telegram/scripts/telegram_client.py</code> (Telethon) with 15 commands, run from the workspace root. Sent and downloaded files resolve under the data overlay via <code>get_outputs_dir()</code>, not the engine tree. It always confirms with Misha before sending to other people; sending to Saved Messages (<code>me</code>) is safe without confirmation. It never logs the session file, API hash, or auth tokens.</p>
+<p><strong>How to use it.</strong> Use to interact with Telegram as a user. For the VIRAID capture channel use <code>/viraid</code>; not for other messaging platforms or for building Telegram bots.</p>
+<pre><code>/telegram read "@janedoe" --limit 10
+"send a telegram to Jane Doe"</code></pre>
+<p><strong>Customize.</strong> Credentials (<code>TELEGRAM_API_ID</code>, <code>TELEGRAM_API_HASH</code>, <code>TELEGRAM_PHONE</code>) load from <code>.env</code>; the session lives gitignored at <code>.sessions/telegram/telegram.session</code>. Full command reference in <code>references/commands.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-tribe-message"><code>/tribe-message [topic]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts a 100-250 word internal message to the 31C Tribe in the captain's voice, any day of the week: heading-setting, Navigation-Principle framing, with maritime register where natural.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code>, <code>outputs/operations/workspace/31c-operational-state-model.md</code> (operational vocabulary and Five Core Principles), and <code>context/current-data.md</code>, then drafts using sea-state and heading framing plus a Voss layer that labels the Tribe's state before the ask. It handles updates, policy, milestones, and Crunch Mode declarations, and returns a draft only.</p>
+<p><strong>How to use it.</strong> Use for any internal all-hands or Tribe-wide message. For the recurring Monday cadence message use <code>/tribe-monday</code>; for external content use <code>/linkedin-post</code> or <code>/corporate-letter</code>.</p>
+<pre><code>/tribe-message quarter close and next heading
+"write to the tribe about the pilot milestone"</code></pre>
+<p><strong>Customize.</strong> Voice and Tribe-communications guidance in <code>reference/misha-voice.md</code>; operational vocabulary in the state model. The NEVER list (no "team", no cheerleading, hyphens only) is in the SKILL.md.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-tribe-monday"><code>/tribe-monday [week_theme]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces a draft you review before sending</p>
+<p><strong>What it is.</strong> Drafts the recurring 150-250 word Monday message to the 31C Tribe: reads the sea state, sets the week's heading, and connects to a Core Principle in the captain's voice.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code>, <code>outputs/operations/workspace/31c-operational-state-model.md</code>, and <code>context/current-data.md</code>, then opens with an honest read of external conditions, states the heading, acknowledges difficulty without drama, and can declare Crunch Mode when flagged. It returns a draft only for review.</p>
+<p><strong>How to use it.</strong> Use specifically for the weekly Monday cadence. For an off-cadence or one-off Tribe message use <code>/tribe-message</code>.</p>
+<pre><code>/tribe-monday focus week on the Acme Corp pilot
+"draft the monday tribe message"</code></pre>
+<p><strong>Customize.</strong> Voice in <code>reference/misha-voice.md</code>; the sea-state/heading structure, 150-250 word bound, and NEVER list are set in the SKILL.md.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-translate"><code>/translate [language] [text]</code><span class="badge">Communication</span></h3>
+<p class="skill-meta">Auto-routes from natural language · produces the translation inline</p>
+<p><strong>What it is.</strong> Translates text between Russian and English (or other languages on request), preserving register, tone, and meaning rather than a literal word-for-word rendering.</p>
+<p><strong>What it does.</strong> Reads <code>reference/misha-voice.md</code> (especially the Russian Language Notes), auto-detects direction and register (personal, business, formal, or tribe), returns the translation, and flags phrases that needed cultural adaptation. It leaves ODUN.ONE, 31C, DPI+, and proper nouns untranslated, and lets warmth come through more fully in Russian.</p>
+<p><strong>How to use it.</strong> Use to render a passage in the other language in Misha's voice. To draft new content use the relevant content or comms skill instead.</p>
+<pre><code>/translate ru
+"translate this to English"</code></pre>
+<p><strong>Customize.</strong> Voice and Russian-language guidance live in <code>reference/misha-voice.md</code>. The <code>direction</code> and <code>register</code> variables override auto-detection per run.</p>
+</section>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

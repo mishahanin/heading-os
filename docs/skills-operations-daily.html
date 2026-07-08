@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations: daily drivers — HEADING OS</title>
+<meta name="description" content="Operations: daily drivers in HEADING OS: what each skill is, what it does, how to invoke it, and what you can customize.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3.cat:first-of-type { margin-top: 24px; }
+  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
+  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
+  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
+  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
+  section.skill p { margin: 8px 0; }
+  section.skill pre { margin: 10px 0; }
+  a.cmd-link { text-decoration: none; }
+  a.cmd-link code { color: var(--link); }
+  a.cmd-link:hover code { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html" class="active">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+
+  <h1>Operations: daily drivers</h1>
+  <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
+Operations: daily drivers</h3>
+
+<section class="skill">
+<h3 id="s-prime"><code>/prime</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (loads context, spawns daemons if dead)</p>
+<p><strong>What it is.</strong> Session initializer: loads full workspace context, runs a parallel health block, surfaces priorities, and recommends the day's skills.</p>
+<p><strong>What it does.</strong> Reads the context files in order (personal, business, strategy, current data, people, pipeline, workspace index, datastore index), then runs seven read-only health checks in parallel via <code>scripts/prime-health-parallel.py</code> (CRM, knowledge, memory, email-intel state, threads archive-scan, Fireside daemon, Sync-Exchange daemon). If the Fireside or Sync-Exchange daemon is dead the health block spawns a detached one. It renders an Active Threads panel from <code>MEMORY.md</code>, flags sync files older than 48 hours as SYNC STALE, and defers the skill catalog to the router rather than duplicating it.</p>
+<p><strong>How to use it.</strong> Run once at the start of every working session. Mid-session, use <code>/next</code> for the logical next step, <code>/dashboard</code> for the morning briefing alone, or <code>/state-check</code> for function-by-function health.</p>
+<pre><code>/prime
+(no arguments; slash-command only, cannot be triggered from natural language)</code></pre>
+<p><strong>Customize.</strong> Reads <code>.workspace-identity.json</code> to branch CEO versus exec paths (flat versus <code>corporate/</code> + <code>personal/</code>); <code>disable-model-invocation: true</code> in frontmatter. On exec workspaces it prepends a setup-wizard completion line when <code>completion_pct &lt; 100</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-dashboard"><code>/dashboard</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/dashboard/YYYY-MM-DD/</code></p>
+<p><strong>What it is.</strong> Generates the daily CEO Morning Dashboard: a single-page HTML and PDF briefing aggregating CRM health, pipeline, calendar, email, strategy, and data freshness.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/generate-dashboard.py --pdf</code>, which reads all workspace data sources (CRM health via <code>scripts/crm-health.py --json</code>, pipeline, calendar and email sync files, strategy, metrics) and writes <code>morning-dashboard.html</code> plus <code>.pdf</code>. It then validates hidden characters with <code>scripts/sanitize-text.py</code> and reports urgent-item count, today's meetings, and a pipeline snapshot. An optional live sea-state enrichment runs a quick WebSearch when requested.</p>
+<p><strong>How to use it.</strong> Use for the morning operational briefing. For a full context load at session start use <code>/prime</code>; for the logical next action use <code>/next</code>; for the end-of-week review use <code>/weekly-review</code>.</p>
+<pre><code>/dashboard
+"give me the morning brief"</code></pre>
+<p><strong>Customize.</strong> The <code>--pdf</code> flag on the backing script; branding is 31C corporate (GT Standard fonts and logos from <code>datastore/brand/</code>, with an explicit surfaced warning if they fail to embed rather than a silent Inter fallback). An R10 Capture Payoff panel auto-hides on any workspace with no Odin brain.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-next"><code>/next [area]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (recommends commands, never runs them)</p>
+<p><strong>What it is.</strong> State-aware "what's next" recommender: reads what just happened and names the logical next step plus the exact slash-command to run.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/next-signal.py --json</code> to build a ranked recent-actions list from four sources (the session handoff pointer, newest <code>outputs/</code> files, recent git log subjects, active business threads), then maps each action to its producing skill via <code>scripts/skill_graph.py</code> and looks up its follow-on edges. It emits 2 to 4 ranked one-line recommendations, or nothing when no edge is strong enough. Strictly read-only: it names the command but never invokes it, and it reads business threads only (personal threads stay out of the signal).</p>
+<p><strong>How to use it.</strong> Use at a mid-session lull or "where were we". Do NOT use for a full context load at session start (<code>/prime</code>), function-health diagnosis (<code>/state-check</code>), the daily briefing (<code>/dashboard</code>), or the end-of-week review (<code>/weekly-review</code>).</p>
+<pre><code>/next deals
+"what should I do now?"</code></pre>
+<p><strong>Customize.</strong> Optional area argument (for example <code>deals</code> or <code>content</code>) to scope the recommendation. Both backing scripts run standalone from terminal or chat, no daemon or browser.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-radar"><code>/radar [ack &lt;key&gt; | crunch on|off]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/ops-radar/</code></p>
+<p><strong>What it is.</strong> Manual-actions and silent-health detector: surfaces which high-consequence manual actions are objectively overdue and which machine states have degraded. A detector, never an executor.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/ops-radar.py</code>, which computes every signal, applies ack and crunch suppression, and prints a detailed due-items view (or "all clear"). Tier A machine states (ollama down, memory-index stale) self-heal on the timer; Tier B manual actions (backup, publish, weekly-review, cold-sweep, Odin collect/reflect) only nudge when objectively overdue, and for each due item the skill names the one command that clears it. It never sends, commits, publishes, or runs a manual action; a daily timer pushes the same counts-only line to Telegram.</p>
+<p><strong>How to use it.</strong> Use to see what is overdue or to ack/crunch. Do NOT use for a full morning brief (<code>/dashboard</code> or <code>/prime</code>), naming the single next action (<code>/next</code>), or function-by-function health (<code>/state-check</code>); the radar FEEDS those.</p>
+<pre><code>/radar ack backup --ttl 24h
+"what am I forgetting to run?"</code></pre>
+<p><strong>Customize.</strong> <code>ack &lt;key&gt;</code> silences one signal until its TTL (<code>--ttl 24h|7d</code>) or until severity worsens; valid keys include <code>backup</code>, <code>publish</code>, <code>weekly_review</code>, <code>cold_sweep</code>, <code>odin_cadence</code>, <code>ollama</code>, <code>memory_index</code>. <code>crunch on|off</code> toggles the critical-floor-only posture.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-queue"><code>/queue [list | show &lt;id&gt; | approve &lt;id&gt; | edit &lt;id&gt; | dismiss &lt;id&gt; | retry &lt;id&gt;]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/action-queue/</code></p>
+<p><strong>What it is.</strong> The terminal-native Action Queue: the one lane where proactive agents (cold-sweep, email-intel, viraid) deposit drafted actions for the CEO's go/no-go.</p>
+<p><strong>What it does.</strong> Drives <code>scripts/action-queue.py</code> entirely in-process, daemon-free and browser-free. <code>list</code> and <code>show</code> are read-only; <code>edit</code> rewrites a draft (flipping it to <code>ready_for_review</code>); <code>dismiss</code> suppresses re-proposal for 14 days; <code>retry</code> re-sends a failed card. Critically, <code>approve</code> SENDS the card synchronously in the same command and prints the outcome: this typed approve is the explicit human approval click that the lethal-trifecta and console-first rules require. It refuses any <code>email_send</code> card that does not resolve <code>gated</code>, and nothing is ever auto-sent.</p>
+<p><strong>How to use it.</strong> Use to clear the pending-draft backlog. Do NOT use to see what is overdue workspace-wide (<code>/radar</code>), to draft cold nudges (<code>/cold-sweep</code>), or for inbox triage (<code>/email-intel</code>); this is the approve/send surface those skills feed.</p>
+<pre><code>/queue approve a1b2
+"show my drafts"</code></pre>
+<p><strong>Customize.</strong> One approve per explicit instruction ("approve the first one" means only the first). Edit takes <code>--subject</code> and <code>--body-file</code>; dismiss takes <code>--reason</code>. All mutations must go through <code>scripts/action-queue.py</code>, never <code>queue.json</code> directly.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-weekly-review"><code>/weekly-review [week date]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/reviews/</code></p>
+<p><strong>What it is.</strong> The CEO weekly review: sea state, heading, pipeline movement, Tribe state, content cadence, top-3 priorities, and course corrections, with week-over-week continuity.</p>
+<p><strong>What it does.</strong> Phase 0 finds the most recent prior review and grades last week's priorities and course corrections against observable signals. Phase 1 loads context and pipeline files; Phase 2 analyzes deal movement (advances, stalls beyond 14 days, wins/losses, weighted value), content cadence against 3 posts and 1 newsletter per week, and context freshness. Phase 3 writes the 2-to-3-page review to <code>outputs/operations/reviews/YYYY-MM-DD-weekly-review.md</code>. On the CEO workspace it optionally surfaces ripe Odin reflection clusters, gated on explicit go-ahead.</p>
+<p><strong>How to use it.</strong> Use at the end of the week (Friday) or start of the next. For a single function's health use <code>/state-check</code>; for the daily briefing use <code>/dashboard</code>.</p>
+<pre><code>/weekly-review 2026-06-27
+"friday review"</code></pre>
+<p><strong>Customize.</strong> Optional week-date argument sets the review week and output filename. Weighting bands (Discovery 10 percent through Closed-Won 100 percent) and cadence targets live in the skill body. The Odin reflection phase is a provable no-op on any workspace without an <code>knowledge/odin-brain/</code> directory.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-dream"><code>/dream [focus area]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to the auto-memory directory + <code>MEMORY.md</code></p>
+<p><strong>What it is.</strong> Reflective memory consolidation: a periodic pass that merges recent learnings into durable, well-organized memory files for future sessions.</p>
+<p><strong>What it does.</strong> Orients over existing memory files and <code>MEMORY.md</code>, gathers recent signal from git log and business/pipeline state, validates technical claims against Context7 (<code>scripts/context7.py</code>), and passes a mandatory security gate before any write. It then merges (never duplicates), converts relative dates to absolute, prunes superseded files, keeps <code>MEMORY.md</code> under its 200-line budget, and produces a consolidation report. It leaves sections marked <code>&lt;!-- managed-by: ... --&gt;</code> (like Active Threads) untouched.</p>
+<p><strong>How to use it.</strong> Use at the end of a productive session or for periodic memory hygiene. For a simple one-off memory write use the auto-memory system; for knowledge-base notes use <code>/zk</code>; for session-resume snapshots use <code>/checkpoint</code>. To only detect defects without mutating, use <code>/memory-hygiene</code>.</p>
+<pre><code>/dream deployment
+"consolidate memories"</code></pre>
+<p><strong>Customize.</strong> Optional focus-area argument scopes targeted transcript investigation; <code>disable-model-invocation: true</code> in frontmatter. If either security rules file is missing the pass stops before Phase 2, incomplete but safe.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-memory-hygiene"><code>/memory-hygiene</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/memory-hygiene/</code></p>
+<p><strong>What it is.</strong> Objective-defect detector for the memory ecosystem (auto-memory plus Odin brain): flags only mechanically-verifiable rot, never mutating memory.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/memory-hygiene.py</code>, which reads the auto-memory directory and runs <code>odin-brain-health.py --compile</code>, then writes a dated report and exits non-zero when objective defects are present. The gate covers dangling or circular <code>superseded_by</code> refs, orphan memory files not linked from <code>MEMORY.md</code>, and an over-budget <code>MEMORY.md</code>; advisory (non-gating) signals include stale files older than 45 days and Odin stale seeds. If the brain is unavailable the script degrades clearly and still reports the auto-memory half.</p>
+<p><strong>How to use it.</strong> Use to check whether memory has accumulated objective rot, on demand or weekly. Do NOT use to consolidate, merge, or reword (that is judgement, use <code>/dream</code>), to recall a fact (<code>/recall</code>), or for operational function health (<code>/state-check</code>).</p>
+<pre><code>/memory-hygiene
+"scan memory for defects"</code></pre>
+<p><strong>Customize.</strong> No flags; detector only. Resolution is handed to <code>/dream</code> with the specific defects as a worklist.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-sentinel"><code>/sentinel [start|stop|status|logs|config]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>.sentinel/</code> (daemon state)</p>
+<p><strong>What it is.</strong> Manages the Sentinel background daemon that monitors corporate email (Exchange) and Telegram for urgent messages and evaluates meeting invites against the CEO Calendar Policy.</p>
+<p><strong>What it does.</strong> Drives <code>scripts/sentinel.py</code> to start (foreground or <code>--daemon</code>), stop (<code>--stop</code>), check <code>--status</code>, run a single dry-run cycle (<code>--test</code>), or view logs (<code>tail .sentinel/sentinel.log</code>); the default action starts the daemon if not already running and shows status. The daemon scores email urgency via the Claude API, recommends CEO actions, and can auto-accept or auto-decline policy-compliant invites while escalating VIP/external senders to Telegram. Runtime state lives in <code>.sentinel/state.json</code>, <code>.sentinel/sentinel.log</code>, and <code>.sentinel/sentinel.pid</code>.</p>
+<p><strong>How to use it.</strong> Use to start, stop, or check the comms-monitoring daemon. For a one-off inbox triage use <code>/email-intel</code>; for ad-hoc Telegram use <code>/telegram</code>.</p>
+<pre><code>/sentinel status
+"is the comms monitor running?"</code></pre>
+<p><strong>Customize.</strong> Config at <code>&lt;data-root&gt;/config/sentinel_config.yaml</code> (engine fallback <code>scripts/sentinel_config.example.yaml</code>): <code>check_interval_minutes</code> (default 15), <code>urgency_threshold</code> (default 7 on a 1-10 scale), <code>vip_senders</code>, <code>monitored_chats</code>, <code>notification.target_chat</code>, digest times, and calendar auto-accept/decline policy. Prerequisites: <code>ANTHROPIC_API_KEY</code>, an authenticated Telegram session, and Exchange credentials in <code>.env</code>. <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-bridge-health"><code>/bridge-health [--stale SECONDS] [--gate] [--json]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (never mutates state)</p>
+<p><strong>What it is.</strong> Read-only rollup health check on the bridge daemon fleet: heartbeat staleness, version drift, config drift, active sessions, and the optional Phase 1 to Phase 2 adoption-gate verdict.</p>
+<p><strong>What it does.</strong> Wraps two scripts. First it runs the local liveness probe <code>scripts/bridge-daemon.py --health</code> (pretty-printing the <code>/health</code> JSON, falling back to on-disk heartbeat if the HTTP probe fails). Then it runs <code>scripts/daemon-fleet-health.py</code> for a per-workspace status grid (ok/stale/version-mismatch/config-drift/error/missing) with a rollup summary line. With <code>--gate</code> it curls the daemon's <code>/telemetry/summary</code> endpoint and labels the four adoption metrics PASS/BELOW. It ends with a one-line verdict and per-status remedies.</p>
+<p><strong>How to use it.</strong> Use when the dashboard feels stale, the sync-pill is amber or red, the daemon may have crashed, or before a <code>/push-updates</code> that changes daemon config. For a single-machine liveness probe run <code>scripts/bridge-daemon.py --health</code> directly.</p>
+<pre><code>/bridge-health --gate
+/bridge-health --stale 60 --json</code></pre>
+<p><strong>Customize.</strong> <code>--stale SECONDS</code> sets the staleness threshold (default 120); <code>--gate</code> adds the adoption-gate summary; <code>--json</code> emits machine-readable output. <code>disable-model-invocation: true</code>. Config edits go to <code>corporate/daemon/config.yaml</code> plus <code>/push-updates</code>, not here.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-cold-sweep"><code>/cold-sweep [--dry-run]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/action-queue/</code> · CEO-only (not synced to executives)</p>
+<p><strong>What it is.</strong> Drains overdue CRM "red debt" into the Action Queue as routed, voice-drafted nudges for one-click CEO approval. It only drafts; it never sends.</p>
+<p><strong>What it does.</strong> The deterministic routing (who, what priority) is done headless by <code>scripts/cold_sweep_core.py</code>, which reads <code>crm-health.py --json</code> and deposits <code>email_send</code> cards with <code>draft_status: needs_draft</code> (via the daemon schedule or a manual <code>scripts/cold-sweep.py</code> run). This skill fills each <code>needs_draft</code> card with a roughly 150-word nudge in Misha's voice, cites one real specific from the contact file, validates with <code>sanitize-text.py</code> and <code>humanization-check.py</code>, and flips the card to <code>ready_for_review</code> through <code>scripts/action-queue.py edit</code>. The CEO then approves and sends synchronously from the terminal with <code>/queue approve &lt;id&gt;</code>; this skill never sends.</p>
+<p><strong>How to use it.</strong> Use to drain the whole overdue-CRM backlog into ready drafts. For a single follow-up use <code>/follow-up</code>; for pipeline review use <code>/crm</code>.</p>
+<pre><code>/cold-sweep --dry-run
+"drain the cold contacts"</code></pre>
+<p><strong>Customize.</strong> <code>--dry-run</code> previews the routed cards without drafting and stops. Routing thresholds live in <code>cold_sweep_core</code>; the daemon runs the sweep on a 06:30 local schedule when enabled. Never invents contacts or fabricates a hook to hit the word count.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-thread"><code>/thread &lt;command&gt; [args]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>threads/</code> and <code>MEMORY.md</code></p>
+<p><strong>What it is.</strong> The operational threads registry: the running state of multi-step business and personal situations across sessions, distinct from CRM (people), pipeline (deals), and ZK (ideas).</p>
+<p><strong>What it does.</strong> Drives <code>scripts/thread.py</code> with subcommands: <code>open</code>, <code>log</code> (with <code>--artifact</code>, <code>--decision</code>, <code>--follow-up</code>, <code>--done</code>), <code>close</code>, <code>hold</code>, <code>reopen</code>, <code>list</code>, <code>find</code>, <code>show</code>, and <code>archive-scan</code> (used by <code>/prime</code>). It never opens or logs silently: before invoking the CLI it asks for approval. Personal threads are strictly protected: their content is never referenced in any output leaving the workspace, backed by a PreToolUse hook, <code>.gitignore</code>, classification, and a path filter.</p>
+<p><strong>How to use it.</strong> Use for a multi-step situation that follows through across sessions. For a single email use <code>/email-draft</code>; for a note use <code>/zk</code>; for a contact log use <code>/crm</code>. Code work and debugging are explicitly out of scope.</p>
+<pre><code>/thread log &lt;thread-id&gt; "sent reply" --follow-up "chase next week"
+"open a thread for the vendor dispute"</code></pre>
+<p><strong>Customize.</strong> Thread type is <code>business</code> or <code>personal</code> at open; <code>list</code> filters on <code>--type</code> and <code>--status</code>; <code>archive-scan --apply</code> archives closed threads. The approval gate is always on (relaxation deferred to v2).</p>
+</section>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

@@ -33,13 +33,24 @@
     <div class="nav-group">
       <div class="label">Operate</div>
       <a href="daemons.html">Daemons &amp; scheduled tasks</a>
-      <a href="skills-mcp-plugins.html">Skills, MCP &amp; plugins</a>
       <a href="memory-odin.html">Memory &amp; ODIN</a>
       <a href="MODELS-SETUP.html">AI models</a>
       <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
       <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
       <a href="TROUBLESHOOTING.html">Troubleshooting</a>
       <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
     </div>
     <div class="nav-group">
       <div class="label">Reference</div>
@@ -52,6 +63,7 @@
       <a href="THREAT-MODEL.html">Threat model</a>
       <a href="engine-data-segregation-contract.html">Engine/data contract</a>
       <a href="EXTENDING.html" class="active">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
       <a href="GLOSSARY.html">Glossary</a>
       <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
       <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
@@ -61,7 +73,7 @@
 <main class="content">
   <h1>Extending the engine</h1>
   <p class="page-meta">How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates</p>
-  <!-- version: 1.0.1 | last-updated: 2026-07-03 -->
+  <!-- version: 1.0.2 | last-updated: 2026-07-08 -->
 
 <p>How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
 before declaring it done. This is the developer how-to. The contribution policy (open
@@ -111,6 +123,10 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
 </table>
 <p>Before building anything: search for an existing pattern and reuse it. The standards
 below are summarized from the engine&rsquo;s own development rules.</p>
+<p>Editing the documentation site itself (<code>docs/</code>) has its own contract: every page is
+either Markdown-sourced (regenerated) or hand-authored HTML, and a drift guard fails
+the build if the two fall out of sync. See <a href="DOCS-PIPELINE.html">DOCS-PIPELINE.md</a>
+before editing anything under <code>docs/</code>.</p>
 <hr />
 <h2 id="2-writing-a-skill">2. Writing a skill</h2>
 <p>A skill is a folder with a <code>SKILL.md</code>. The frontmatter is a contract:</p>

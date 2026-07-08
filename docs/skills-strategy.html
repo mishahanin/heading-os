@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strategy skills — HEADING OS</title>
+<meta name="description" content="Strategy skills in HEADING OS: what each skill is, what it does, how to invoke it, and what you can customize.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3.cat:first-of-type { margin-top: 24px; }
+  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
+  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
+  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
+  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
+  section.skill p { margin: 8px 0; }
+  section.skill pre { margin: 10px 0; }
+  a.cmd-link { text-decoration: none; }
+  a.cmd-link code { color: var(--link); }
+  a.cmd-link:hover code { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html" class="active">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+
+  <h1>Strategy skills</h1>
+  <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
+Strategy</h3>
+
+<section class="skill">
+<h3 id="s-deep-think"><code>/deep-think [problem]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (and engages proactively) · saves strategic sessions to <code>outputs/thinking/</code></p>
+<p><strong>What it is.</strong> A structured sequential reasoning engine that breaks a complex decision into visible, numbered thought steps, surfacing every assumption and ending with a maritime-framed course recommendation.</p>
+<p><strong>What it does.</strong> Runs through named stages (Problem Definition, Assumptions Surfaced, Research/Evidence, Analysis with Path A/B/C branching, Revision, Synthesis, Heading Recommendation) at a depth of quick, standard, or deep. It can optionally pull 2-5 named elicitation methods via <code>scripts/elicit.py</code>. The output closes with a Course, Confidence (HIGH/MEDIUM/LOW), Key risk, and a concrete course correction; strategic standard/deep sessions persist to <code>outputs/thinking/YYYY-MM-DD-[topic].md</code>. It is a thinking layer that feeds <code>/deal-strategy</code>, <code>/create-plan</code>, <code>/meeting-prep</code>, and <code>/investor-pitch</code>.</p>
+<p><strong>How to use it.</strong> Use before generating a deliverable when reasoning quality matters, or let it engage itself on multi-variable, high-stakes problems. For a simple question just answer it; for independent opinions from other models use <code>/council</code>.</p>
+<pre><code>/deep-think enter the new market direct or through a partner, given the tender deadline
+"what are we missing on this pricing call"</code></pre>
+<p><strong>Customize.</strong> <code>depth</code> is <code>quick</code>/<code>standard</code>/<code>deep</code>. Per-exec overrides (default depth, currency, output path) resolve via <code>scripts/resolve_customization.py</code> (layout in <code>config/skill-custom/README.md</code>). Elicitation methods are catalogued in <code>reference/elicitation-methods.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-council"><code>/council [question] | --critique [draft]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · saves transcript to <code>outputs/operations/council/</code></p>
+<p><strong>What it is.</strong> A second-opinion advisor that consults Gemini, Grok, and Kimi in parallel for independent views on a hard or high-stakes call, presented side-by-side with Claude's own view. The CEO decides, there is no synthesized final answer.</p>
+<p><strong>What it does.</strong> Runs in independent mode (all models see the problem fresh, without Claude's reasoning) or critique mode (all stress-test a draft). It dispatches <code>scripts/gemini-consult.py</code>, <code>scripts/grok-consult.py</code>, and <code>scripts/kimi-consult.py</code> in a single parallel message, distills each verbatim response into a traceable bullet block, adds Claude's independently reached view, then a where-we-agree/disagree paragraph. The transcript persists to <code>outputs/operations/council/</code>, and a final line asks the CEO which answer landed best (recorded via <code>scripts/council-record-verdict.py</code> and aggregated).</p>
+<p><strong>How to use it.</strong> Use for a hard call where cross-model disagreement is itself signal. For Claude reasoning alone use <code>/deep-think</code>; for Claude plus the curated knowledge brain use <code>/odin</code>.</p>
+<pre><code>/council should we sign the Acme Corp reseller deal or stay direct
+/council --critique "draft message text to stress-test"
+"second opinion on this pricing"</code></pre>
+<p><strong>Customize.</strong> Requires <code>GEMINI_API_KEY</code>, <code>XAI_API_KEY</code>, and <code>OLLAMA_API_KEY</code> in <code>.env</code>. Flags: <code>--gemini-only</code>/<code>--grok-only</code>/<code>--kimi-only</code> (run one), <code>--no-gemini</code>/<code>--no-grok</code>/<code>--no-kimi</code> (skip one), per-model <code>--gemini-model</code>/<code>--grok-model</code>/<code>--kimi-model</code>, plus <code>--temperature</code>, <code>--max-tokens</code>, and <code>--no-log</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-deal-strategy"><code>/deal-strategy [prospect]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/negotiations/</code></p>
+<p><strong>What it is.</strong> A full deal strategy analysis for a specific prospect: prospect intelligence, competitive positioning, a pricing recommendation, Voss-informed objection handling, and recommended next steps in one briefing.</p>
+<p><strong>What it does.</strong> Reads the business, strategy, DPI market intelligence, growth playbook, and pipeline context files, then works through seven phases (prospect intelligence, competitive analysis, positioning, pricing, Voss objection handling, next steps, brain audit). It keeps an append-only memlog at <code>outputs/negotiations/[prospect]/.memlog.md</code> (via <code>scripts/memlog.py</code>) so work survives a context compaction, and writes the brief to the same directory. On the CEO workspace it can cite Odin principles via <code>scripts/odin-principles.py</code>, and it closes with a <code>/brain-audit</code> footer reporting source freshness and contradictions.</p>
+<p><strong>How to use it.</strong> Use to build the win plan for a specific opportunity. For competitor comparison alone use <code>/competitor-intel</code>; for market intel use <code>/market-brief</code>.</p>
+<pre><code>/deal-strategy Acme Corp
+"how do we win the Acme Corp deal"</code></pre>
+<p><strong>Customize.</strong> Positioning and pricing draw from <code>reference/billion-growth-playbook.md</code> and <code>reference/dpi-market-intelligence.md</code>; competitor profiles and geopolitical context from those and <code>reference/geopolitical-landscape.md</code>. Odin principle citation is brain-gated (CEO workspace only) and skips silently elsewhere.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-investor-pitch"><code>/investor-pitch [investor_type]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns deck content (read-only, no file write)</p>
+<p><strong>What it is.</strong> Full investor pitch deck content: the investment narrative arc, a slide-by-slide structure with key messages and speaker notes, and a data appendix, tuned to the investor type.</p>
+<p><strong>What it does.</strong> Reads the business, current-data, strategy, growth-playbook, market-intelligence, geopolitical, and voice context files, then produces three phases: the Problem-to-Ask narrative arc, a 14-slide structure (title, one-sentence key message, bullets, and speaker note per slide), and a supporting data appendix. Investor type (strategic, venture, sovereign fund, angel, corporate VC) tunes the framing. It optionally runs the <code>/editorial-review</code> structural checklist over a long assembled narrative. Output is text content for Misha to adapt and present, not a rendered file.</p>
+<p><strong>How to use it.</strong> Use to prepare materials for an investor meeting or fundraise. For a progress update to existing investors use <code>/investor-update</code>; to render the slides as PPTX use <code>/pptx-generator</code>.</p>
+<pre><code>/investor-pitch venture
+"prepare a fundraising deck for a sovereign fund"</code></pre>
+<p><strong>Customize.</strong> Set <code>investor_type</code>, <code>round_context</code>, <code>audience</code>, and <code>format</code> (<code>deck_outline</code>/<code>full_content</code>/<code>speaker_notes_only</code>, default full content). Narrative and metrics are grounded in <code>reference/billion-growth-playbook.md</code>, the context files, and validated against <code>datastore/INDEX.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-investor-update"><code>/investor-update [period]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a ready-to-send update (read-only, no file write)</p>
+<p><strong>What it is.</strong> A progress update for existing investors, quarterly or milestone-triggered: an opening captain's note, a key-metrics table, milestones (said versus did), wins, honest challenges, next-90-days commitments, and any specific ask.</p>
+<p><strong>What it does.</strong> Reads <code>context/current-data.md</code>, <code>context/pipeline.md</code>, <code>context/people.md</code>, the growth playbook, and the voice guide, then drafts a 1-2 page update in Misha's voice against the locked structure (subject line with headline, opening, metrics table, milestones, what's working, what's challenging, next 90 days, ask, closing). Specific facts are validated against <code>datastore/INDEX.md</code>.</p>
+<p><strong>How to use it.</strong> Use for a recurring update to people already invested. For a first pitch to new investors use <code>/investor-pitch</code>; for a formal diligence package use <code>/data-room</code>.</p>
+<pre><code>/investor-update "Q2 2026"
+"draft the board update for this quarter"</code></pre>
+<p><strong>Customize.</strong> Set <code>period</code>, <code>investor</code>, <code>highlights</code>, <code>challenges</code>, and <code>ask</code> (leave blank if none). Metrics that matter for the valuation story come from <code>reference/billion-growth-playbook.md</code>; voice from <code>reference/misha-voice.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-voss"><code>/voss [counterpart] [situation]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/negotiations/</code></p>
+<p><strong>What it is.</strong> A tactical negotiation and conversation coaching engine based on Christopher Voss's FBI methodology: it produces a situation-specific playbook for a high-stakes conversation.</p>
+<p><strong>What it does.</strong> Reads the Voss reference, voice guide, people, and pipeline files (plus the counterpart's CRM file if one exists), then builds five phases: intelligence and profiling (negotiator type, power dynamics), an accusation audit with preemptive labels, 8-12 calibrated questions, a tactical playbook (mirroring map, labeling scripts, "That's Right" pathway, Black Swan hypotheses, Ackerman plan), and scenario mapping. It saves the playbook to <code>outputs/negotiations/YYYY-MM-DD-{counterpart}.md</code> and logs a Note to the counterpart's CRM file if present.</p>
+<p><strong>How to use it.</strong> Use for deep per-conversation prep before a negotiation, difficult talk, or sensitive call. Note the Voss principles also run always-on across all outbound comms via the voss rule; this skill is the dedicated deep prep.</p>
+<pre><code>/voss Jane Doe (Acme Corp) renewal price pushback
+"prepare me for this difficult conversation"</code></pre>
+<p><strong>Customize.</strong> Set <code>counterpart</code>, <code>situation</code>, <code>goal</code>, and optional <code>tension</code>. The full methodology (Ackerman Model, tactical phrases) lives in <code>reference/voss-negotiation.md</code>; playbook language matches <code>reference/misha-voice.md</code>. Non-round numbers are enforced in any pricing.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-state-check"><code>/state-check [function]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a one-page assessment (read-only, no file write)</p>
+<p><strong>What it is.</strong> A diagnostic assessment of one workspace function or the whole system, run as a 15-minute State Check in the Navigation Principle sense: operational state, drift, and course corrections rather than rigid pass/fail targets.</p>
+<p><strong>What it does.</strong> Reads the operational-state-model, the state-check guide, current-data, and pipeline, then answers the four State Check questions (Sea State, Current State, Heading Check, Course Corrections) for the chosen function (sales, product, partnerships, tribe, research, or company-wide). Output is one page max: current state in a sentence, an on-heading / slight-drift / significant-drift verdict, a sea-state summary, up to three behavioral course corrections, and the next check timing.</p>
+<p><strong>How to use it.</strong> Use to diagnose whether a function is holding its operational state. For the morning briefing use <code>/dashboard</code>, for the full context load use <code>/prime</code>, for the end-of-week review use <code>/weekly-review</code>.</p>
+<pre><code>/state-check sales
+"how are we doing on partnerships"</code></pre>
+<p><strong>Customize.</strong> Set <code>function</code> and optional situational <code>context</code>. The operational states per function are defined in <code>outputs/operations/workspace/31c-operational-state-model.md</code>; the four-question format in <code>reference/state-check-guide.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-meeting-prep"><code>/meeting-prep [with] [purpose]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/meeting-prep/</code></p>
+<p><strong>What it is.</strong> A deep pre-meeting brief on a named external counterpart: relationship history, their world right now, our objective, talking points, anticipated questions, competitive context, meeting flow, and a Voss tactical-empathy plan.</p>
+<p><strong>What it does.</strong> Reads people, pipeline, strategy, and business context, searches the web (with domain filtering and <code>scripts/firecrawl.py</code> for recent counterpart news), and consumes any existing <code>/osint</code> case file at <code>outputs/intel/cases/</code> read-only, carrying its evidence grades into the brief. It produces a nine-section briefing in Markdown, HTML, and PDF (via <code>scripts/html-to-pdf.py</code>) under <code>outputs/operations/meeting-prep/</code>, appends a <code>/brain-audit</code> footer, and logs a Note to the counterpart's CRM file. On the CEO workspace it also cites brain-gated Odin principles. A deep multi-signal request escalates to the orchestrator's parallel Deep Meeting Prep pattern (osint + voss + CRM + comms scout).</p>
+<p><strong>How to use it.</strong> Use before a meeting with a named external person and/or company. For raw recon on a target use <code>/osint</code>; for a full win plan on a deal use <code>/deal-strategy</code>.</p>
+<pre><code>/meeting-prep Jane Doe (Acme Corp) partnership discussion
+"prepare for meeting with the Acme Corp CTO"</code></pre>
+<p><strong>Customize.</strong> Set <code>with</code>, <code>purpose</code>, <code>date</code>, <code>format</code> (in-person/video/phone), and <code>context</code>. Web-search filtering uses <code>reference/search-domains.md</code>; the Voss section draws on <code>reference/voss-negotiation.md</code>; Odin-principle citation is brain-gated to the CEO workspace and skips silently elsewhere.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-proposal"><code>/proposal [type] [recipient]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (locked corporate doctype, changes require CEO approval) · writes to <code>outputs/documents/{sender}/proposal/</code></p>
+<p><strong>What it is.</strong> Produces a branded 31C commercial proposal (PDF + DOCX) for a sales, partnership, channel, or government deal from the locked corporate template.</p>
+<p><strong>What it does.</strong> Loads the brand stack (<code>reference/corporate-style-guide.md</code>, terminology, voice, Voss rules) and drafts a four-page deliverable: dark cover, executive opening plus opportunity, solution plus proof, commercial terms plus next steps, with Voss-precise pricing (no round numbers). After an approval gate it assembles a JSON payload and renders through <code>scripts/render-doctype.py --type proposal</code> to PDF and DOCX, then runs the hidden-character scan before reporting.</p>
+<p><strong>How to use it.</strong> Use it for a commercial offer with pricing; for an MOU, LOI, or term sheet use <code>/partnership-doc</code>, for a formal letter without pricing use <code>/corporate-letter</code>, and for a tender use <code>/rfp-response</code>.</p>
+<pre><code>/proposal partnership Acme Corp
+"write a commercial proposal for Northgate Capital"</code></pre>
+<p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/proposal.html</code>; brand rules in <code>reference/corporate-style-guide.md</code>; pricing bundles in <code>reference/billion-growth-playbook.md</code>; render output via the <code>--out</code> flag on <code>render-doctype.py</code>. Reference numbering (<code>31C-PROP-{YYYY}-{NNNN}</code>) counts from <code>outputs/documents/_proposal-sequence.txt</code>. Template changes require CEO approval.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-partnership-doc"><code>/partnership-doc [subtype] [counterparty]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (locked corporate doctype, changes require CEO approval) · writes to <code>outputs/documents/{sender}/partnership/</code></p>
+<p><strong>What it is.</strong> Produces a locked 31C partnership document (MOU, Letter of Intent, term sheet, or partnership agreement) defining mutual obligations, territory, exclusivity, governance, and confidentiality.</p>
+<p><strong>What it does.</strong> Loads the brand and guardrail stack, then drafts in a neutral legal-adjacent voice (no Voss moves inside the executed text) with a default clause set: territory, exclusivity, commercial terms, training, marketing, data sovereignty. After an approval gate it renders via <code>scripts/render-doctype.py --type partnership</code> to PDF and DOCX, runs the hidden-character scan, and appends a counsel-review reminder to every output.</p>
+<p><strong>How to use it.</strong> Use it for a legal-adjacent collaboration framework with mutual obligations; for a commercial offer with pricing and module activation use <code>/proposal</code>, and for a formal letter use <code>/corporate-letter</code>.</p>
+<pre><code>/partnership-doc MOU Acme Corp
+"draft an LOI with Northgate Capital"</code></pre>
+<p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/partnership.html</code>; brand rules in <code>reference/corporate-style-guide.md</code>. Reference numbering (<code>31C-{MOU|LOI|TS|PA}-{YYYY}-{NNNN}</code>) counts from <code>outputs/documents/_partnership-sequence.txt</code>. Template changes require CEO approval.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-official-doc"><code>/official-doc [class] [subject]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (locked corporate doctype, changes require CEO approval) · writes to <code>outputs/documents/{sender}/official/</code></p>
+<p><strong>What it is.</strong> Produces a 31C official document issued under corporate authority: board resolution, formal notice, letter of position, certificate of authority, or corporate directive.</p>
+<p><strong>What it does.</strong> Loads the brand and guardrail stack, then drafts in a declarative authoritative voice (third-person for the entity, "Whereas / Now, therefore, resolved" for resolutions, no marketing or Tribe vocabulary). After an approval gate it renders via <code>scripts/render-doctype.py --type official</code> to PDF and DOCX with a locked header, reference number, and seal block, then runs the hidden-character scan and a counsel-countersign reminder.</p>
+<p><strong>How to use it.</strong> Use it for documents issued under corporate authority; for an external partner letter use <code>/corporate-letter</code>, for a priced proposal use <code>/proposal</code>, and for an MOU or term sheet use <code>/partnership-doc</code>.</p>
+<pre><code>/official-doc "Board Resolution" appointment of authorized signatory
+"draft a formal notice to Acme Corp"</code></pre>
+<p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/official.html</code>; brand rules in <code>reference/corporate-style-guide.md</code>. Reference numbering (<code>31C-{BR|FN|LP|CA|CD}-{YYYY}-{QN}-{NNN}</code>) counts per class-code-year-quarter from <code>outputs/documents/_official-sequence.txt</code>. Template changes require CEO approval.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-xpager"><code>/xpager [product] [audience]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (locked corporate doctype, changes require CEO approval) · writes to <code>outputs/documents/{sender}/xpager/</code></p>
+<p><strong>What it is.</strong> Produces a three-page branded 31C OnePager (xPager): a dark full-bleed cover with the ODUN.ONE wordmark, a capability-card page, and a proof/contact page.</p>
+<p><strong>What it does.</strong> Loads the brand and guardrail stack, then drafts a cover tagline (under 180 characters), exactly four Voss-precise stats, four to six capability cards, and four proof cards. After an approval gate it renders via <code>scripts/render-doctype.py --type xpager</code> to PDF and HTML (both deliverables), reusing the white logo from <code>datastore/brand/assets/logos/</code> rather than rebuilding it, then runs the hidden-character scan.</p>
+<p><strong>How to use it.</strong> Use it for a single concise branded summary of a product or module; for a multi-page client deck use <code>/pptx-generator</code>, and for a priced commercial proposal use <code>/proposal</code>.</p>
+<pre><code>/xpager ODUN.ONE regulator
+"make a one-pager capability sheet for Acme Corp"</code></pre>
+<p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/xpager.html</code>; brand rules and the xPager checklist in <code>reference/corporate-style-guide.md</code>; the <code>--formats</code> flag on <code>render-doctype.py</code> controls the render set (PDF plus HTML here). Template changes require CEO approval.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-rfp-response"><code>/rfp-response [client]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a structured draft for review (read-only skill, no render pipeline)</p>
+<p><strong>What it is.</strong> Produces a structured response to a formal Request for Proposals or government tender, mapping stated requirements to ODUN.ONE capabilities.</p>
+<p><strong>What it does.</strong> Grounds claims in <code>context/business-info.md</code>, the market-intelligence and growth-playbook references, and the DataStore, then drafts six sections: requirements analysis, executive summary, technical response, company credentials, commercial proposal, and a compliance matrix. An optional structural pass via <code>/editorial-review</code> checks the argument arc before the CEO reviews and approves prior to submission.</p>
+<p><strong>How to use it.</strong> Use it for a formal RFP, ITT, or procurement bid; for an informal commercial proposal with pricing use <code>/proposal</code>, and for an MOU or term sheet use <code>/partnership-doc</code>.</p>
+<pre><code>/rfp-response Acme Corp
+"respond to this government tender"</code></pre>
+<p><strong>Customize.</strong> No locked render template: this skill drafts structured markdown for review. Grounding sources are <code>context/business-info.md</code>, <code>reference/dpi-market-intelligence.md</code>, <code>reference/billion-growth-playbook.md</code>, and <code>context/strategy.md</code>; paste the RFP requirements inline when invoking.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-data-room"><code>/data-room [type] [investor_type]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a drafted document for review (read-only skill, no render pipeline)</p>
+<p><strong>What it is.</strong> Prepares investor data room material, due diligence responses, and fundraising documents in Misha's voice.</p>
+<p><strong>What it does.</strong> Reads the context stack (<code>business-info</code>, <code>current-data</code>, <code>strategy</code>, <code>pipeline</code>) plus the growth playbook and market intelligence, validating specific facts against the datastore, then drafts one of several document types: company overview, financial summary, market analysis, team overview, technology brief, competitive landscape, a due-diligence question response, or a full-room table of contents. An optional <code>/editorial-review</code> structural pass runs before finalizing.</p>
+<p><strong>How to use it.</strong> Use it when preparing for investor conversations or answering diligence questions; for a live pitch deck use <code>/investor-pitch</code>, and for a recurring progress note to existing investors use <code>/investor-update</code>.</p>
+<pre><code>/data-room dd-response vc
+"prepare due diligence materials for Northgate Capital"</code></pre>
+<p><strong>Customize.</strong> No locked template: output is drafted markdown. The <code>type</code> argument selects the document (overview, financial-summary, market-analysis, team-overview, technology-brief, competitive-landscape, dd-response, full-room) and <code>investor_type</code> tunes the framing (strategic, vc, sovereign, pe). Grounding sources are the <code>context/</code> files, <code>reference/billion-growth-playbook.md</code>, and <code>datastore/INDEX.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-odin"><code>/odin [mode] [source or question]</code><span class="badge">Strategy 🔒</span></h3>
+<p class="skill-meta">Auto-routes on "Odin" as a name or address (CEO-only, never synced) · writes to <code>knowledge/odin-brain/</code></p>
+<p><strong>What it is.</strong> A persistent AI advisor with a curated, CEO-only knowledge brain that ingests books, articles, and videos, builds principles and positions, and gives referenced first-person advice with a mandatory Challenge section.</p>
+<p><strong>What it does.</strong> Runs nine modes: learn (ingest a source and extract principles), consult (default, brain-grounded advice), recall, reflect, teach, log (record a dated episode), collect (scan business threads for episodes), compile (lint the brain plus ZK), and skill-proposal. All writes land only in the <code>knowledge/odin-brain/</code> brain; after any write it refreshes <code>INDEX.md</code> and rebuilds the associative memory index (<code>scripts/memory-index.py build</code>) so new notes are recallable, then runs the hidden-character scan.</p>
+<p><strong>How to use it.</strong> Use it to advise from or grow the curated brain, or to log episodes; for structured reasoning without the brain use <code>/deep-think</code>, and for a generic note use <code>/zk</code>. Do not trigger on "odin" as the Russian numeral "one".</p>
+<pre><code>/odin consult should we sign an exclusive channel deal in this region
+"ask Odin what he thinks about the pricing shift"</code></pre>
+<p><strong>Customize.</strong> Brain lives entirely under <code>knowledge/odin-brain/</code> (sources, principles, positions, episodes, conflicts), with mode pipelines in <code>references/mode-catalog.md</code> and file templates in <code>references/templates.md</code>. The index rebuild depends on a local ollama <code>bge-m3</code> model; the cadence-nudge Telegram target is set via the engine <code>.env</code> key <code>ODIN_CADENCE_TELEGRAM_TARGET</code>. CEO-only, never published to corporate or execs.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-recall"><code>/recall &lt;what to recall&gt; [--collection content|code|all] [--layer NAME]</code><span class="badge">Strategy</span></h3>
+<p class="skill-meta">Auto-routes from natural language (CEO-only, never synced) · read-only, cites file paths (no writes, no sends)</p>
+<p><strong>What it is.</strong> Workspace-wide semantic recall: finds past decisions, briefs, contacts, and notes by meaning across the whole workspace, then answers only from retrieved sources with path citations or says "not in memory".</p>
+<p><strong>What it does.</strong> Refreshes the local associative-memory index incrementally (<code>scripts/memory-index.py build</code>, ollama <code>bge-m3</code> hybrid dense plus BM25, on-machine, zero API cost), queries it with <code>--json</code> across the Odin brain, threads, CRM, LinkedIn, context, reference, plans, outputs, knowledge, and datastore extracts, then reads the top cited files and composes a cited answer. On a threshold gap it reports the gap plainly rather than guessing; it structurally air-gaps the vault and personal-thread branch.</p>
+<p><strong>How to use it.</strong> Use it to surface something the workspace already knows by meaning; for Odin-brain-only advice use <code>/odin recall</code>, for external intel use <code>/osint</code>, to capture a new note use <code>/zk</code>, and for exact-string search use Grep.</p>
+<pre><code>/recall where did we land on the Acme Corp pricing --collection content
+"have we touched Northgate Capital before"</code></pre>
+<p><strong>Customize.</strong> The <code>--collection</code> flag switches between <code>content</code> (default, what we know or decided), <code>code</code> (skills and rules), or <code>all</code>; <code>--layer NAME</code> pins one source layer (for example <code>odin</code>, <code>thread</code>, <code>crm</code>, <code>context</code>, <code>outputs</code>). The engine (<code>scripts/memory-index.py</code>) is cross-lingual RU/EN and runs entirely local. CEO-only, never synced to executives.</p>
+</section>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

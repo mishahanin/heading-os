@@ -276,3 +276,33 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+
+  # Docs HTML drift guard (F-8.1) -- the early-catch sibling of the CI "Docs HTML in
+  # sync" step. Regenerates docs/ (--all: md pairs + nav/search injection + search
+  # index) and fails if the working tree drifts, so an edited .md or hand-authored
+  # page committed without regenerating is caught before push. Runs through `uv run`
+  # so it uses the SAME locked toolchain (markdown + pygments) CI uses -- the ambient
+  # python3 can carry a different pygments and produce false codehilite drift. Skips
+  # cleanly when uv is absent; CI is the authoritative gate. pass_filenames: false.
+  - repo: local
+    hooks:
+      - id: docs-html-drift
+        name: Docs HTML in sync (regenerate + git diff docs/)
+        entry: bash -c 'command -v uv >/dev/null 2>&1 || { echo "uv not found; skipping docs-html-drift (CI is authoritative)"; exit 0; }; uv run python scripts/regenerate-docs-html.py --all --quiet && git diff --exit-code docs/'
+        language: system
+        files: '^(docs/.*\.(md|html)|scripts/regenerate-docs-html\.py)$'
+        pass_filenames: false
+
+  # README numbers guard (F-8.3) -- re-derives the security-test + guard-layer counts
+  # and fails if README.md or docs/index.html "By the numbers" disagrees. Runs through
+  # `uv run` so the pytest collection of tests/security sees the locked dependency set
+  # (the ambient python3 lacks the extras and cannot collect). Skips when uv is absent;
+  # CI is the authoritative gate.
+  - repo: local
+    hooks:
+      - id: readme-numbers
+        name: README numbers in sync (derived vs README/index)
+        entry: bash -c 'command -v uv >/dev/null 2>&1 || { echo "uv not found; skipping readme-numbers (CI is authoritative)"; exit 0; }; uv run python scripts/dev/check-readme-numbers.py --quiet'
+        language: system
+        files: '^(README\.md|docs/index\.html|scripts/dev/check-readme-numbers\.py)$'
+        pass_filenames: false

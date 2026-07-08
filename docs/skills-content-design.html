@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Content &amp; design skills — HEADING OS</title>
+<meta name="description" content="Content and design skills in HEADING OS: what each skill is, what it does, how to invoke it, and what you can customize.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3.cat:first-of-type { margin-top: 24px; }
+  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
+  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
+  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
+  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
+  section.skill p { margin: 8px 0; }
+  section.skill pre { margin: 10px 0; }
+  a.cmd-link { text-decoration: none; }
+  a.cmd-link code { color: var(--link); }
+  a.cmd-link:hover code { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html" class="active">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+
+  <h1>Content &amp; design skills</h1>
+  <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
+Content &amp; design</h3>
+
+<section class="skill">
+<h3 id="s-linkedin-post"><code>/linkedin-post [topic]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only draft (does not publish)</p>
+<p><strong>What it is.</strong> Drafts a single LinkedIn post in the operator's authentic voice: a standalone hook, an observation-to-insight arc, and a thought-provoking close (no CTA).</p>
+<p><strong>What it does.</strong> Reads the voice guide, a best-example archive post, and business-positioning context, then validates any specific facts against the datastore before drafting. It produces the post plus two alternative openers, three to five hashtags, a recommended posting time, and a one-line cut suggestion. It is read-only (allowed tool: Read) and never publishes.</p>
+<p><strong>How to use it.</strong> Use for one post. For a multi-post plan across a theme use <code>/linkedin-series</code>; to file a post after publishing use <code>/linkedin-archive</code>.</p>
+<pre><code>/linkedin-post the category we are creating
+"draft a post about data sovereignty"</code></pre>
+<p><strong>Customize.</strong> Voice via <code>reference/misha-voice.md</code>; brand facts via <code>context/business-info.md</code> and <code>datastore/</code>. Length variable (short/medium/long, default medium). Per-exec overrides resolve at Phase 0 through <code>scripts/resolve_customization.py</code> (activation steps, persistent facts, output paths); see <code>config/skill-custom/README.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-linkedin-series"><code>/linkedin-series [theme]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/content/linkedin/[theme-slug]/</code></p>
+<p><strong>What it is.</strong> Plans a multi-post LinkedIn content series around one theme or strategic moment, in the operator's voice.</p>
+<p><strong>What it does.</strong> Reads the voice guide, an example post, strategy, and current milestones, then produces a series overview, per-post angle/hook/proof-point/hashtags, the narrative arc, and a ready-to-publish draft of Post 1. It keeps an append-only session memory via <code>scripts/memlog.py</code> at <code>outputs/content/linkedin/[theme-slug]/.memlog.md</code> so the plan survives context compaction and resumes across sessions.</p>
+<p><strong>How to use it.</strong> Use to plan several connected posts around a strategic moment. For a single standalone post use <code>/linkedin-post</code>.</p>
+<pre><code>/linkedin-series the DPI category we are creating
+"plan posts for the week"</code></pre>
+<p><strong>Customize.</strong> Variables for post count (default 4), timeframe, and goal. Voice via <code>reference/misha-voice.md</code>; alignment inputs via <code>context/strategy.md</code> and <code>context/current-data.md</code>. The <code>.memlog.md</code> is gitignored working memory, not a deliverable.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-linkedin-archive"><code>/linkedin-archive [slug]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>datastore/content/linkedin-archive/</code></p>
+<p><strong>What it is.</strong> Files a just-published LinkedIn piece (article, post, or comment) plus any attached images out of staging and into the typed datastore archive.</p>
+<p><strong>What it does.</strong> Auto-fires on English or Russian "I published it on LinkedIn" phrasing. It resolves content type (from filename/frontmatter or an <code>AskUserQuestion</code> prompt) and any image paths, runs a dry-run via <code>scripts/linkedin-archive.py</code>, shows the plan, then waits for approval before moving files (with optional auto-commit). It moves exactly one piece per invocation and reports the destination folder, file count, and commit hash.</p>
+<p><strong>How to use it.</strong> Use right after publishing to file the content. For drafting a post use <code>/linkedin-post</code>; this skill never drafts.</p>
+<pre><code>/linkedin-archive my-post-slug
+"I published this on LinkedIn"</code></pre>
+<p><strong>Customize.</strong> Flags on the script: <code>--type</code> (post/article/comment), one or more <code>--image &lt;path&gt;</code>, <code>--execute</code>, and <code>--commit</code> for auto-commit. Confirm step is mandatory and cannot be skipped; there is no <code>--undo</code> flag.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-keynote-deck"><code>/keynote-deck [event] [topic]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only script (does not render .pptx)</p>
+<p><strong>What it is.</strong> Produces a slide-by-slide presentation script for an event, VIP meeting, or government engagement, each slide carrying a title, key message, content, and speaker notes in the operator's voice.</p>
+<p><strong>What it does.</strong> Reads business, current-data, market, geopolitical, strategy, and voice context, then builds the deck in six phases (opening hook, problem, solution, proof, future, close plus CTA). Slide count follows a duration rule (about 1 minute per slide for technical content, 2 for storytelling). Proof-point figures are pulled live from <code>context/current-data.md</code> rather than hardcoded. It outputs the structure and speaker script only; it does not render the file.</p>
+<p><strong>How to use it.</strong> Use for event and conference speaking decks. For an investor fundraising deck use <code>/investor-pitch</code>; to render slides as a PPTX use <code>/pptx-generator</code>.</p>
+<pre><code>/keynote-deck expo sovereign DPI for telcos
+"prepare a speaking deck for the conference"</code></pre>
+<p><strong>Customize.</strong> Variables for event, audience, topic, duration (drives slide count), and context. Grounding files: <code>context/business-info.md</code>, <code>context/current-data.md</code>, <code>reference/dpi-market-intelligence.md</code>, <code>reference/geopolitical-landscape.md</code>, <code>reference/misha-voice.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-image-prompt"><code>/image-prompt [content to visualize]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · text only (no image file)</p>
+<p><strong>What it is.</strong> Turns content you just produced (post, article, email, slide copy) into a 50 to 150 word photorealistic text-to-image prompt for Midjourney, DALL-E, or Stable Diffusion.</p>
+<p><strong>What it does.</strong> Reads the preceding text, distills the central idea, extracts visual elements against a content-type-to-visual-language map (maritime, product/technical, sovereignty, etc.), sets the mood, and constructs the prompt. It returns the core theme, the prompt, parameters (16:9, photorealistic, no text), and a Midjourney suffix. Default brand palette: deep blues, teals, warm amber accents. Text only, no image file.</p>
+<p><strong>How to use it.</strong> Use to get a prompt for a visual companion to content. To actually render the image use <code>/flux-image</code>; for full design work (mockups, infographics, logos) use <code>/design</code>.</p>
+<pre><code>/image-prompt visualize the post about navigation and heading
+"generate an image prompt for this article"</code></pre>
+<p><strong>Customize.</strong> Per-platform suffixes in <code>references/platforms.md</code>. The output format (core theme, prompt, parameters, Midjourney suffix) and the never-include list (text, logos, stock clichés, military, dystopian imagery) are fixed by the skill.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-flux-image"><code>/flux-image [prompt]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/content/images/</code> (DATA overlay)</p>
+<p><strong>What it is.</strong> Generates real image files on disk from a text prompt via the Replicate API, using Nano Banana 2 (Google DeepMind, default) or FLUX.2 max (Black Forest Labs).</p>
+<p><strong>What it does.</strong> Runs <code>generate_image.py</code>, which loads <code>REPLICATE_API_TOKEN</code> from <code>.env</code> and calls Replicate, saving to the resolved DATA outputs directory. It resolves an absolute output path via <code>get_outputs_dir()</code> so images never land in the engine tree. Under <code>SENSITIVE_MODE</code> (fail-closed default) it strips all project-identifying detail from the prompt before the API call; only the prompt leaves the machine, the file stays local.</p>
+<p><strong>How to use it.</strong> Use when you want an actual picture produced. To craft the prompt only use <code>/image-prompt</code>; for a full multi-asset design pipeline use <code>/design</code>.</p>
+<pre><code>/flux-image a helm at golden hour over open water, 16:9
+"create an image for the announcement"</code></pre>
+<p><strong>Customize.</strong> <code>REPLICATE_API_TOKEN</code> in <code>.env</code>. Script flags: <code>--model banana|flux-max</code>, <code>--aspect-ratio</code> (1:1, 16:9, 21:9, 9:16, and more), <code>--num-outputs 1-4</code>, <code>--format png|jpg|webp</code>, <code>--seed</code>. Model details in <code>references/models.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-design"><code>/design [type] [brief]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/design/</code> and <code>outputs/content/images/</code></p>
+<p><strong>What it is.</strong> A professional design studio for social graphics, infographics, UI mockups, cards, brochures, logos, and AI imagery, routing each task to the optimal pipeline.</p>
+<p><strong>What it does.</strong> Three pipelines: HTML Studio (free, deterministic layout/text/data work via <code>scripts/design-studio.py render</code> with brand CSS injected), Replicate AI (creative imagery and native SVG vectors via <code>scripts/design-engine.py generate|edit|upscale|remove-bg</code> across models like recraft-v4, flux-2-pro, recraft-v4-svg, ideogram-v3, flux-schnell, kontext), and Document Production (redirects decks to <code>/pptx-generator</code>, PDF from HTML via the design studio). HTML renders save to <code>outputs/design/</code> with source in <code>outputs/design/source/</code>; AI images to <code>outputs/content/images/</code>. Under <code>SENSITIVE_MODE</code> it strips identifying detail from any external prompt.</p>
+<p><strong>How to use it.</strong> Use for any branded visual asset. For a simple one-off image from a prompt use <code>/flux-image</code>; for presentation slides use <code>/pptx-generator</code>.</p>
+<pre><code>/design infographic sovereign DPI adoption by region
+"design a logo concept for the platform"</code></pre>
+<p><strong>Customize.</strong> Brand system in <code>references/brand.css</code> (dark theme, Inter font, accent colors); color source of truth <code>.claude/skills/pptx-generator/brands/31c/brand.json</code>. Per-command model choice and standard dimensions table (LinkedIn, Instagram, A4, and more); model registry in <code>references/models.md</code>. <code>REPLICATE_API_TOKEN</code> in <code>.env</code> for the AI pipeline.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-pptx-generator"><code>/pptx-generator [brand] [topic]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/content/decks/{brand}/</code> (DATA overlay)</p>
+<p><strong>What it is.</strong> Generates and edits on-brand presentation slides as PPTX files (PowerPoint, Google Slides, and Keynote compatible), builds square LinkedIn carousels exported to PDF, and manages reusable cookbook layouts.</p>
+<p><strong>What it does.</strong> Built on python-pptx. It reads the brand config (<code>brand.json</code>, <code>config.json</code>) and all cookbook layout frontmatters, presents a written slide plan with variety checks, then generates in batches of 5 slides maximum, validating after each batch (backgrounds set on every slide, no duplicate titles, correct colors) and combining into one final file with part files deleted. Three modes: presentation slides, LinkedIn carousels (1:1 to PDF), and layout CRUD.</p>
+<p><strong>How to use it.</strong> Use for editable branded decks, carousels, or layout work. For non-slide visuals use <code>/design</code>; for a quick markdown-driven internal deck use <code>/marp</code>.</p>
+<pre><code>/pptx-generator 31c sovereign DPI overview
+"create a linkedin carousel about data sovereignty"</code></pre>
+<p><strong>Customize.</strong> Per-brand configs under <code>.claude/skills/pptx-generator/brands/{brand}/</code> (colors as hex without <code>#</code>, fonts, asset paths, output dir, naming); reusable layouts in <code>cookbook/*.py</code> with TOML frontmatter. Reference workflows in <code>references/</code> (layout-guide, generation-workflow, brand-setup, carousel-workflow, layout-crud, technical-reference).</p>
+</section>
+
+<section class="skill">
+<h3 id="s-marp"><code>/marp [new &lt;topic&gt; | render &lt;path&gt; | from &lt;path&gt; | watch &lt;path&gt;]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/deliverables/presentations/marp-source/</code></p>
+<p><strong>What it is.</strong> A markdown-driven presentation pipeline that renders branded PDF and HTML (not editable PPTX) from MARP source.</p>
+<p><strong>What it does.</strong> Four subcommands via <code>scripts/marp_render.py</code>: <code>new</code> drafts a full deck from a topic prompt then renders; <code>render</code> renders existing MARP source; <code>from</code> transforms any workspace markdown into slides in-memory (strips frontmatter and wiki-links, inserts slide breaks, auto-adds cover and closing) without mutating the source; <code>watch</code> gives live hot-reload preview. It uses a single-file dual-mode 31C theme with 7 layouts (<code>themes/31c.css.tmpl</code>) and workspace-aware mode defaults per source location. Every render reports hidden-character sanitizer status.</p>
+<p><strong>How to use it.</strong> Use for internal decks, runbooks, state checks, and knowledge renders. For an editable brand-heavy client deck or a LinkedIn carousel use <code>/pptx-generator</code>.</p>
+<pre><code>/marp from context/strategy.md
+"render this as a deck"</code></pre>
+<p><strong>Customize.</strong> Theme template <code>.claude/skills/marp/themes/31c.css.tmpl</code> (7 layouts, per-slide <code>_class</code> directives). Flags: <code>--slides N</code>, <code>--mode dark|light|mixed</code>, <code>--break-at h2|h3|manual</code>, <code>--title</code>/<code>--subtitle</code>, <code>--images png</code>, <code>--pdf-only</code>/<code>--html-only</code>, <code>--output</code>. Frontmatter fields (theme, size, class, footer, classification). Self-test: <code>python3 scripts/marp_render.py --self-test</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-pencil-export"><code>/pencil-export &lt;path-to.pen&gt; [--formats png,pdf,html,pptx,pptx-flat]</code><span class="badge">Content</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>&lt;deck-dir&gt;/export/</code> (DATA overlay)</p>
+<p><strong>What it is.</strong> Exports a Pencil <code>.pen</code> design deck to per-slide PNG, a 16:9 PDF, an editable PPTX, and a portable self-contained HTML. It exists because the Pencil MCP <code>export_nodes</code> tool (native PNG/PDF) is broken on WSL: its bundled path translator prepends <code>\\wsl.localhost\&lt;distro&gt;\</code> inconsistently and cannot write per-slide images from a WSL-resident deck. The MCP <code>export_html</code> tool in the same server resolves paths correctly, so this skill uses it as the seam.</p>
+<p><strong>What it does.</strong> Two steps. First the agent calls <code>export_html</code> to dump all slide frames to one HTML written inside the deck's <code>pencil/</code> dir, so relative image fills resolve. Then <code>scripts/pencil-export.py</code> renders each <code>Slide-*</code> frame in isolation via chromium (sibling frames hidden, so overlapping absolutely-positioned frames cannot bleed into a neighbour), and assembles the requested formats. PPTX defaults to the <strong>editable twin</strong>: each slide becomes a text-less background render plus native, editable PowerPoint text boxes laid on top at the extracted coordinates, size, colour, and alignment. The brand fonts are embedded into the file (the PowerPoint "Embed fonts" OPC structures, written directly at the OpenXML package layer, TTF/OTF only), so it opens identically without the fonts installed and never round-trips through LibreOffice, which would drift the layout. Branding, graphics, images, and table grids stay baked into the background.</p>
+<p><strong>How to use it.</strong> Open the target <code>.pen</code> as the active editor in the Pencil desktop app, then run the skill. For a markdown-driven deck use <code>/marp</code>; for an editable brand PPTX authored from scratch use <code>/pptx-generator</code>.</p>
+<pre><code>/pencil-export outputs/.../deck.pen
+"export the pencil deck to pdf and an editable pptx"</code></pre>
+<p><strong>Customize.</strong> Flags on <code>scripts/pencil-export.py</code>: <code>--formats</code> (subset of <code>png,pdf,html,pptx,pptx-flat</code>; <code>pptx-flat</code> alias <code>pptx-image</code> writes the locked-look image-per-slide deck as <code>&lt;stem&gt; (ready to be shared with the world).pptx</code>, byte-frozen and needing no fonts installed), <code>--fonts-dir</code> (brand typefaces to embed), <code>--width</code>/<code>--height</code> (default 1920x1080), <code>--scale</code> (default 2), <code>--image-format jpeg</code> with <code>--quality</code> (default 85) to shrink a heavy deck to a few MB in one pass, and <code>--keep-in-bg &lt;Name&gt;</code> to keep a named decorative component baked into the background. Requires <code>playwright</code> (chromium) and <code>python-pptx</code>.</p>
+</section>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

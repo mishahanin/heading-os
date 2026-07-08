@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intel skills — HEADING OS</title>
+<meta name="description" content="Intel skills in HEADING OS: what each skill is, what it does, how to invoke it, and what you can customize.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3.cat:first-of-type { margin-top: 24px; }
+  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
+  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
+  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
+  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
+  section.skill p { margin: 8px 0; }
+  section.skill pre { margin: 10px 0; }
+  a.cmd-link { text-decoration: none; }
+  a.cmd-link code { color: var(--link); }
+  a.cmd-link:hover code { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html" class="active">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+
+  <h1>Intel skills</h1>
+  <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
+Intel</h3>
+
+<section class="skill">
+<h3 id="s-osint"><code>/osint [target]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/intel/osint/YYYY-MM-DD-[target-slug]/</code></p>
+<p><strong>What it is.</strong> The master intelligence-gathering skill: deep, multi-source open-source intelligence on any company, person, market, or technology, producing an executive-grade brief with confidence ratings and source attribution. It is the raw-intel foundation the other intel skills consume.</p>
+<p><strong>What it does.</strong> Auto-detects the target mode (company / person / market / technology), then runs a deterministic entity resolver (<code>scripts/resolve_entity.py</code>, Tavily with Brave fallback plus a Haiku tool-use extraction) to expand aliases and handles, fans out mode-specific parallel research streams over WebSearch and Firecrawl, grades every finding Confirmed / Deduced / Hypothesized against a persistent case file, and cross-references the CRM and datastore. It writes <code>brief.md</code>, <code>research-notes.md</code>, and a dark self-contained <code>report.html</code>, then appends a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Reach for it for comprehensive recon on one named target; use <code>/competitor-intel</code> for a head-to-head against a vendor, <code>/market-brief</code> for a sector or region, and <code>/ceo-intel</code> for global geopolitics.</p>
+<pre><code>/osint Acme Corp
+"dig into Jane Doe, background check before the meeting"</code></pre>
+<p><strong>Customize.</strong> Variables <code>mode</code>, <code>depth</code> (standard / deep / maximum), <code>focus</code>, and <code>context</code>. Depth escalates to Agent Browser and DataStore cross-referencing. Per-mode stream catalogues live in <code>references/streams-{company,person,market,technology}.md</code>; domain filtering in <code>reference/search-domains.md</code>; evidence grading in <code>reference/forensic-evidence-grading.md</code>. Optional per-exec overrides via <code>scripts/resolve_customization.py</code> (see <code>config/skill-custom/README.md</code>).</p>
+</section>
+
+<section class="skill">
+<h3 id="s-osint-advanced"><code>/osint-advanced [target]</code><span class="badge">Intel 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/intel/osint-advanced/YYYY-MM-DD-[target-slug]/</code></p>
+<p><strong>What it is.</strong> A specialized-database complement to <code>/osint</code>: it queries sanctions and compliance lists, corporate registries, breach databases, threat-actor platforms, infrastructure scanners, and face/username search that general web search does not reach.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model, selecting streams by mode from a fixed matrix (sanctions/compliance is MANDATORY in company and person mode). Each tool query follows a fallback chain: WebFetch to the API endpoint, then <code>scripts/firecrawl.py scrape</code>, then a <code>site:</code> WebSearch. It writes <code>brief.md</code>, raw <code>tool-responses.md</code>, and a <code>report.html</code> carrying a sanctions status banner (CLEAR / MATCH / PARTIAL) and a tool access log.</p>
+<p><strong>How to use it.</strong> Use it after <code>/osint</code> has run and a specific dimension still needs depth (compliance screening, breach exposure, infrastructure recon); for the first broad pass on any target, use <code>/osint</code>.</p>
+<pre><code>/osint-advanced Acme Corp
+/osint-advanced jane.doe@example.com</code></pre>
+<p><strong>Customize.</strong> <code>disable-model-invocation: true</code> keeps it explicit-only; <code>model: sonnet</code> is set in frontmatter. Variables <code>mode</code>, <code>streams</code> (all or a comma list), and <code>depth</code> (quick / full). Tool registry and validation status in <code>reference/osint-advanced-toolkit.md</code>; per-tool patterns in <code>references/tool-integration-guide.md</code> and <code>references/streams-deep-osint.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-competitor-intel"><code>/competitor-intel [company]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · maintains a case file at <code>outputs/intel/cases/[competitor-slug].md</code></p>
+<p><strong>What it is.</strong> Deep competitive analysis of a named vendor against 31C/ODUN.ONE: product-gap comparison, geographic overlap, honest strengths, exploitable weaknesses, a win strategy, and recommended actions.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. It reads the existing DPI vendor landscape and 31C positioning, then runs three web passes: a filtered industry-source search, a broad company search (blocklist only), and a Firecrawl website crawl over the vendor's product and pricing pages. Every material claim is evidence-graded Confirmed / Deduced / Hypothesized against an append-only persistent case file, and the brief closes with a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Use it for a head-to-head against a named competitor; if the target is a person or a broad company profile use <code>/osint</code>, and for market sizing use <code>/market-brief</code>. For a bare "vs" with no named second party, disambiguate first.</p>
+<pre><code>/competitor-intel ExampleTelco
+"how does ExampleTelco compare to us on encrypted traffic"</code></pre>
+<p><strong>Customize.</strong> <code>model: sonnet</code> and <code>depth</code> (quick / deep) are the main knobs. Baseline competitive data in <code>reference/dpi-market-intelligence.md</code>; domain filtering in <code>reference/search-domains.md</code>; the case-file template at <code>reference/templates/intel-case-file.md</code>; evidence grading in <code>reference/forensic-evidence-grading.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-market-brief"><code>/market-brief [topic]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns a brief inline (forked-context research pass)</p>
+<p><strong>What it is.</strong> A fast market or regional intelligence brief on a sector or geography: market sizing, competitive landscape, regulatory environment, entry timing, and 31C positioning framed through the sovereign/DPI+ lens.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. It reads DPI market and geopolitical reference data plus 31C strategy, then searches the web with topic-group domain filtering. When the topic falls inside the Polymarket coverage whitelist (AI, big tech, elections, geopolitics, crypto, macro, sports, corporate events) it appends a "Markets Are Pricing" section from <code>scripts/polymarket.py</code>, and it closes with a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Use it for a sector, region, or TAM question; for a specific named company use <code>/osint</code> or <code>/competitor-intel</code>, and for global geopolitics use <code>/ceo-intel</code>.</p>
+<pre><code>/market-brief GCC telco DPI market
+"sector overview and TAM for sovereign 5G security"</code></pre>
+<p><strong>Customize.</strong> Variables <code>depth</code> (surface / detailed) and <code>purpose</code>. Reference data in <code>reference/dpi-market-intelligence.md</code> and <code>reference/geopolitical-landscape.md</code>; domain filtering in <code>reference/search-domains.md</code>; Polymarket whitelist and disambiguation rules in <code>reference/polymarket-coverage.md</code>. Polymarket output is internal-only and never quotable externally.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-ceo-intel"><code>/ceo-intel [focus]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/intel/briefs/world-intel-YYYY-MM-DD.html</code> (+ PDF)</p>
+<p><strong>What it is.</strong> A confidential CEO-eyes-only world intelligence brief covering geopolitics, cybersecurity, markets, and priority-region developments, each section framed through 31C's lens with direct business implications and action items.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. Phase 1 fans out parallel WebSearch streams (geopolitics, cybersecurity, priority regions, markets/DPI) with domain filtering, runs <code>scripts/perplexity-research.py</code>, fetches World Monitor feeds, and batch-scrapes top articles via Firecrawl. Phase 2 writes a single-page HTML brief with a threat-level bar, metrics strip, and per-section 31C-relevance callouts; Phase 3 renders a PDF via <code>scripts/html-to-pdf.py</code> and appends a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Use it for internal world/geopolitical situational awareness with action items; for the public-safe version use <code>/intel-briefing-newsletter</code>, and for a specific company or person use <code>/osint</code>.</p>
+<pre><code>/ceo-intel
+"give me a geopolitical brief on GCC defense"</code></pre>
+<p><strong>Customize.</strong> The <code>focus</code> variable narrows to a topic or region. The HTML design system (fonts, colors, layout) is specified inline. Reference data in <code>reference/dpi-market-intelligence.md</code>; domain filtering in <code>reference/search-domains.md</code>; the conditional Polymarket section uses <code>scripts/polymarket.py</code> per <code>reference/polymarket-coverage.md</code>. This brief is never shared externally.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-intel-briefing-newsletter"><code>/intel-briefing-newsletter [focus]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/intel/newsletters/YYYY-MM-DD/</code></p>
+<p><strong>What it is.</strong> The public-facing, branded 31C Intelligence Briefing newsletter: curated live world intel carrying zero confidential information, safe for Tribe distribution and external sharing.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. It fans out the same parallel research streams as <code>/ceo-intel</code> (WebSearch with domain filtering, Perplexity, World Monitor, Firecrawl), synthesizes the fixed section set (Hero, Indicators, Sea State, Cyber Front, Navigation Chart, Market Depth, The Heading, Signal Watch, Recommended Reading), then runs a mandatory confidentiality scrub against <code>context/people.md</code> and <code>context/pipeline.md</code>. It builds an <code>input.json</code>, optionally generates editorial images via the flux-image generator, and renders HTML + PDF through <code>scripts/generate-newsletter-html.py</code>.</p>
+<p><strong>How to use it.</strong> Use it when the output is meant to be published or shared; for the internal-only version that names partners and deals and adds action items, use <code>/ceo-intel</code>.</p>
+<pre><code>/intel-briefing-newsletter
+"publish an intel briefing on GCC cybersecurity"</code></pre>
+<p><strong>Customize.</strong> Variables <code>focus</code> and <code>issue_number</code>. Content structure, design system, and confidentiality rules in <code>reference/newsletter-guide.md</code>; voice in <code>reference/misha-voice.md</code>; domain filtering in <code>reference/search-domains.md</code>. Optional <code>/editorial-review</code> structural pass before finalizing.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-yt-pulse"><code>/yt-pulse [query]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/intel/pulse/YYYY-MM-DD-[slug]/</code></p>
+<p><strong>What it is.</strong> A domain-agnostic YouTube intelligence scanner: it searches YouTube for any topic, clusters the hot themes creators are discussing, deep-analyzes the top video by transcript, scores 31C relevance, and delivers a brief in MD, HTML, and PDF.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model, firing a mandatory VPN pre-flight gate first (datacenter IPs get blocked). Phase 1 runs <code>.claude/skills/yt-pulse/scripts/pulse.py</code> using YouTube's server-side date filter; it clusters titles into 3-5 topics, selects the top-ranked video by an engagement formula, and pulls the transcript via the Playwright <code>pw.py youtube</code> command (with a WebSearch/WebFetch fallback when the IP is blocked). Phase 5 generates the three-format brief and renders the PDF via <code>scripts/html-to-pdf.py</code>.</p>
+<p><strong>How to use it.</strong> Use it for YouTube content discovery and analysis in any domain; for non-YouTube target research use <code>/osint</code>, and for an X/Twitter account scan use <code>/x-pulse</code>.</p>
+<pre><code>/yt-pulse deep packet inspection
+"what's trending on YouTube about AI agents"</code></pre>
+<p><strong>Customize.</strong> Variables <code>timeframe</code> (24h / 72h / 7d / 30d) and <code>depth</code> (quick / full). Per-channel cap (default <code>--per-channel-cap 3</code>, pass <code>0</code> for uncapped), browser-cookie sourcing (default Brave ClaudeCode profile via yt-dlp), and residential-proxy fallback are in <code>references/configuration.md</code>. Output templates in <code>references/output-template.md</code>. VPN gate governed by <code>.claude/rules/vpn-preflight.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-x-pulse"><code>/x-pulse [--window 24h|72h|7d] [--bucket &lt;name&gt;]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to the data overlay's <code>intel/x-pulse/YYYY-MM-DD-HHMM/</code></p>
+<p><strong>What it is.</strong> An account-centric X.com (Twitter) intelligence scanner: it pulls recent posts from a curated, categorised account list (peer CEOs, DPI competitors, sovereign-tech thinkers, AI-policy figures, personal interest) and produces an MD/HTML/PDF brief with top-3 highlights, per-category breakdown, and 31C relevance plus actions.</p>
+<p><strong>What it does.</strong> Runs in a forked context on the Sonnet model. Scraping is server-side via Apify (no browser, no VPN gate). It runs <code>.claude/skills/x-pulse/scripts/pulse.py --dry-run</code> first to show the plan and estimated cost, waits for confirmation, then fetches and applies a two-stage filter: a mechanical engagement filter (top 50% per category by <code>likes + 2*retweets + 3*replies</code>) followed by Claude judgement to pick the top 3 highlights. It renders the brief and PDF using the same design tokens as <code>/yt-pulse</code>.</p>
+<p><strong>How to use it.</strong> Use it to monitor specific X accounts; for topic-based YouTube discovery use <code>/yt-pulse</code>.</p>
+<pre><code>/x-pulse --window 72h --bucket peer_ceos
+"what's on X from the DPI vendors this week"</code></pre>
+<p><strong>Customize.</strong> Options <code>--window</code>, <code>--bucket</code>, <code>--max-per-account</code> (default 30, max 100), and <code>--dry-run</code>. The account list is <code>config/x-pulse-accounts.yaml</code>. Requires <code>APIFY_TOKEN</code> in <code>.env</code> (the skill halts with sign-up instructions if it is missing and never edits <code>.env</code> for you). Quoted tweet text is preserved verbatim and exempt from the humanisation rule.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-notebooklm"><code>/notebooklm [status|create|add|query|audio|research|report|describe|download] [args]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/content/notebooklm/</code> (CEO-only)</p>
+<p><strong>What it is.</strong> A CLI wrapper for Google NotebookLM: create topic notebooks, add sources (URLs, text, files), query with grounded citations, generate audio overviews (AI podcasts), run research discovery, and produce briefing reports. CEO-only, not synced to exec workspaces.</p>
+<p><strong>What it does.</strong> Runs on the Sonnet model, driving the <code>notebooklm-mcp-cli</code> (<code>nlm</code>) tool via a portable invocation pattern. Every mode is preceded by a Phase 0 auth check (<code>nlm login --check</code>); if auth is expired the skill stops and directs the user to log in manually. Phase 1 dispatches to one of nine modes; per-mode CLI commands, polling rules, and output templates live in <code>references/mode-catalog.md</code>. Long-running modes (audio, report) poll at 15-second intervals up to five minutes.</p>
+<p><strong>How to use it.</strong> Use it for NotebookLM-specific notebook work and AI audio overviews; for general target research use <code>/osint</code>, for atomic notes use <code>/zk</code>, and for topic-based YouTube podcasts use <code>/yt-pulse</code>.</p>
+<pre><code>/notebooklm create "Middle East DPI Market"
+"create a NotebookLM audio overview from these sources"</code></pre>
+<p><strong>Customize.</strong> Nine subcommand modes (<code>status</code>, <code>create</code>, <code>add</code>, <code>query</code>, <code>audio</code>, <code>research</code>, <code>report</code>, <code>describe</code>, <code>download</code>). Filenames follow <code>YYYY-MM-DD-&lt;slug&gt;.&lt;ext&gt;</code>. Uses undocumented Google APIs and may break without notice; it never auto-logs-in, never auto-upgrades the CLI, and never uses the MCP server. Auth is per-user via <code>nlm login</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-docparse"><code>/docparse [file-path or directory] [question]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · returns an answer inline; optional HTML/PDF report on <code>--report</code></p>
+<p><strong>What it is.</strong> A document parser with visual citations: it parses PDF, DOCX, PPTX, and XLSX with spatial bounding boxes via LiteParse and answers a question by tracing every cited fact to its exact location on the source page.</p>
+<p><strong>What it does.</strong> Runs on the Sonnet model via <code>scripts/docparse.py</code> (cache-aware). Phase 0 runs a prerequisite check and, for documents over 50 pages, asks for a page range. Phase 1 parses to a JSON file; Phase 2 answers a question by extracting 5-15 character-for-character verbatim quotes as citations keyed to inline <code>[N]</code> markers, which the script's box engine maps to page coordinates. Phase 3 optionally renders a 31C-branded self-contained HTML report plus PDF.</p>
+<p><strong>How to use it.</strong> Use it when you need spatially-grounded citations or to show where a document says something; for plain text extraction use <code>datastore-extract.py</code>, for email use <code>/email-intel</code>, and for web pages use <code>/playwright</code>.</p>
+<pre><code>/docparse datastore/reports/acme-q3.pdf "What was Q3 revenue?"
+"parse this PDF and show me where it says the pricing"</code></pre>
+<p><strong>Customize.</strong> Flags <code>--pages</code> (required for 100+ page documents), <code>--dpi</code> (default 150), and <code>--report</code> / <code>--no-pdf</code>. Never parses over 100 pages without an explicit <code>--pages</code> restriction. Integration patterns for calling it from other skills are in <code>references/integration.md</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-deep-research-advance"><code>/deep-research-advance "&lt;question&gt;" [--critical] [--audio] [--depth N] [--domains a.com,b.com]</code><span class="badge">Intel</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/research/&lt;run&gt;/report.md</code></p>
+<p><strong>What it is.</strong> Advanced one-shot deep research on a public-web topic: a headless script offloads token-heavy acquisition (Perplexity) and reasoning/verification (Kimi), then Claude audits the findings, writes a cited report, and proposes an Odin distillate for approval.</p>
+<p><strong>What it does.</strong> Runs in a forked context. It states its data-boundary guardrail first, asks 2-3 scoping questions if the topic is underspecified, then runs <code>scripts/deep-research-advance.py</code>, which returns an <code>intermediate.json</code> of angles, sources, corpus, and Kimi's claim analysis. Phase 3 conditionally fires an adversarial audit governor (when sources exceed 12 or <code>--critical</code> is set) that tries to refute each supported claim from the corpus alone. Phase 4 synthesizes a report (executive summary, findings by angle, claims table, contradictions, source list) and appends a <code>/brain-audit</code> footer.</p>
+<p><strong>How to use it.</strong> Use it for deep, fact-checked reports on public-web topics; it refuses private or internal topics because the question and corpus leave to third-party clouds. For quick lookups use <code>/osint</code> or WebSearch, and for Odin-brain recall use <code>/odin</code>.</p>
+<pre><code>/deep-research-advance "state of sovereign DPI regulation in the GCC" --critical
+"advanced deep research with verification on 5G security standards"</code></pre>
+<p><strong>Customize.</strong> Flags <code>--depth N</code> (Perplexity angles, default 4, max 8), <code>--critical</code> (force the audit governor), <code>--recency {hour|day|week|month|year}</code>, <code>--domains</code> (allow-list), and the skill-level <code>--audio</code> (gated NotebookLM push, handled in Phase 5, not passed to the script). Persistence is double-gated: the Odin distillate and any NotebookLM audio each require explicit CEO approval. Never runs on private data or injects business context into cloud prompts.</p>
+</section>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

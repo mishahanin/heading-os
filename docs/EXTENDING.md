@@ -1,4 +1,4 @@
-<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
+<!-- version: 1.0.2 | last-updated: 2026-07-08 -->
 # Extending the engine
 
 How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
@@ -34,6 +34,11 @@ Four kinds of artifact, each with its own home and conventions:
 
 Before building anything: search for an existing pattern and reuse it. The standards
 below are summarized from the engine's own development rules.
+
+Editing the documentation site itself (`docs/`) has its own contract: every page is
+either Markdown-sourced (regenerated) or hand-authored HTML, and a drift guard fails
+the build if the two fall out of sync. See [DOCS-PIPELINE.md](DOCS-PIPELINE.html)
+before editing anything under `docs/`.
 
 ---
 

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations: planning &amp; review — HEADING OS</title>
+<meta name="description" content="Operations: planning and review in HEADING OS: what each skill is, what it does, how to invoke it, and what you can customize.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+<style>
+  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
+  h3.cat:first-of-type { margin-top: 24px; }
+  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
+  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
+  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
+  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
+  section.skill p { margin: 8px 0; }
+  section.skill pre { margin: 10px 0; }
+  a.cmd-link { text-decoration: none; }
+  a.cmd-link code { color: var(--link); }
+  a.cmd-link:hover code { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html" class="active">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+
+<main class="content">
+
+  <h1>Operations: planning &amp; review</h1>
+  <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
+Operations: planning &amp; review</h3>
+
+<section class="skill">
+<h3 id="s-create-plan"><code>/create-plan [describe what to plan]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>plans/</code></p>
+<p><strong>What it is.</strong> Designs a structured implementation plan for a non-trivial change before any code is written: objective, scope, critical files, step sequence, success criteria, and risks.</p>
+<p><strong>What it does.</strong> Researches the workspace first (core reference files, existing patterns, connections), then writes a complete plan document to <code>plans/YYYY-MM-DD-{name}.md</code> following a fixed template (Overview, Spec Core, Current State, Proposed Changes, Step-by-Step Tasks, Success Criteria). It plans only and never makes the changes. Steps are grouped into optional parallel waves so <code>/implement</code> can execute them cleanly, and the Spec Core must carry at least one Non-Goal and a single testable Success Signal.</p>
+<p><strong>How to use it.</strong> Use before significant or multi-file work; to carry out the plan use <code>/implement</code>, and to stress-test it before approval use <code>/scrutinize</code>. Do not use it to execute an existing plan.</p>
+<pre><code>/create-plan add a new intake command with routing config
+"plan for restructuring the outputs directory"</code></pre>
+<p><strong>Customize.</strong> The one argument is a free-text description of what to plan. No flags. The plan structure is fixed by the reference template; wave grouping is optional inside the plan itself.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-pre-impl"><code>/pre-impl [plan description or @path/to/plan.md]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>plans/</code></p>
+<p><strong>What it is.</strong> A recommended structured gate between plan approval and <code>/implement</code>: it defines success criteria, stress-tests the plan, audits the harness, and writes a test contract before a single line of code is generated.</p>
+<p><strong>What it does.</strong> Runs six phases: context load, 3 to 5 binary success criteria, an inline contrarian critique (the <code>/devil</code> discipline, run inline because <code>/devil</code> is locked), an optional <code>/council</code> architecture review with Kimi as devil's advocate, a harness gap audit, and a proposed test contract, ending in a GO or NO-GO decision with a ready-to-paste <code>/implement</code> prompt. It saves the gate report alongside the plan at <code>plans/YYYY-MM-DD-pre-impl-{slug}.md</code>. The gate is recommended, not harness-enforced: nothing blocks <code>/implement</code> if it is skipped.</p>
+<p><strong>How to use it.</strong> Run after <code>/create-plan</code> approval and before <code>/implement</code> for any non-trivial work. Skip it for one-liner fixes, typo corrections, and config-only changes. Full chain: <code>/create-plan</code> to <code>/pre-impl</code> to <code>/implement</code> to <code>/scrutinize</code>.</p>
+<pre><code>/pre-impl @plans/2026-07-01-add-intake-command.md
+"are we ready to implement this?"</code></pre>
+<p><strong>Customize.</strong> The argument is either a plan description or an <code>@path</code> to a plan file (or nothing, to pick up the most recent plan in session). Phase 3's council review is optional and can be skipped for low-architectural-risk plans. No flags.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-implement"><code>/implement [plan-path] [--no-trajectory] [--evaluate]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · writes to <code>outputs/operations/implement/</code> and the files the plan touches</p>
+<p><strong>What it is.</strong> Executes an approved implementation plan step by step, writing complete files and emitting a structured trajectory for every phase so the run can be audited later.</p>
+<p><strong>What it does.</strong> Reads the plan in full, runs a soft pre-impl gate reminder, then executes each step (or each wave, when the plan uses <code>### Wave</code> headers, dispatching parallel steps as agents). It writes a JSONL trajectory to <code>outputs/operations/implement/_trajectory_&lt;run_id&gt;.jsonl</code> unless <code>--no-trajectory</code> is passed, validates against the plan's checklist, and updates the plan status to Implemented. Pass <code>--evaluate</code> to grade each artifact with <code>/evaluate</code> after execution (up to three rework cycles).</p>
+<p><strong>How to use it.</strong> Use to build out a plan from <code>/create-plan</code>; do not use it for planning itself. To audit the finished run afterward, run <code>/scrutinize trajectory:&lt;run_id&gt;</code>.</p>
+<pre><code>/implement plans/2026-07-01-add-intake-command.md --evaluate
+"execute the plan"</code></pre>
+<p><strong>Customize.</strong> The <code>plan-path</code> argument, plus two flags: <code>--no-trajectory</code> (skip JSONL emission for throwaway runs) and <code>--evaluate</code> (run <code>/evaluate</code> on each artifact after Phase 3).</p>
+</section>
+
+<section class="skill">
+<h3 id="s-evaluate"><code>/evaluate [artifact-path] [--plan plan-path]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (reports inline)</p>
+<p><strong>What it is.</strong> A skeptical quality evaluator that grades a workspace artifact (skill, script, reference file, or rule) against workspace standards and, optionally, a plan's success criteria.</p>
+<p><strong>What it does.</strong> Runs a two-layer assessment: deterministic checks via <code>scripts/artifact-evaluator.py</code>, then a qualitative pass from a deliberately skeptical reviewer persona that looks for shortcuts and vagueness. It ends in one of four grades (PASS, PASS WITH NOTES, NEEDS REWORK, FAIL) with specific, line-referenced rework instructions. A deterministic failure cannot pass.</p>
+<p><strong>How to use it.</strong> Use to grade an artifact against a fixed rubric after <code>/implement</code> or standalone. For fact-checking a draft against source documents use <code>/validate</code>; for a multi-phase stress-test that proposes and applies fixes use <code>/scrutinize</code>.</p>
+<pre><code>/evaluate .claude/skills/intake/SKILL.md --plan plans/2026-07-01-add-intake-command.md
+"grade this script"</code></pre>
+<p><strong>Customize.</strong> The <code>artifact-path</code> argument plus an optional <code>--plan &lt;plan-path&gt;</code> to grade against that plan's success criteria and validation checklist. Artifact type is auto-detected from the path.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-scrutinize"><code>/scrutinize [plan | execution | file:&lt;path&gt; | dir:&lt;path&gt; | workspace | trajectory:&lt;run_id&gt;] [--relentless] [--no-refute]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/operations/scrutiny/</code> plus any file approved for a fix</p>
+<p><strong>What it is.</strong> A maximum-effort principal-engineer review gate that runs a Validate-Identify-Improve-Adjust pass over a target, then presents evidence-backed findings with concrete proposed fixes, blocking forward progress until approved.</p>
+<p><strong>What it does.</strong> Runs 14 subchecks over the target, then an adversarial refutation layer (Phase 2.5) with cross-family judge rotation (Claude, Gemini, Grok) and a two-agent debate on BLOCKER and HIGH findings to drop false positives. Findings carry confidence scores and land in an approval block; only explicitly approved fixes are applied. The <code>workspace</code> target dispatches five parallel specialist agents; <code>--relentless</code> pre-approves fixes and loops with adaptive termination (two-zero, marginal-twice, a 10-iteration cap, check failure, or oscillation), and <code>--no-refute</code> skips the debate layer.</p>
+<p><strong>How to use it.</strong> Use to stress-test a plan before approval or audit changes after <code>/implement</code>. For artifact grading against a rubric use <code>/evaluate</code>; for fact-checking a draft use <code>/validate</code>; for decision reasoning use <code>/deep-think</code>.</p>
+<pre><code>/scrutinize file:scripts/intake.py --relentless
+/scrutinize trajectory:2026-07-01_143052_add-intake-command</code></pre>
+<p><strong>Customize.</strong> Six target selectors (<code>plan</code>, <code>execution</code>, <code>file:&lt;path&gt;</code>, <code>dir:&lt;path&gt;</code>, <code>workspace</code>, <code>trajectory:&lt;run_id&gt;</code>) plus four flags: <code>--relentless</code> (auto-apply and loop, incompatible with <code>target=plan</code>), <code>--no-refute</code>, <code>--include-low-confidence</code>, <code>--include-ambiguous</code>. Confidence threshold defaults to 75. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-validate"><code>/validate [content or file path]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · read-only (reports inline)</p>
+<p><strong>What it is.</strong> Fact-checks a draft against the source-of-truth DataStore documents, bucketing every claim as Validated, Unverified, or Contradicted.</p>
+<p><strong>What it does.</strong> Extracts every factual claim (numbers, names, dates, technical and market claims, superlatives), then validates each against a source hierarchy where the DataStore wins over context files, which win over reference files. Each verdict carries a forensic evidence grade (Confirmed, Deduced, Hypothesized) and a risk level (High, Medium, Low), and the report ends with corrections prioritized by risk. It never fabricates a validation: no source found means Unverified, not a guess.</p>
+<p><strong>How to use it.</strong> Use to verify facts, figures, and superlatives before external-facing content ships. For grading an artifact's craft and completeness use <code>/evaluate</code>; for a full engineering review use <code>/scrutinize</code>.</p>
+<pre><code>/validate outputs/content/2026-07-01_proposal-draft.md
+"fact-check this draft"</code></pre>
+<p><strong>Customize.</strong> One argument: either pasted draft text or a file path. No flags; the source hierarchy and risk table are fixed.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-editorial-review"><code>/editorial-review [file:&lt;path&gt; | pasted text]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language · edits the target document in place (structural operations only)</p>
+<p><strong>What it is.</strong> A document-level structural editor for long deliverables: it reviews a draft's argument architecture (section ordering, claim-to-evidence linkage, hierarchy, redundancy, buried lede) and never touches the ideas.</p>
+<p><strong>What it does.</strong> Phase 1 selects a document model, maps the structure with word counts, walks a defect checklist, and emits findings each tagged with one operation (CUT, MERGE, MOVE, CONDENSE, SPLIT, ADD, PROMOTE, DEMOTE, PRESERVE, QUESTION) and a word-savings estimate, behind an approval gate. On approval it applies only the approved structural edits. Phase 2 hands all sentence-level work (rhythm, specificity, vocabulary) to the always-on humanization prose rule and runs the sanitize and humanization-check gates. Content is sacrosanct: it reorganizes, it never rewrites sentences.</p>
+<p><strong>How to use it.</strong> Use on a long proposal, brief, or report whose argument arc needs checking. For sentence-level "make this sound human" work use the humanization rule, not this skill; for fact-checking use <code>/validate</code>; for artifact grading use <code>/evaluate</code>.</p>
+<pre><code>/editorial-review file:outputs/content/2026-07-01_market-brief.md
+"review the structure of this draft"</code></pre>
+<p><strong>Customize.</strong> One argument: <code>file:&lt;path&gt;</code> or pasted text. No flags; the operation vocabulary and defect checklist are fixed by the reference file.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-workspace-deep-audit"><code>/workspace-deep-audit [--mode={full|quick|focus}] [--focus={skills|rules|deps|security|architecture}] [--vs=&lt;previous_audit_path&gt;]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/operations/workspace/</code></p>
+<p><strong>What it is.</strong> The heaviest workspace skill: a comprehensive 8-section deep audit of the entire workspace (executive summary, inventory matrix, architectural findings, dependency validation, a best-practices gap score, competitive mapping, prioritized recommendations).</p>
+<p><strong>What it does.</strong> Dispatches up to seven parallel read-only inventory agents (batched under the concurrency cap), validates every dependency pin against current docs via Context7, scores the workspace against a 34-point best-practices rubric, maps it against a competitive baseline, and emits prioritized P0 to P3 recommendations. Output renders to markdown plus branded HTML and logs to an audit thread. It is read-only against the workspace: fix application belongs to <code>/scrutinize</code>. <code>--mode=quick</code> skips competitive and best-practices analysis (roughly half the runtime), <code>--mode=focus</code> plus <code>--focus</code> scopes to one subsystem, and <code>--vs</code> produces a before/after delta report.</p>
+<p><strong>How to use it.</strong> Use at a major milestone or when checking ecosystem drift. For a single-skill review use <code>/evaluate</code>; to apply fixes use <code>/scrutinize</code>; for a quick operational health check use <code>/state-check</code>.</p>
+<pre><code>/workspace-deep-audit --mode=focus --focus=security
+/workspace-deep-audit --vs=outputs/operations/workspace/2026-05-14_audit_workspace-deep-overview.md</code></pre>
+<p><strong>Customize.</strong> Three flags: <code>--mode</code> (<code>full</code> default, <code>quick</code>, <code>focus</code>), <code>--focus</code> (one of <code>skills</code>, <code>rules</code>, <code>deps</code>, <code>security</code>, <code>architecture</code>, <code>observability</code>; required with <code>focus</code> mode), and <code>--vs=&lt;prev_audit_path&gt;</code> for delta mode. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-calibrate"><code>/calibrate [light]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to memory, settings, CEO-only skills and rules, and <code>outputs/operations/calibrate/</code></p>
+<p><strong>What it is.</strong> A reflective end-of-session self-improvement pass: it scans the current session for corrections, preferences, repeated patterns, errors, successes, and voice violations, then proposes concrete patches.</p>
+<p><strong>What it does.</strong> Runs six-category detection over a parsed session envelope, applies an idempotency check, and resolves each candidate's classification. CEO-only candidates go to a numbered approval list; corporate-classified candidates route to a separate review queue and are never auto-applied. Approved patches to memory, settings, and CEO-only skills and rules are applied and committed in one atomic git commit. <code>/calibrate light</code> scans only the in-context conversation (skipping the repeated-patterns and errors categories) for low-token or quick sweeps.</p>
+<p><strong>How to use it.</strong> Use at the end of a working session to capture learnings. For cross-session memory consolidation use <code>/dream</code>; for grading a single artifact use <code>/evaluate</code>.</p>
+<pre><code>/calibrate light
+/calibrate</code></pre>
+<p><strong>Customize.</strong> One optional argument: <code>light</code> (or <code>--light</code>) selects the lighter in-context mode. No other flags. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-checkpoint"><code>/checkpoint [optional note]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/operations/handoff-archive/</code></p>
+<p><strong>What it is.</strong> Saves a manual session handoff so the session can be resumed later with clean context, without running compact or clearing anything.</p>
+<p><strong>What it does.</strong> Writes one combined handoff file (objective, acceptance criteria, constraints, decisions, files touched, current state, next steps, continuation prompt) to <code>outputs/operations/handoff-archive/</code>, then updates the <code>.latest/summary.md</code> and <code>.latest/prompt.md</code> pointer files that the SessionStart inject hook reads on resume. It does not run compact, does not clear the session, and does not continue work after writing. It surfaces from the two-tier checkpoint-offer hook at 25 and 30 percent context used.</p>
+<p><strong>How to use it.</strong> Use before switching tasks, before a risky action, or when the checkpoint-offer hook fires. For a reflective end-of-session capture use <code>/calibrate</code>; for cross-session memory consolidation use <code>/dream</code>.</p>
+<pre><code>/checkpoint paused mid-refactor, tests still failing
+/checkpoint</code></pre>
+<p><strong>Customize.</strong> One optional free-text note argument, appended as a "User note" section (omitted if empty). No flags. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-align"><code>/align [N]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (purely conversational, nothing persisted)</p>
+<p><strong>What it is.</strong> A manual escalation lever above the always-on prompt-refinement rule: it forces exactly N numbered clarifying questions before any work begins, so scope is locked up front instead of corrected later.</p>
+<p><strong>What it does.</strong> Parses and validates N, walks back to the latest substantive request, then returns a compact expansion plus N numbered questions, each with lettered options and one committed recommendation, a summary table, and a closer. After the user answers (compactly, for example "1a, 2c, 3 - custom: ..."), it produces the full expanded prompt and waits at an approval gate before executing. Single-shot per invocation.</p>
+<p><strong>How to use it.</strong> Use before a high-stakes or ambiguous task where a wrong assumption is expensive. For simple requests the always-on prompt-refinement rule already handles clarification, so skip it. For contrarian critique use <code>/devil</code>; for content variants use <code>/burst</code>.</p>
+<pre><code>/align 3
+/align</code></pre>
+<p><strong>Customize.</strong> One optional argument N, default 5, valid range 1 to 10; anything outside the range aborts with a one-line error. No flags. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-devil"><code>/devil [N] [: &lt;inline claim&gt;]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (purely conversational, nothing persisted)</p>
+<p><strong>What it is.</strong> A manual sycophancy-breaker: it forces exactly N contrarian critique points against a target position, each from a distinct angle, in committed prose with no fixes and no hedging.</p>
+<p><strong>What it does.</strong> Targets either an inline claim (<code>/devil 5: &lt;claim&gt;</code>) or the latest substantive decision walked back from conversation. It emits N numbered points, each with a severity tag (BLOCKER, HIGH, MEDIUM, LOW), a bolded 2-to-5-word headline, and one or two sentences that land the cut and stop. Points span distinct angles (correctness, scope, cost, timing, alternatives, second-order effects, stakeholder risk, and more) and sort by severity. An honesty floor stops it early rather than fabricate weak points to hit N. Single-shot: after the pass it exits with no approval gate.</p>
+<p><strong>How to use it.</strong> Use to pressure-test a recent decision cheaply. For external Gemini, Grok, and Kimi views use <code>/council</code>; for a multi-phase principal-engineer review use <code>/scrutinize</code>.</p>
+<pre><code>/devil 5: we should ship the intake command without a test contract
+/devil 3</code></pre>
+<p><strong>Customize.</strong> Optional N, default 5, range 1 to 10; optional inline claim after a colon (else it walks back). The <code>force N</code> reply is the honesty-floor escape hatch to surface weak points anyway. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-burst"><code>/burst [N] [: &lt;inline seed&gt;]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · read-only (purely conversational, nothing persisted)</p>
+<p><strong>What it is.</strong> A manual variation lever: it produces N different versions of the latest content artifact, each attacking a distinct axis, with one mandatory "swing-the-other-way" variant that inverts a defining property.</p>
+<p><strong>What it does.</strong> Targets either an inline seed (<code>/burst 3: &lt;seed&gt;</code>) or the latest assistant-produced content turn. It generates N-1 spread variants across diverse axes (opener, tone, structure, lens, length, voice, metaphor) plus one swing variant, holding the core message constant and varying only the wrapper, then closes with one recommended pick. A cost-and-time pre-flight gate fires when each variant would run a paid-API call or a multi-step task. Single-shot, and it supports the convergence pattern: pick a variant, run <code>/burst</code> again from there.</p>
+<p><strong>How to use it.</strong> Use to compare directions, escape a stuck draft, or converge on a final version. For N clarifying questions use <code>/align</code>; for contrarian critique use <code>/devil</code>.</p>
+<pre><code>/burst 5: a 150-word post about data sovereignty
+/burst</code></pre>
+<p><strong>Customize.</strong> Optional N, default 3, range 2 to 5; optional inline seed after a colon (else it walks back). The cost gate requires an explicit "go" per invocation for paid or long tasks. Frontmatter carries <code>disable-model-invocation: true</code>.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-brain-audit"><code>/brain-audit --sources &lt;paths&gt; [--entity &lt;name&gt;] [--modalities &lt;list&gt;]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Invoked by other synthesis skills, not from natural language · read-only (returns a footer string)</p>
+<p><strong>What it is.</strong> A small post-synthesis audit primitive: given a set of cited source files, it returns a stable three-section footer reporting source freshness, modality coverage, and disagreements.</p>
+<p><strong>What it does.</strong> Runs three checks over the sources passed in: newest-modified date per source (flagging anything over 90 days as STALE), comms and intel modality coverage for a named entity (email, telegram, osint, crm-log, calendar), and a single LLM call to detect disagreements between sources. It returns a <code>## Brain audit</code> footer and nothing else. It is a leaf: it never synthesizes, never scans the whole workspace, and never writes state, and every failure mode degrades to a valid footer rather than aborting the caller. It is composed by <code>/meeting-prep</code>, <code>/odin</code> (consult mode), and <code>/deal-strategy</code>, which paste the footer beneath their output.</p>
+<p><strong>How to use it.</strong> Not a natural-language command. A composing synthesis skill invokes it at the end of its synthesis phase; the CEO may also invoke it directly for an ad-hoc audit.</p>
+<pre><code>/brain-audit --sources crm/contacts/example-corp.md,outputs/intel/osint/2026-07-01_osint_example-corp.md --entity "Example Corp"</code></pre>
+<p><strong>Customize.</strong> <code>--sources</code> (required, comma-separated workspace-relative paths, capped at 20 for the contradiction check), <code>--entity</code> (optional, scopes the modality scan), and <code>--modalities</code> (optional subset of the canonical list). Footer shape adapts to single-source, no-entity, degraded, and no-sources cases.</p>
+</section>
+
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="skills-mcp-plugins.html">Skill catalog</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

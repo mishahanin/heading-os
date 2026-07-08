@@ -34,6 +34,7 @@
       <div class="label">Operate</div>
       <a href="daemons.html">Daemons &amp; scheduled tasks</a>
       <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="memory-lifecycle.html">Memory lifecycle</a>
       <a href="MODELS-SETUP.html">AI models</a>
       <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
       <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
@@ -114,14 +115,20 @@ how to edit each, and how the drift guard keeps them honest.</p>
 <code>docs/assets/docs.css</code>; client-side search is <code>docs/assets/search.js</code> backed by
 <code>docs/assets/search-index.json</code>.</p>
 <h2 id="two-page-classes">Two page classes</h2>
-<h3 id="1-markdown-sourced-regenerated-18-pages">1. Markdown-sourced (regenerated) - 18 pages</h3>
+<h3 id="1-markdown-sourced-regenerated-19-pages">1. Markdown-sourced (regenerated) - 19 pages</h3>
 <p>The <code>.md</code> is the source of truth; the <code>.html</code> is generated and must never be
 hand-edited. Editing the <code>.md</code> without regenerating is caught by the drift guard.</p>
 <p><code>ARCHITECTURE</code>, <code>CONFIGURATION</code>, <code>DEPLOYMENT</code>, <code>DOCS-PIPELINE</code> (this page),
 <code>EMERGENCY-PROCEDURES</code>, <code>EXTENDING</code>, <code>GLOSSARY</code>, <code>HOOKS-REFERENCE</code>,
 <code>INTEGRATIONS-SETUP</code>, <code>MAKE-IT-YOURS</code>, <code>MODELS-SETUP</code>, <code>QUICKSTART</code>,
 <code>RULES-REFERENCE</code>, <code>SECURITY-MODEL</code>, <code>TELEGRAM-AND-ALERTS</code>, <code>THREAT-MODEL</code>,
-<code>TROUBLESHOOTING</code>, <code>engine-data-segregation-contract</code>.</p>
+<code>TROUBLESHOOTING</code>, <code>engine-data-segregation-contract</code>, <code>memory-lifecycle</code>.</p>
+<p><code>memory-lifecycle</code> carries a Mermaid diagram. The generator renders a <code>```mermaid</code>
+fence to a <code>&lt;pre class="mermaid"&gt;</code> block and injects the vendored <code>assets/mermaid.min.js</code>
+on that page only (a per-page conditional), so every other page stays byte-identical and
+zero-JS. A brand-new md page has no <code>.html</code> sibling yet, so it is created once with
+single-file <code>python scripts/regenerate-docs-html.py docs/&lt;name&gt;.md</code>; <code>--all</code> maintains it
+thereafter.</p>
 <p><strong>To edit:</strong> change the <code>.md</code>, run <code>python scripts/regenerate-docs-html.py &lt;md&gt;</code>
 (or <code>--all</code>), commit both files.</p>
 <h3 id="2-hand-authored-html-navsearch-injected-14-pages">2. Hand-authored HTML (nav/search-injected) - 14 pages</h3>

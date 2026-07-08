@@ -442,9 +442,15 @@ def delete_emails(account, subject_query, folder_name="Inbox", confirm=True):
 # Meeting Creation
 # ============================================================
 
-def create_meeting(account, subject, start_time, duration_minutes=30, location=None, body=None, attendees=None, timezone_str=get_default_tz_name()):
-    """Create a calendar meeting."""
+def create_meeting(account, subject, start_time, duration_minutes=30, location=None, body=None, attendees=None, send_invites=False, timezone_str=get_default_tz_name()):
+    """Create a calendar meeting.
+
+    When send_invites is True and attendees are present, the meeting invitation
+    is emailed to the attendees. Otherwise the item is saved as a private HOLD
+    with no invitation sent.
+    """
     from exchangelib import Mailbox, Attendee
+    from exchangelib.items import SEND_ONLY_TO_ALL, SEND_TO_NONE
 
     tz = EWSTimeZone.from_timezone(
         ZoneInfo(timezone_str)
@@ -480,13 +486,15 @@ def create_meeting(account, subject, start_time, duration_minutes=30, location=N
             for email in attendees
         ]
 
-    item.save()
+    invite_mode = SEND_ONLY_TO_ALL if (send_invites and attendees) else SEND_TO_NONE
+    item.save(send_meeting_invitations=invite_mode)
     print(f"[OK] Meeting created: '{subject}'")
     print(f"     Time: {start} - {end} ({duration_minutes}m)")
     if location:
         print(f"     Location: {location}")
     if attendees:
-        print(f"     Attendees: {', '.join(attendees)}")
+        sent = "invite sent" if invite_mode is SEND_ONLY_TO_ALL else "HOLD only, no invite sent"
+        print(f"     Attendees: {', '.join(attendees)} ({sent})")
 
 
 # ============================================================
@@ -509,6 +517,7 @@ def main():
     parser.add_argument("--location", type=str, help="Meeting location")
     parser.add_argument("--body", type=str, help="Meeting description")
     parser.add_argument("--attendees", type=str, nargs="*", help="Attendee email addresses")
+    parser.add_argument("--send-invites", action="store_true", help="Send the meeting invitation to --attendees (default: HOLD only, no invite sent)")
 
     # Email deletion
     parser.add_argument("--delete", type=str, metavar="SUBJECT", help="Delete emails matching subject (case-insensitive)")
@@ -550,6 +559,7 @@ def main():
                 location=args.location,
                 body=args.body,
                 attendees=args.attendees,
+                send_invites=args.send_invites,
                 timezone_str=config["EXCHANGE_TIMEZONE"],
             )
         except Exception as e:

@@ -7,7 +7,7 @@ Thanks for your interest. HEADING OS began as the system one chief executive run
 Open an issue for any of these:
 
 - **Bug reports** — something behaves differently than the docs say. Include your OS, Python version, the command you ran, and the output (with secrets removed).
-- **Questions** — about the architecture, the setup, or how a piece works. Use the discussion-style issue template.
+- **Questions** about the architecture, the setup, or how a piece works: ask in [Discussions Q&A](https://github.com/mishahanin/heading-os/discussions/categories/q-a), not as an issue.
 - **Ideas and feature requests** — what you'd want the engine to do, and why.
 
 Before opening one, a quick search of existing issues saves everyone time.
@@ -33,6 +33,10 @@ Keep the bar the engine holds itself to:
 - **No new dependencies** without raising it in the issue first; pin exact versions.
 - **Match the surrounding style.** Read the file before editing it.
 - **Docs stay in sync.** If you touch `docs/`, regenerate the HTML and keep it current. See [`docs/DOCS-PIPELINE.md`](docs/DOCS-PIPELINE.md) for which pages are Markdown-sourced vs hand-authored; the docs-drift guard fails the build otherwise.
+
+## Design docs and ADRs
+
+Structural or cross-cutting changes get a short design doc first, in [`docs/design/`](docs/design/), before the code. It records the context, the decision taken, and the alternatives rejected, so the direction is reviewable on its own. Small, local fixes do not need one. To start, copy [`docs/design/adr-template.md`](docs/design/adr-template.md); the naming convention and an index of existing records are in [`docs/design/README.md`](docs/design/README.md).
 
 ## Development setup
 

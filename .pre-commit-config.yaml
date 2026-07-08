@@ -93,7 +93,7 @@ repos:
         name: Skill-router registry generated from SKILL.md frontmatter (no drift)
         entry: python3 scripts/generate-skill-router.py --check
         language: system
-        files: '^(\.claude/(skills/.*/SKILL\.md|rules/skill-router\.md)|scripts/generate-skill-router\.py)$'
+        files: '^(\.claude/(skills/.*/SKILL\.md|rules/skill-router\.md)|reference/skill-router/.*\.md|scripts/generate-skill-router\.py)$'
         pass_filenames: false
 
   # Version-sync guard (F-1.1): pyproject.toml is the single source of truth;

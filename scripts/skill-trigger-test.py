@@ -48,6 +48,28 @@ from scripts.utils.workspace import get_workspace_root, load_env  # noqa: E402
 ROOT = get_workspace_root()
 SKILLS_DIR = ROOT / ".claude" / "skills"
 ROUTER_RULE = ROOT / ".claude" / "rules" / "skill-router.md"
+# F-5.2: the per-category exclusions/compound tables the judge needs to reason about
+# should_trigger:false cases live here, not in the always-on router rule.
+CATEGORY_DETAIL_DIR = ROOT / "reference" / "skill-router"
+
+
+def load_full_router_rules() -> str:
+    """The router rule text PLUS the per-category detail files.
+
+    F-5.2 moved the exclusions/compound columns out of the always-on router rule into
+    reference/skill-router/<category>.md. The judge builds its negative test cases from
+    the documented exclusions, so it must see them: concatenate every detail file under a
+    clear delimiter. Degrades to the rule alone if the detail dir is absent.
+    """
+    parts = [ROUTER_RULE.read_text(encoding="utf-8")]
+    if CATEGORY_DETAIL_DIR.exists():
+        for detail in sorted(CATEGORY_DETAIL_DIR.glob("*.md")):
+            parts.append(
+                f"\n\n=== {detail.stem.upper()} DETAIL (exclusions + compound) ===\n"
+                f"{detail.read_text(encoding='utf-8')}"
+            )
+    return "".join(parts)
+
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 MODEL_ALIAS = {
@@ -150,7 +172,9 @@ def changed_routing_skills(base: str = "origin/main") -> list[str]:
     """Skills whose routing surface changed since `base`. A change to the router
     rule widens scope to every skill with a triggers.json (the rule affects all)."""
     changed = _git_changed_files(base)
-    if ".claude/rules/skill-router.md" in changed:
+    if ".claude/rules/skill-router.md" in changed or any(
+        c.startswith("reference/skill-router/") and c.endswith(".md") for c in changed
+    ):
         return list_skills_with_triggers()
     skills: set[str] = set()
     for path in changed:
@@ -309,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     model = MODEL_ALIAS.get(args.model, args.model)
 
-    router_rules = ROUTER_RULE.read_text(encoding="utf-8")
+    router_rules = load_full_router_rules()
     t0 = time.time()
     reports = [run_skill(client, model, router_rules, name) for name in skills]
     elapsed = time.time() - t0

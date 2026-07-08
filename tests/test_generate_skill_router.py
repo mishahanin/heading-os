@@ -1,10 +1,14 @@
-"""Tests for scripts/generate-skill-router.py (F-5.1).
+"""Tests for scripts/generate-skill-router.py (F-5.1 + F-5.2 split).
 
-Golden-file on a fixture skills tree, idempotency (write -> check green),
-marker-preservation (text outside the markers survives a --write), missing-block
-failure with the offending path, and pipe round-trip. The generator is loaded via
-importlib (its filename is kebab-case) and its module-level SKILLS_DIR / ROUTER_FILE
-globals are monkeypatched onto a tmp fixture so no test touches the real tree.
+Golden-file on a fixture skills tree, idempotency (split write -> check green),
+marker-preservation (text outside the markers survives a write), missing-block
+failure with the offending path, and pipe round-trip. F-5.2 adds: split write creates
+the compact 2-column core index AND the per-category 4-column detail files; `--check`
+detects a category-file drift or a missing file; `--split-by-category` is a synonym of
+the default write; and the split is semantics-preserving (on-disk category rows, parsed
+as bytes, equal the flat monolith). The generator is loaded via importlib (its filename
+is kebab-case) and its module-level SKILLS_DIR / ROUTER_FILE / CATEGORY_FILE_DIR globals
+are monkeypatched onto a tmp fixture so no test touches the real tree.
 """
 
 import importlib.util
@@ -53,9 +57,11 @@ def fixture_tree(tmp_path, monkeypatch):
     skills.mkdir(parents=True)
     router = tmp_path / "skill-router.md"
     router.write_text(_router_skeleton(), encoding="utf-8")
+    cat_dir = tmp_path / "reference" / "skill-router"
     monkeypatch.setattr(gen, "ROOT", tmp_path)
     monkeypatch.setattr(gen, "SKILLS_DIR", skills)
     monkeypatch.setattr(gen, "ROUTER_FILE", router)
+    monkeypatch.setattr(gen, "CATEGORY_FILE_DIR", cat_dir)
     return skills, router
 
 
@@ -98,9 +104,9 @@ def test_write_then_check_is_idempotent(fixture_tree):
 
     rows, errors = gen.load_routing_rows()
     assert errors == []
-    assert gen.cmd_write(rows) == 0
-    # Second write is a no-op; check is green.
-    assert gen.cmd_check(rows) == 0
+    assert gen.cmd_split_write(rows) == 0
+    # Second check is green (both layers idempotent).
+    assert gen.cmd_split_check(rows) == 0
     text = router.read_text(encoding="utf-8")
     assert "| `/alpha` |" in text and "| `/bravo` |" in text
     assert "STALE CONTENT" not in text
@@ -110,7 +116,7 @@ def test_marker_preservation(fixture_tree):
     skills, router = fixture_tree
     _write_skill(skills, "alpha", "x-heading-routing:\n  category: Intel\n  triggers:\n    - a\n  exclusions:\n    - N/A\n  compound: \"No\"\n  router: auto\n")
     rows, _ = gen.load_routing_rows()
-    gen.cmd_write(rows)
+    gen.cmd_split_write(rows)
     text = router.read_text(encoding="utf-8")
     assert "intro text (must be preserved)" in text
     assert "tail text (must be preserved)" in text
@@ -152,10 +158,13 @@ def test_pipe_round_trip(fixture_tree):
     )
     rows, errors = gen.load_routing_rows()
     assert errors == []
-    gen.cmd_write(rows)
+    gen.cmd_split_write(rows)
     text = router.read_text(encoding="utf-8")
-    assert r"--mode={a\|b\|c}" in text  # escaped in the rendered table
-    assert gen.cmd_check(rows) == 0     # and idempotent
+    assert r"--mode={a\|b\|c}" in text  # escaped in the core index (triggers stay in-core)
+    # And escaped in the category detail layer (flagskill is Operations).
+    detail = (gen.CATEGORY_FILE_DIR / "operations.md").read_text(encoding="utf-8")
+    assert r"--mode={a\|b\|c}" in detail
+    assert gen.cmd_split_check(rows) == 0     # and idempotent across both layers
 
 
 def test_already_escaped_pipe_not_double_escaped(fixture_tree):
@@ -166,15 +175,82 @@ def test_already_escaped_pipe_not_double_escaped(fixture_tree):
         "    - 'flags: --mode={a\\|b}'\n  exclusions:\n    - N/A\n  compound: \"No\"\n  router: manual\n",
     )
     rows, _ = gen.load_routing_rows()
-    gen.cmd_write(rows)
+    gen.cmd_split_write(rows)
     text = router.read_text(encoding="utf-8")
     assert r"--mode={a\|b}" in text
     assert r"--mode={a\\|b}" not in text  # no double escaping
 
 
-def test_split_by_category_stub_exits_2(fixture_tree, monkeypatch):
+_INTEL = ("x-heading-routing:\n  category: Intel\n  triggers:\n    - a\n"
+          "  exclusions:\n    - N/A\n  compound: \"No\"\n  router: auto\n")
+_CRM = ("x-heading-routing:\n  category: CRM\n  triggers:\n    - b\n"
+        "  exclusions:\n    - N/A\n  compound: \"No\"\n  router: auto\n")
+
+
+def test_split_by_category_is_synonym_of_default_write(fixture_tree, monkeypatch):
+    skills, router = fixture_tree
+    _write_skill(skills, "alpha", _INTEL)
     monkeypatch.setattr(sys, "argv", ["generate-skill-router.py", "--split-by-category"])
-    assert gen.main() == 2
+    assert gen.main() == 0  # no longer a stub; produces the split output
+    assert "| `/alpha` |" in router.read_text(encoding="utf-8")
+    assert (gen.CATEGORY_FILE_DIR / "intel.md").exists()
+
+
+def test_split_write_creates_core_index_and_category_files(fixture_tree):
+    skills, router = fixture_tree
+    _write_skill(skills, "alpha", _INTEL)
+    _write_skill(skills, "bravo", _CRM)
+    rows, _ = gen.load_routing_rows()
+    assert gen.cmd_split_write(rows) == 0
+    core = router.read_text(encoding="utf-8")
+    # The core index is 2-column; the 4-column header lives only in the category files.
+    assert gen.CORE_TABLE_HEADER in core
+    assert gen.TABLE_HEADER not in core
+    intel = (gen.CATEGORY_FILE_DIR / "intel.md").read_text(encoding="utf-8")
+    assert intel.startswith("# Skill Router — Intel")
+    assert gen.TABLE_HEADER in intel
+    assert "| `/alpha` |" in intel
+    assert "| `/bravo` |" in (gen.CATEGORY_FILE_DIR / "crm.md").read_text(encoding="utf-8")
+
+
+def test_split_check_detects_category_file_drift(fixture_tree):
+    skills, router = fixture_tree
+    _write_skill(skills, "alpha", _INTEL)
+    rows, _ = gen.load_routing_rows()
+    gen.cmd_split_write(rows)
+    p = gen.CATEGORY_FILE_DIR / "intel.md"
+    p.write_text(p.read_text(encoding="utf-8") + "| `/rogue` | x | y | z |\n", encoding="utf-8")
+    assert gen.cmd_split_check(rows) == 1
+
+
+def test_split_check_detects_missing_category_file(fixture_tree):
+    skills, router = fixture_tree
+    _write_skill(skills, "alpha", _INTEL)
+    rows, _ = gen.load_routing_rows()
+    gen.cmd_split_write(rows)
+    (gen.CATEGORY_FILE_DIR / "intel.md").unlink()
+    assert gen.cmd_split_check(rows) == 1
+
+
+def test_semantics_preserved_on_disk(fixture_tree):
+    """M3: PARSE the on-disk category rows (not re-render) and compare to the flat monolith."""
+    skills, router = fixture_tree
+    _write_skill(skills, "alpha", _INTEL)
+    _write_skill(skills, "bravo", _CRM)
+    _write_skill(skills, "charlie", _INTEL)
+    rows, _ = gen.load_routing_rows()
+    gen.cmd_split_write(rows)
+    # Reference: the flat monolith row lines (what --flat prints).
+    flat_rows = [ln for ln in gen.render_registry(rows).splitlines() if ln.startswith("| `")]
+    # Actual: parsed from the on-disk files (bytes), in category-then-name order.
+    disk_rows = []
+    for cat in gen.CATEGORY_ORDER:
+        p = gen.CATEGORY_FILE_DIR / f"{gen.category_slug(cat)}.md"
+        if p.exists():
+            disk_rows += [ln for ln in p.read_text(encoding="utf-8").splitlines()
+                          if ln.startswith("| `")]
+    assert disk_rows == flat_rows
+    assert len(disk_rows) == 3
 
 
 def test_missing_markers_errors(tmp_path, monkeypatch):
@@ -185,6 +261,7 @@ def test_missing_markers_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(gen, "ROOT", tmp_path)
     monkeypatch.setattr(gen, "SKILLS_DIR", skills)
     monkeypatch.setattr(gen, "ROUTER_FILE", router)
+    monkeypatch.setattr(gen, "CATEGORY_FILE_DIR", tmp_path / "reference" / "skill-router")
     _write_skill(skills, "alpha", "x-heading-routing:\n  category: Intel\n  triggers:\n    - a\n  exclusions:\n    - N/A\n  compound: \"No\"\n  router: auto\n")
     rows, _ = gen.load_routing_rows()
-    assert gen.cmd_check(rows) == 2  # markers absent -> ValueError -> exit 2
+    assert gen.cmd_split_check(rows) == 2  # markers absent -> ValueError -> exit 2

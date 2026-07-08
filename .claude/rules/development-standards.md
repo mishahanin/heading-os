@@ -179,7 +179,7 @@ Router registry (under `x-heading-routing:` namespaced block, required for every
 **The skill router is GENERATED from these blocks** by `scripts/generate-skill-router.py`, in a two-layer split (F-5.2): a compact core index (Skill + Triggers) between the `<!-- BEGIN GENERATED REGISTRY -->` / `<!-- END GENERATED REGISTRY -->` markers in the always-on `.claude/rules/skill-router.md`, plus a full per-category detail table (Skill | Triggers | Exclusions | Compound) in each `reference/skill-router/<category>.md`. Never hand-edit either layer: edit the skill's `x-heading-routing` frontmatter, then run `python scripts/generate-skill-router.py`. CI and pre-commit run `--check` (regen -> diff across BOTH layers), which fails on any content drift, a missing/orphan category file, or a skill missing its block (the last fails with the file path and a paste-ready fix-it snippet). `--flat` prints the legacy flat monolith to stdout for debugging. The migration that first populated these blocks is `scripts/dev/extract-router-rows.py` (one-shot, kept for provenance).
 
 **Body:**
-- Under 500 lines. Use `references/` subdirectory for overflow content.
+- Size budget (F-5.3): each `SKILL.md` is capped at **500 lines AND 18432 bytes (18 KB)** hard, with a **16384-byte (16 KB) warn** threshold; use the `references/` subdirectory for overflow. `scripts/skill-metadata-check.py` enforces the budget in CI (flagless) and pre-commit (`skill-size-budget` hook) - a HARD violation exits 1 unconditionally; a WARN prints but does not block.
 - Phased execution (Phase 0: context loading, Phase 1: execution, Phase 2: synthesis, Phase 3: output)
 - Reference files must include: H1 title, "Consumed by" pointer, "Last Updated" date
 - Voice rules section matching workspace standards (hyphens, ODUN.ONE, DPI+)
@@ -257,7 +257,7 @@ Skill reference files in `.claude/skills/{name}/references/` additionally need:
 1. **Hidden character scan:** `python scripts/sanitize-text.py {file} --scan` on every new/modified file
 2. **Python syntax check:** `python3 -m py_compile {script}` for all Python files
 3. **Frontmatter validation:** Verify YAML parses correctly, all required fields present
-4. **Line count check:** SKILL.md files under 500 lines
+4. **Size budget:** `python scripts/skill-metadata-check.py` enforces <= 500 lines AND <= 18432 bytes per `SKILL.md` (warn >= 16384 bytes), in CI + the `skill-size-budget` pre-commit hook
 5. **Documentation propagation:** Update `templates/GETTING-STARTED.md` (per documentation propagation rule). On the CEO workspace, also update `reference/workspace-overview.md`.
 6. **Context7 validation:** For any code using external libraries or APIs, fetch current docs via Context7 and validate patterns
 7. **Artifact evaluation:** Run `python scripts/artifact-evaluator.py --path {artifact}` on new skills, scripts, reference files, and rules. Or use `/evaluate {artifact-path}` for full qualitative + deterministic assessment. Use `/implement --evaluate` to integrate the feedback loop into implementation

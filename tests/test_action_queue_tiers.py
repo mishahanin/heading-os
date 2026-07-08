@@ -32,6 +32,8 @@ import sys
 from pathlib import Path
 
 import pytest
+pytest.importorskip("fastapi")  # F-7.1: skip on a core-only clone (needs the dashboard extra)
+
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

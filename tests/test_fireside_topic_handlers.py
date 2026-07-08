@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+pytest.importorskip("openpyxl")  # F-7.1: skip on a core-only clone (needs the documents extra)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))

@@ -1,5 +1,6 @@
 ---
 name: intel-briefing-newsletter
+x-heading-requires: ["research"]   # F-7.1: optional-dependency extras this skill needs
 description: Produce an external-facing intelligence briefing newsletter - curated, publishable intel framed for an audience beyond the CEO. Use when the output is meant to be shared/published, not a private desk brief. Trigger when the user says "newsletter", "intel briefing", "publish intelligence brief", or "external intel brief". Do NOT use for an internal-only situational brief (use /ceo-intel).
 argument-hint: "[focus]"
 context: fork

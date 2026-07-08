@@ -520,16 +520,16 @@ def step_install_python_deps(state: dict) -> bool:
     # Avoids the PEP 668 system-Python rejection modern distros enforce, and
     # installs the exact locked set. See docs/security/DEPENDENCY-POLICY.md.
     if shutil.which("uv"):
-        print(f"  Running: uv sync --all-groups")
+        print("  Running: uv sync --all-extras --all-groups")
         try:
-            run_cmd(["uv", "sync", "--all-groups"], cwd=str(WORKSPACE_ROOT))
-            ok("Dependencies installed via uv (pyproject.toml + uv.lock)")
+            run_cmd(["uv", "sync", "--all-extras", "--all-groups"], cwd=str(WORKSPACE_ROOT))
+            ok("Dependencies installed via uv (pyproject.toml + uv.lock, all extras)")
             mark_done(state, "install_python_deps")
             return True
         except subprocess.CalledProcessError as e:
             err = (str(e.stderr) if e.stderr else str(e)).strip()
             fail(f"uv sync failed: {err[:300]}")
-            print(f"\n  {YELLOW}Try manually: uv sync --all-groups{RESET}")
+            print(f"\n  {YELLOW}Try manually: uv sync --all-extras --all-groups{RESET}")
             sys.exit(1)
 
     warn("uv not found - install it (https://astral.sh/uv) for reproducible installs.")

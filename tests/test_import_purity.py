@@ -26,12 +26,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Optional-integration packages destined for pyproject extras (F-7.1). A fresh
+# Optional-integration packages that live in pyproject extras (F-7.1). A fresh
 # core clone does not have these; importing this workspace's code must not need
 # them. Kept as top-level package names; the blocker also covers submodules.
+#
+# F-7.1 drop: weasyprint and replicate were removed as declared deps (zero direct
+# imports) and are fully gone from the lock, so they are no longer optional-only
+# and leave this set. xlsxwriter stays - it survives as a python-pptx transitive
+# (the `documents` extra), so it is absent in a core clone and core code must
+# still not import it.
 BLOCKED = {
-    "exchangelib", "telethon", "playwright", "weasyprint", "yt_dlp",
-    "apify_client", "replicate", "langfuse", "fastapi", "uvicorn", "starlette",
+    "exchangelib", "telethon", "playwright", "yt_dlp",
+    "apify_client", "langfuse", "fastapi", "uvicorn", "starlette",
     "openai", "google", "firecrawl", "youtube_transcript_api", "pptx", "docx",
     "openpyxl", "xlsxwriter", "markitdown", "mammoth", "markdownify",
     "onnxruntime", "magika",

@@ -38,8 +38,8 @@ Keep the bar the engine holds itself to:
 The full environment setup is in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The short version:
 
 ```bash
-uv sync --group dev      # runtime + dev tools (pytest, ruff, pre-commit)
-pre-commit install       # arm the commit-time gates
+uv sync --all-extras --group dev   # core + all integration extras + dev tools (pytest, ruff, pre-commit)
+pre-commit install                 # arm the commit-time gates
 python scripts/run-tests.py
 ```
 

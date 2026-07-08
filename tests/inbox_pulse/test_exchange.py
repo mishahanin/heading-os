@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+pytest.importorskip("exchangelib")  # F-7.1: skip on a core-only clone (needs the email extra)
 
 
 # ---------------------------------------------------------------------------

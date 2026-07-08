@@ -1,5 +1,6 @@
 ---
 name: ceo-intel
+x-heading-requires: ["research"]   # F-7.1: optional-dependency extras this skill needs
 description: Global, geopolitical, and cross-domain intelligence brief for the CEO - world events, sovereign-tech shifts, macro and threat signals relevant to 31C, rendered as a dated HTML/PDF brief. Use for world-scale situational awareness, not a single entity. Trigger when the user says "world intel", "geopolitical brief", "what's happening globally", "global threats", or "CEO intelligence brief". Do NOT use for a specific company or person (use /osint) or an externally published newsletter (use /intel-briefing-newsletter).
 metadata:
   author: Misha Hanin

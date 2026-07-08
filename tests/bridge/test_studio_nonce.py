@@ -5,6 +5,9 @@ image URL the frontend constructs."""
 import time
 from pathlib import Path
 
+import pytest
+pytest.importorskip("fastapi")  # F-7.1: skip on a core-only clone (needs the dashboard extra)
+
 from fastapi.testclient import TestClient
 
 from scripts.bridge_daemon.app import build_app

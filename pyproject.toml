@@ -1,6 +1,10 @@
 # pyproject.toml -- HEADING OS engine: package management + tool configuration.
 # Source of truth for dependencies. uv.lock hash-pins the transitive set.
-# requirements.txt is a GENERATED export (`uv export`) for legacy consumers.
+# Core deps below are the light always-installed set; heavy integrations live in
+# [project.optional-dependencies] (F-7.1) so an adopter runs `uv sync` (core) and
+# arms capabilities with `uv sync --extra <name>`. The operator/CI install is
+# `uv sync --all-extras`. requirements.txt is a GENERATED export
+# (`uv export --all-extras`) covering the full runtime graph for legacy consumers.
 # See docs/security/DEPENDENCY-POLICY.md for dependency management rules.
 
 [project]
@@ -13,43 +17,76 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Misha Hanin", email = "misha.hanin@odinix.com" }]
 keywords = ["claude-code", "ai-agent", "workspace", "automation", "security", "heading-os"]
 requires-python = ">=3.11"
+# Core: light, broadly-imported packages installed on every `uv sync`. Heavy
+# integration packages live in [project.optional-dependencies] below (F-7.1).
 dependencies = [
-    "exchangelib==5.6.0",
-    "Telethon==1.44.0",
     "anthropic==0.116.0",
+    "requests==2.34.2",
+    "httpx==0.28.1",
+    "pyyaml==6.0.3",
+    "python-dotenv==1.2.2",
+    "markdown==3.10.2",
+    "pymdown-extensions==11.0.1",
+    "lxml==6.1.1",
+    "Pillow==12.3.0",
+    "liteparse==2.4.1",
+    "watchdog==6.0.0",
+    "apscheduler==3.11.3",
+    # numpy powers the memory-index / recall engine (scripts/memory-index.py), a
+    # core capability - it was only ever present transitively (via magika /
+    # onnxruntime / pandas in the heavy set), so F-7.1's split made it an explicit
+    # core dep rather than silently lose recall on a core clone.
+    "numpy==2.4.6",
+]
+
+# Optional-dependency extras (F-7.1). Extra NAMES match the `optdeps.require(...,
+# extra="X")` call sites verbatim (email, telegram, browser, documents, media,
+# dashboard, ai-extra) so no call site changes; observability + research are new
+# (no code binds them yet). Operator/CI install is `uv sync --all-extras`.
+[project.optional-dependencies]
+email = [
+    "exchangelib==5.6.0",
+]
+telegram = [
+    "Telethon==1.44.0",
+]
+browser = [
+    "playwright==1.61.0",
+    "greenlet==3.5.3",   # playwright transitive, pinned; travels with browser
+]
+documents = [
+    "python-docx==1.2.0",
+    "python-pptx==1.0.2",
+    "openpyxl==3.1.5",
+    "markitdown[pdf,docx,pptx,xlsx,outlook]==0.1.6",
+]
+media = [
+    "youtube-transcript-api==1.2.4",
+    "yt-dlp==2026.7.4",
+]
+dashboard = [
+    "fastapi==0.139.0",
+    "uvicorn[standard]==0.50.2",
+]
+ai-extra = [
     "google-api-python-client==2.198.0",
     "google-auth==2.55.1",
     "google-auth-oauthlib==1.4.0",
     "google-auth-httplib2==0.4.0",
-    "python-docx==1.2.0",
-    "python-pptx==1.0.2",
-    "openpyxl==3.1.5",
-    "xlsxwriter==3.2.9",
-    "weasyprint==69.0",
-    "liteparse==2.4.1",
-    "markitdown[pdf,docx,pptx,xlsx,outlook]==0.1.6",
-    "markdown==3.10.2",
-    "pymdown-extensions==11.0.1",
-    "requests==2.34.2",
-    "playwright==1.61.0",
-    "greenlet==3.5.3",
-    "Pillow==12.3.0",
-    "replicate==1.0.7",
     "google-genai==2.10.0",
     "openai==2.44.0",
-    "youtube-transcript-api==1.2.4",
-    "yt-dlp==2026.7.4",
-    "apify-client==3.0.4",
-    "python-dotenv==1.2.2",
-    "lxml==6.1.1",
+]
+observability = [
     "langfuse==4.13.0",
-    "fastapi==0.139.0",
-    "uvicorn[standard]==0.50.2",
-    "watchdog==6.0.0",
-    "apscheduler==3.11.3",
-    "pyyaml==6.0.3",
-    "httpx==0.28.1",
+]
+research = [
+    "apify-client==3.0.4",
     "firecrawl-py==4.31.0",   # added per F-H4; never silently missing again
+]
+# Meta-extra: the full integration surface (operator/CI parity). Self-references
+# the project's own extras so it stays in sync automatically.
+all = [
+    "heading-os-engine[email,telegram,browser,documents,media,dashboard,ai-extra,observability,research]",
 ]
 
 [project.urls]
@@ -128,7 +165,7 @@ markers = [
     "requires_exchange: needs exchangelib (uv sync --extra email)",
     "requires_telegram: needs Telethon (uv sync --extra telegram)",
     "requires_playwright: needs playwright (uv sync --extra browser)",
-    "requires_documents: needs weasyprint/docx/pptx stack (uv sync --extra documents)",
+    "requires_documents: needs docx/pptx/openpyxl stack (uv sync --extra documents)",
     "requires_media: needs yt-dlp / transcript APIs (uv sync --extra media)",
     "requires_ollama: needs a local Ollama with bge-m3",
     "requires_network: performs real network I/O",

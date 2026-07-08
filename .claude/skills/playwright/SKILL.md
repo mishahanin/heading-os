@@ -1,5 +1,6 @@
 ---
 name: playwright
+x-heading-requires: ["browser"]   # F-7.1: optional-dependency extras this skill needs
 description: >
   Automate web browsers with Playwright for screenshots, scraping, form filling,
   PDF generation, YouTube video analysis, and website testing. Use for any task

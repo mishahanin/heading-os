@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 import pytest
+pytest.importorskip("exchangelib")  # F-7.1: skip on a core-only clone (needs the email extra)
 
 # ---------------------------------------------------------------------------
 # Workspace on sys.path

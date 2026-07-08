@@ -1,5 +1,6 @@
 ---
 name: osint-advanced
+x-heading-requires: ["research"]   # F-7.1: optional-dependency extras this skill needs
 description: "EXPLICIT INVOCATION ONLY -- never auto-trigger. This skill activates ONLY when the user literally types '/osint-advanced' or says 'run osint-advanced'. DO NOT trigger from 'investigate', 'research', 'dig into', 'OSINT', 'intelligence on', 'background check', 'due diligence', 'profile', 'recon', 'dossier', 'deep dive', or ANY general intelligence request -- those belong to /osint. This skill queries specialized OSINT databases (sanctions lists, corporate registries, breach databases, threat actor platforms, infrastructure scanners) that the base /osint does not cover. Requires explicit user approval before each execution."
 disable-model-invocation: true
 argument-hint: "[target]"

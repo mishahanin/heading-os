@@ -1,5 +1,6 @@
 ---
 name: telegram
+x-heading-requires: ["telegram"]   # F-7.1: optional-dependency extras this skill needs
 description: >
   Use this skill to communicate via Telegram as Misha's personal account. Handles
   all Telegram messaging: send messages to contacts or groups, read conversations,

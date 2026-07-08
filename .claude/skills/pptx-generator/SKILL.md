@@ -1,5 +1,6 @@
 ---
 name: pptx-generator
+x-heading-requires: ["documents"]   # F-7.1: optional-dependency extras this skill needs
 description: |
   Generate and edit presentation slides as PPTX files. Also create LinkedIn carousels and manage reusable slide layouts.
 

@@ -1,5 +1,6 @@
 ---
 name: osint
+x-heading-requires: ["research"]   # F-7.1: optional-dependency extras this skill needs
 description: "Deep OSINT intelligence gathering on any target - company, person, market/region, or technology. The master intelligence skill that feeds all other intel skills. Produces executive-grade intelligence briefs with confidence ratings, source attribution, and 31C business relevance. Use when the user says 'OSINT', 'investigate', 'dig into', 'deep dive on', 'intelligence on', 'find out everything about', 'who is', 'what do we know about', 'research [company/person/market/tech]', 'background check', 'due diligence on', 'profile [target]', 'recon on', 'intel on', 'dossier on', or asks for comprehensive intelligence gathering on any entity, person, region, or technology. This is the raw intelligence foundation that /competitor-intel, /deal-strategy, /meeting-prep, and /market-brief consume. Always trigger when the user needs deep, comprehensive, multi-source intelligence on a specific target."
 argument-hint: "[target]"
 context: fork

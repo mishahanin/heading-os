@@ -19,7 +19,8 @@ git clone https://github.com/<org>/heading-os.git .heading-os
 cd .heading-os
 
 # 2. Install dependencies (Python managed by uv) + arm the secret gate
-uv sync
+uv sync                        # core only - small, fast; arm integrations later
+# uv sync --all-extras         # OR: the full integration surface (operator parity)
 pre-commit install
 
 # 3. Create your own private data repository (one command)
@@ -32,6 +33,12 @@ cp .env.example .env        # fill in what you use
 uv run python scripts/workspace-health.py
 claude        # then /prime
 ```
+
+Core `uv sync` installs only the light always-on set. Each integration (email,
+Telegram, browser automation, document generation, ...) lives in an optional
+extra you arm on demand - `uv sync --extra <name>` - and a script that needs a
+dormant extra tells you the exact command to run. Want everything at once? Use
+`uv sync --all-extras`. See [DEPLOYMENT.md](DEPLOYMENT.md) for the extras ladder.
 
 Full prerequisites, platform setup, authentication, plugins, and troubleshooting are
 in [DEPLOYMENT.md](DEPLOYMENT.md).

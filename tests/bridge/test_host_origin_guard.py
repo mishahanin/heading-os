@@ -7,6 +7,9 @@ hostile cross-origin page must be rejected (403). These tests exercise the
 middleware through /health (unauthenticated) so the guard, not the token check,
 is what they observe.
 """
+import pytest
+pytest.importorskip("fastapi")  # F-7.1: skip on a core-only clone (needs the dashboard extra)
+
 from fastapi.testclient import TestClient
 
 from scripts.bridge_daemon.app import build_app

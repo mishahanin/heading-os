@@ -1,5 +1,6 @@
 ---
 name: crm
+x-heading-requires: ["email"]   # F-7.1: optional-dependency extras this skill needs
 description: "Personal CRM - add, log, radar, find, update contacts"
 metadata:
   author: Misha Hanin

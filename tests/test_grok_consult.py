@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+pytest.importorskip("openai")  # F-7.1: skip on a core-only clone (needs the ai-extra extra)
 
 # Load the script as a module (it has a hyphen in its filename)
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "grok-consult.py"

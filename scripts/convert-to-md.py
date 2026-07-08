@@ -55,9 +55,11 @@ def main() -> int:
             MarkItDownException,
         )
     except ImportError:
+        # F-7.1: markitdown lives in the `documents` extra; name it like the rest
+        # of the optdeps loud-absence surface (uv sync --extra <name>).
         print(
             f"{RED}markitdown not installed.{RESET} "
-            f"Run: pip install 'markitdown[pdf,docx,pptx,xlsx,outlook]==0.1.6'",
+            f"this capability needs: uv sync --extra documents",
             file=sys.stderr,
         )
         return 1

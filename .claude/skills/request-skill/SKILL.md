@@ -1,5 +1,6 @@
 ---
 name: request-skill
+x-heading-requires: ["email"]   # F-7.1: optional-dependency extras this skill needs
 disable-model-invocation: true
 description: "Request a new skill from the CEO - describe what it should do, and the request is emailed to the admin. EXPLICIT INVOCATION ONLY - sends external email."
 metadata:

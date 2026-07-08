@@ -552,3 +552,125 @@ def index_freshness_state(engine_root: Path, data_root: Path, now: float | None 
     newest_source = max((m for m in (newest_data, newest_engine) if m is not None), default=None)
     sources_newer = newest_source is not None and newest_source > build_mtime
     return classify_index(build_age_days, sources_newer)
+
+
+# ============================================================
+# Router accuracy (F-6.2) - Tier B
+# ============================================================
+
+# Point thresholds (rates are 0-1 fractions, scaled *100 to points like eval-drift).
+ROUTER_ACCURACY_DROP_PCT = 10.0    # a skill dropping > this many points vs baseline is due (warn)
+ROUTER_ACCURACY_HIGH_PCT = 20.0    # ... a bigger single-skill drop escalates to high
+ROUTER_ACCURACY_BASELINE_N = 7     # rolling-baseline window (prior records), mirrors eval-drift
+
+
+def classify_router_accuracy(latest: dict | None, baseline: dict | None) -> dict:
+    """Pure: compare the latest router-accuracy record against a rolling baseline.
+
+    `latest` / `baseline` are record-shaped dicts {overall_rate, per_skill:{name:rate}}
+    with rates as 0-1 fractions; `baseline` is the per-skill mean of the prior window.
+    Point-scaled like eval-drift: drop_pts = (baseline_rate - latest_rate) * 100. due
+    when any skill dropped > ROUTER_ACCURACY_DROP_PCT points OR the aggregate overall_rate
+    dropped > that; a single skill dropping > ROUTER_ACCURACY_HIGH_PCT or an aggregate drop
+    escalates to high. Not due when there is no baseline (< 2 records). Tier B - a sovereign
+    manual nudge (the CEO investigates a routing regression), never machine-auto-healable."""
+    worst_skill = None
+    worst_drop = 0.0
+    overall_drop = 0.0
+    if latest and baseline:
+        lp = latest.get("per_skill") or {}
+        bp = baseline.get("per_skill") or {}
+        for name, brate in bp.items():
+            lrate = lp.get(name)
+            if brate is not None and lrate is not None:
+                drop = (brate - lrate) * 100.0
+                if drop > worst_drop:
+                    worst_drop = drop
+                    worst_skill = name
+        lo = latest.get("overall_rate")
+        bo = baseline.get("overall_rate")
+        if lo is not None and bo is not None:
+            overall_drop = (bo - lo) * 100.0
+
+    due = worst_drop > ROUTER_ACCURACY_DROP_PCT or overall_drop > ROUTER_ACCURACY_DROP_PCT
+    if worst_drop > ROUTER_ACCURACY_HIGH_PCT or overall_drop > ROUTER_ACCURACY_DROP_PCT:
+        severity = "high"
+    elif due:
+        severity = "warn"
+    else:
+        severity = "ok"
+
+    if worst_skill:
+        summary = (
+            f"router-accuracy: {worst_skill} -{worst_drop:.0f}pt vs baseline"
+            + (f", overall -{overall_drop:.0f}pt" if overall_drop > 0 else "")
+        )
+    elif latest is None:
+        summary = "router-accuracy: no trend data"
+    elif baseline is None:
+        summary = "router-accuracy: baseline forming (< 2 records)"
+    else:
+        summary = "router-accuracy: stable"
+
+    return {
+        "key": "router_accuracy",
+        "value": {
+            "worst_skill": worst_skill,
+            "worst_drop_pts": round(worst_drop, 1),
+            "overall_drop_pts": round(overall_drop, 1),
+        },
+        "threshold": ROUTER_ACCURACY_DROP_PCT,
+        "due": due,
+        "severity": severity,
+        "tier": "B",
+        "summary": summary,
+    }
+
+
+def _read_trend_records(trend_path: Path, limit: int) -> list[dict]:
+    """Return up to the last `limit` parsed JSONL records; [] if absent/unreadable."""
+    try:
+        lines = trend_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    records: list[dict] = []
+    for line in lines[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def router_accuracy_state(data_root: Path) -> dict:
+    """Read the router-accuracy trend under the DATA root, build a rolling baseline
+    (per-skill mean of the prior up-to-N records), and classify. Degrades to not-due
+    when the trend is absent or has < 2 records. The trend lives under the datastore
+    (get_datastore_dir() == data_root/datastore), written by router-accuracy-nightly.py."""
+    trend_path = data_root / "datastore" / "operations" / "router-accuracy" / "trend.jsonl"
+    records = _read_trend_records(trend_path, ROUTER_ACCURACY_BASELINE_N + 1)
+    if len(records) < 2:
+        return classify_router_accuracy(records[-1] if records else None, None)
+    latest = records[-1]
+    prior = records[:-1]
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    overall_sum = 0.0
+    overall_n = 0
+    for rec in prior:
+        ov = rec.get("overall_rate")
+        if ov is not None:
+            overall_sum += ov
+            overall_n += 1
+        for name, rate in (rec.get("per_skill") or {}).items():
+            if rate is not None:
+                sums[name] = sums.get(name, 0.0) + rate
+                counts[name] = counts.get(name, 0) + 1
+    baseline = {
+        "overall_rate": (overall_sum / overall_n) if overall_n else None,
+        "per_skill": {name: sums[name] / counts[name] for name in sums},
+    }
+    return classify_router_accuracy(latest, baseline)

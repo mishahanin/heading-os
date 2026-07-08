@@ -43,6 +43,7 @@ rules:
   "datastore/content/linkedin-archive/": private
   "datastore/operations/tribe/fireside-state/": private
   "datastore/operations/eval-drift/": private
+  "datastore/operations/router-accuracy/": private    # F-6.2 nightly router-accuracy trend (dated JSON + trend.jsonl)
   "datastore/operations/service-mirror/": private    # read-only laptop mirror of the service host's daemon state
   # --- decisions (Task 7 reconciliation): per-instance config + CEO-only
   #     sensitive files that would otherwise DEFAULT to 'engine' and ship in a

@@ -7,7 +7,7 @@ Last Verified: 2026-05-15
 
 Whenever ANY of the following change, the corresponding documentation MUST be updated:
 
-1. **New skill created or existing skill modified** -> Update the skill reference table in `templates/GETTING-STARTED.md`. For the router registry in `.claude/rules/skill-router.md`, do NOT hand-edit the generated tables: set the skill's `x-heading-routing` frontmatter and run `python scripts/generate-skill-router.py` (CI + pre-commit enforce `--check`). On the CEO workspace, also update `reference/workspace-overview.md`.
+1. **New skill created or existing skill modified** -> Update the skill reference table in `templates/GETTING-STARTED.md`. For the router registry, do NOT hand-edit the generated layers (the compact core index in `.claude/rules/skill-router.md` and the per-category detail files `reference/skill-router/<category>.md`): set the skill's `x-heading-routing` frontmatter and run `python scripts/generate-skill-router.py` (CI + pre-commit enforce `--check` across both layers). On the CEO workspace, also update `reference/workspace-overview.md`.
 2. **New script created or existing script modified** -> On the CEO workspace, update `reference/workspace-overview.md`.
 3. **Workspace structure changes** -> Update `templates/CLAUDE.md.template` and `templates/GETTING-STARTED.md`
 4. **New admin tool created** -> Update `templates/CEO-ADMIN-GUIDE.md`

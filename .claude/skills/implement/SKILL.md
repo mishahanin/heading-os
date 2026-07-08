@@ -6,7 +6,7 @@ allowed-tools: "Read, Write, Edit, Bash(python3:*), Bash(python:*), Glob, Grep"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.6"
+  version: "1.7"
 x-heading-orchestration:
   parallel_safe: false
   shared_state: []
@@ -39,6 +39,8 @@ x-heading-routing:
 
 Execute an implementation plan created by `/create-plan`. Read the plan thoroughly, execute each step in order, emit a structured trajectory for every phase boundary, and report on the completed work.
 
+**v1.7 (2026-07-08):** The helper now enforces the sequencing invariant at emit time — a `step_start` opened while another step is open (outside a parallel wave), or a `step_end` for an unopened step, is REJECTED with exit `5`; emit the missing marker first (or open a parallel `wave_start` for legitimate interleaving). `--verify` gains a run-level files reconciliation: any engine file changed since `run_start.git_head` but recorded in no step's `files_affected` is flagged as an advisory defect (meaningful only immediately after the run, before any commit / `git pull`; degrades to a no-op when git is unavailable). Phase 5 now MUST surface a non-zero `--verify` verbatim in the Report Deviations (still advisory — no hard-fail). Schema and `/scrutinize` lens unchanged.
+
 **v1.6 (2026-07-07):** Emission now uses typed flags on the helper (one `Bash` call per event, no temp file, no `_tmp/` cleanup): `--step`, `--title`, `--file` (repeatable), `--status`, `--wave`, `--successes`, `--check`, `--passed`/`--failed`, and the rest. `--data-file`/`--data-stdin` remain the escape hatch for an arbitrary payload; `--data-json` is still forbidden from `/implement`. After `run_end`, Phase 5 runs `--verify` to self-check the trajectory (advisory). The **Trajectory emission contract** below is the single consolidated statement of the invariants that the prior per-version notes (v1.3 emission, v1.4 M1/L1/N1 pairing and literal-path discipline, v1.5 whole-wave deferral) built up; the event schema and the `/scrutinize` lens are unchanged.
 
 ## Trajectory emission contract
@@ -46,7 +48,7 @@ Execute an implementation plan created by `/create-plan`. Read the plan thorough
 The trajectory (`outputs/operations/implement/_trajectory_<run_id>.jsonl`) is the input to `/scrutinize trajectory:<run_id>` audits (Agent-as-a-Judge, DevAI benchmark) and a verbatim audit record: emit through the helper only, never edit it. All emission is skipped under `--no-trajectory`. The invariants, enforced by the phases below and self-checked by `--verify`:
 
 - **Pairing.** Every `step_start` has a matching `step_end` (same step number); step 0 (plan-load) is paired too. Every `wave_start` has a `wave_end`.
-- **Sequencing (sequential waves / no-wave runs).** Emit each `step_end` before the next `step_start`; never open step N+1 while step N is open. If work genuinely reorders, emit a `deviation` recording the swap (the M1 discipline). Parallel-wave member steps may legitimately interleave inside their wave bracket.
+- **Sequencing (sequential waves / no-wave runs).** Emit each `step_end` before the next `step_start`; never open step N+1 while step N is open. **The helper enforces this at emit time (v1.7):** a `step_start` opened while a step is still open (outside a parallel wave), or a `step_end` for an unopened step, exits `5` and does not land — emit the missing `step_end`/`step_start` first, or open a parallel `wave_start` for legitimate interleaving. If work genuinely reorders, emit a `deviation` recording the swap (the M1 discipline). Parallel-wave member steps may legitimately interleave inside their wave bracket (an open parallel wave suspends the guard).
 - **Wave bracketing.** `wave_start` precedes the wave's first `step_start`; `wave_end` follows all member `step_end`s; `wave_end.successes` equals the count of bracketed `step_end` with status `ok`/`deviation` (not the declared membership).
 - **Literal paths.** `--file` takes one literal path per real file touched: no globs, brace-shorthand, or count strings (the N1 discipline).
 - **Whole-wave deferral.** A wave not executed at all emits no `wave_start`/`wave_end`; instead one wave-scoped `deviation` keyed to the wave's first step (`--scope wave --wave N`).
@@ -244,7 +246,7 @@ After implementation (and optional evaluation), update the plan file:
 
 **Final emission** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type run_end --summary "<one-line>" --plan-status Implemented` (`run_id` and `trajectory_path` auto-fill).
 
-**Self-check** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --verify --run-id {run_id}`. This is **advisory**. If it exits non-zero, surface the reported defects to the CEO in the Report as a note; do NOT hard-fail the completed run (CEO sovereignty holds, matching the soft pre-impl gate). No temp files are written anymore, so there is no `_tmp/` cleanup step.
+**Self-check** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --verify --run-id {run_id}`. This is **advisory** — it NEVER hard-fails a completed run (CEO sovereignty holds, matching the soft pre-impl gate). But if it exits non-zero, the reported defects MUST be surfaced **verbatim, as a named defect list**, in the Report's Deviations section — not glossed as an optional footnote. A non-zero self-check that is not surfaced verbatim is itself a discipline violation. Run this self-check BEFORE any `git commit` / `git pull`: the run-level files reconciliation compares the current engine working tree against `run_start.git_head`, so it is only meaningful while the tree holds just this run's changes (re-running it after a merge/pull over-flags pulled files — expected, advisory, not a regression). No temp files are written anymore, so there is no `_tmp/` cleanup step.
 
 ---
 
@@ -310,5 +312,7 @@ Updated `plans/YYYY-MM-DD-{name}.md` status to "Implemented"
 - Never proceed past a blocker or ambiguity without asking the user - guessing at unclear steps produces wrong work
 - Never skip documentation propagation - if you created or modified a skill, script, reference file, or rule, update CLAUDE.md, templates/GETTING-STARTED.md, and any other affected documentation targets before declaring done
 - Never skip trajectory emission unless `--no-trajectory` was explicitly passed - trajectory is the input to `/scrutinize trajectory:<run_id>` audits
+- Never work around the emit-time sequencing guard (exit `5`) by reordering or dropping markers to silence it - it means a `step_end`/`step_start` is genuinely out of order; emit the missing marker (or open a parallel `wave_start`) instead
+- Never gloss a non-zero `--verify` self-check - its defects MUST be surfaced verbatim as a named list in the Report Deviations (advisory does not mean optional-to-report)
 - Never call `scripts/implement-trajectory-log.py` with `--data-json` from inside `/implement` - that mode is bash-only / hand-runs only. Prefer the typed flags (`--step`, `--file`, `--status`, ...) for every event; `--data-file` / `--data-stdin` remain the escape hatch for a genuinely arbitrary payload
 - Never write to `outputs/operations/implement/_trajectory_*.jsonl` directly - only through the helper script (it handles atomic-append concurrency on POSIX + Windows)

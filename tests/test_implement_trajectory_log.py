@@ -1,8 +1,11 @@
-"""Unit coverage for scripts/implement-trajectory-log.py (v1.6).
+"""Unit coverage for scripts/implement-trajectory-log.py (v1.7).
 
 Covers the typed-flag payload builder and its type-aware defaults, the
 typed-vs-data-* mutual exclusion, the tri-state --parallel / --passed flags,
-and the --verify self-check (clean, and each structural defect class).
+the --verify self-check (clean, and each structural defect class), the v1.7
+emit-time sequencing guard (exit 5, wave-aware), and the v1.7 run-level files
+reconciliation in verify_trajectory (via the monkeypatchable _git_changed_files
+seam).
 
 Note: --parallel uses argparse.BooleanOptionalAction (Python 3.9+); the
 engine CI matrix is 3.11/3.12, so it is available.
@@ -55,6 +58,7 @@ def _write_traj(run_id, events):
 # ============================================================
 def test_step_end_type_aware_defaults(traj_dir):
     _seed("rid1")
+    itl.main(["--event", "--run-id", "rid1", "--type", "step_start", "--step", "2"])
     rc = itl.main(["--event", "--run-id", "rid1", "--type", "step_end", "--step", "2"])
     assert rc == 0
     pl = _payloads("rid1")[-1]["payload"]
@@ -65,6 +69,7 @@ def test_step_end_type_aware_defaults(traj_dir):
 
 def test_step_end_two_files_in_order(traj_dir):
     _seed("rid2")
+    itl.main(["--event", "--run-id", "rid2", "--type", "step_start", "--step", "1"])
     itl.main(["--event", "--run-id", "rid2", "--type", "step_end", "--step", "1",
               "--file", "a.py", "--file", "b.py", "--status", "ok", "--notes", "done"])
     pl = _payloads("rid2")[-1]["payload"]
@@ -111,6 +116,7 @@ def test_validation_failed_and_passed(traj_dir):
 def test_step_end_dict_equal_to_legacy(traj_dir):
     """CAP-1: typed payload equals the legacy hand-authored dict."""
     _seed("rid7")
+    itl.main(["--event", "--run-id", "rid7", "--type", "step_start", "--step", "3"])
     itl.main(["--event", "--run-id", "rid7", "--type", "step_end", "--step", "3",
               "--file", "a.py", "--status", "ok"])
     pl = _payloads("rid7")[-1]["payload"]
@@ -226,3 +232,95 @@ def test_cmd_verify_defect_exit_1(traj_dir):
 
 def test_cmd_verify_missing_exit_3(traj_dir):
     assert itl.main(["--verify", "--run-id", "nope"]) == 3
+
+
+# ============================================================
+# v1.7: emit-time sequencing guard (exit 5)
+# ============================================================
+def _emit(run_id, *args):
+    return itl.main(["--event", "--run-id", run_id, *args])
+
+
+def test_guard_clean_sequential_run_accepted(traj_dir):
+    _seed("gseq")
+    assert _emit("gseq", "--type", "step_start", "--step", "1", "--title", "s1") == 0
+    assert _emit("gseq", "--type", "step_end", "--step", "1", "--status", "ok") == 0
+    assert _emit("gseq", "--type", "step_start", "--step", "2", "--title", "s2") == 0
+    assert _emit("gseq", "--type", "step_end", "--step", "2", "--status", "ok") == 0
+
+
+def test_guard_rejects_step_start_while_step_open(traj_dir, capsys):
+    _seed("gopen")
+    assert _emit("gopen", "--type", "step_start", "--step", "1", "--title", "s1") == 0
+    rc = _emit("gopen", "--type", "step_start", "--step", "2", "--title", "s2")
+    assert rc == 5
+    err = capsys.readouterr().err
+    assert "[1]" in err and "still" in err
+
+
+def test_guard_rejects_orphan_step_end(traj_dir, capsys):
+    _seed("gorph")
+    rc = _emit("gorph", "--type", "step_end", "--step", "7", "--status", "ok")
+    assert rc == 5
+    assert "no open step_start" in capsys.readouterr().err
+
+
+def test_guard_suspended_inside_open_parallel_wave(traj_dir):
+    _seed("gpar")
+    assert _emit("gpar", "--type", "wave_start", "--wave", "1",
+                 "--step-count", "2", "--parallel") == 0
+    assert _emit("gpar", "--type", "step_start", "--step", "1", "--title", "s1") == 0
+    # step 1 is still open, but the open parallel wave suspends the guard.
+    assert _emit("gpar", "--type", "step_start", "--step", "2", "--title", "s2") == 0
+
+
+def test_guard_non_parallel_wave_still_enforced(traj_dir):
+    _seed("gnp")
+    assert _emit("gnp", "--type", "wave_start", "--wave", "1",
+                 "--step-count", "2", "--no-parallel") == 0
+    assert _emit("gnp", "--type", "step_start", "--step", "1", "--title", "s1") == 0
+    # A non-parallel wave does NOT suspend the guard: opening step 2 while step 1
+    # is open is rejected.
+    assert _emit("gnp", "--type", "step_start", "--step", "2", "--title", "s2") == 5
+
+
+# ============================================================
+# v1.7: run-level files reconciliation in verify_trajectory
+# ============================================================
+def _recon_events(git_head, recorded):
+    """Structurally clean trajectory whose single step records `recorded`."""
+    return [
+        {"event_type": "run_start", "step_number": 0, "payload": {"git_head": git_head}},
+        {"event_type": "step_start", "step_number": 1, "payload": {"step": 1}},
+        {"event_type": "step_end", "step_number": 1,
+         "payload": {"step": 1, "files_affected": list(recorded), "status": "ok"}},
+        {"event_type": "run_end", "step_number": None, "payload": {"summary": "ok"}},
+    ]
+
+
+def test_reconcile_flags_unrecorded_file(traj_dir, monkeypatch):
+    monkeypatch.setattr(itl, "_git_changed_files", lambda gh: {"a.py", "b.py"})
+    _write_traj("rf", _recon_events("deadbeef", ["a.py"]))
+    defects = itl.verify_trajectory("rf")
+    assert any("(advisory)" in d and "b.py" in d for d in defects)
+    assert not any("a.py" in d for d in defects)
+
+
+def test_reconcile_clean_when_all_recorded(traj_dir, monkeypatch):
+    monkeypatch.setattr(itl, "_git_changed_files", lambda gh: {"a.py"})
+    _write_traj("rc", _recon_events("deadbeef", ["a.py"]))
+    assert itl.verify_trajectory("rc") == []
+
+
+def test_reconcile_skipped_on_unknown_git_head(traj_dir, monkeypatch):
+    monkeypatch.setattr(itl, "_git_changed_files", lambda gh: {"z.py"})
+    _write_traj("ru", _recon_events("unknown", ["a.py"]))
+    defects = itl.verify_trajectory("ru")
+    assert not any("z.py" in d for d in defects)
+
+
+def test_reconcile_skipped_on_git_error(traj_dir, monkeypatch):
+    # Helper returns empty set on git failure -> no reconciliation defect.
+    monkeypatch.setattr(itl, "_git_changed_files", lambda gh: set())
+    _write_traj("rge", _recon_events("deadbeef", ["a.py"]))
+    assert itl.verify_trajectory("rge") == []

@@ -52,6 +52,15 @@ def test_marketplace_json(built):
     assert mj["plugins"][0]["source"] == "./plugins/heading-core"
 
 
+def test_no_bytecode_cruft(built):
+    """A built bundle ships source only: no __pycache__ dirs, no compiled bytecode."""
+    bundle, _ = built
+    pycache = list(bundle.rglob("__pycache__"))
+    compiled = list(bundle.rglob("*.pyc")) + list(bundle.rglob("*.pyo"))
+    assert not pycache, f"__pycache__ shipped in bundle: {pycache[:3]}"
+    assert not compiled, f"compiled bytecode shipped in bundle: {compiled[:3]}"
+
+
 def test_hooks_json_registers_guards(built):
     bundle, _ = built
     hj = json.loads((bundle / "hooks" / "hooks.json").read_text())

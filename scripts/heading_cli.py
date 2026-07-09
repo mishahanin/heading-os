@@ -50,6 +50,10 @@ DEFAULT_BUDGET_USD = 0.50
 # Default-deny: a skill runs headless only if listed here; the value is its tier.
 SKILL_ALLOWLIST = {
     "state-check": "read-only",
+    # queue-draft is the reference draft-tier skill: it DEPOSITS a gated card and
+    # can never approve/send (the draft tier grants deposit but not the send
+    # transports, enforced in build_skill_command + SEND_DENY).
+    "queue-draft": "draft",
 }
 
 # The --allowedTools set per tier. The read-only tier grants only Read; the draft

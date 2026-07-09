@@ -51,6 +51,12 @@ JSON schemas for CRM records: `crm-contact.schema.json`, `crm-relationship.schem
 
 A place for local, per-clone skill overrides that should not ship with the engine. See its `README.md` for the override convention.
 
+## Data root: pinning `HEADING_OS_DATA`
+
+The engine and your private data are two sibling repositories: the engine clone (`.heading-os`) and the data overlay (`.heading-os-data`). `get_data_root()` in `scripts/utils/paths.py` picks the overlay in this order, first hit wins: the `HEADING_OS_DATA` environment variable when it points at a real directory; in-tree data when it already lives inside the engine clone (the transitional single-workspace case); the sibling `../.heading-os-data`; then demo mode (the read-only bundled `examples/`). A standard side-by-side layout needs no configuration, because the sibling step resolves it automatically.
+
+Set `HEADING_OS_DATA` only to pin the binding explicitly: when the data repo is not a direct sibling, when you run several clones, or as insurance so resolution can never drift. Two ways to set it, and they are not equal. An exported shell variable (`export HEADING_OS_DATA="/absolute/path/to/.heading-os-data"` in `~/.bashrc`) is the stronger form: every process, hooks and daemons included, inherits it before any Python import runs. A line in the gitignored `.env` is only partial, honored just by callers that run `load_env()` first, so it does not cover hooks or externally launched daemons. Use the `.env` line as belt-and-suspenders, not as the sole pin. The path is absolute, so if you relocate the workspace, update it in both places or the stale value points at a directory that no longer exists. Confirm the current resolution with `python3 -c "from scripts.utils.paths import get_data_root, data_root_is_demo as d; print(get_data_root()); print('demo?', d())"`, which prints your `.heading-os-data` path and `demo? False` on a correct setup.
+
 ## Related
 
 - [Rules reference](RULES-REFERENCE.html): the rules that read these files.

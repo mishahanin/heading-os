@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Install as a Claude Code plugin</title>
+<meta name="description" content="HEADING OS ships an installable plugin marketplace, so you can try the engine&#x27;s">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="PLUGINS.html" class="active">Install as a plugin</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="memory-lifecycle.html">Memory lifecycle</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Install as a Claude Code plugin</h1>
+  <p class="page-meta">HEADING OS ships an installable plugin marketplace, so you can try the engine&#x27;s</p>
+  <p>HEADING OS ships an installable plugin marketplace, so you can try the engine&rsquo;s
+core inside Claude Code with two commands, no clone and no toolchain.</p>
+<p>Last Updated: 2026-07-09</p>
+<h2 id="the-marketplace">The marketplace</h2>
+<p>The plugins live in their own public repository,
+<strong><a href="https://github.com/mishahanin/heading-os-marketplace">mishahanin/heading-os-marketplace</a></strong>.
+It is a <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a> plugin
+marketplace: a git repo carrying a <code>.claude-plugin/marketplace.json</code> and one
+directory per plugin bundle. It is generated from this engine monorepo (the
+source of truth), so you never install anything the engine did not produce.</p>
+<h2 id="install">Install</h2>
+<p>Inside Claude Code:</p>
+<div class="highlight"><pre><span></span><code>/plugin marketplace add mishahanin/heading-os-marketplace
+/plugin install heading-core@heading-os-marketplace
+</code></pre></div>
+<p>(The CLI form works too: <code>claude plugin marketplace add mishahanin/heading-os-marketplace</code>.)</p>
+<p>That is it. <code>heading-core</code> is the sovereignty and session bundle: the
+<code>prime</code>, <code>state-check</code>, and <code>checkpoint</code> skills, the standalone sovereignty guard
+hooks, and the scripts they need. More capability bundles
+(<code>heading-intel</code>, <code>heading-comms</code>, <code>heading-content</code>, <code>heading-crm</code>,
+<code>heading-ops</code>) are planned.</p>
+<h2 id="how-updates-work">How updates work</h2>
+<p>The bundles carry no <code>version</code>, so every marketplace commit is a new version and
+your installed plugins update automatically. Skills reach their bundled scripts
+through <code>${CLAUDE_PLUGIN_ROOT}</code> (resolved to the plugin&rsquo;s install directory), and
+a <code>SessionStart</code> hook resolves your data overlay at runtime through
+<code>HEADING_OS_DATA</code>. No private data is ever bundled: with nothing configured, the
+plugin resolves to the read-only demo tree, the same data-less default the
+devcontainer uses.</p>
+<h2 id="plugin-or-full-clone">Plugin or full clone?</h2>
+<p>Both are first-class; pick by what you want.</p>
+<ul>
+<li><strong>Plugin install</strong> gives you the sovereignty core inside your existing Claude
+  Code, with zero setup. It is the fastest way to feel the engine and to layer
+  its guards and session skills onto how you already work.</li>
+<li><strong>A full clone</strong> (<a href="DEPLOYMENT.md">DEPLOYMENT.md</a>) gives you the whole engine,
+  your own private data overlay, the daemons, and every skill. It is the operator
+  setup: the engine you run your company from.</li>
+</ul>
+<p>The plugin is the front door; the clone is the house.</p>
+<h2 id="sovereignty-is-unchanged">Sovereignty is unchanged</h2>
+<p>The guard hooks ship in <code>heading-core</code>, and the engine&rsquo;s non-bypassable push-time
+content scan and the <code>send_capable -&gt; gated</code> invariant remain the backstops.
+Outbound send stays human-gated everywhere. A plugin install adds capability, it
+never adds a path around the human approve click. See
+<a href="SECURITY-MODEL.md">SECURITY-MODEL.md</a>.</p>
+<h2 id="for-maintainers-publishing">For maintainers: publishing</h2>
+<p>The marketplace repo is a generated distribution artifact. Never hand-edit it.
+To cut a new release, run the publisher from the engine, which builds the bundles
+fresh, syncs them into a checkout of the marketplace repo, refreshes its README
+and license, and pushes:</p>
+<div class="highlight"><pre><span></span><code>python scripts/dev/publish-marketplace.py --repo-dir ../heading-os-marketplace
+</code></pre></div>
+<p>One-time bootstrap of the marketplace checkout is documented at the top of
+<code>scripts/dev/publish-marketplace.py</code>. The bundle manifest is
+<code>config/plugin-bundles.yaml</code>, and the generator is <code>scripts/dev/build-plugins.py</code>;
+both are described in <a href="EXTENDING.md">EXTENDING.md</a>.</p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

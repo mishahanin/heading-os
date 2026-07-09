@@ -1,4 +1,5 @@
 """Integration tests for scripts/convert-to-md.py."""
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -163,6 +164,12 @@ def test_sanitizer_missing_on_disk(tmp_path):
         capture_output=True,
         timeout=30,
         cwd=str(sandbox),
+        # Pin the workspace root to the sandbox. Since the engine became an
+        # installed package (F-10.1 item 4), `scripts` resolves to the real
+        # workspace, so get_workspace_root() would otherwise find the real
+        # sanitize-text.py and the missing-sanitizer branch would never fire.
+        # WORKSPACE_ROOT is the first-honored override in paths.py.
+        env=dict(os.environ, WORKSPACE_ROOT=str(sandbox)),
     )
     assert result.returncode == 1
     stderr = result.stderr.decode("utf-8")

@@ -7,6 +7,14 @@
 # (`uv export --all-extras`) covering the full runtime graph for legacy consumers.
 # See docs/security/DEPENDENCY-POLICY.md for dependency management rules.
 
+# Build backend: the engine is an installed uv package (not a virtual project),
+# so the `heading` console entry point below is placed on PATH. The wheel ships
+# only the `scripts` package (see [tool.hatch.build.targets.wheel]); the rest of
+# the tree (tests, config, .claude) is not packaged.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "heading-os-engine"
 version = "0.3.0"
@@ -108,7 +116,23 @@ dev = [
     "pytest-xdist==3.8.0",
 ]
 
+[project.scripts]
+# `heading`: the vendor-independent dispatcher over the engine scripts (F-10.1
+# Option C). Installed onto PATH by the build backend above; run via `uv run
+# heading ...` or after `uv tool install`.
+heading = "scripts.heading_cli:main"
+
+[tool.hatch.build.targets.wheel]
+# Ship only the scripts package. Kebab-named CLIs under scripts/ are carried as
+# files (invoked by path, not imported); scripts.heading_cli + scripts.utils are
+# the importable modules the entry point needs.
+packages = ["scripts"]
+
 [tool.uv]
+# The engine is an installed package (not a virtual project) so [project.scripts]
+# reaches PATH. Editable by default, so in-tree `sys.path` imports and the
+# installed `heading` resolve to the same source.
+package = true
 # Security floor on a transitive dep: msgpack < 1.2.1 carries GHSA-6v7p-g79w-8964
 # (DoS on Unpacker reuse with untrusted input). msgpack arrives via
 # pip-audit -> cachecontrol -> msgpack, so it is not a direct dependency; a plain

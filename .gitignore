@@ -302,3 +302,7 @@ config/skill-custom/*.user.toml
 # system fallback when they are absent.
 .claude/skills/marp/themes/fonts/GT-Standard-*.woff2
 .claude/skills/marp/themes/fonts/31CHorizontalT03-*.woff2
+
+# Generated plugin/marketplace build output (scripts/dev/build-plugins.py).
+# Rebuildable from the monorepo; never committed.
+/dist/

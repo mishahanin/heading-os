@@ -26,6 +26,7 @@ DUAL_ROLE_EXCLUSIONS = {
     "crm_migrate_to_entity_model.py",  # tests/test_crm_migration.py
     "crm_next.py",                   # tests/test_crm_next.py
     "fireside_topics.py",            # fireside-bot.py, test_fireside_topics.py, test_fireside_topic_handlers.py
+    "heading_cli.py",                # tests/test_heading_cli.py (F-10.1 dispatcher: dual-role CLI + import)
     "fireside_webhook.py",           # fireside-bot-daemon.py
     "marp_render.py",                # test_marp_integration.py, test_marp_render.py
     "odin_brain_lint.py",            # odin-brain-health.py, test_odin_temporal_validity.py

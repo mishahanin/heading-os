@@ -1,0 +1,93 @@
+# Plugin bundle manifest
+#
+# Consumed by: scripts/dev/build-plugins.py (F-10.1).
+# Maps the monorepo tree into Claude Code plugin bundles. The monorepo stays the
+# source of truth; this file only declares which existing skills, hooks, and
+# scripts belong to which bundle. Nothing here is a copy of source content.
+#
+# Per bundle:
+#   description       - one line
+#   skills            - .claude/skills/<name> dirs to include (copied verbatim)
+#   hooks             - .claude/hooks/<file> to include (copied verbatim)
+#   hook_events       - event -> [hook script names] wiring used to GENERATE
+#                       hooks/hooks.json (this workspace wires hooks in
+#                       settings.local.json, which does not travel in a plugin)
+#   session_start_env - when true, the build emits a SessionStart hook that
+#                       exports WORKSPACE_ROOT and HEADING_OS_DATA into
+#                       $CLAUDE_ENV_FILE (plugin-cache root resolution + data seam)
+#   scripts           - EXPLICIT list of scripts/<path> the bundle needs.
+#                       scripts/utils/ is implied and always copied.
+#
+# NOTE: rules are deliberately NOT a field in this slice (F-10.1 / H2). There is
+# no supported plugin component that loads .claude/rules/*.md as always-on
+# behavior from a plugin cache; a carrier mechanism is an unresolved follow-up.
+
+bundles:
+  heading-core:
+    description: >-
+      Sovereignty and session core: the prime/state-check/checkpoint skills plus
+      the standalone sovereignty guard hooks.
+    skills:
+      - prime
+      - state-check
+      - checkpoint
+    hooks:
+      # Genuinely self-contained guards only. prevent-secrets.py / protect-*.py
+      # are excluded: they runpy-delegate to _dispatch.py, whose fan-out
+      # (protect-corporate, protect-docs, protect-personal-threads,
+      # secret-scanner, x, sync-docs, utils/api, utils/sensitive) is out of
+      # scope for the walking skeleton (F-10.1 / M1).
+      - prompt-guard.py
+      - post-write-sanitize.py
+    hook_events:
+      PostToolUse:
+        - matcher: "Write|Edit|MultiEdit|NotebookEdit"
+          hooks:
+            - prompt-guard.py
+            - post-write-sanitize.py
+    session_start_env: true
+    scripts:
+      # Scripts referenced by the three skills' SKILL.md (enumerated, not
+      # grep-discovered at build time). scripts/utils/ is always bundled.
+      - apply-wizard-answers.py
+      - generate-skill-router.py
+      - prime-health-parallel.py
+      - sync-exchange.py
+      - thread.py
+
+  # --- Placeholder bundles: names reserved, not built in the walking skeleton ---
+  heading-intel:
+    description: Intelligence skills (osint, market-brief, ceo-intel, ...). Not built yet.
+    skills: []
+    hooks: []
+    hook_events: {}
+    session_start_env: true
+    scripts: []
+  heading-comms:
+    description: Communication skills (email-intel, telegram, tribe-message, ...). Not built yet.
+    skills: []
+    hooks: []
+    hook_events: {}
+    session_start_env: true
+    scripts: []
+  heading-content:
+    description: Content skills (linkedin-post, keynote-deck, flux-image, ...). Not built yet.
+    skills: []
+    hooks: []
+    hook_events: {}
+    session_start_env: true
+    scripts: []
+  heading-crm:
+    description: CRM skills (crm, viraid, google-contacts). Not built yet.
+    skills: []
+    hooks: []
+    hook_events: {}
+    session_start_env: true
+    scripts: []
+  heading-ops:
+    description: Operations skills (dashboard, radar, queue, sync, ...). Not built yet.
+    skills: []
+    hooks: []
+    hook_events: {}
+    session_start_env: true
+    scripts: []

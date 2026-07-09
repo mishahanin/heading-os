@@ -94,3 +94,20 @@ One-time bootstrap of the marketplace checkout is documented at the top of
 `scripts/dev/publish-marketplace.py`. The bundle manifest is
 `config/plugin-bundles.yaml`, and the generator is `scripts/dev/build-plugins.py`;
 both are described in [EXTENDING.md](EXTENDING.md).
+
+### Automatic publishing
+
+You do not have to run the publisher by hand. The `publish-marketplace` GitHub
+Action republishes the marketplace whenever a push to `main` touches a bundle
+input (the manifest, the build or publish scripts, or any skill or hook a bundle
+can carry), and on manual `workflow_dispatch`. It is a no-op when nothing
+changed.
+
+The Action pushes to a different repository than the one it runs in, so the
+default `GITHUB_TOKEN` cannot authorize it. One-time setup: create a fine-grained
+Personal Access Token scoped write to ONLY `mishahanin/heading-os-marketplace`
+(Contents: read and write), and add it to the engine repo's secrets as
+`MARKETPLACE_PUBLISH_TOKEN` (Settings, then Secrets and variables, then Actions).
+Until the secret exists the Action fails on its first step with a clear message
+rather than publishing a broken state. The manual publisher above stays available
+regardless.

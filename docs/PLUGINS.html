@@ -148,6 +148,20 @@ and license, and pushes:</p>
 <code>scripts/dev/publish-marketplace.py</code>. The bundle manifest is
 <code>config/plugin-bundles.yaml</code>, and the generator is <code>scripts/dev/build-plugins.py</code>;
 both are described in <a href="EXTENDING.md">EXTENDING.md</a>.</p>
+<h3 id="automatic-publishing">Automatic publishing</h3>
+<p>You do not have to run the publisher by hand. The <code>publish-marketplace</code> GitHub
+Action republishes the marketplace whenever a push to <code>main</code> touches a bundle
+input (the manifest, the build or publish scripts, or any skill or hook a bundle
+can carry), and on manual <code>workflow_dispatch</code>. It is a no-op when nothing
+changed.</p>
+<p>The Action pushes to a different repository than the one it runs in, so the
+default <code>GITHUB_TOKEN</code> cannot authorize it. One-time setup: create a fine-grained
+Personal Access Token scoped write to ONLY <code>mishahanin/heading-os-marketplace</code>
+(Contents: read and write), and add it to the engine repo&rsquo;s secrets as
+<code>MARKETPLACE_PUBLISH_TOKEN</code> (Settings, then Secrets and variables, then Actions).
+Until the secret exists the Action fails on its first step with a clear message
+rather than publishing a broken state. The manual publisher above stays available
+regardless.</p>
   <footer class="foot">
     <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>

@@ -46,8 +46,13 @@ ALLOWED_SNAKE = DUAL_ROLE_EXCLUSIONS | DOCUMENTED_CLI_EXCEPTIONS
 
 
 def _root_cli_scripts():
-    """scripts/*.py at the root — not utils/ (library), not archive/."""
-    return sorted(p for p in SCRIPTS_DIR.glob("*.py"))
+    """scripts/*.py at the root — not utils/ (library), not archive/, and not
+    dunder package files (__init__.py is a package marker, never a CLI script)."""
+    return sorted(
+        p
+        for p in SCRIPTS_DIR.glob("*.py")
+        if not (p.name.startswith("__") and p.name.endswith("__.py"))
+    )
 
 
 def test_standalone_cli_scripts_are_kebab_case():

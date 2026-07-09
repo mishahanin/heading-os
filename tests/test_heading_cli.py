@@ -44,3 +44,32 @@ def test_both_ways_parity():
     assert direct.returncode == via_cli.returncode == 0
     assert direct.stdout.strip() == via_cli.stdout.strip()
     assert direct.stdout.strip() != ""
+
+
+def test_console_entry_point_installed():
+    """CAP-4 real gate: the installed `heading` console script runs.
+
+    The in-tree `import scripts.heading_cli` passes even without the package
+    installed (pytest `pythonpath = ["."]`), so it does NOT gate CAP-4. This
+    exercises the actual entry point placed on PATH by the build backend.
+    """
+    heading_bin = Path(sys.executable).parent / "heading"
+    if heading_bin.exists():
+        proc = subprocess.run([str(heading_bin), "list"], capture_output=True, text=True, cwd=ROOT)
+    else:  # not directly on the venv bin dir; drive the same entry point through uv
+        proc = subprocess.run(
+            ["uv", "run", "heading", "list"], capture_output=True, text=True, cwd=ROOT
+        )
+    assert proc.returncode == 0
+    assert "health" in proc.stdout and "classification" in proc.stdout
+
+
+def test_pyproject_declares_console_script():
+    """The build config that makes the entry point reachable is present (an
+    installed package with the `heading` script), not a uv virtual project."""
+    import tomllib
+
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "build-system" in data  # not a virtual project
+    assert data["project"]["scripts"]["heading"] == "scripts.heading_cli:main"
+    assert data["tool"]["uv"].get("package") is True

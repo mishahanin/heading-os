@@ -11,13 +11,17 @@ This is a DISPATCHER, never a fork of script logic. It resolves the workspace
 root via scripts/utils/paths.py and shells the target with the current
 interpreter.
 
-Invocation (the project is not pip-packaged, so there is no `heading` console
-script yet; invoke the module directly):
+Invocation. The engine is an installed uv package, so `heading` is a console
+script (`[project.scripts]` in pyproject.toml):
 
-  python scripts/heading_cli.py run scripts/utils/paths.py
-  python scripts/heading_cli.py health
+  uv run heading run scripts/utils/paths.py
+  uv run heading health
+  uv run heading list
+  uv run heading skill state-check
+
+The module form still works and is what the in-tree tests drive:
+
   python scripts/heading_cli.py list
-  python scripts/heading_cli.py skill state-check
 
 `run` takes a path relative to the workspace root (a bare name is resolved under
 scripts/). Named subcommands are shortcuts in the registry below. `skill` runs an

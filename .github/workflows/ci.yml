@@ -68,7 +68,7 @@ jobs:
         # Byte-identical to the regen command; uv writes a header echoing this
         # exact argv, so any drift (or a hand-edited header) fails the diff.
         run: |
-          uv export --no-hashes --no-dev --all-extras --format requirements-txt > /tmp/req.txt
+          uv export --no-hashes --no-dev --all-extras --no-emit-project --format requirements-txt > /tmp/req.txt
           diff -u requirements.txt /tmp/req.txt
       - name: Docs HTML in sync (F-8.1)
         # --all regenerates every md-sourced page, nav-syncs + search-injects the

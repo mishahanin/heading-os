@@ -73,7 +73,11 @@ def _export_full_requirements(dest: Path) -> bool:
         # --all-extras: F-7.1 moved heavy deps into optional-dependencies; without
         # this flag the export (and thus the CVE audit) would silently drop every
         # optional package. Keep the full graph in scope.
-        ["uv", "export", "--no-hashes", "--all-extras", "--format", "requirements-txt"],
+        # --no-emit-project: the engine is an installed package (F-10.1 item 4), so
+        # a bare export emits `-e .`, which pip-audit rejects. Audit the deps, not
+        # the local editable project.
+        ["uv", "export", "--no-hashes", "--all-extras", "--no-emit-project",
+         "--format", "requirements-txt"],
         cwd=str(ROOT),
         capture_output=True,
         text=True,

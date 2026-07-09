@@ -68,7 +68,13 @@ def load_manifest(root: Path) -> dict:
 
 def _copytree(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, dst, dirs_exist_ok=True)
+    # Never ship compiled-bytecode cruft in a bundle (stale, bloated, non-source).
+    shutil.copytree(
+        src,
+        dst,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
 
 
 def collect_bundled_scripts(spec: dict, root: Path) -> set[str]:

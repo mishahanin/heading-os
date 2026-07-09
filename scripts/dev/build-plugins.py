@@ -13,7 +13,9 @@ Per built bundle it:
   - GENERATES a SessionStart env hook that exports WORKSPACE_ROOT (and, when a
     userConfig data path is present, HEADING_OS_DATA) so bundled scripts resolve
     their root from the plugin cache,
-  - drops CLAUDE.md + .claude/ marker files (marker-walk fallback),
+  - writes NO root-marker files: in the plugin cache the root resolves from the
+    exported WORKSPACE_ROOT plus paths.py's structural fallback, so a CLAUDE.md
+    marker would be redundant AND trips `claude plugin validate` (see below),
   - rewrites `python scripts/...` invocations in built SKILL.md to the
     ${CLAUDE_PLUGIN_ROOT} form (the only path that resolves once a plugin is
     copied to ~/.claude/plugins/cache),

@@ -177,6 +177,7 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 | `/publish-corporate` | NEVER auto-trigger. Explicit `/publish-corporate` only. |
 | `/push-updates` | NEVER auto-trigger. Explicit `/push-updates` only. |
 | `/queue` | queue, action queue, show my drafts, what's waiting to send, approve/send the first one, retry that failed send, dismiss a queued card |
+| `/queue-draft` | NEVER auto-trigger. Explicit `/queue-draft` only. Deposits one GATED draft card into the Action Queue; never approves or sends. |
 | `/radar` | radar, ops radar, what's overdue, what am I forgetting to run, what manual actions are due, ack a radar item, crunch mode on/off |
 | `/request-skill` | NEVER auto-trigger. Explicit `/request-skill` only. |
 | `/rollback-corporate` | NEVER auto-trigger. Explicit `/rollback-corporate [--dry-run]` only. CEO-only R16 Layer 2: forward-revert corporate `main` to the previous BUILD (no force-push), execs pull the reverted state next sync. |

@@ -29,6 +29,7 @@ def _values_after(cmd, flag):
 
 def test_allowlist_and_tiers():
     assert SKILL_ALLOWLIST["state-check"] == "read-only"
+    assert SKILL_ALLOWLIST["queue-draft"] == "draft"
     assert set(TIER_ALLOWED) == {"read-only", "draft"}
     assert SEND_DENY  # non-empty denylist
 
@@ -70,6 +71,22 @@ def test_draft_tier_send_boundary():
     disallowed = _values_after(cmd, "--disallowedTools")
     assert any("approve" in d for d in disallowed)
     assert any("send-email.py" in d for d in disallowed)
+
+
+def test_queue_draft_live_draft_boundary():
+    """The live draft skill queue-draft is allowlisted at the draft tier, and its
+    BUILT command grants the Action-Queue deposit but never approve or send - the
+    send boundary holds for a real depositing skill, not only a synthetic tier."""
+    assert SKILL_ALLOWLIST["queue-draft"] == "draft"
+    cmd = build_skill_command("queue-draft", [], tier=SKILL_ALLOWLIST["queue-draft"])
+    assert "/queue-draft" in cmd
+    allowed = _values_after(cmd, "--allowedTools")
+    assert any("action-queue.py deposit" in a for a in allowed)  # deposit granted
+    assert not any("approve" in a for a in allowed)  # approve never granted
+    assert not any("send-email.py" in a for a in allowed)  # send transport never granted
+    disallowed = _values_after(cmd, "--disallowedTools")
+    for entry in SEND_DENY:  # every send transport is explicitly denied
+        assert entry in disallowed
 
 
 def test_args_passthrough():

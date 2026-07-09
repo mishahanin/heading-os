@@ -1,0 +1,94 @@
+# Auto-republish the HEADING OS plugin marketplace (marketplace follow-up, item 2).
+#
+# The engine monorepo is the source of truth; the public `heading-os-marketplace`
+# repo is a generated distribution artifact. This workflow keeps them in sync
+# without a human running `publish-marketplace.py` by hand: on any push to `main`
+# that touches a bundle input (the manifest, the build/publish scripts, or any
+# skill/hook that a bundle can carry), it rebuilds the bundles and pushes the
+# marketplace repo. It is a no-op when nothing changed (the publisher exits 0
+# with "Nothing to publish").
+#
+# ONE-TIME OPERATOR SETUP (required, or this workflow fails clearly):
+#   Create a fine-grained Personal Access Token scoped WRITE to ONLY
+#   `mishahanin/heading-os-marketplace` (Contents: read+write), and add it to
+#   THIS repo's secrets as `MARKETPLACE_PUBLISH_TOKEN`
+#   (Settings -> Secrets and variables -> Actions). The default GITHUB_TOKEN
+#   cannot push to a sibling repo, which is why a scoped PAT is used. See
+#   docs/PLUGINS.md "For maintainers".
+#
+# Actions are pinned by commit SHA to match the rest of the engine's CI (F-1.5).
+
+name: publish-marketplace
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "config/plugin-bundles.yaml"
+      - "scripts/dev/build-plugins.py"
+      - "scripts/dev/publish-marketplace.py"
+      - ".claude/skills/**"
+      - ".claude/hooks/**"
+      - ".github/workflows/publish-marketplace.yml"
+  workflow_dispatch: {}
+
+# The engine checkout only needs read; the cross-repo push authenticates with the
+# PAT, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
+# Serialize publishes so two runs never race on the marketplace push. Do not
+# cancel an in-flight run: a cancelled mid-push could leave a partial state.
+concurrency:
+  group: publish-marketplace
+  cancel-in-progress: false
+
+env:
+  HEADING_OS_TZ: Etc/GMT-4
+
+jobs:
+  publish:
+    name: publish marketplace
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Verify publish token is set
+        env:
+          TOKEN: ${{ secrets.MARKETPLACE_PUBLISH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::MARKETPLACE_PUBLISH_TOKEN is not set. Create a fine-grained PAT with write access to mishahanin/heading-os-marketplace and add it as a repo secret. See docs/PLUGINS.md 'For maintainers'."
+            exit 1
+          fi
+
+      - name: Checkout engine
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Checkout marketplace repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: mishahanin/heading-os-marketplace
+          token: ${{ secrets.MARKETPLACE_PUBLISH_TOKEN }}
+          path: marketplace-repo
+
+      - name: Set commit identity on the marketplace checkout
+        # publish-marketplace.py's ensure_identity() early-returns when the
+        # marketplace repo already has user.email, so identity must be set on
+        # THIS checkout (not the engine one it would otherwise read from).
+        run: |
+          git -C marketplace-repo config user.name "Misha Hanin"
+          git -C marketplace-repo config user.email "mishahanin@users.noreply.github.com"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          enable-cache: true
+
+      - name: Sync core dependencies
+        run: uv sync --frozen
+
+      - name: Publish
+        env:
+          ENGINE_SHA: ${{ github.sha }}
+        run: |
+          uv run python scripts/dev/publish-marketplace.py --repo-dir marketplace-repo --message "chore: auto-publish marketplace from ${ENGINE_SHA}"

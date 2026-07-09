@@ -61,6 +61,46 @@ def test_no_bytecode_cruft(built):
     assert not compiled, f"compiled bytecode shipped in bundle: {compiled[:3]}"
 
 
+@pytest.fixture(scope="module")
+def built_ops(tmp_path_factory):
+    out = tmp_path_factory.mktemp("mkt_ops")
+    mod = _load_builder()
+    rc = mod.main(["--bundle", "heading-ops", "--out", str(out)])
+    assert rc == 0
+    return out / "plugins" / "heading-ops", out
+
+
+def test_curated_bundle_composition(built_ops):
+    """A curated multi-skill bundle builds green with its skills and enumerated scripts."""
+    bundle, _ = built_ops
+    skills = {p.name for p in (bundle / "skills").iterdir() if p.is_dir()}
+    assert {"create-plan", "deep-think", "editorial-review"} <= skills
+    # The enumerated scripts the bundled skills reference are present (the
+    # completeness gate would have failed the build otherwise).
+    for sc in ("elicit.py", "humanization-check.py", "sanitize-text.py", "resolve_customization.py"):
+        assert (bundle / "scripts" / sc).is_file(), f"missing enumerated script: {sc}"
+    # Curated bundles ship source only, same as heading-core.
+    assert not list(bundle.rglob("__pycache__"))
+    assert not list(bundle.rglob("*.pyc"))
+
+
+def test_all_builds_curated_marketplace(tmp_path):
+    """--all builds every curated (non-empty) bundle; the fully-reserved crm is skipped."""
+    mod = _load_builder()
+    rc = mod.main(["--all", "--out", str(tmp_path)])
+    assert rc == 0
+    mj = json.loads((tmp_path / ".claude-plugin" / "marketplace.json").read_text())
+    names = {p["name"] for p in mj["plugins"]}
+    assert {
+        "heading-core",
+        "heading-intel",
+        "heading-comms",
+        "heading-content",
+        "heading-ops",
+    } <= names
+    assert "heading-crm" not in names  # empty skills -> skipped by --all, never published
+
+
 def test_hooks_json_registers_guards(built):
     bundle, _ = built
     hj = json.loads((bundle / "hooks" / "hooks.json").read_text())

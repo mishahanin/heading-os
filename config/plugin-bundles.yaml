@@ -55,28 +55,52 @@ bundles:
       - sync-exchange.py
       - thread.py
 
-  # --- Placeholder bundles: names reserved, not built in the walking skeleton ---
+  # --- Curated capability bundles (2026-07-09) ---
+  # Curation criterion: a skill ships only if it runs for a stranger with NO CEO
+  # credentials, NO running daemon, and NO private data overlay (Claude-native
+  # tools + bundled scripts, degrading gracefully). Skills needing Exchange /
+  # Telegram / OSINT-service creds, Google OAuth, third-party model keys, the
+  # private CRM overlay, or a live daemon stay RESERVED (named below).
   heading-intel:
-    description: Intelligence skills (osint, market-brief, ceo-intel, ...). Not built yet.
-    skills: []
+    description: >-
+      Intelligence: parse a document with citations (docparse) and build a
+      web-sourced market brief (market-brief). Reserved (need service creds):
+      osint, x-pulse, yt-pulse, deep-research-advance, notebooklm.
+    skills:
+      - docparse
+      - market-brief
     hooks: []
     hook_events: {}
     session_start_env: true
-    scripts: []
+    scripts:
+      - docparse.py
+      - polymarket.py
   heading-comms:
-    description: Communication skills (email-intel, telegram, tribe-message, ...). Not built yet.
-    skills: []
+    description: >-
+      Communication: translate between English and Russian (translate).
+      Reserved (need Exchange/Telegram/session or the send transport):
+      email-intel, telegram, email-draft, email-respond, follow-up.
+    skills:
+      - translate
     hooks: []
     hook_events: {}
     session_start_env: true
     scripts: []
   heading-content:
-    description: Content skills (linkedin-post, keynote-deck, flux-image, ...). Not built yet.
-    skills: []
+    description: >-
+      Content drafting: LinkedIn posts and series, plus image prompts
+      (linkedin-post, linkedin-series, image-prompt). Reserved: flux-image
+      (API key), linkedin-archive (private data).
+    skills:
+      - linkedin-post
+      - linkedin-series
+      - image-prompt
     hooks: []
     hook_events: {}
     session_start_env: true
-    scripts: []
+    scripts:
+      - resolve_customization.py
+      - memlog.py
   heading-crm:
     description: CRM skills (crm, viraid, google-contacts). Not built yet.
     skills: []
@@ -85,9 +109,20 @@ bundles:
     session_start_env: true
     scripts: []
   heading-ops:
-    description: Operations skills (dashboard, radar, queue, sync, ...). Not built yet.
-    skills: []
+    description: >-
+      Ops and thinking: draft an implementation plan (create-plan), reason
+      through a hard decision (deep-think), and run a structural editorial
+      pass (editorial-review). Reserved (data/daemon/key-bound): dashboard,
+      radar, queue, sync, next, recall, council.
+    skills:
+      - create-plan
+      - deep-think
+      - editorial-review
     hooks: []
     hook_events: {}
     session_start_env: true
-    scripts: []
+    scripts:
+      - elicit.py
+      - resolve_customization.py
+      - humanization-check.py
+      - sanitize-text.py

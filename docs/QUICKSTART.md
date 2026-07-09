@@ -1,4 +1,4 @@
-<!-- version: 2.3.0 | last-updated: 2026-07-09 -->
+<!-- version: 2.4.0 | last-updated: 2026-07-09 -->
 # HEADING OS — Quickstart
 
 The one-page version. For the full zero-to-running walk-through, see
@@ -26,6 +26,22 @@ uv run python scripts/crm-health.py
 
 When you are ready for a real workspace, follow **Install (short form)** below. Details
 live in [`.devcontainer/README.md`](../.devcontainer/README.md).
+
+---
+
+## Install as a Claude Code plugin
+
+Want the sovereignty core inside your existing Claude Code, with no clone? Add the
+marketplace and install the bundle:
+
+```
+/plugin marketplace add mishahanin/heading-os-marketplace
+/plugin install heading-core@heading-os-marketplace
+```
+
+`heading-core` carries the `prime`, `state-check`, and `checkpoint` skills plus the
+sovereignty guard hooks. For what each bundle holds, how updates work, and when to
+prefer a plugin over a full clone, see **[PLUGINS.md](PLUGINS.md)**.
 
 ---
 

@@ -228,6 +228,7 @@ SITE_NAV_GROUPS = [
         ("prerequisites.html", "Prerequisites &amp; install"),
         ("DEPLOYMENT.html", "Full deployment guide"),
         ("QUICKSTART.html", "Quickstart"),
+        ("PLUGINS.html", "Install as a plugin"),
         ("MAKE-IT-YOURS.html", "Make it yours"),
     ]),
     ("Operate", [

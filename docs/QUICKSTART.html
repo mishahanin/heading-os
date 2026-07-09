@@ -28,6 +28,7 @@
       <a href="prerequisites.html">Prerequisites &amp; install</a>
       <a href="DEPLOYMENT.html">Full deployment guide</a>
       <a href="QUICKSTART.html" class="active">Quickstart</a>
+      <a href="PLUGINS.html">Install as a plugin</a>
       <a href="MAKE-IT-YOURS.html">Make it yours</a>
     </div>
     <div class="nav-group">
@@ -74,7 +75,7 @@
 <main class="content">
   <h1>HEADING OS — Quickstart</h1>
   <p class="page-meta">The one-page version. For the full zero-to-running walk-through, see</p>
-  <!-- version: 2.3.0 | last-updated: 2026-07-09 -->
+  <!-- version: 2.4.0 | last-updated: 2026-07-09 -->
 
 <p>The one-page version. For the full zero-to-running walk-through, see
 <strong><a href="DEPLOYMENT.md">DEPLOYMENT.md</a></strong>.</p>
@@ -93,6 +94,16 @@ mode refuses writes by design.</p>
 </code></pre></div>
 <p>When you are ready for a real workspace, follow <strong>Install (short form)</strong> below. Details
 live in <a href="../.devcontainer/README.md"><code>.devcontainer/README.md</code></a>.</p>
+<hr />
+<h2 id="install-as-a-claude-code-plugin">Install as a Claude Code plugin</h2>
+<p>Want the sovereignty core inside your existing Claude Code, with no clone? Add the
+marketplace and install the bundle:</p>
+<div class="highlight"><pre><span></span><code>/plugin marketplace add mishahanin/heading-os-marketplace
+/plugin install heading-core@heading-os-marketplace
+</code></pre></div>
+<p><code>heading-core</code> carries the <code>prime</code>, <code>state-check</code>, and <code>checkpoint</code> skills plus the
+sovereignty guard hooks. For what each bundle holds, how updates work, and when to
+prefer a plugin over a full clone, see <strong><a href="PLUGINS.md">PLUGINS.md</a></strong>.</p>
 <hr />
 <h2 id="install-short-form">Install (short form)</h2>
 <p>Once you have WSL2/Ubuntu (Windows) or a Unix shell, plus <code>git</code>, <code>gh</code>, <code>uv</code>, Node, and

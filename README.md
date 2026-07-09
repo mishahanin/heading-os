@@ -79,6 +79,15 @@ The full documentation — prerequisites &amp; install, the architecture overvie
 
 The zero-to-running walk-through — WSL2, toolchain, prerequisites, Claude Code, your private data repo, and the engine wired to it — is in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** (with [docs/QUICKSTART.md](docs/QUICKSTART.md) for the short version).
 
+Just want a taste inside your existing Claude Code, with no clone? Install the sovereignty core as a plugin from the marketplace:
+
+```
+/plugin marketplace add mishahanin/heading-os-marketplace
+/plugin install heading-core@heading-os-marketplace
+```
+
+The marketplace repo is **[mishahanin/heading-os-marketplace](https://github.com/mishahanin/heading-os-marketplace)**; **[docs/PLUGINS.md](docs/PLUGINS.md)** covers the bundles, how updates work, and when to prefer a plugin over a full clone.
+
 Three focused setup guides cover everything beyond the core install:
 
 - **[docs/MODELS-SETUP.md](docs/MODELS-SETUP.md)** — the AI models: installing **Ollama** for the local `bge-m3` embedder behind `/recall`, and wiring **Gemini, Grok, and Kimi** as the `/council` voices.

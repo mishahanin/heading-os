@@ -91,11 +91,27 @@ source of truth), so you never install anything the engine did not produce.</p>
 /plugin install heading-core@heading-os-marketplace
 </code></pre></div>
 <p>(The CLI form works too: <code>claude plugin marketplace add mishahanin/heading-os-marketplace</code>.)</p>
-<p>That is it. <code>heading-core</code> is the sovereignty and session bundle: the
-<code>prime</code>, <code>state-check</code>, and <code>checkpoint</code> skills, the standalone sovereignty guard
-hooks, and the scripts they need. More capability bundles
-(<code>heading-intel</code>, <code>heading-comms</code>, <code>heading-content</code>, <code>heading-crm</code>,
-<code>heading-ops</code>) are planned.</p>
+<p>That installs <code>heading-core</code>, the sovereignty and session bundle: the <code>prime</code>,
+<code>state-check</code>, and <code>checkpoint</code> skills, the standalone sovereignty guard hooks,
+and the scripts they need.</p>
+<p>The marketplace also ships four curated capability bundles, each installed the
+same way (<code>/plugin install &lt;bundle&gt;@heading-os-marketplace</code>):</p>
+<ul>
+<li><code>heading-intel</code> - parse a document with citations (docparse) and build a
+  web-sourced market brief (market-brief).</li>
+<li><code>heading-comms</code> - translate between English and Russian (translate).</li>
+<li><code>heading-content</code> - draft LinkedIn posts and series plus image prompts
+  (linkedin-post, linkedin-series, image-prompt).</li>
+<li><code>heading-ops</code> - draft an implementation plan (create-plan), reason through a
+  hard decision (deep-think), and run a structural editorial pass
+  (editorial-review).</li>
+</ul>
+<p>Bundles ship only skills that run without your private data, credentials, or
+daemons. Skills that need those stay in the full engine: the <code>heading-crm</code>
+skills (crm, viraid, google-contacts) need a private CRM overlay or Google
+OAuth, and skills like email-intel, telegram, osint, and council need Exchange,
+a session, or third-party API keys. To run those, clone the engine
+(<a href="DEPLOYMENT.md">DEPLOYMENT.md</a>).</p>
 <h2 id="how-updates-work">How updates work</h2>
 <p>The bundles carry no <code>version</code>, so every marketplace commit is a new version and
 your installed plugins update automatically. Skills reach their bundled scripts

@@ -25,11 +25,28 @@ Inside Claude Code:
 
 (The CLI form works too: `claude plugin marketplace add mishahanin/heading-os-marketplace`.)
 
-That is it. `heading-core` is the sovereignty and session bundle: the
-`prime`, `state-check`, and `checkpoint` skills, the standalone sovereignty guard
-hooks, and the scripts they need. More capability bundles
-(`heading-intel`, `heading-comms`, `heading-content`, `heading-crm`,
-`heading-ops`) are planned.
+That installs `heading-core`, the sovereignty and session bundle: the `prime`,
+`state-check`, and `checkpoint` skills, the standalone sovereignty guard hooks,
+and the scripts they need.
+
+The marketplace also ships four curated capability bundles, each installed the
+same way (`/plugin install <bundle>@heading-os-marketplace`):
+
+- `heading-intel` - parse a document with citations (docparse) and build a
+  web-sourced market brief (market-brief).
+- `heading-comms` - translate between English and Russian (translate).
+- `heading-content` - draft LinkedIn posts and series plus image prompts
+  (linkedin-post, linkedin-series, image-prompt).
+- `heading-ops` - draft an implementation plan (create-plan), reason through a
+  hard decision (deep-think), and run a structural editorial pass
+  (editorial-review).
+
+Bundles ship only skills that run without your private data, credentials, or
+daemons. Skills that need those stay in the full engine: the `heading-crm`
+skills (crm, viraid, google-contacts) need a private CRM overlay or Google
+OAuth, and skills like email-intel, telegram, osint, and council need Exchange,
+a session, or third-party API keys. To run those, clone the engine
+([DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ## How updates work
 

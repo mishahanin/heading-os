@@ -1,0 +1,15 @@
+[Unit]
+Description=HEADING OS council model freshness check (broken/newer pins -> Telegram)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/council-models-notify.py
+# TZ pins the daily fire to the configured timezone regardless of the host. The
+# installer substitutes {{TZ}} from HEADING_OS_TZ (default UTC). journald avoids
+# double-writing a log path on a /mnt/c 9P mount.
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

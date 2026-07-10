@@ -15,8 +15,13 @@ sys.modules["kimi_consult"] = kc
 _spec.loader.exec_module(kc)
 
 
-def test_default_model_is_kimi_cloud():
-    assert kc.DEFAULT_MODEL == "kimi-k2.6:cloud"
+def test_default_model_from_council_config():
+    # DEFAULT_MODEL is resolved from config/council-models.json (single source of
+    # truth), not hardcoded — assert the wiring, so a version bump never breaks this.
+    from scripts.utils.council_models import get_model
+
+    assert kc.DEFAULT_MODEL == get_model("kimi")
+    assert kc.DEFAULT_MODEL.endswith(":cloud")
 
 
 def test_base_url_is_local_ollama():

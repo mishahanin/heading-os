@@ -20,7 +20,7 @@ def test_default_model_from_council_config():
     # truth), not hardcoded — assert the wiring, so a version bump never breaks this.
     from scripts.utils.council_models import get_model
 
-    assert kc.DEFAULT_MODEL == get_model("kimi")
+    assert get_model("kimi") == kc.DEFAULT_MODEL
     assert kc.DEFAULT_MODEL.endswith(":cloud")
 
 

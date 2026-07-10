@@ -176,9 +176,9 @@ def test_assess_with_injected_probes():
     findings = cf.assess(probes={
         "xai": ["grok-4.5"],
         "gemini": ["gemini-3.5-flash"],
-        "ollama": ["kimi-k2.6:cloud", "kimi-k2.7-code:cloud", "bge-m3:latest"],
+        "ollama": ["kimi-k2.6:cloud", "kimi-k2.7-code:cloud", "glm-5.2:cloud", "bge-m3:latest"],
     })
-    assert {f["provider"] for f in findings} == {"grok", "gemini", "kimi", "kimi-code"}
+    assert {f["provider"] for f in findings} == {"grok", "gemini", "kimi", "kimi-code", "glm"}
     # With current pins matching, everything should be ok.
     assert all(f["status"] == "ok" for f in findings)
 

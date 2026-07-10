@@ -1,7 +1,7 @@
 ---
 name: council
 description: |
-  Second-opinion advisor. Consults Gemini, Grok AND Kimi in parallel for independent views on hard or high-stakes calls.
+  Second-opinion advisor. Consults Gemini, Grok, Kimi AND GLM in parallel for independent views on hard or high-stakes calls.
   Two modes: independent (all models see the problem only, reason fresh) and critique (all stress-test a draft).
   Distinct from /deep-think (Claude reasoning structured, alone) and /odin (Claude + the curated knowledge brain).
   Trigger when the user says: "council", "/council", "second opinion on", "consult the council",
@@ -29,9 +29,9 @@ x-heading-orchestration:
     - council vote
 x-heading-capability:
   what: >
-    Independent second opinions from Gemini, Grok AND Kimi in parallel, presented side-by-side with Claude's own view — no synthesized final answer, the CEO decides.
+    Independent second opinions from Gemini, Grok, Kimi AND GLM in parallel, presented side-by-side with Claude's own view — no synthesized final answer, the CEO decides.
   how: >
-    Run /council <question> for independent mode, or /council --critique <draft> to stress-test a draft. Transcript saved to outputs/operations/council/ unless --no-log. Flags --gemini-only / --grok-only / --kimi-only (run one) or --no-gemini / --no-grok / --no-kimi (skip one). A coding-specialised Kimi-Code voice joins additively as a 4th player on code tasks (auto-detected, or forced with --code / suppressed with --no-kimi-code).
+    Run /council <question> for independent mode, or /council --critique <draft> to stress-test a draft. Transcript saved to outputs/operations/council/ unless --no-log. Flags --gemini-only / --grok-only / --kimi-only / --glm-only (run one) or --no-gemini / --no-grok / --no-kimi / --no-glm (skip one). A coding-specialised Kimi-Code voice joins additively on code tasks (auto-detected, or forced with --code / suppressed with --no-kimi-code).
   when: >
     Use for a hard or high-stakes call where cross-model disagreement is itself signal. For Claude reasoning alone use /deep-think; for Claude plus the curated knowledge brain use /odin.
 x-heading-routing:
@@ -56,13 +56,13 @@ x-heading-routing:
   router: auto
 ---
 
-# Council - Independent Second Opinions (Gemini + Grok + Kimi)
+# Council - Independent Second Opinions (Gemini + Grok + Kimi + GLM)
 
-Independent second opinions from Gemini, Grok AND Kimi, dispatched in parallel by default. Use when:
+Independent second opinions from Gemini, Grok, Kimi AND GLM, dispatched in parallel by default. Use when:
 - The user wants fresh views on a hard call (independent mode)
 - The user wants a draft stress-tested before it ships (critique mode)
 
-This skill is distinct from `/deep-think` (Claude reasoning harder, alone) and `/odin` (Claude + the curated knowledge brain). The unique value here is three models with different training pedigrees, different RLHF, and different failure modes — when they agree, agreement is stronger evidence; when they disagree, the disagreement itself is information.
+This skill is distinct from `/deep-think` (Claude reasoning harder, alone) and `/odin` (Claude + the curated knowledge brain). The unique value here is four models with different training pedigrees, different RLHF, and different failure modes — agreement is stronger evidence; disagreement is itself information.
 
 ---
 
@@ -89,7 +89,7 @@ For CRITIQUE mode, prepare:
 - `draft`: the exact draft text to critique. If the user passed `--critique 'text'` inline, the draft is the quoted text immediately following the flag. If the user pasted a draft in the message body without the flag, use that body verbatim.
 - `context`: why the draft was produced (audience, goal, constraints). In critique mode, including Claude's reasoning IS appropriate - Gemini is being asked to stress-test it.
 
-**Optional - structure Claude's own view with named methods.** When forming Claude's view (Phase 3), you may pull 2-5 methods from the shared catalog to give Claude's contribution a distinct lens from the outside models - draw from `collaboration`, `research`, or `framing` (e.g. Steelmanning, Source Triangulation, Reframe the Question): `python scripts/elicit.py list --category collaboration`, then `show "<Method>"`. Optional; skip when the question is already well-framed. Catalog: `reference/elicitation-methods.md`.
+**Optional** — to give Claude's view a distinct lens from the outside models, pull 2-5 methods from `reference/elicitation-methods.md` (`python scripts/elicit.py list --category collaboration`; categories `collaboration`/`research`/`framing`, e.g. Steelmanning, Reframe the Question). Skip when the question is already well-framed.
 
 ---
 
@@ -97,12 +97,13 @@ For CRITIQUE mode, prepare:
 
 ### Determine which models to call
 
-Scan the user's invocation text for model-selection flags. Default = run Gemini + Grok + Kimi.
+Scan the user's invocation text for model-selection flags. Default = run Gemini + Grok + Kimi + GLM.
 
 **Exclusive flags** (run exactly one):
 - `--gemini-only` — call only Gemini.
 - `--grok-only` — call only Grok.
 - `--kimi-only` — call only Kimi.
+- `--glm-only` — call only GLM.
 
 At most one `--*-only` flag is allowed.
 
@@ -110,15 +111,16 @@ At most one `--*-only` flag is allowed.
 - `--no-gemini` — skip Gemini.
 - `--no-grok` — skip Grok.
 - `--no-kimi` — skip Kimi.
+- `--no-glm` — skip GLM.
 
 **Reject immediately** (one-line error, then stop — do not proceed to Phase 3) if:
 - More than one `--*-only` flag is set.
 - Any `--*-only` is combined with any `--no-*`.
-- All three models end up skipped (e.g. `--no-gemini --no-grok --no-kimi`).
+- All base voices end up skipped (e.g. `--no-gemini --no-grok --no-kimi --no-glm`).
 
 ### The Kimi-Code voice (optional 4th, code tasks)
 
-Kimi-Code (`kimi-k2.7-code:cloud`, resolved via `python scripts/council-models.py --get kimi-code`) is a coding-specialised voice that joins the panel **additively** — Gemini + Grok + Kimi + Kimi-Code — on code-related consultations. It never replaces the general Kimi voice; the two are distinct players.
+Kimi-Code (`kimi-k2.7-code:cloud`, resolved via `python scripts/council-models.py --get kimi-code`) is a coding-specialised voice that joins the panel **additively** — Gemini + Grok + Kimi + GLM + Kimi-Code — on code-related consultations. It never replaces the general Kimi voice; the two are distinct players.
 
 Include Kimi-Code when EITHER:
 - The user passed `--code`, OR
@@ -126,7 +128,7 @@ Include Kimi-Code when EITHER:
 
 Exclude it when `--no-kimi-code` is set (forces exclusion even under `--code` or a code question), or when there is no code signal and no `--code` flag (the default for strategy/business questions).
 
-`--code` / `--no-kimi-code` are **orthogonal** to the `--*-only` exclusivity: those flags select among the three base voices; Kimi-Code adds on top when activated. So `--grok-only --code` runs Grok + Kimi-Code; a plain code question runs all four.
+`--code` / `--no-kimi-code` are **orthogonal** to the `--*-only` exclusivity: those flags select among the four base voices; Kimi-Code adds on top when activated. So `--grok-only --code` runs Grok + Kimi-Code; a plain code question runs all five.
 
 ### Build the commands
 
@@ -137,6 +139,8 @@ For independent mode:
 python scripts/gemini-consult.py --mode independent --question '...' --context '...'
 python scripts/grok-consult.py   --mode independent --question '...' --context '...'
 python scripts/kimi-consult.py   --mode independent --question '...' --context '...'
+# GLM base voice (ollama wrapper):
+python scripts/kimi-consult.py   --mode independent --question '...' --context '...' --model "$(python scripts/council-models.py --get glm)"
 # plus, ONLY when the Kimi-Code voice is active (see above) — same wrapper, code model:
 python scripts/kimi-consult.py   --mode independent --question '...' --context '...' --model "$(python scripts/council-models.py --get kimi-code)"
 ```
@@ -146,16 +150,19 @@ For critique mode:
 python scripts/gemini-consult.py --mode critique --draft '...' --context '...'
 python scripts/grok-consult.py   --mode critique --draft '...' --context '...'
 python scripts/kimi-consult.py   --mode critique --draft '...' --context '...'
+# GLM base voice (ollama wrapper):
+python scripts/kimi-consult.py   --mode critique --draft '...' --context '...' --model "$(python scripts/council-models.py --get glm)"
 # plus, ONLY when the Kimi-Code voice is active:
 python scripts/kimi-consult.py   --mode critique --draft '...' --context '...' --model "$(python scripts/council-models.py --get kimi-code)"
 ```
 
-The Kimi-Code call is a normal `kimi-consult.py` invocation pointed at the code model — do NOT add a new script. Label its captured output **Kimi-Code** (distinct from the general **Kimi** call) so the two never merge.
+The Kimi-Code and GLM calls are normal `kimi-consult.py` invocations pointed at their models (both ollama-served) — do NOT add a new script. Label their outputs **Kimi-Code** and **GLM** (distinct from the general **Kimi** call) so the three never merge.
 
 Optional model overrides:
 - `--gemini-model gemini-2.5-flash` — passed to the Gemini call as `--model gemini-2.5-flash`
 - `--grok-model grok-3-mini` — passed to the Grok call as `--model grok-3-mini`
 - `--kimi-model kimi-k2.6:cloud` — passed to the general Kimi call as `--model kimi-k2.6:cloud`
+- `--glm-model <id>` — override the GLM voice's model (default: the `glm` pin)
 - `--kimi-code-model <id>` — override the Kimi-Code voice's model (default: the `kimi-code` pin)
 
 Other passthrough flags (apply to all calls): `--temperature`, `--max-tokens`.
@@ -180,7 +187,7 @@ If at least one model SUCCEEDED, proceed to Phase 3.
 
 ## Phase 3 - Formulate Claude's view
 
-After reading the verbatim responses captured in Phase 2 (whichever models succeeded — could be Gemini, Grok, Kimi, or any subset of them), write Claude's own view on the question or draft. Reach a real position independently of what any outside model said — don't just react to them.
+After reading the verbatim responses captured in Phase 2 (whichever models succeeded — could be Gemini, Grok, Kimi, GLM, or any subset of them), write Claude's own view on the question or draft. Reach a real position independently of what any outside model said — don't just react to them.
 
 Claude's view should be 3-5 bullets covering: position, key reasons, main risk Claude sees. (Tightened from 3-7 in Phase 1 — three views in one output need shorter bullets to stay readable.)
 
@@ -199,6 +206,9 @@ Render exactly the sections below to the user. No more, no less. No synthesised 
 
 ## Kimi's view
 [3-5 bullets distilling Kimi's response. Same rule — preserve Kimi's actual conclusions and arguments.]
+
+## GLM's view
+[3-5 bullets distilling GLM's response. Same rule — preserve GLM's actual conclusions and arguments.]
 
 ## Kimi-Code's view
 [ONLY when the Kimi-Code voice ran. 3-5 bullets distilling the code voice's response, framed as the code-specialist read (correctness, edge cases, implementation risk). Same rule — preserve its actual conclusions. Omit this whole section when the code voice was not active.]
@@ -224,8 +234,9 @@ Before writing the side-by-side:
 1. If Gemini was requested AND succeeded: re-read Gemini's verbatim response from Phase 2 stdout. Verify every bullet under `## Gemini's view` is traceable to a specific sentence in that verbatim text. If the verbatim is ambiguous, truncated, or hedged, say so explicitly in the bullets rather than inferring a position.
 2. If Grok was requested AND succeeded: repeat for Grok's verbatim and `## Grok's view`.
 3. If Kimi was requested AND succeeded: repeat for Kimi's verbatim and `## Kimi's view`.
-4. If the Kimi-Code voice ran AND succeeded: repeat for its verbatim and `## Kimi-Code's view`.
-5. Do NOT cross-feed: never use one model's verbatim to interpret another model's bullets. The general Kimi and Kimi-Code verbatims are separate — never merge them.
+4. If GLM was requested AND succeeded: repeat for GLM's verbatim and `## GLM's view`.
+5. If the Kimi-Code voice ran AND succeeded: repeat for its verbatim and `## Kimi-Code's view`.
+6. Do NOT cross-feed: never use one model's verbatim to interpret another model's bullets. The general Kimi, GLM, and Kimi-Code verbatims are separate — never merge them.
 
 ---
 
@@ -268,29 +279,29 @@ Skip this phase entirely if `--no-log` was set (no transcript = nothing to recor
 
 After the transcript path is reported, ask the CEO **one short question** as the final line of the chat output:
 
-> Which answer landed best - `claude`, `gemini`, `grok`, `kimi`, `mix`, `reject`, or `skip`? (one word + optional sentence on why)
+> Which answer landed best - `claude`, `gemini`, `grok`, `kimi`, `glm`, `mix`, `reject`, or `skip`? (one word + optional sentence on why)
 
-(When the Kimi-Code voice ran, it folds under `kimi` for this verdict — the verdict schema tracks the base four choices only, so a "Kimi-Code was best" reply is recorded as `kimi`.)
+(When the Kimi-Code voice ran, it folds under `kimi` for this verdict — a "Kimi-Code was best" reply is recorded as `kimi`. GLM is a base voice with its own `glm` verdict choice.)
 
-That is all. Do NOT re-summarise the answers, do NOT push for a decision, do NOT explain the choice values — the CEO knows them. The question must fit in one prompt line so the CEO can reply in 5 seconds.
+That is all. Do NOT re-summarise, push for a decision, or explain the choice values — the CEO knows them. Keep the question to one line so the CEO can reply in 5 seconds.
 
 When the CEO replies, parse their next message:
 
-- First token (case-insensitive) is the choice. Accept `claude` / `gemini` / `grok` / `kimi` / `mix` / `reject` / `skip` / Russian equivalents (`пропустить`, `мix`, etc — normalise to the English choice).
+- First token (case-insensitive) is the choice. Accept `claude` / `gemini` / `grok` / `kimi` / `glm` / `mix` / `reject` / `skip` / Russian equivalents (`пропустить`, `мix`, etc — normalise to the English choice).
 - Everything after the first token is the optional `notes` string. Trim whitespace.
 
-If choice is **`skip`** (or any non-recognised first token without an explicit `claude/gemini/grok/kimi/mix/reject` keyword anywhere in the reply): do NOT record. Print one line: `Verdict skipped (left pending).` Do not nag.
+If choice is **`skip`** (or any non-recognised first token without an explicit `claude/gemini/grok/kimi/glm/mix/reject` keyword anywhere in the reply): do NOT record. Print one line: `Verdict skipped (left pending).` Do not nag.
 
 Otherwise, run:
 
 ```bash
 python scripts/council-record-verdict.py \
   --id {transcript filename stem, NO .md extension} \
-  --choice {claude|gemini|grok|kimi|mix|reject} \
+  --choice {claude|gemini|grok|kimi|glm|mix|reject} \
   --notes "{notes string, or omit the flag if empty}"
 ```
 
-The script prints `recorded: ... tally: N recorded - claude=X, gemini=Y, grok=Z, kimi=K, mix=A, reject=B`. Echo only the tally line back to the CEO so they see the running count, plus one final line:
+The script prints `recorded: ... tally: N recorded - claude=X, gemini=Y, grok=Z, kimi=K, glm=G, mix=A, reject=B`. Echo only the tally line back to the CEO so they see the running count, plus one final line:
 
 `Recorded. Aggregate refreshed.`
 
@@ -307,7 +318,7 @@ If the CEO has not yet replied when you would otherwise close out (e.g., they we
 - Cross-feed one model's response to another. Each model reasons independently.
 - Re-run a failed model silently. If a model fails, render `## Failed: {Model}` with the error and continue.
 - Forget the 31C system block — `gemini-consult.py`, `grok-consult.py`, and `kimi-consult.py` inject it automatically; if you ever bypass any script, inject it yourself.
-- Run without the relevant API key set in `.env` (`GEMINI_API_KEY` for Gemini, `XAI_API_KEY` for Grok, `OLLAMA_API_KEY` for Kimi).
+- Run without the relevant API key set in `.env` (`GEMINI_API_KEY` for Gemini, `XAI_API_KEY` for Grok, `OLLAMA_API_KEY` for Kimi and GLM).
 - Modify `scripts/gemini-consult.py`, `scripts/grok-consult.py`, or `scripts/kimi-consult.py` from inside this skill — those are code changes, not skill behaviour.
 - Dispatch the model scripts sequentially when multiple are requested. Always parallel (single assistant message, multiple Bash tool calls).
 - Ask the CEO to open `_aggregate.md` or `_verdicts.jsonl` directly. The CEO never edits those files; Phase 6 + `scripts/council-record-verdict.py` are the only writing path.

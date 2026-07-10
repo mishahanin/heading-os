@@ -15,9 +15,10 @@ Usage:
     --choice gemini \\
     --notes "more concrete sequencing, surfaced Series B timing risk first"
 
-Choice values: claude | gemini | grok | kimi | mix | reject
-- claude / gemini / grok / kimi: that single model's answer landed best
-- kimi: Kimi's answer landed best
+Choice values: claude | gemini | grok | kimi | glm | mix | reject
+- claude / gemini / grok / kimi / glm: that single model's answer landed best
+- kimi: Kimi's answer landed best (Kimi-Code folds under kimi)
+- glm: GLM's answer landed best
 - mix: took useful pieces from multiple; no single winner
 - reject: none of the answers moved the decision; used something else
 
@@ -43,7 +44,7 @@ from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 
 COUNCIL_DIR = get_outputs_dir() / "operations" / "council"
 VERDICTS_PATH = COUNCIL_DIR / "_verdicts.jsonl"
-VALID_CHOICES = {"claude", "gemini", "grok", "kimi", "mix", "reject"}
+VALID_CHOICES = {"claude", "gemini", "grok", "kimi", "glm", "mix", "reject"}
 
 
 def latest_verdicts(path: Path) -> dict[str, dict]:
@@ -84,7 +85,7 @@ def render_tally(verdicts: dict[str, dict]) -> str:
     if not verdicts:
         return "tally: 0 recorded"
     counts = Counter(v["choice"] for v in verdicts.values())
-    parts = [f"{k}={counts.get(k, 0)}" for k in ("claude", "gemini", "grok", "kimi", "mix", "reject")]
+    parts = [f"{k}={counts.get(k, 0)}" for k in ("claude", "gemini", "grok", "kimi", "glm", "mix", "reject")]
     return f"tally: {len(verdicts)} recorded - " + ", ".join(parts)
 
 
@@ -94,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="verdict_id (transcript filename stem, e.g. "
                              "2026-05-22_council_151429_always-on-assistant)")
     parser.add_argument("--choice", required=True, choices=sorted(VALID_CHOICES),
-                        help="CEO's chosen winner: claude / gemini / grok / kimi / mix / reject")
+                        help="CEO's chosen winner: claude / gemini / grok / kimi / glm / mix / reject")
     parser.add_argument("--notes", default="",
                         help="Optional CEO comment about WHY (free text)")
     args = parser.parse_args(argv)

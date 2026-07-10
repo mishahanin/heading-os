@@ -38,6 +38,10 @@ FALLBACKS = {
     # joins on code tasks (and /scrutinize code reviews). Also ollama-served, so
     # the same pull-then-pin rule applies.
     "kimi-code": "kimi-k2.7-code:cloud",
+    # glm: Zhipu GLM, the 4th BASE /council voice (peer of gemini/grok/kimi).
+    # Also served through the local ollama daemon (cloud-routed), so the pin must
+    # match a tag actually registered there; bump only after `ollama pull glm-<new>:cloud`.
+    "glm": "glm-5.2:cloud",
 }
 
 PROVIDERS = tuple(FALLBACKS.keys())

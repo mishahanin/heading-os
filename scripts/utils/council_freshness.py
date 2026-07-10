@@ -265,4 +265,5 @@ def assess(probes: dict | None = None) -> list[dict]:
         classify_direct_api("gemini", get_model("gemini"), gemini),
         classify_ollama_model("kimi", get_model("kimi"), ollama),
         classify_ollama_model("kimi-code", get_model("kimi-code"), ollama),
+        classify_ollama_model("glm", get_model("glm"), ollama),
     ]

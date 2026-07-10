@@ -1,0 +1,6 @@
+{
+  "gemini": "gemini-3.5-flash",
+  "grok": "grok-4.5",
+  "kimi": "kimi-k2.6:cloud",
+  "kimi-code": "kimi-k2.7-code:cloud"
+}

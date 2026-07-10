@@ -32,6 +32,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.api import load_api_key  # noqa: E402
 from scripts.utils.colors import RED, RESET  # noqa: E402
+from scripts.utils.council_models import get_model  # noqa: E402
 from scripts.utils.council_prompts import (  # noqa: E402
     THIRTY_ONE_C_BLOCK,
     build_independent_prompt,
@@ -42,7 +43,10 @@ from scripts.utils.council_prompts import (  # noqa: E402
 # Configuration
 # ============================================================
 
-DEFAULT_MODEL = "gemini-3.5-flash"  # GA 2026-05-19, flagship intelligence at Flash speed, Dynamic Thinking on by default
+# Resolved from config/council-models.json (single source of truth). Bump the
+# pin with: python scripts/council-models.py --set gemini=<new>. Falls back to
+# the baseline in scripts/utils/council_models.py if the config is missing.
+DEFAULT_MODEL = get_model("gemini")
 DEFAULT_TEMPERATURE = 0.7              # Independent mode: room to reason creatively
 DEFAULT_CRITIQUE_TEMPERATURE = 0.4     # Critique mode: more deterministic, less paraphrasing
 DEFAULT_MAX_TOKENS = 8192

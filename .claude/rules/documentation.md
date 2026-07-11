@@ -1,18 +1,41 @@
-<!-- version: 1.0.0 | last-updated: 2026-04-28 -->
+<!-- version: 1.1.0 | last-updated: 2026-07-12 -->
 # Documentation Propagation Rule
 
-Last Verified: 2026-05-15
+Last Verified: 2026-07-12
 
 ## Always Update Documentation
 
-Whenever ANY of the following change, the corresponding documentation MUST be updated:
+The public documentation site lives under `docs/` and is built by one generator,
+`scripts/regenerate-docs-html.py` (full source-of-truth map: `docs/DOCS-PIPELINE.md`).
+The old `templates/ -> docs/` sync model is retired; there is no `templates/`
+directory. Markdown-sourced pages (`docs/<NAME>.md`) regenerate to `.html`; the
+skills-catalog pages are hand-authored HTML. Whenever ANY of the following change,
+update the matching docs and regenerate:
 
-1. **New skill created or existing skill modified** -> Update the skill reference table in `templates/GETTING-STARTED.md`. For the router registry, do NOT hand-edit the generated layers (the compact core index in `.claude/rules/skill-router.md` and the per-category detail files `reference/skill-router/<category>.md`): set the skill's `x-heading-routing` frontmatter and run `python scripts/generate-skill-router.py` (CI + pre-commit enforce `--check` across both layers). On the CEO workspace, also update `reference/workspace-overview.md`.
-2. **New script created or existing script modified** -> On the CEO workspace, update `reference/workspace-overview.md`.
-3. **Workspace structure changes** -> Update `templates/CLAUDE.md.template` and `templates/GETTING-STARTED.md`
-4. **New admin tool created** -> Update `templates/CEO-ADMIN-GUIDE.md`
-5. **Sync or provisioning workflow changes** -> Update both GETTING-STARTED.md and CEO-ADMIN-GUIDE.md
-6. **New rules created** -> Update the rules list in `templates/CLAUDE.md.template`
+1. **New rule created or existing rule modified** -> Add or update its row in
+   `docs/RULES-REFERENCE.md` (under the right functional group), then regenerate:
+   `python scripts/regenerate-docs-html.py docs/RULES-REFERENCE.md`.
+2. **New skill created or existing skill modified** -> Update the matching
+   hand-authored skills-catalog page `docs/skills-<category>.html` (the per-skill
+   cards are hand-authored, NOT generated from frontmatter), then run
+   `python scripts/regenerate-docs-html.py --nav-sync`. Separately, for the router
+   registry do NOT hand-edit the generated layers (`.claude/rules/skill-router.md`
+   and `reference/skill-router/<category>.md`): set the skill's `x-heading-routing`
+   frontmatter and run `python scripts/generate-skill-router.py` (CI + pre-commit
+   enforce `--check`).
+3. **New script, integration, or subsystem change** -> Update the markdown-sourced
+   page that documents it (`docs/EXTENDING.md` for the authoring pattern,
+   `docs/ARCHITECTURE.md`, `docs/HOOKS-REFERENCE.md`, `docs/INTEGRATIONS-SETUP.md`,
+   `docs/CONFIGURATION.md`, as applicable) and regenerate that page.
+4. **Always run the drift guard before committing:**
+   `python scripts/regenerate-docs-html.py --all && git diff --exit-code docs/`.
+   The `docs-html-drift` pre-commit hook runs the same check with the locked
+   pygments toolchain, so run the generator from the repo `.venv` (matching the
+   pinned pygments) to avoid false drift from an ambient interpreter.
+
+> CEO-workspace-only inventories (`reference/workspace-overview.md`, the
+> `CEO-ADMIN-GUIDE`) live in the private CEO data workspace, NOT this engine clone.
+> Update them there when working in that workspace; they are not engine targets.
 
 ## Propagation Chain
 

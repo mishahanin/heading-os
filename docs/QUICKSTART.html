@@ -75,7 +75,7 @@
 <main class="content">
   <h1>HEADING OS — Quickstart</h1>
   <p class="page-meta">The one-page version. For the full zero-to-running walk-through, see</p>
-  <!-- version: 2.4.0 | last-updated: 2026-07-09 -->
+  <!-- version: 2.5.0 | last-updated: 2026-07-12 -->
 
 <p>The one-page version. For the full zero-to-running walk-through, see
 <strong><a href="DEPLOYMENT.md">DEPLOYMENT.md</a></strong>.</p>
@@ -213,6 +213,13 @@ expected until you create or import records.</p>
 <p>You can also just describe what you want in plain language — &ldquo;research this company&rdquo;,
 &ldquo;draft a reply&rdquo;, &ldquo;who haven&rsquo;t I followed up with&rdquo; — and it routes to the right
 capability automatically.</p>
+<p>On anything non-trivial the engine first plays back its understanding — objective,
+scope, assumptions — and waits for your go before acting, so a misread is caught before
+it becomes a wrong deliverable. Prefix a message with <code>!</code> to skip that and act
+immediately; type <code>/align</code> to force a round of clarifying questions first. The full
+three-phase flow, the escape valves, and the <code>/align</code> · <code>/devil</code> · <code>/burst</code>
+escalations are documented in the
+<a href="RULES-REFERENCE.md#prompt-refinement-in-depth">rules reference</a>.</p>
 <blockquote>
 <p><strong>Outbound is always human-gated.</strong> Email and messages are drafted and shown to you
 first. Nothing sends on its own.</p>

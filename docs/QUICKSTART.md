@@ -1,4 +1,4 @@
-<!-- version: 2.4.0 | last-updated: 2026-07-09 -->
+<!-- version: 2.5.0 | last-updated: 2026-07-12 -->
 # HEADING OS — Quickstart
 
 The one-page version. For the full zero-to-running walk-through, see
@@ -114,6 +114,14 @@ expected until you create or import records.
 You can also just describe what you want in plain language — "research this company",
 "draft a reply", "who haven't I followed up with" — and it routes to the right
 capability automatically.
+
+On anything non-trivial the engine first plays back its understanding — objective,
+scope, assumptions — and waits for your go before acting, so a misread is caught before
+it becomes a wrong deliverable. Prefix a message with `!` to skip that and act
+immediately; type `/align` to force a round of clarifying questions first. The full
+three-phase flow, the escape valves, and the `/align` · `/devil` · `/burst`
+escalations are documented in the
+[rules reference](RULES-REFERENCE.md#prompt-refinement-in-depth).
 
 > **Outbound is always human-gated.** Email and messages are drafted and shown to you
 > first. Nothing sends on its own.

@@ -47,6 +47,7 @@ How the engine interprets a request and routes it to the right work.
 | Rule | Scope | What it enforces |
 |------|-------|------------------|
 | `prompt-refinement.md` | Always-on | The interpret then clarify then await-approval flow before acting, plus the `/align`, `/devil`, and `/burst` escalations and the `!` escape valve. |
+| `measurable-execution.md` | Always-on | Before any non-trivial task, agree the metric that defines "done ideally" and, when the task signals a fit, propose `/goal` (verifiable end-condition) or `/loop` (recurrence). Attaches to prompt-refinement Phase 1; advisory. |
 | `skill-router.md` | Always-on | Matches a natural-language message to the right skill, with a full skill registry, exclusions, and compound-trigger handoff. |
 | `skill-orchestrator.md` | Always-on | Detects compound workflows and dispatches parallel research agents while serialising writes, bounded by a concurrency cap and approval gates. |
 | `console-first.md` | Always-on | Every capability must be operable from the terminal and chat. The web dashboard is a convenience layer, never a dependency. |
@@ -70,6 +71,44 @@ Governs development work on the engine itself.
 | `development-standards.md` | Path-scoped | Quality gates for every artifact: research first, restraint (simplicity and surgical changes), a debugging discipline, and the skill / script / reference standards. |
 | `documentation.md` | Always-on | Keep documentation in step with the code: which docs to update when a skill, script, rule, or structure changes, and the version-marker convention. |
 | `trace-id.md` | Path-scoped | One correlation ID per process tree, so a single grep answers "what happened in this run?" across the daemon logs. |
+
+## Prompt refinement in depth
+
+`prompt-refinement.md` is the rule that sits between your message and the engine's first action. Where the [skill router](skills-mcp-plugins.html) decides *which* capability runs, prompt refinement decides *whether the engine has understood you* before it runs anything. The premise is plain: re-asking is cheap and redoing is expensive, so ambiguity is resolved up front rather than discovered in a wrong deliverable.
+
+### The three-phase flow
+
+Every substantive request passes through three phases before work begins.
+
+**Phase 1 — Interpret and expand.** The engine restates your request as an execution-ready brief. It opens with the line *"It looks like you want me to do the following:"* and then sets out the objective, the concrete scope (what is in, what is out), the deliverables and file outputs, the constraints and quality bar, and any assumptions it is making. Each assumption is flagged explicitly, so you can correct a misread before it costs anything. The brief closes with a measurable-execution line — how the result will be judged — so success is defined before work starts, not asserted after.
+
+**Phase 2 — Clarify, only when needed.** If a genuine ambiguity blocks a confident expansion, the engine asks focused questions first, in a single block, and asks only what it actually needs. It does not invent the missing detail; it names the gap.
+
+**Phase 3 — Await approval, then execute.** After presenting the brief the engine stops and waits for an explicit go: "approved", "proceed", "go", "execute", or "yes". On approval it executes strictly against the agreed brief. If a new decision surfaces mid-execution, it stops and asks again rather than widening scope on its own.
+
+### Escape valves
+
+The flow is calibrated for ambiguous or large-scope work, not for trivia. The engine acts immediately, skipping the ritual, in exactly three cases:
+
+1. **`!` prefix.** A message that starts with `!` (for example `!fix this typo`) runs directly. This is the fastest way to say "just do it".
+2. **A direct reply** to a question the engine itself asked.
+3. **A trivial one-step correction** to work just produced: a typo, a rename, a single-line tweak.
+
+When in doubt, the engine runs the protocol. Over-refinement is cheaper than misaligned execution.
+
+### Forcing the behaviour: /align, /devil, /burst
+
+When you know up front that a decision carries weight, three explicit escalations override the default posture. Each keeps the Phase 3 approval gate.
+
+| Command | Default · range | What it does |
+|---|---|---|
+| `/align N` | 5 · 1–10 | Replaces Phase 1's long expansion with a compact preamble and asks exactly N numbered clarifying questions, each carrying a recommendation. Use it before wide-scope or branching work when you want the engine to interrogate the request first. |
+| `/devil N` | 5 · 1–10 | Inverts the default validate-and-proceed posture into contrarian critique: N severity-tagged objections to a recent decision or claim, from distinct angles (correctness, scope, cost, timing, alternatives, second-order effects). It stops early rather than fabricate weak points. |
+| `/burst N` | 3 · 2–5 | Produces N variants of the latest content artifact — N-1 attacking distinct axes (opener, tone, structure, lens, length, voice) plus one deliberate swing-the-other-way inversion — to compare directions or break a stuck draft. |
+
+### Interplay with the corporate-docs guardrail
+
+When a request matches one of the five locked doctypes (letter, proposal, partnership doc, official doc, one-pager), the corporate-docs guardrail requires the engine to announce the chosen skill immediately. The two rules reconcile cleanly: the announcement happens *inside* Phase 1, on the opening line, then the expanded brief follows and the Phase 3 approval gate still holds. The `!` escape valve bypasses both.
 
 ## Editing a rule
 

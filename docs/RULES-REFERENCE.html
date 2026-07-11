@@ -183,6 +183,11 @@
 <td>The interpret then clarify then await-approval flow before acting, plus the <code>/align</code>, <code>/devil</code>, and <code>/burst</code> escalations and the <code>!</code> escape valve.</td>
 </tr>
 <tr>
+<td><code>measurable-execution.md</code></td>
+<td>Always-on</td>
+<td>Before any non-trivial task, agree the metric that defines &ldquo;done ideally&rdquo; and, when the task signals a fit, propose <code>/goal</code> (verifiable end-condition) or <code>/loop</code> (recurrence). Attaches to prompt-refinement Phase 1; advisory.</td>
+</tr>
+<tr>
 <td><code>skill-router.md</code></td>
 <td>Always-on</td>
 <td>Matches a natural-language message to the right skill, with a full skill registry, exclusions, and compound-trigger handoff.</td>
@@ -255,6 +260,51 @@
 </tr>
 </tbody>
 </table>
+<h2 id="prompt-refinement-in-depth">Prompt refinement in depth</h2>
+<p><code>prompt-refinement.md</code> is the rule that sits between your message and the engine&rsquo;s first action. Where the <a href="skills-mcp-plugins.html">skill router</a> decides <em>which</em> capability runs, prompt refinement decides <em>whether the engine has understood you</em> before it runs anything. The premise is plain: re-asking is cheap and redoing is expensive, so ambiguity is resolved up front rather than discovered in a wrong deliverable.</p>
+<h3 id="the-three-phase-flow">The three-phase flow</h3>
+<p>Every substantive request passes through three phases before work begins.</p>
+<p><strong>Phase 1 — Interpret and expand.</strong> The engine restates your request as an execution-ready brief. It opens with the line <em>&ldquo;It looks like you want me to do the following:&rdquo;</em> and then sets out the objective, the concrete scope (what is in, what is out), the deliverables and file outputs, the constraints and quality bar, and any assumptions it is making. Each assumption is flagged explicitly, so you can correct a misread before it costs anything. The brief closes with a measurable-execution line — how the result will be judged — so success is defined before work starts, not asserted after.</p>
+<p><strong>Phase 2 — Clarify, only when needed.</strong> If a genuine ambiguity blocks a confident expansion, the engine asks focused questions first, in a single block, and asks only what it actually needs. It does not invent the missing detail; it names the gap.</p>
+<p><strong>Phase 3 — Await approval, then execute.</strong> After presenting the brief the engine stops and waits for an explicit go: &ldquo;approved&rdquo;, &ldquo;proceed&rdquo;, &ldquo;go&rdquo;, &ldquo;execute&rdquo;, or &ldquo;yes&rdquo;. On approval it executes strictly against the agreed brief. If a new decision surfaces mid-execution, it stops and asks again rather than widening scope on its own.</p>
+<h3 id="escape-valves">Escape valves</h3>
+<p>The flow is calibrated for ambiguous or large-scope work, not for trivia. The engine acts immediately, skipping the ritual, in exactly three cases:</p>
+<ol>
+<li><strong><code>!</code> prefix.</strong> A message that starts with <code>!</code> (for example <code>!fix this typo</code>) runs directly. This is the fastest way to say &ldquo;just do it&rdquo;.</li>
+<li><strong>A direct reply</strong> to a question the engine itself asked.</li>
+<li><strong>A trivial one-step correction</strong> to work just produced: a typo, a rename, a single-line tweak.</li>
+</ol>
+<p>When in doubt, the engine runs the protocol. Over-refinement is cheaper than misaligned execution.</p>
+<h3 id="forcing-the-behaviour-align-devil-burst">Forcing the behaviour: /align, /devil, /burst</h3>
+<p>When you know up front that a decision carries weight, three explicit escalations override the default posture. Each keeps the Phase 3 approval gate.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Default · range</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/align N</code></td>
+<td>5 · 1–10</td>
+<td>Replaces Phase 1&rsquo;s long expansion with a compact preamble and asks exactly N numbered clarifying questions, each carrying a recommendation. Use it before wide-scope or branching work when you want the engine to interrogate the request first.</td>
+</tr>
+<tr>
+<td><code>/devil N</code></td>
+<td>5 · 1–10</td>
+<td>Inverts the default validate-and-proceed posture into contrarian critique: N severity-tagged objections to a recent decision or claim, from distinct angles (correctness, scope, cost, timing, alternatives, second-order effects). It stops early rather than fabricate weak points.</td>
+</tr>
+<tr>
+<td><code>/burst N</code></td>
+<td>3 · 2–5</td>
+<td>Produces N variants of the latest content artifact — N-1 attacking distinct axes (opener, tone, structure, lens, length, voice) plus one deliberate swing-the-other-way inversion — to compare directions or break a stuck draft.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="interplay-with-the-corporate-docs-guardrail">Interplay with the corporate-docs guardrail</h3>
+<p>When a request matches one of the five locked doctypes (letter, proposal, partnership doc, official doc, one-pager), the corporate-docs guardrail requires the engine to announce the chosen skill immediately. The two rules reconcile cleanly: the announcement happens <em>inside</em> Phase 1, on the opening line, then the expanded brief follows and the Phase 3 approval gate still holds. The <code>!</code> escape valve bypasses both.</p>
 <h2 id="editing-a-rule">Editing a rule</h2>
 <ol>
 <li>Rules are plain markdown. Edit the file in <code>.claude/rules/</code>; the change is in force next session.</li>

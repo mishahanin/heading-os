@@ -23,6 +23,7 @@ Then present the expanded prompt with:
 - Deliverables and file outputs
 - Constraints, tone, and quality bar
 - Any assumptions being made (flagged explicitly)
+- The measurable-execution block as the final element, per `measurable-execution.md` (metric always; `/loop` and `/goal` proposals only on signal)
 
 ### Phase 2 - Clarify (only if needed)
 

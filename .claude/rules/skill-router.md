@@ -210,7 +210,15 @@ The router is a markdown rule the model interprets, so a new skill's triggers ca
 
 ## Scheduled & Background Tasks
 
-Durable scheduled tasks created via the `CronCreate` tool are persisted in `.claude/scheduled_tasks.json`. The file has no frontmatter and is managed by the Claude Code runtime.
+Scheduled tasks created via the `CronCreate` tool are recorded in
+`.claude/scheduled_tasks.json`, but they are **session-scoped**: they fire only
+in the session that created them, or when it is resumed via `claude --resume` /
+`--continue` before expiry (recurring tasks expire 7 days after creation). A
+fresh session does NOT re-activate them. For reminders that must fire regardless
+of session lifecycle (and catch up after the machine was off), use the durable
+reminders system: `scripts/reminders.py` (CLI) + the `reminders.timer`
+systemd-user timer -> `scripts/reminders-notify.py` -> Telegram, with a `/prime`
+backstop. See docs/superpowers/specs/2026-07-14-durable-reminders-design.md.
 
 To view active scheduled tasks: `cat .claude/scheduled_tasks.json | python -m json.tool` (or just read the file directly).
 

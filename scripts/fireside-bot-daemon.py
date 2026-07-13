@@ -67,6 +67,10 @@ JOB_SPECS: dict[str, dict] = {
     "topic-nudge": {"trigger": {"kind": "cron", "day_of_week": "sat", "hour": 12, "minute": 0}, "critical": False},
     "topic-digest": {"trigger": {"kind": "cron", "day_of_week": "sun", "hour": 9, "minute": 0}, "critical": False},
     "cycle-end-invite": {"trigger": {"kind": "cron", "hour": 11, "minute": 0}, "critical": False},
+    # Daily: rebuild schedule.json when a new cycle config has landed and the old
+    # cycle ended. No-op on non-rollover days. Early (07:30) so a rolled schedule
+    # is live before speaker-dms (09:00) / helmsman-brief (10:00) read it.
+    "cycle-rollover": {"trigger": {"kind": "cron", "hour": 7, "minute": 30}, "critical": False},
 }
 
 
@@ -185,6 +189,7 @@ class JobDispatcher:
             "topic-nudge": fireside_bot.cmd_topic_nudge,
             "topic-digest": fireside_bot.cmd_topic_digest,
             "cycle-end-invite": fireside_bot.cmd_cycle_end_invite,
+            "cycle-rollover": fireside_bot.cmd_cycle_rollover,
         }
 
     def dispatch(self, job_name: str) -> None:

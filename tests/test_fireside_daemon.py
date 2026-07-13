@@ -29,7 +29,7 @@ def test_job_specs_complete(daemon_mod):
         "poll", "heartbeat", "speaker-dms", "sunday-preview", "dayof-reminders",
         "helmsman-brief", "weekly-discrepancy-report", "email-backup",
         "unpin-weekly", "health-check", "topic-nudge", "topic-digest",
-        "cycle-end-invite",
+        "cycle-end-invite", "cycle-rollover",
     }
     assert set(daemon_mod.JOB_SPECS.keys()) == expected
 

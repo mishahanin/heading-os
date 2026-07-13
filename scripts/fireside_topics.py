@@ -270,3 +270,25 @@ def current_cycle(schedule: list, today: date) -> int:
     if upcoming:
         return int(upcoming[0].get("cycle", 1))
     return int(max((s.get("cycle", 1) for s in schedule), default=1))
+
+
+def cycle_rollover_needed(schedule: list, config_week1_monday: date,
+                          today: date) -> bool:
+    """True when the live schedule should be rebuilt from a newer cycle config.
+
+    Fires when the configured Week-1 Monday differs from the live schedule's
+    earliest session date AND the current live cycle has fully ended (today is
+    past the last live session). An empty schedule paired with a config also
+    rolls.
+
+    The differ-check makes it idempotent: once rebuilt, the live Week-1 Monday
+    equals the config's, so it stops firing. The "cycle ended" guard prevents
+    clobbering an in-flight cycle just because the operator pre-edited the config
+    for the next one.
+    """
+    if not schedule:
+        return True
+    dates = [date.fromisoformat(s["session_date"]) for s in schedule]
+    if config_week1_monday == min(dates):
+        return False
+    return today > max(dates)

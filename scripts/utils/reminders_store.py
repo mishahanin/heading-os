@@ -94,9 +94,31 @@ def first_friday_minus_1(year: int, month: int) -> date:
 
 
 def _recurring_due_date(rule: str, today: date) -> date:
-    if rule == "first-friday-minus-1":
-        return first_friday_minus_1(today.year, today.month)
-    raise ValueError(f"unknown recurrence rule: {rule}")
+    if rule not in RECURRENCE_RULES:
+        raise ValueError(f"unknown recurrence rule: {rule}")
+    return first_friday_minus_1(today.year, today.month)
+
+
+def _next_month_date(today: date) -> date:
+    """First day of the month after `today`, rolling the year at December."""
+    if today.month == 12:
+        return date(today.year + 1, 1, 1)
+    return date(today.year, today.month + 1, 1)
+
+
+def _recurring_candidates(rule: str, today: date) -> list[date]:
+    """Both the current-month and next-month target dates for `rule`.
+
+    A recurring target computed for month M can land in month M-1 (e.g.
+    first-friday-minus-1 when the first Friday is the 1st). Evaluating only
+    `today`'s own month therefore misses that boundary day. Checking both
+    candidates against `today` closes the gap without special-casing any
+    rule by name.
+    """
+    return [
+        _recurring_due_date(rule, today),
+        _recurring_due_date(rule, _next_month_date(today)),
+    ]
 
 
 def is_due(record: dict, today: date) -> bool:
@@ -106,11 +128,10 @@ def is_due(record: dict, today: date) -> bool:
             return False
         return date.fromisoformat(record["when"]) <= today
     if kind == "recurring":
-        target = _recurring_due_date(record["when"], today)
-        if today != target:
+        if today not in _recurring_candidates(record["when"], today):
             return False
         last = record.get("last_fired")
-        return last != target.isoformat()
+        return last != today.isoformat()
     raise ValueError(f"unknown reminder kind: {kind}")
 
 
@@ -127,7 +148,8 @@ def upcoming(today: date, days: int = 7) -> list[dict]:
             if today < when <= horizon:
                 out.append(r)
         elif r.get("kind") == "recurring":
-            target = _recurring_due_date(r["when"], today)
-            if today < target <= horizon and r.get("last_fired") != target.isoformat():
-                out.append(r)
+            for target in _recurring_candidates(r["when"], today):
+                if today < target <= horizon and r.get("last_fired") != target.isoformat():
+                    out.append(r)
+                    break
     return out

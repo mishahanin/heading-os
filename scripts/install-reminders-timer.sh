@@ -1,7 +1,27 @@
 #!/usr/bin/env bash
 # Install the durable reminders dispatcher as a systemd-user timer on Linux/WSL2.
+#
+# Usage:
 #   scripts/install-reminders-timer.sh
-#   HEADING_OS_TZ=Asia/Dubai scripts/install-reminders-timer.sh
+#   HEADING_OS_TZ=Asia/Dubai scripts/install-reminders-timer.sh   # pin a TZ
+#
+# Renders scripts/templates/systemd/reminders.{service,timer} (substituting
+# {{WORKSPACE}}, {{PYTHON}}, {{TZ}}) into ~/.config/systemd/user/, then enables the
+# daily timer. The timer fires 07:45 in the configured timezone (HEADING_OS_TZ,
+# default UTC) independent of any Claude Code session and runs
+# scripts/reminders-notify.py, which is notify-only -- it dispatches due one-off
+# and recurring reminders to the operator's Telegram alert channel and never
+# executes any action on their behalf. Persistent=true on the timer catches a
+# fire missed while the host was off, so a reminder whose date passed while
+# asleep still fires on next boot.
+#
+# This is a STANDALONE installer mirroring install-ops-radar-timer.sh's
+# template+sed render convention. The timezone is read from the environment (no
+# hardcoded locale), so the templates carry no geographic signal and ship in the
+# public engine.
+#
+# For unattended boot:  loginctl enable-linger "$USER"  (done automatically below)
+
 set -euo pipefail
 WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
@@ -26,5 +46,10 @@ systemctl --user enable --now reminders.timer
 if ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
   loginctl enable-linger "$USER" 2>/dev/null || echo "  [hint] run once for unattended boot: loginctl enable-linger $USER"; fi
 echo "  [ok] systemd user timer installed and enabled: reminders.timer"
+echo ""
+echo "  Next fire:"
 systemctl --user list-timers reminders.timer --no-pager || true
-echo "  Test:  python3 scripts/reminders-notify.py"
+echo ""
+echo "  Status:  systemctl --user status reminders.timer"
+echo "  Logs:    journalctl --user -u reminders.service -f"
+echo "  Test:    python3 scripts/reminders-notify.py"

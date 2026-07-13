@@ -1,0 +1,19 @@
+[Unit]
+Description=31C Conversation Chronicle build (summarize new sessions into the dated history)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+# Incremental build: summarizes only sessions newer than the .last-chronicle
+# marker (and never one already chronicled), so a day's delta is a handful of
+# sessions -> minutes. Writes one dated entry per non-trivial conversation into
+# the DATA overlay chronicle/{business,personal}. NEVER writes to the brain and
+# NEVER sends anything -- safe to run unattended (the property that gates the
+# timer). Needs ollama (gemma3:4b) up; if it is down the build skips what it
+# cannot summarize and the next fire resumes -- no corruption. Personal tagging
+# fails toward "personal", so an unattended run can only over-wall.
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/chronicle.py build
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

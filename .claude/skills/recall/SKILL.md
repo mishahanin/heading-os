@@ -15,7 +15,7 @@ description: >
   brain-scoped); external/world intelligence on a company or person (use /osint);
   capturing a NEW note (use /zk); plain exact-string file search (use Grep). This
   skill never fabricates beyond returned sources and never sends anything. CEO-only.
-argument-hint: "<what to recall> [--collection content|code|all] [--layer NAME]"
+argument-hint: "<what to recall> [--collection content|code|all] [--layer NAME] [--personal]"
 allowed-tools: "Read, Bash(python3:*), Bash(python:*)"
 metadata:
   author: Misha Hanin
@@ -124,6 +124,50 @@ Parse the JSON. It is one object:
      don't answer it directly" — and name what they do cover. Never invent the
      missing fact.
 
+## Phase 1.5 — Chronicle (historical class, always below the brain)
+
+After the primary answer, run a SEPARATE secondary pass over the Conversation
+Chronicle — a dated record of past sessions ("on date X we discussed Y"). It is
+NOT a belief and NOT current fact; it only tells you a conversation happened.
+
+```bash
+python3 scripts/memory-index.py query "<the user's question>" --collection chronicle --json
+```
+
+- Append chronicle hits **below** the brain/content answer, never mixed into it.
+  The separate collection is what makes this ordering structural: a brain hit
+  always precedes a chronicle hit on the same topic. If the primary pass already
+  answered, chronicle is supplementary "we talked about this on <date>" context.
+- Render each hit **tagged with its date and class**, e.g.
+  `[chronicle 2026-05-19] session about the Globex pricing debate — `path``.
+  Never restate a chronicle summary as a current decision; if it matters now,
+  say "we discussed this on <date>; confirm whether it still holds."
+- The chronicle's `personal` entries are air-gapped (`personal` segment) and
+  never appear here — that is intended, not a miss.
+- Skip this pass entirely when the user pinned `--collection code`/`--layer`, or
+  when the chronicle query returns a gap (say nothing rather than pad).
+
+## Phase 1.6 — Personal chronicle (EXPLICIT opt-in ONLY)
+
+Personal-life sessions are air-gapped: the `personal` path segment is a
+hard-coded deny, so personal chronicle is in NO persistent index and is NEVER
+part of the default recall, Phase 1.5, `--collection all`, or auto-inject.
+
+Run a personal-chronicle search **only when the user explicitly asks for it** —
+`recall --personal ...`, "search my personal history", "when did I discuss the
+villa", etc. Never on a normal recall.
+
+```bash
+python3 scripts/chronicle.py personal-recall "<the user's question>"
+```
+
+This reads `chronicle/personal/*.md` ON THE FLY, scores locally (bge-m3, lexical
+fallback), and persists NOTHING. Present the dated hits tagged `[Личное <date>]`,
+clearly historical, never as a current fact. If it returns no match, say so
+plainly. Do NOT run this pass in the same breath as an outbound draft unless the
+user asked for it — the whole point of the wall is to keep personal life out of
+send-capable contexts unless summoned.
+
 ## Phase 2 — Source list
 
 End with a one-line-per-source list of what you cited, each as a clickable
@@ -156,3 +200,6 @@ Sources:
   index stores a 500-char embed snippet, not the full note.
 - **Never claim freshness you don't have.** If ollama was down and the index
   wasn't refreshed, say so.
+- **Never treat a chronicle hit as current fact or a decision.** It is a dated
+  historical record of a past conversation; surface it tagged with its date,
+  below the brain, and flag that it may be stale.

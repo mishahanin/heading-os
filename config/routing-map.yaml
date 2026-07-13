@@ -29,6 +29,10 @@ rules:
   "context/": private
   "plans/": private
   "templates/": private
+  # chronicle/ is the Conversation Chronicle (dated history of past sessions) in
+  # the DATA overlay. All CEO data; the personal subtree also air-gaps from the
+  # recall index via deny_segments:[personal]. Fail-closed to private.
+  "chronicle/": private
   # _archive/ is historical CEO content (old migrations + the personal book project
   # under _archive/books/), never live engine functionality. Fail-closed to private.
   "_archive/": private

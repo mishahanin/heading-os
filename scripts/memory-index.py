@@ -363,32 +363,42 @@ def _store_targets(cfg):
     """The physical-store plan: one entry per store, each on its own side of the
     engine/data seam.
 
-    content layers build from the DATA root (`get_data_root()`) into STORE_REL;
-    the `code` collection (skill/rule) builds from the ENGINE root
-    (`get_workspace_root()`) into CODE_STORE_REL. Returns a list of dicts
-    {name, root, store_rel, layers(set)}. The roots are resolved here (not at
-    import) so tests can monkeypatch get_data_root/get_workspace_root on this
-    module. A configured layer that belongs to no collection is reported once and
-    simply not built (it would otherwise silently route nowhere)."""
+    The DATA store (`get_data_root()` -> STORE_REL) physically holds every
+    NON-code collection's layers -- `content` plus any DATA-side collection such
+    as `chronicle`. The `code` collection (skill/rule) builds from the ENGINE root
+    (`get_workspace_root()`) into CODE_STORE_REL. Store membership only decides
+    WHERE rows live; query-time `--collection` still scopes RESULTS per collection
+    via the `allowed` layer filter, so a DATA-side collection (chronicle) can share
+    the physical store with `content` yet stay out of the default `content` result
+    set. Returns a list of dicts {name, root, store_rel, layers(set)}. The roots
+    are resolved here (not at import) so tests can monkeypatch
+    get_data_root/get_workspace_root on this module. A configured layer that
+    belongs to no collection is reported once and simply not built (it would
+    otherwise silently route nowhere)."""
     colls = cfg.get("collections") or {}
     if colls:
-        content_layers = set(colls.get("content", []))
         code_layers = set(colls.get("code", []))
+        # DATA store = union of all non-code collections (content, chronicle, ...).
+        data_layers = set()
+        for _name, _lyrs in colls.items():
+            if _name == "code":
+                continue
+            data_layers.update(_lyrs)
     else:
         # Back-compat: no collections map -> every layer builds into the single
         # content store (the pre-split behaviour; keeps minimal configs working).
-        content_layers = {lc["layer"] for lc in cfg.get("layers", [])}
+        data_layers = {lc["layer"] for lc in cfg.get("layers", [])}
         code_layers = set()
     targets = [{
         "name": "content", "root": get_data_root(),
-        "store_rel": STORE_REL, "layers": content_layers,
+        "store_rel": STORE_REL, "layers": data_layers,
     }]
     if code_layers:
         targets.append({
             "name": "code", "root": get_workspace_root(),
             "store_rel": CODE_STORE_REL, "layers": code_layers,
         })
-    covered = content_layers | code_layers
+    covered = data_layers | code_layers
     orphan = [lc["layer"] for lc in cfg.get("layers", []) if lc["layer"] not in covered]
     if orphan:
         sys.stderr.write(

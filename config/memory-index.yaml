@@ -86,6 +86,14 @@ layers:
     glob: "datastore/**/*-extract.md"  # markdown companions of binary source-of-truth docs
   - layer: memory
     glob: "auto-memory/*.md"  # canonical data auto-memory (kept in sync with the native harness store by .claude/hooks/memory-reconcile.py)
+  # --- chronicle collection (dated history of past sessions, queried separately) ---
+  - layer: chronicle
+    glob: "chronicle/business/**/*.md"  # business chronicle -> content-side, ranked below brain
+    # NB: chronicle/personal/ is deliberately NOT a layer here. The `personal`
+    # segment is a HARD-CODED air-gap deny (scripts/utils/air_gap.py), so personal
+    # chronicle never enters ANY persistent index. Personal recall is on-the-fly
+    # only: scripts/chronicle.py personal-recall reads chronicle/personal/*.md at
+    # query time and persists nothing (see /recall --personal).
   # --- code collection (the machinery, queried separately) ---
   - layer: skill
     glob: ".claude/skills/**/SKILL.md"
@@ -107,6 +115,15 @@ layers:
 collections:
   content: [odin, thread, crm, linkedin, context, reference, plans, outputs, knowledge, datastore-extract, memory]
   code: [skill, rule]
+  # chronicle: dated history of past sessions. A DATA-side collection: its rows
+  # live in the same physical store as `content` (see _store_targets), but it is
+  # queried SEPARATELY (`query --collection chronicle`) and is NOT in `content`,
+  # so the default /recall never mixes it in. /recall runs it as a secondary pass
+  # and appends its hits BELOW the brain -- the structural below-brain guarantee.
+  chronicle: [chronicle]
+  # Personal chronicle has NO collection here: the `personal` segment is a
+  # hard-coded air-gap deny, so it is never in any persistent store. Personal
+  # recall is on-the-fly only (scripts/chronicle.py personal-recall).
 
 # Chunking (2026-06-11): long documents are split into overlapping chunks, each
 # embedded as its own row (id = path for chunk 0, path#N for the rest), so content

@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily 31C Conversation Chronicle build (03:00, host local)
+
+[Timer]
+# Daily incremental chronicle build at 03:00 -- deliberately BEFORE the 03:30
+# memory-index refresh, so the day's new business chronicle entries are embedded
+# into the recall index the same night. No timezone suffix: the build does no
+# date math, so the exact wall-clock hour is cosmetic. Persistent=true runs a
+# missed fire on next boot (covers "the machine was off overnight") without a
+# separate OnBootSec trigger and without racing a manual build at install time.
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

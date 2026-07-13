@@ -95,6 +95,9 @@
 
     KB[knowledge base&lt;br/&gt;knowledge/] --&gt;|promote-knowledge.py&lt;br/&gt;manual| COR[corporate knowledge&lt;br/&gt;knowledge/shared]
 
+    SESSJSONL([past session transcripts&lt;br/&gt;~/.claude/projects]) --&gt;|chronicle.py build&lt;br/&gt;daily timer, local gemma3:4b| CHR[conversation chronicle&lt;br/&gt;chronicle/business, personal]
+    CHR --&gt;|memory-index.py build&lt;br/&gt;business only, ranked below brain| IDX
+
     HYG([memory-hygiene.py: weekly Mon 07:34]) -.-&gt;|detect only, never mutates| AM
     HYG -.-&gt;|detect only| ODIN</pre>
 <h2 id="the-stores">The stores</h2>
@@ -137,8 +140,14 @@
 <td><code>data-root/threads/business</code>, <code>personal</code></td>
 <td>DATA (private)</td>
 </tr>
+<tr>
+<td>conversation chronicle</td>
+<td><code>data-root/chronicle/business</code>, <code>personal</code></td>
+<td>DATA (private)</td>
+</tr>
 </tbody>
 </table>
+<p>The conversation chronicle is a distinct historical CLASS, not one of the belief stores above. It records &ldquo;on date X we discussed Y&rdquo; from past session transcripts; it is never promoted into the brain and never treated as a current fact. It is listed here because it shares the recall index, ranked below the belief stores, with its personal subtree air-gapped.</p>
 <h2 id="the-edges-one-by-one">The edges, one by one</h2>
 <ul>
 <li><strong>Write during a session (on demand).</strong> A fact is written to auto-memory (<code>data-root/auto-memory/*.md</code>) with a one-line pointer added to <code>MEMORY.md</code>. This is the canonical, durable home.</li>
@@ -148,6 +157,7 @@
 <li><strong>Index build, <code>scripts/memory-index.py build</code> (daily 03:30, incremental).</strong> Rebuilds the local semantic recall index over the business memory corpus (Odin brain, business threads, business CRM) and the auto-memory records, computed locally via ollama <code>bge-m3</code>. Recall is hybrid: a dense channel (bge-m3 cosine, threshold-gated) fused with a sparse channel (SQLite FTS5 BM25) by reciprocal rank fusion. Query it with <code>memory-index.py query "&lt;text&gt;"</code>.</li>
 <li><strong>Promote, <code>scripts/promote-knowledge.py</code> (manual).</strong> Copies a personal <code>knowledge/</code> note into corporate <code>knowledge/shared/{type}/</code> with provenance, for sharing down to executives.</li>
 <li><strong>Consolidate, <code>/dream</code> (manual, human-gated).</strong> The judgement pass: merges duplicates, rewords, resolves contradictions, clears orphans across auto-memory and the ODIN brain. Nothing here is automatic.</li>
+<li><strong>Chronicle build, <code>scripts/chronicle.py build</code> (daily timer, incremental).</strong> Summarizes past session transcripts (top-level sessions only, never nested subagent logs) with a local model (<code>gemma3:4b</code>) into one dated entry per non-trivial conversation, tagged business or personal. Business entries index into the <code>chronicle</code> collection, recalled BELOW the belief stores. Personal entries are NEVER indexed (the <code>personal</code> segment is a hard-coded air-gap deny); they are recallable only on explicit demand via <code>scripts/chronicle.py personal-recall</code>, which reads <code>chronicle/personal/*.md</code> on the fly (local bge-m3, lexical fallback) and persists nothing - so personal life never surfaces into a working/send context unless the CEO summons it. It never writes to the brain and never sends anything, so it is safe to run unattended - the same family as the daily index build and auto-retire.</li>
 <li><strong>Hygiene, <code>scripts/memory-hygiene.py</code> (weekly Monday 07:34).</strong> A detector, never a mutator. It aggregates objective defects (orphan memory files, <code>MEMORY.md</code> over budget, Odin temporal-validity errors) into one dated report and exits non-zero when any is present. A human resolves what it finds, usually via <code>/dream</code>.</li>
 </ul>
 <h2 id="driving-it-from-one-place">Driving it from one place</h2>

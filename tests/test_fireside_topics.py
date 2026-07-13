@@ -174,3 +174,25 @@ def test_current_cycle_reads_schedule():
     assert ft.current_cycle(sched, date(2026, 6, 25)) == 1
     assert ft.current_cycle(sched, date(2026, 7, 10)) == 2   # cycle 1 over, next is cycle 2
     assert ft.current_cycle([], date(2026, 6, 25)) == 1      # empty -> 1
+
+
+# _SCHED live cycle: Week-1 Mon 2026-06-29, last session 2026-07-08.
+def test_cycle_rollover_needed_fires_when_cycle_ended_and_config_newer():
+    # New cycle configured (Week-1 Mon 2026-07-13) and the live cycle is over.
+    assert ft.cycle_rollover_needed(_SCHED, date(2026, 7, 13), date(2026, 7, 13)) is True
+
+
+def test_cycle_rollover_needed_idempotent_when_config_matches_live():
+    # Config's Week-1 Monday already equals the live schedule's -> already built.
+    assert ft.cycle_rollover_needed(_SCHED, date(2026, 6, 29), date(2026, 7, 20)) is False
+
+
+def test_cycle_rollover_needed_holds_while_current_cycle_active():
+    # Operator pre-edited the config, but the current cycle has not ended yet.
+    assert ft.cycle_rollover_needed(_SCHED, date(2026, 7, 13), date(2026, 7, 2)) is False
+    # Boundary: on the last session day the cycle is not yet fully over.
+    assert ft.cycle_rollover_needed(_SCHED, date(2026, 7, 13), date(2026, 7, 8)) is False
+
+
+def test_cycle_rollover_needed_empty_schedule_rolls():
+    assert ft.cycle_rollover_needed([], date(2026, 7, 13), date(2026, 7, 13)) is True

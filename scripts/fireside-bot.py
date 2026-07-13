@@ -120,6 +120,23 @@ CYCLE_1_START_MONDAY = datetime.fromisoformat(_fireside_schedule["cycle_1_start_
 WEEK_1_TO_9_SCHEDULE = _fireside_schedule["weeks"]
 
 
+def _load_fireside_config_fresh() -> tuple:
+    """Re-read the cycle config from disk, returning (start_monday, weeks).
+
+    A long-running daemon freezes CYCLE_1_START_MONDAY / WEEK_1_TO_9_SCHEDULE at
+    import. Cycle rollover must see config edits that landed after the daemon
+    started (e.g. a git pull), so it re-reads the file each call rather than
+    trusting the frozen constants.
+    """
+    path = resolve_config_with_example(
+        "fireside-schedule.json",
+        WORKSPACE_ROOT / "scripts" / "fireside-schedule.example.json",
+    )
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    start = datetime.fromisoformat(cfg["cycle_1_start_monday"]).date()
+    return start, cfg["weeks"]
+
+
 # ============================================================
 # Time helper (the configured timezone)
 # ============================================================
@@ -605,11 +622,17 @@ def load_tribe_metadata() -> dict:
 # Schedule generator (Phase 2 task 2.3)
 # ============================================================
 
-def build_schedule(roster_by_name: dict) -> tuple[list, list[str]]:
-    """Convert WEEK_1_TO_9_SCHEDULE into the schedule.json structure.
+def build_schedule(roster_by_name: dict, start_monday=None,
+                   weeks=None) -> tuple[list, list[str]]:
+    """Convert a week calendar into the schedule.json structure.
 
     Args:
         roster_by_name: dict[full_name -> {telegram_username, ...}] for username lookup.
+        start_monday: Week-1 Monday date. Defaults to the module constant
+            CYCLE_1_START_MONDAY (frozen at import). Pass a fresh value when a
+            long-running daemon rebuilds from an updated config file.
+        weeks: the week calendar (list of {week, theme, mon, wed}). Defaults to
+            the module constant WEEK_1_TO_9_SCHEDULE.
 
     Returns:
         (schedule_entries, missing_speakers) where:
@@ -618,13 +641,18 @@ def build_schedule(roster_by_name: dict) -> tuple[list, list[str]]:
     """
     from datetime import timedelta
 
+    if start_monday is None:
+        start_monday = CYCLE_1_START_MONDAY
+    if weeks is None:
+        weeks = WEEK_1_TO_9_SCHEDULE
+
     entries = []
     missing = []
-    for week_data in WEEK_1_TO_9_SCHEDULE:
+    for week_data in weeks:
         week_num = week_data["week"]
         theme = week_data["theme"]
-        # Mon = CYCLE_1_START + (week-1)*7 days; Wed = Mon + 2
-        mon_date = CYCLE_1_START_MONDAY + timedelta(days=(week_num - 1) * 7)
+        # Mon = start_monday + (week-1)*7 days; Wed = Mon + 2
+        mon_date = start_monday + timedelta(days=(week_num - 1) * 7)
         wed_date = mon_date + timedelta(days=2)
 
         for day_label, day_date, speaker_names in [
@@ -3075,6 +3103,72 @@ def cmd_cycle_end_invite(args) -> None:
     print(f"{GREEN}cycle-end-invite{RESET}: drafted to CEO for approval (cycle {cycle})")
 
 
+def cmd_cycle_rollover(args) -> None:
+    """Rebuild schedule.json when a new cycle config lands and the old cycle ended.
+
+    Daily cron. Reads the cycle config FRESH from disk (not the frozen import
+    constants) and, if ft.cycle_rollover_needed() says the live cycle is over and
+    the config describes a newer Week-1 Monday, backs up the outgoing schedule,
+    rebuilds from the fresh config against the existing roster, saves, logs, and
+    DMs the CEO a heads-up. Every non-rollover day is a no-op. Idempotent: once
+    rebuilt the live Week-1 Monday equals the config's, so it stops firing.
+    Never resets helmsmen or roster - those stay the CEO's call.
+    """
+    schedule = load_state(SCHEDULE) or []
+    try:
+        start_monday, weeks = _load_fireside_config_fresh()
+    except (OSError, ValueError, KeyError) as e:
+        print(f"{RED}cycle-rollover: cannot read cycle config: {e}{RESET}", file=sys.stderr)
+        return
+
+    today = _today_local_date()
+    if not ft.cycle_rollover_needed(schedule, start_monday, today):
+        print(f"{GRAY}cycle-rollover: no rollover due (cycle active or already built){RESET}")
+        return
+
+    roster_by_name = build_roster_by_name(load_state(TRIBE_ROSTER) or [])
+    entries, missing = build_schedule(roster_by_name, start_monday=start_monday, weeks=weeks)
+    if not entries:
+        print(f"{RED}cycle-rollover: rebuilt schedule is empty; aborting{RESET}", file=sys.stderr)
+        return
+    dates = sorted({e["session_date"] for e in entries})
+    unresolved = sorted(set(missing))
+
+    if getattr(args, "dry_run", False):
+        print(f"{CYAN}--- cycle-rollover (DRY RUN) ---{RESET}")
+        print(f"would rebuild {len(entries)} entries, {dates[0]} -> {dates[-1]}")
+        if unresolved:
+            print(f"unresolved speakers: {unresolved}")
+        return
+
+    # Back up the outgoing cycle before overwriting (one backup per rollover day).
+    old = state_path(SCHEDULE)
+    if old.exists():
+        backup = state_path(f"schedule.pre-{today.isoformat()}.bak.json")
+        if not backup.exists():
+            backup.write_text(old.read_text(encoding="utf-8"), encoding="utf-8")
+
+    save_state(SCHEDULE, entries)
+    _log_event("cycle_rollover", week1=dates[0], last=dates[-1],
+               entries=len(entries), unresolved=unresolved)
+    print(f"{GREEN}cycle-rollover{RESET}: rebuilt {len(entries)} entries "
+          f"({dates[0]} -> {dates[-1]}), unresolved={len(unresolved)}")
+
+    # Heads-up DM to the CEO (best-effort; never fail the job on a send error).
+    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    if misha_id:
+        note = ("Fireside cycle rolled over automatically.\n"
+                f"New schedule: {dates[0]} -> {dates[-1]} ({len(entries)} slots).\n"
+                "Helmsman for week 1 is not set yet - pick one when ready.")
+        if unresolved:
+            note += ("\nSpeakers with no Telegram match (roster refresh needed): "
+                     + ", ".join(unresolved))
+        try:
+            get_bot().send_message(misha_id, note, parse_mode="")
+        except TelegramAPIError as e:
+            print(f"{YELLOW}cycle-rollover: heads-up DM failed: {e}{RESET}", file=sys.stderr)
+
+
 # ============================================================
 # Subcommand: topic-ideas (console-first backlog reader)
 # ============================================================
@@ -3753,6 +3847,8 @@ def main() -> int:
     topic_digest.add_argument("--dry-run", action="store_true", help="Print without sending")
     cycle_end = sub.add_parser("cycle-end-invite", help="Draft end-of-cycle topic invite to CEO for approval")
     cycle_end.add_argument("--dry-run", action="store_true", help="Print draft without DMing CEO")
+    cycle_rollover = sub.add_parser("cycle-rollover", help="Rebuild schedule.json from fresh config when the cycle rolls over")
+    cycle_rollover.add_argument("--dry-run", action="store_true", help="Show what would rebuild without writing")
     topic_ideas = sub.add_parser("topic-ideas", help="List the topic backlog (terminal)")
     topic_ideas.add_argument("--cycle", type=int, default=None, help="Filter to one cycle")
     topic_ideas.add_argument("--new", action="store_true", help="Only ideas since last digest")
@@ -3789,6 +3885,7 @@ def main() -> int:
         "topic-nudge": cmd_topic_nudge,
         "topic-digest": cmd_topic_digest,
         "cycle-end-invite": cmd_cycle_end_invite,
+        "cycle-rollover": cmd_cycle_rollover,
         "topic-ideas": cmd_topic_ideas,
         "log-session": cmd_log_session,
         "set-webhook": cmd_set_webhook,

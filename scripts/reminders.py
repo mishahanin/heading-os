@@ -23,7 +23,11 @@ from scripts.utils import reminders_store as rs  # noqa: E402
 
 def cmd_add(args) -> int:
     if args.once:
-        date.fromisoformat(args.once)  # validate
+        try:
+            date.fromisoformat(args.once)  # validate
+        except ValueError:
+            print(f"invalid date: {args.once}", file=sys.stderr)
+            return 2
         rec = {"kind": "once", "when": args.once, "message": args.message}
     elif args.recurring:
         if args.recurring not in rs.RECURRENCE_RULES:

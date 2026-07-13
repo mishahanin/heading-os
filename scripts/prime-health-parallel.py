@@ -53,6 +53,7 @@ DISPLAY_ORDER = [
     "sync_exchange_health",
     "odin_cadence",
     "ops_radar",
+    "reminders_due",
 ]
 
 # Section banner for each block (matches /prime numbering for legibility)
@@ -66,6 +67,7 @@ SECTION_BANNERS = {
     "sync_exchange_health": "### 2.13 Sync-Exchange Daemon",
     "odin_cadence": "### 2.14 Odin Cadence",
     "ops_radar": "### 2.15 Ops-Radar",
+    "reminders_due": "### 2.16 Durable Reminders",
 }
 
 # Per-check timeout (seconds). Real budget for /prime parallel block.
@@ -387,6 +389,31 @@ def run_ops_radar(workspace_root: Path) -> dict[str, Any]:
     }
 
 
+def run_reminders_due(workspace_root: Path) -> dict[str, Any]:
+    """Read-only: surface due + upcoming durable reminders as a /prime backstop.
+
+    Never mutates the store, never marks fired. ceo-only surface via outputs/;
+    omit_if_empty keeps the brief clean when nothing is due or upcoming.
+    """
+    from datetime import date as _date
+
+    try:
+        from scripts.utils import reminders_store as rs
+        today = _date.today()
+        due = rs.due_records(today)
+        upcoming = rs.upcoming(today, days=7)
+    except Exception as exc:  # noqa: BLE001 - boundary; reported inline
+        return {"status": "error", "output": f"reminders check failed: {exc}",
+                "omit_if_empty": True}
+    lines = []
+    for r in due:
+        lines.append(f"DUE: {r['message']}" + (f"  -> {r['command']}" if r.get("command") else ""))
+    for r in upcoming:
+        when = r["when"] if r["kind"] == "once" else "recurring"
+        lines.append(f"upcoming ({when}): {r['message']}")
+    return {"status": "ok", "output": "\n".join(lines), "omit_if_empty": True}
+
+
 # Map check key -> (callable, friendly label)
 CHECKS = {
     "crm_health": (run_crm_health, "CRM health"),
@@ -398,6 +425,7 @@ CHECKS = {
     "sync_exchange_health": (run_sync_exchange_health, "Sync-Exchange daemon health"),
     "odin_cadence": (run_odin_cadence, "Odin cadence nudge"),
     "ops_radar": (run_ops_radar, "Ops-radar detector"),
+    "reminders_due": (run_reminders_due, "Durable reminders"),
 }
 
 

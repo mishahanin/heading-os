@@ -36,6 +36,27 @@ def test_recurring_due_only_on_rule_date_once_per_period():
     assert rs.is_due(fired, date(2026, 8, 6)) is False  # already fired this period
 
 
+def test_recurring_due_across_month_boundary():
+    # First Friday of May 2026 is May 1 -> target is Apr 30 (previous month).
+    # A month-keyed `today.month` lookup never matches this target: on Apr 30
+    # `today.month=4` computes first-friday-minus-1 of April, not May's.
+    rec = {"kind": "recurring", "when": "first-friday-minus-1", "last_fired": None}
+    assert rs.is_due(rec, date(2026, 4, 30)) is True
+    assert rs.is_due(rec, date(2026, 5, 1)) is False
+    fired = {**rec, "last_fired": "2026-04-30"}
+    assert rs.is_due(fired, date(2026, 4, 30)) is False
+
+
+def test_upcoming_recurring_across_month_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(rs, "store_path", lambda: tmp_path / "reminders.json")
+    rs.add({"kind": "recurring", "when": "first-friday-minus-1", "last_fired": None, "message": "m"})
+    hits = rs.upcoming(date(2026, 4, 27), days=7)
+    assert len(hits) == 1 and hits[0]["message"] == "m"
+    # A window that reaches neither this month's nor next month's candidate.
+    no_hits = rs.upcoming(date(2026, 5, 10), days=3)
+    assert no_hits == []
+
+
 def test_add_load_roundtrip_atomic(tmp_path, monkeypatch):
     monkeypatch.setattr(rs, "store_path", lambda: tmp_path / "reminders.json")
     saved = rs.add({"kind": "once", "when": "2026-07-26", "message": "hi"})

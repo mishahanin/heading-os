@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily HEADING OS reminders dispatcher (07:45, configured timezone)
+
+[Timer]
+# 07:45 daily in the configured timezone. Persistent=true catches a fire missed
+# because the host was off, running it on next boot -- so a reminder whose date
+# passed while asleep still fires (dispatcher due rule is when<=today).
+OnCalendar=*-*-* 07:45:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

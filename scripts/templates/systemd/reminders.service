@@ -1,0 +1,13 @@
+[Unit]
+Description=HEADING OS durable reminders (due-date nudges -> Telegram)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/reminders-notify.py
+# TZ pins due-date math to the configured timezone regardless of the host.
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

@@ -2,8 +2,9 @@
 """reminders-notify -- timer entrypoint that pushes due reminders to Telegram.
 
 Thin orchestrator. On each fire it reads the reminders store, computes the due
-set (once: when<=today and not fired; recurring: today matches the rule and not
-already fired this period), and sends each due reminder to the CEO's Telegram
+set (once: when<=today and not fired; recurring: within RECURRING_CATCHUP_GRACE_DAYS
+of the most-recent target and not already fired for that target), and sends each
+due reminder to the CEO's Telegram
 alert channel. A record is marked fired ONLY after a successful send, so a
 transient Telegram failure simply leaves it due for the next tick -- nothing is
 lost. Exit is 0 even on send failure (the oneshot unit is never left `failed`);

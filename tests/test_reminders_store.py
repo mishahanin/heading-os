@@ -39,17 +39,18 @@ def test_recurring_due_only_on_rule_date_once_per_period():
 
 
 def test_recurring_catchup_within_grace_window():
-    # Target Aug 6 2026 missed; host boots 2 days late (within the 3-day
+    # Target Aug 6 2026 missed; host boots 6 days late (within the 7-day
     # grace window) -> still fires as a catch-up.
     rec = {"kind": "recurring", "when": "first-friday-minus-1", "last_fired": None}
-    assert rs.is_due(rec, date(2026, 8, 8)) is True
+    assert rs.is_due(rec, date(2026, 8, 8)) is True   # 2 days late
+    assert rs.is_due(rec, date(2026, 8, 12)) is True  # 6 days late, still within 7
 
 
 def test_recurring_not_due_beyond_grace_window():
-    # Target Aug 6 2026 missed; host boots 4 days late (beyond the 3-day
+    # Target Aug 6 2026 missed; host boots 8 days late (beyond the 7-day
     # grace window) -> best-effort catch-up gives up, no longer due.
     rec = {"kind": "recurring", "when": "first-friday-minus-1", "last_fired": None}
-    assert rs.is_due(rec, date(2026, 8, 10)) is False
+    assert rs.is_due(rec, date(2026, 8, 14)) is False
 
 
 def test_recurring_due_across_month_boundary():
@@ -62,8 +63,8 @@ def test_recurring_due_across_month_boundary():
     # grace window, so it IS now due (supersedes the old exact-match
     # expectation that this was False).
     assert rs.is_due(rec, date(2026, 5, 1)) is True
-    # Beyond grace: May 5 is 5 days after the Apr 30 target -> no longer due.
-    assert rs.is_due(rec, date(2026, 5, 5)) is False
+    # Beyond grace: May 8 is 8 days after the Apr 30 target -> no longer due.
+    assert rs.is_due(rec, date(2026, 5, 8)) is False
     fired = {**rec, "last_fired": "2026-04-30"}
     assert rs.is_due(fired, date(2026, 4, 30)) is False
 

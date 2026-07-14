@@ -6,7 +6,7 @@ always_active: true
 
 # Skill Router
 
-Last Verified: 2026-05-28
+Last Verified: 2026-07-14
 
 Automatically match natural-language user messages to the right skill. This rule is always active.
 
@@ -242,7 +242,7 @@ This fallback applies only to local skills in `.claude/skills/`. See the next se
 
 Plugins shipped via the Claude Code plugin system expose skills under a `plugin:skill` namespace. Enablement lives in two tiers: workspace-level `.claude/settings.json` `enabledPlugins`, and user-level `~/.claude/settings.json` `enabledPlugins`. Currently enabled:
 
-- `superpowers:*` v5.1.0 - 14 skills: brainstorming, writing-plans, executing-plans, subagent-driven-development, using-git-worktrees, test-driven-development, systematic-debugging, verification-before-completion, receiving-code-review, requesting-code-review, finishing-a-development-branch, writing-skills, using-superpowers, dispatching-parallel-agents - workspace-level. v5.1.0 (2026-04-30) removed the legacy `/brainstorm`, `/write-plan`, `/execute-plan` slash-command stubs and the `superpowers:code-reviewer` named agent; invoke each skill by its namespaced name (`superpowers:brainstorming`) via the Skill tool. The `using-superpowers` skill bootstraps the set at SessionStart via the plugin's own hook.
+- `superpowers:*` v6.1.1 - 14 skills: brainstorming, writing-plans, executing-plans, subagent-driven-development, using-git-worktrees, test-driven-development, systematic-debugging, verification-before-completion, receiving-code-review, requesting-code-review, finishing-a-development-branch, writing-skills, using-superpowers, dispatching-parallel-agents - workspace-level. The v6 major (upgraded from v5.1.0 on 2026-07-14) kept the same 14-skill set - no skills added or removed - so all namespaced-name bindings remain valid. The earlier v5.1.0 (2026-04-30) had removed the legacy `/brainstorm`, `/write-plan`, `/execute-plan` slash-command stubs and the `superpowers:code-reviewer` named agent; invoke each skill by its namespaced name (`superpowers:brainstorming`) via the Skill tool. The `using-superpowers` skill bootstraps the set at SessionStart via the plugin's own hook.
 - `skill-creator:skill-creator` - workspace-level
 - `claude-md-management:revise-claude-md`, `claude-md-management:claude-md-improver` - workspace-level
 - `frontend-design:frontend-design` - workspace-level

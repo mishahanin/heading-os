@@ -64,7 +64,7 @@ def test_rm_nonexistent_id(tmp_path):
     assert "not found" in r.stdout
 
 
-def test_done_is_alias_of_rm(tmp_path):
+def test_done_removes_once_reminder(tmp_path):
     (tmp_path / "outputs" / "operations" / "reminders").mkdir(parents=True)
     # Add a reminder
     r = _run(["add", "--once", "2026-07-26", "--message", "Test done"], tmp_path)
@@ -80,6 +80,21 @@ def test_done_is_alias_of_rm(tmp_path):
     # Verify it's gone
     out = _run(["list"], tmp_path)
     assert "Test done" not in out.stdout
+
+
+def test_done_spares_recurring_reminder(tmp_path):
+    (tmp_path / "outputs" / "operations" / "reminders").mkdir(parents=True)
+    r = _run(["add", "--recurring", "first-friday-minus-1", "--message", "Monthly AMA"], tmp_path)
+    assert r.returncode == 0
+    out = _run(["list", "--json"], tmp_path)
+    records = json.loads(out.stdout)
+    rid = records[0]["id"]
+    r = _run(["done", rid], tmp_path)
+    assert r.returncode == 2, f"Expected exit 2, got {r.returncode}"
+    assert "rm" in r.stderr and rid in r.stderr
+    # Still present -- 'done' must not permanently delete a recurring reminder.
+    out = _run(["list"], tmp_path)
+    assert "Monthly AMA" in out.stdout
 
 
 def test_invalid_once_date_exits_2(tmp_path):

@@ -21,6 +21,12 @@ from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 
 RECURRENCE_RULES = {"first-friday-minus-1"}
 
+# Bounds how late a missed recurring target still fires as a catch-up. A
+# `once` reminder catches up no matter how stale (it names one specific,
+# still-relevant day); a recurring nudge that is days past its period is
+# usually no longer useful, so recurring catch-up is best-effort and capped.
+RECURRING_CATCHUP_GRACE_DAYS = 3
+
 
 def store_path() -> Path:
     return get_outputs_dir() / "operations" / "reminders" / "reminders.json"
@@ -81,7 +87,11 @@ def mark_fired(rid: str, today: date) -> None:
             if r.get("kind") == "once":
                 r["status"] = "fired"
             else:
-                r["last_fired"] = today.isoformat()
+                # Record the MATCHED target, not `today` -- on a catch-up day
+                # those differ, and stamping `today` would leave the real
+                # target date perpetually re-firing.
+                target = _current_recurring_target(r, today)
+                r["last_fired"] = target.isoformat() if target else today.isoformat()
             break
     save(records)
 
@@ -106,6 +116,13 @@ def _next_month_date(today: date) -> date:
     return date(today.year, today.month + 1, 1)
 
 
+def _prev_month_date(today: date) -> date:
+    """First day of the month before `today`, rolling the year at January."""
+    if today.month == 1:
+        return date(today.year - 1, 12, 1)
+    return date(today.year, today.month - 1, 1)
+
+
 def _recurring_candidates(rule: str, today: date) -> list[date]:
     """Both the current-month and next-month target dates for `rule`.
 
@@ -121,6 +138,29 @@ def _recurring_candidates(rule: str, today: date) -> list[date]:
     ]
 
 
+def _current_recurring_target(record: dict, today: date) -> date | None:
+    """The most-recent recurring target still eligible for catch-up, or None.
+
+    Scans the previous, current, and next month's target for the record's
+    rule (three candidates cover a target that lands in the trailing days of
+    the previous month, e.g. first-friday-minus-1 for May landing on Apr 30).
+    This prev/current/next-month scan assumes every recurrence rule's target
+    lands within +/-1 month of `today` -- true for first-friday-minus-1, the
+    only rule registered today; a rule with a wider offset would need a wider
+    scan. Keeps only candidates at or before `today` and within
+    RECURRING_CATCHUP_GRACE_DAYS of it, and returns the most recent (max) of
+    those -- i.e. the one period that is actually due right now.
+    """
+    rule = record["when"]
+    candidate_months = (_prev_month_date(today), today, _next_month_date(today))
+    candidates = [_recurring_due_date(rule, d) for d in candidate_months]
+    eligible = [
+        c for c in candidates
+        if c <= today and (today - c).days <= RECURRING_CATCHUP_GRACE_DAYS
+    ]
+    return max(eligible) if eligible else None
+
+
 def is_due(record: dict, today: date) -> bool:
     kind = record.get("kind")
     if kind == "once":
@@ -128,10 +168,8 @@ def is_due(record: dict, today: date) -> bool:
             return False
         return date.fromisoformat(record["when"]) <= today
     if kind == "recurring":
-        if today not in _recurring_candidates(record["when"], today):
-            return False
-        last = record.get("last_fired")
-        return last != today.isoformat()
+        target = _current_recurring_target(record, today)
+        return target is not None and record.get("last_fired") != target.isoformat()
     raise ValueError(f"unknown reminder kind: {kind}")
 
 

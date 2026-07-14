@@ -67,6 +67,23 @@ def cmd_rm(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_done(args) -> int:
+    rec = next((r for r in rs.load() if r.get("id") == args.id), None)
+    if rec is None:
+        print("not found", args.id)
+        return 1
+    if rec.get("kind") == "recurring":
+        print(
+            f"{args.id} is a recurring reminder; 'done' only completes once "
+            f"reminders. Use 'rm {args.id}' to permanently delete it.",
+            file=sys.stderr,
+        )
+        return 2
+    ok = rs.remove(args.id)
+    print("removed" if ok else "not found", args.id)
+    return 0 if ok else 1
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Durable reminders CLI.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -88,9 +105,9 @@ def main() -> int:
     pr.add_argument("id")
     pr.set_defaults(fn=cmd_rm)
 
-    pd = sub.add_parser("done", help="Mark a reminder done (remove it)")
+    pd = sub.add_parser("done", help="mark a once reminder done (removes it)")
     pd.add_argument("id")
-    pd.set_defaults(fn=cmd_rm)
+    pd.set_defaults(fn=cmd_done)
 
     args = p.parse_args()
     return args.fn(args)

@@ -25,7 +25,7 @@ RECURRENCE_RULES = {"first-friday-minus-1"}
 # `once` reminder catches up no matter how stale (it names one specific,
 # still-relevant day); a recurring nudge that is days past its period is
 # usually no longer useful, so recurring catch-up is best-effort and capped.
-RECURRING_CATCHUP_GRACE_DAYS = 3
+RECURRING_CATCHUP_GRACE_DAYS = 7
 
 
 def store_path() -> Path:

@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly 31C dream-shadow scan (03:10, host local)
+
+[Timer]
+# Daily cadence, before memory-index-refresh.timer (03:30). No embedding call
+# is needed for the prune pass (parses frontmatter directly); scan_redundancy
+# embeds its own pair-comparison texts independently, so this detector needs no
+# fresh index to run against. Persistent=true runs a missed night on next boot.
+OnCalendar=*-*-* 03:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -113,10 +113,17 @@ def _cosine(u, v):
     return 0.0 if nu == 0 or nv == 0 else dot / (nu * nv)
 
 
-def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None) -> dict:
+def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None, timeout=120) -> dict:
     """Advisory near-duplicate detector over auto-memory/*.md. Proposes only; never
     mutates. Returns {"ok": bool, "pairs": [{a,b,score}], "note": str}. Degrades to
-    ok=False (never raises) when the embedder is unavailable."""
+    ok=False (never raises) when the embedder is unavailable.
+
+    `timeout` (seconds, default 120) is the per-request socket timeout passed
+    to the default embedder. A single request can batch up to 32 full memory
+    files -- on CPU-only ollama that can exceed 120s as the corpus grows, so a
+    background/cron caller with no interactive latency pressure (e.g.
+    dream-shadow.py) should pass a longer value. Ignored when a custom
+    `embedder` callable is supplied (the caller owns its own timeout then)."""
     files = sorted(p for p in Path(memory_dir).glob("*.md") if p.name != "MEMORY.md")
     if len(files) < 2:
         return {"ok": True, "pairs": [], "note": "fewer than 2 memory files"}
@@ -125,7 +132,7 @@ def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None) -> dict:
             from scripts.utils.embeddings import embed
 
             def embedder(ts):
-                return embed(ts, model="bge-m3", host="http://localhost:11434")
+                return embed(ts, model="bge-m3", host="http://localhost:11434", timeout=timeout)
         except Exception as e:
             return {"ok": False, "pairs": [], "note": f"embedder unavailable: {e}"}
     texts = [f.read_text(encoding="utf-8") for f in files]

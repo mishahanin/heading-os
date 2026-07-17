@@ -29,12 +29,20 @@ outputs/operations/viraid/state.json -- same globs, same exclusions, same gate.
 If mode-catalog's allowlist or detection regexes change, change this script too.
 
 Needs no ollama (pure counting). Exit 0 always.
+
+Gap #5 enrichment: when reflect-ready clusters exist, `main()` also writes a
+dated report (episode membership + shared tags per cluster) under
+outputs/operations/odin-cadence/ -- never to the brain. This is the ONE
+side effect this otherwise read-only script has; `compute()` itself still
+performs no writes (existing tests call `compute()` directly and remain
+read-only).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import date, datetime
@@ -235,6 +243,9 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
       stale_count      -- clusters un-fed for >= STALE_CLUSTER_DAYS
       oldest_age_days  -- age of the most-stale cluster (None when none datable)
       ages             -- per-cluster age in days (None where undatable)
+      clusters         -- Gap #5 enrichment: per-cluster {episodes, shared_tags,
+                          age_days} detail (episode filenames + the union of
+                          their tags), same order as `ages`
 
     A cluster's age = days since its NEWEST episode was logged (the smallest node
     age in the component). A cluster whose even-newest episode is old has been
@@ -243,17 +254,17 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
     if today is None:
         today = datetime.now(get_default_tz()).date()
     base = root / EPISODES_DIR
-    empty = {"count": 0, "stale_count": 0, "oldest_age_days": None, "ages": []}
+    empty = {"count": 0, "stale_count": 0, "oldest_age_days": None, "ages": [], "clusters": []}
     if not base.is_dir():
         return empty
 
-    nodes = []  # list of (set_of_tags, age_days|None)
+    nodes = []  # list of (set_of_tags, age_days|None, filename)
     for p in sorted(base.glob("*.md")):
         block = _frontmatter_block(p.read_text(encoding="utf-8", errors="replace"))
         if _fm_scalar(block, "status") != "raw":
             continue
         tags = set(_fm_list(block, "entities")) | set(_fm_list(block, "keywords"))
-        nodes.append((tags, _episode_age_days(block, today)))
+        nodes.append((tags, _episode_age_days(block, today), p.name))
 
     n = len(nodes)
     parent = list(range(n))
@@ -279,11 +290,19 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
         members.setdefault(find(i), []).append(i)
 
     ages: list[int | None] = []
+    clusters: list[dict[str, Any]] = []
     for idxs in members.values():
         if len(idxs) < 2:
             continue
         node_ages = [nodes[i][1] for i in idxs if nodes[i][1] is not None]
-        ages.append(min(node_ages) if node_ages else None)  # newest = smallest age
+        age = min(node_ages) if node_ages else None  # newest = smallest age
+        ages.append(age)
+        shared_tags = sorted(set().union(*(nodes[i][0] for i in idxs)))
+        clusters.append({
+            "episodes": [nodes[i][2] for i in idxs],
+            "shared_tags": shared_tags,
+            "age_days": age,
+        })
 
     datable = [a for a in ages if a is not None]
     return {
@@ -291,6 +310,7 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
         "stale_count": sum(1 for a in datable if a >= STALE_CLUSTER_DAYS),
         "oldest_age_days": max(datable) if datable else None,
         "ages": ages,
+        "clusters": clusters,
     }
 
 
@@ -334,6 +354,7 @@ def compute(root: Path, min_entries: int) -> dict[str, Any]:
         "reflect_clusters": clusters,
         "stale_clusters": ca["stale_count"],
         "oldest_cluster_age_days": ca["oldest_age_days"],
+        "cluster_detail": ca["clusters"],
         "min_entries": min_entries,
         "nudge": nudge,
         "reasons": reasons,
@@ -341,7 +362,37 @@ def compute(root: Path, min_entries: int) -> dict[str, Any]:
     }
 
 
-def suggestion_line(r: dict[str, Any]) -> str:
+def write_cadence_report(root: Path, result: dict[str, Any], today: date) -> Path | None:
+    """Write a dated report of cluster membership when `cluster_detail` is
+    non-empty; return the path, or None (writes nothing) on a clean week.
+
+    Deliberately different from dream-shadow's always-write posture: this
+    report PREVIEWS content (which episodes cluster, on what tags) rather
+    than gating a mechanical defect, so an empty week writes nothing."""
+    clusters = result.get("cluster_detail") or []
+    if not clusters:
+        return None
+    report_dir = root / "outputs" / "operations" / "odin-cadence"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    path = report_dir / f"{today.isoformat()}_odin-cadence_report.md"
+    lines = [
+        "# Odin Cadence Report", "",
+        f"**Generated:** {today.isoformat()}", "",
+        f"## Reflect-Ready Clusters: {len(clusters)}", "",
+    ]
+    for c in clusters:
+        tags = ", ".join(c["shared_tags"]) if c["shared_tags"] else "(none)"
+        age = f"{c['age_days']}d" if c["age_days"] is not None else "unknown age"
+        lines.append(f"- Episodes: {', '.join(c['episodes'])} | shared tags: {tags} | newest {age}")
+    lines.append("")
+    text = "\n".join(lines)
+    tmp = path.with_suffix(".md.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
+def suggestion_line(r: dict[str, Any], report_rel: str | None = None) -> str:
     if not r["nudge"]:
         days = r["days_since"]
         when = f"last collect {days}d ago" if days is not None else "collect never run"
@@ -372,7 +423,10 @@ def suggestion_line(r: dict[str, Any]) -> str:
     if clusters:
         tail.append("/odin reflect")
     detail = ", ".join(parts) if parts else "cadence due"
-    return f"Odin cadence: {when} — {detail}. Run {' or '.join(tail)}."
+    line = f"Odin cadence: {when} — {detail}. Run {' or '.join(tail)}."
+    if report_rel:
+        line += f" (report: {report_rel})"
+    return line
 
 
 # ============================================================
@@ -391,14 +445,19 @@ def main() -> int:
     # so resolve under the DATA root via the data-root seam -- never the engine
     # clone. `root` below is the data root throughout this module.
     root = get_data_root()
+    today = datetime.now(get_default_tz()).date()
     r = compute(root, args.min_entries)
+    report_path = write_cadence_report(root, r, today)
+    report_rel = str(report_path.relative_to(root)) if report_path else None
 
     if args.json:
-        print(json.dumps(r, indent=2, default=str))
+        out = dict(r)
+        out["report_path"] = report_rel
+        print(json.dumps(out, indent=2, default=str))
         return 0
     if args.quiet and not r["nudge"]:
         return 0
-    print(suggestion_line(r))
+    print(suggestion_line(r, report_rel))
     return 0
 
 

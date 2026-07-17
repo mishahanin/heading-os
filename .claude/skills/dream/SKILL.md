@@ -134,6 +134,8 @@ Check workspace state for facts that might contradict or extend existing memorie
    - Use `tail -30` to limit output
    - Skip transcript search entirely if no specific signal warrants it
 
+5. **Shadow worklist:** read the latest `<data-root>/outputs/operations/dream/*_dream-shadow_report.md` if present - its salience-ranked prune and merge candidates are additional signal, computed nightly by `scripts/dream-shadow.py` and never applied automatically.
+
 ### Phase 1B - Context7 Validation
 
 For each memory file that contains a technical claim about a library, framework, or API:
@@ -216,6 +218,10 @@ Write or update memory files based on signals gathered in Phase 1. Every write m
 ### Apply redundancy merge proposals (human-gated)
 
 Read the latest `<data-root>/outputs/operations/memory-hygiene/` report's "## Redundancy (advisory - not gated)" section. For each candidate pair, show Misha both files and ask for approval. On approval, merge the two facts into ONE survivor file (keeping genuinely distinct facts as SEPARATE files - respect one-fact-per-file), update the survivor's `MEMORY.md` pointer, then retire the other file with `python scripts/retire-memory.py <other.md>`. Never auto-merge; each pair needs explicit approval.
+
+### Apply shadow-worklist prune proposals (human-gated)
+
+Read the latest `<data-root>/outputs/operations/dream/*_dream-shadow_report.md` report's "## Prune Candidates (stale + low-salience)" section (same report read as additional signal in Phase 1A). For each candidate, show Misha the file (name, age, type, access_count, salience) and ask for approval. On approval, retire it with `python scripts/retire-memory.py <name.md>`. Never auto-prune; each candidate needs explicit approval, same as the redundancy-merge flow above.
 
 ### What NOT to Write
 

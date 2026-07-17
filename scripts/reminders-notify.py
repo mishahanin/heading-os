@@ -11,7 +11,9 @@ lost. Exit is 0 even on send failure (the oneshot unit is never left `failed`);
 /prime backstops. A corrupt store is a genuine defect and exits non-zero.
 
 Recipient (never hardcoded; read from the gitignored engine .env):
-    REMINDERS_TELEGRAM_TARGET -> ODIN_CADENCE_TELEGRAM_TARGET -> "me"
+    REMINDERS_TELEGRAM_TARGET -> ODIN_CADENCE_TELEGRAM_TARGET -> unconfigured (no send)
+
+Delivery is via the dedicated notifications bot (scripts/utils/telegram_notify.py).
 
 Invoked by scripts/templates/systemd/reminders.service (daily timer). Also
 runnable by hand:  python3 scripts/reminders-notify.py
@@ -20,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -30,9 +31,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils import reminders_store as rs  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 from scripts.utils.paths import load_env  # noqa: E402
+from scripts.utils import telegram_notify  # noqa: E402
 
-TELEGRAM_CLIENT = ".claude/skills/telegram/scripts/telegram_client.py"
-DEFAULT_RECIPIENT = "me"
+# Unconfigured default when no env target is set -- never a send attempt
+# (Telegram's own-account "me"/Saved Messages sentinel is not a valid
+# fallback anywhere in this system).
+DEFAULT_RECIPIENT = ""
 
 
 def _log(msg: str) -> None:
@@ -66,28 +70,16 @@ def send_due(today: date, send_fn) -> list[str]:
     return sent
 
 
-def _telegram_sender(root: Path):
+def _telegram_sender():
     recipient = (
         os.environ.get("REMINDERS_TELEGRAM_TARGET")
         or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")
         or DEFAULT_RECIPIENT
     )
-    tg = root / TELEGRAM_CLIENT
 
     def _send(message: str) -> bool:
-        if not tg.exists():
-            _log(f"telegram client absent ({tg}); /prime will backstop")
-            return False
-        try:
-            proc = subprocess.run(
-                [sys.executable, str(tg), "send", recipient, message],
-                cwd=str(root), capture_output=True, text=True, timeout=120,
-            )
-        except Exception as exc:  # noqa: BLE001 - transient send error non-fatal
-            _log(f"telegram send raised ({type(exc).__name__}: {exc})")
-            return False
-        if proc.returncode != 0:
-            _log(f"telegram send exit {proc.returncode}: {proc.stderr.strip()[:200]}")
+        if not telegram_notify.notify(recipient, message):
+            _log("telegram send failed (see telegram_notify log); /prime will backstop")
             return False
         return True
 
@@ -106,7 +98,7 @@ def main() -> int:
     if not due:
         _log("nothing due")
         return 0
-    sent = send_due(date.today(), _telegram_sender(root))
+    sent = send_due(date.today(), _telegram_sender())
     _log(f"sent {len(sent)}/{len(due)} due reminder(s)")
     return 0
 

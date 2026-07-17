@@ -3,8 +3,13 @@
 Asserts that scripts.utils.alert.alert() fires the right channels per severity
 and that a Telegram-send failure degrades to card+log without raising. The live
 Action Queue (outputs/operations/action-queue/queue.json) and real Telegram are
-NEVER touched: append_cards is monkeypatched to a recorder, and the Telegram
-subprocess is monkeypatched. get_workspace_root is pointed at a temp dir.
+NEVER touched: append_cards is monkeypatched to a recorder, and
+telegram_notify.notify() is monkeypatched (post-migration to the dedicated
+notifications bot - see plans/2026-07-17-heading-os-notification-bot.md). A
+fake ODIN_CADENCE_TELEGRAM_TARGET is set in the fixture so _telegram_target()
+resolves to a real (fake) channel instead of falling through to "" (which
+notify() would legitimately reject as unconfigured - not the failure mode this
+matrix is testing). get_workspace_root is pointed at a temp dir.
 
 Matrix under test:
     critical -> telegram + card + log
@@ -30,24 +35,24 @@ from scripts.utils import alert as alert_mod
 def recorder(tmp_path, monkeypatch):
     """Isolate alert() from the live queue and real Telegram.
 
-    Returns an object capturing the append_cards calls and the Telegram
-    subprocess argv, with a knob to make the Telegram send fail.
+    Returns an object capturing the append_cards calls and the
+    telegram_notify.notify(target, message) calls, with a knob to make the
+    notify call fail.
     """
 
     class Rec:
         def __init__(self):
             self.cards = []          # list of card lists passed to append_cards
-            self.telegram_calls = []  # argv lists passed to subprocess.run
+            self.telegram_calls = []  # (target, message) tuples passed to notify()
             self.telegram_ok = True   # flip to simulate a send failure
 
     rec = Rec()
 
-    # Point the router at a temp workspace and give it a telegram client file
-    # so _send_telegram does not short-circuit on a missing client.
-    client = tmp_path / ".claude" / "skills" / "telegram" / "scripts"
-    client.mkdir(parents=True)
-    (client / "telegram_client.py").write_text("# stub\n", encoding="utf-8")
     monkeypatch.setattr(alert_mod, "get_workspace_root", lambda: tmp_path)
+    # A real (fake) channel target so _telegram_target() resolves to it
+    # instead of falling through to "" (unconfigured) - that's a distinct
+    # case from the send-success/-failure matrix this file tests.
+    monkeypatch.setenv("ODIN_CADENCE_TELEGRAM_TARGET", "-100test")
 
     def fake_append_cards(workspace_root, cards):
         rec.cards.append(cards)
@@ -55,17 +60,11 @@ def recorder(tmp_path, monkeypatch):
 
     monkeypatch.setattr(alert_mod, "_aq_append_fn", fake_append_cards)
 
-    class FakeCompleted:
-        def __init__(self, rc):
-            self.returncode = rc
-            self.stdout = ""
-            self.stderr = "" if rc == 0 else "boom"
+    def fake_notify(target, message):
+        rec.telegram_calls.append((target, message))
+        return rec.telegram_ok
 
-    def fake_run(argv, **kwargs):
-        rec.telegram_calls.append(argv)
-        return FakeCompleted(0 if rec.telegram_ok else 1)
-
-    monkeypatch.setattr(alert_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(alert_mod.telegram_notify, "notify", fake_notify)
 
     return rec
 
@@ -77,10 +76,9 @@ def test_critical_fires_all_three(recorder):
     assert recorder.cards[0][0]["action_type"] == "alert"
     assert recorder.cards[0][0]["priority"] == "P1"
     assert len(recorder.telegram_calls) == 1
-    # argv: [python, client_path, "send", target, message]
-    argv = recorder.telegram_calls[0]
-    assert argv[2] == "send"
-    assert argv[3] == "me"  # default target
+    target, message = recorder.telegram_calls[0]
+    assert target == "-100test"
+    assert "daemon sentinel silent 6m" in message
 
 
 def test_warning_skips_telegram(recorder):
@@ -111,11 +109,16 @@ def test_telegram_failure_degrades_to_card_and_log(recorder):
     assert len(recorder.telegram_calls) == 1   # send was attempted, then failed
 
 
-def test_telegram_subprocess_raise_does_not_propagate(recorder, monkeypatch):
-    def boom(argv, **kwargs):
-        raise OSError("no such session")
+def test_telegram_notify_failure_does_not_propagate(recorder, monkeypatch):
+    # telegram_notify.notify() is contracted to never raise (CAP-2) - its
+    # worst case is returning False. This replaces the old subprocess-raise
+    # test (there is no longer a raising transport call inside
+    # _send_telegram to defend against; that defense now lives entirely
+    # inside notify() itself, covered by tests/test_telegram_notify.py).
+    def fake_notify(target, message):
+        return False
 
-    monkeypatch.setattr(alert_mod.subprocess, "run", boom)
+    monkeypatch.setattr(alert_mod.telegram_notify, "notify", fake_notify)
     # Must not raise; degrades to card+log.
     fired = alert_mod.alert("critical", "daemon eval-drift down", source="watchdog")
     assert fired["telegram"] is False

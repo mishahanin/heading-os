@@ -294,6 +294,53 @@ def main():
     ok &= _check("mixed cluster uses newest -> 0 stale",
                  rm["reflect_clusters"] == 1 and rm["stale_clusters"] == 0)
 
+    # ============================================================
+    # Gap #5 enrichment: cluster_detail membership + write_cadence_report
+    # ============================================================
+    detail_root = cluster_root([
+        ("raw", ["acme", "bob"], ["mnda"]),
+        ("raw", ["acme", "carol"], ["demo"]),
+    ])
+    ca = oc.analyze_reflect_clusters(detail_root, today)
+    ok &= _check("cluster_detail has 1 cluster", len(ca["clusters"]) == 1)
+    cd = ca["clusters"][0]
+    ok &= _check("cluster_detail episodes lists both filenames",
+                 set(cd["episodes"]) == {"e0.md", "e1.md"})
+    ok &= _check("cluster_detail shared_tags is the tag union",
+                 set(cd["shared_tags"]) == {"acme", "bob", "carol", "mnda", "demo"})
+
+    r_detail = oc.compute(detail_root, min_entries=5)
+    ok &= _check("compute() r has cluster_detail matching analyze_reflect_clusters",
+                 r_detail["cluster_detail"] == ca["clusters"])
+
+    # write_cadence_report: no-op (returns None, writes nothing) when empty
+    empty_root = cluster_root([])
+    r_empty = oc.compute(empty_root, min_entries=5)
+    before_files = _snapshot(empty_root)
+    rep_none = oc.write_cadence_report(empty_root, r_empty, today)
+    after_files = _snapshot(empty_root)
+    ok &= _check("write_cadence_report returns None on empty cluster_detail", rep_none is None)
+    ok &= _check("write_cadence_report writes nothing on empty cluster_detail",
+                 before_files == after_files)
+
+    # write_cadence_report: writes the expected file when clusters exist
+    rep_path = oc.write_cadence_report(detail_root, r_detail, today)
+    ok &= _check("write_cadence_report writes a file when clusters exist",
+                 rep_path is not None and rep_path.is_file())
+    ok &= _check("write_cadence_report filename matches convention",
+                 rep_path is not None and rep_path.name == f"{today.isoformat()}_odin-cadence_report.md")
+    report_text = rep_path.read_text(encoding="utf-8") if rep_path else ""
+    ok &= _check("report mentions both episode filenames",
+                 "e0.md" in report_text and "e1.md" in report_text)
+
+    # suggestion_line(): includes the report path exactly when one was written
+    line_with_report = oc.suggestion_line(r_detail, "outputs/operations/odin-cadence/x.md")
+    ok &= _check("suggestion_line appends report path when given",
+                 "report: outputs/operations/odin-cadence/x.md" in line_with_report)
+    line_without_report = oc.suggestion_line(r_detail)
+    ok &= _check("suggestion_line omits report mention when not given",
+                 "report:" not in line_without_report)
+
     print("\nALL PASS" if ok else "\nSOME FAILED")
     return 0 if ok else 1
 

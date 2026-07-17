@@ -100,6 +100,11 @@ def _post_with_retry(url: str, payload: bytes, timeout: int, attempts: int = 3):
             )
         except (json.JSONDecodeError, KeyError) as e:
             last_err = f"malformed response from {url}: {e}"
+        except TimeoutError as e:
+            # A read-phase timeout (after connection) raises bare TimeoutError,
+            # not wrapped in URLError -- without this branch it propagated
+            # uncaught and skipped the retry/backoff below entirely.
+            last_err = f"timed out waiting for {url} (timeout={timeout}s): {e}"
 
         if attempt < attempts - 1:
             time.sleep(1.5 * (attempt + 1))

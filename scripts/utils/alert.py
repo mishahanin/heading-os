@@ -4,8 +4,9 @@ One entry point - ``alert(severity, summary, ...)`` - that fans a notice out to
 the right channels by severity, with graceful degradation so a failed channel
 never escalates into a crash. The three channels:
 
-- **Telegram** push to the CEO's Saved Messages (best-effort; for outages that
-  must reach off-machine). Subprocess to the CEO-only telegram_client skill.
+- **Telegram** push to the CEO's alert channel (best-effort; for outages that
+  must reach off-machine). Sent via the dedicated notifications bot
+  (scripts/utils/telegram_notify.py) - never to Saved Messages/"me"/"self".
 - **Action Queue** card (``action_type="alert"``, surfaced read-only). The
   console-first surface the CEO already checks; survives Telegram being down.
 - **Log** - always, tagged with the current ``[trace_id]``. The always-on floor.
@@ -32,11 +33,11 @@ Usage::
 from __future__ import annotations
 
 import logging
-import subprocess
-import sys
+import os
 from collections.abc import Callable
 from pathlib import Path
 
+from scripts.utils import telegram_notify
 from scripts.utils import trace
 from scripts.utils.workspace import get_workspace_root
 
@@ -62,13 +63,16 @@ SEVERITIES = ("critical", "warning", "info")
 # Severity -> Action Queue card priority.
 _PRIORITY = {"critical": "P1", "warning": "P2", "info": "P3"}
 
-# Path to the CEO-only Telegram client (sends to Saved Messages via "send me").
-_TELEGRAM_CLIENT = ".claude/skills/telegram/scripts/telegram_client.py"
-_TELEGRAM_TIMEOUT_S = 30
-
-
 def _telegram_target(workspace_root: Path) -> str:
-    """Read daemon.alert.telegram_target from merged config; default "me"."""
+    """Read daemon.alert.telegram_target from merged config; else
+    ODIN_CADENCE_TELEGRAM_TARGET (the shared alerts channel every other
+    notification script already uses); else "" (unconfigured, no send).
+
+    Never defaults to "me"/Saved Messages - confirmed live defect, fixed
+    2026-07-17: this function used to return "me" here with no config
+    override ever set, so critical alerts were silently landing in Saved
+    Messages instead of reaching the CEO's phone.
+    """
     try:
         from scripts.bridge_daemon.config import load_config
 
@@ -78,37 +82,17 @@ def _telegram_target(workspace_root: Path) -> str:
             return target.strip()
     except Exception as exc:  # noqa: BLE001 - config read is best-effort; default below
         logger.debug("alert: telegram_target config read failed: %s", exc)
-    return "me"
+    return os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET", "")
 
 
 def _send_telegram(workspace_root: Path, message: str) -> bool:
-    """Push a message to Telegram via the CEO-only client. Best-effort.
+    """Push a message to Telegram via the dedicated notifications bot.
 
-    Returns True on a clean send, False on any failure (missing client, no
-    session, non-zero exit, timeout). NEVER raises.
+    Returns True on a clean send, False on any failure (missing token,
+    unresolvable target, transport/API error). NEVER raises.
     """
-    client = workspace_root / _TELEGRAM_CLIENT
-    if not client.is_file():
-        logger.warning("alert: telegram client missing at %s; skipping push", client)
-        return False
     target = _telegram_target(workspace_root)
-    try:
-        result = subprocess.run(
-            [sys.executable, str(client), "send", target, message],
-            cwd=str(workspace_root),
-            capture_output=True,
-            text=True,
-            timeout=_TELEGRAM_TIMEOUT_S,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("alert: telegram send raised %s; degrading to card+log", exc)
-        return False
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip().replace("\n", " ")[:200]
-        logger.warning("alert: telegram send exit %s (%s); degrading to card+log",
-                       result.returncode, stderr or "no stderr")
-        return False
-    return True
+    return telegram_notify.notify(target, message)
 
 
 def _post_card(workspace_root: Path, severity: str, summary: str, detail: str,

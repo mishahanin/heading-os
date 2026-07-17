@@ -200,7 +200,7 @@ Pattern 6 does **not** dispatch subagents. Unlike Patterns 1–5 and 7, `/prime`
 
 **Mechanism:** in-process `ThreadPoolExecutor(max_workers=8)`, one worker per check, aggregated by `run_all()`. A check that errors or times out is reported inline and never aborts the others.
 
-**Checks (8, defined in the `CHECKS` registry):**
+**Checks (11, defined in the `CHECKS` registry):**
 
 - `crm_health` — CRM health
 - `knowledge_health` — knowledge-base health
@@ -210,6 +210,9 @@ Pattern 6 does **not** dispatch subagents. Unlike Patterns 1–5 and 7, `/prime`
 - `fireside_health` — Fireside daemon health
 - `sync_exchange_health` — Sync-Exchange daemon health
 - `odin_cadence` — Odin cadence nudge (ceo-only; renders nothing when empty)
+- `ops_radar` — Ops-radar detector (ceo-only; renders nothing when all clear)
+- `reminders_due` — durable reminders due/upcoming (renders nothing when empty)
+- `dream_shadow` — dream-shadow nightly worklist (reads the latest report only, never runs the scan itself; renders nothing when empty)
 
 **Safety floor (each check):**
 

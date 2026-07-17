@@ -22,8 +22,8 @@ metadata:
   email: misha.hanin@odinix.com
   version: "1.0"
 x-heading-orchestration:
-  parallel_safe: true
-  shared_state: []
+  parallel_safe: partial
+  shared_state: ["auto-memory/"]
   triggers:
     - "recall"
     - "what do we know about"
@@ -123,6 +123,19 @@ Parse the JSON. It is one object:
      retrieval), say that honestly — "the closest sources touch the topic but
      don't answer it directly" — and name what they do cover. Never invent the
      missing fact.
+  4. **Reinforce cited auto-memory hits.** For each cited hit whose `layer` is
+     `memory` (auto-memory facts only — every other layer: `odin`, `thread`,
+     `crm`, `context`, `reference`, `plans`, `outputs`, `knowledge`,
+     `datastore-extract`, `chronicle`, `skill`, `rule`, is left untouched), once
+     per unique file path, run:
+
+     ```bash
+     python3 scripts/memory-touch.py <path>
+     ```
+
+     This bumps `access_count`/`last_accessed` in the file's frontmatter only —
+     it never touches content. Run this regardless of whether Phase 0's index
+     build was a no-op (it edits the source file directly, not the index).
 
 ## Phase 1.5 — Chronicle (historical class, always below the brain)
 
@@ -203,3 +216,6 @@ Sources:
 - **Never treat a chronicle hit as current fact or a decision.** It is a dated
   historical record of a past conversation; surface it tagged with its date,
   below the brain, and flag that it may be stale.
+- **The reinforcement touch step never modifies content.** `scripts/memory-touch.py`
+  only bumps `access_count`/`last_accessed` in frontmatter, scoped to `memory`-layer
+  hits; it refuses any path outside the auto-memory directory.

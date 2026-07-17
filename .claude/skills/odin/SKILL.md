@@ -14,7 +14,7 @@ description: >
   "/odin". DO NOT trigger on "odin" as the Russian numeral "one" in
   phrases like "odin variant" or "another one". Only trigger when used
   as a proper name or form of address.
-argument-hint: "[learn|consult|recall|reflect|teach|log|collect|compile|skill-proposal] [source or question]"
+argument-hint: "[learn|consult|recall|reflect [--propose]|teach|log|collect|compile|skill-proposal] [source or question]"
 allowed-tools: "Read, Write, Edit, Grep, Glob, Bash, Agent, WebFetch, WebSearch"
 metadata:
   author: Misha Hanin
@@ -142,6 +142,8 @@ Each mode has its full pipeline, response format, and writeback rules in a refer
 | `skill-proposal` | `references/mode-catalog.md` (Mode: skill-proposal) | Propose a reflection-derived how-to principle as a checklist-step edit to a target skill - proposal artifact only, never auto-edits |
 
 File format templates (principle, position, episode, conflict) live in `references/templates.md` and are consumed by `learn`, `teach`, and `log` modes.
+
+`reflect --propose` is the one headless-eligible Odin invocation (via `heading skill odin reflect --propose`, see `docs/design/F-10.3-headless-skill-runner.md`); every other mode remains interactive-only.
 
 ---
 

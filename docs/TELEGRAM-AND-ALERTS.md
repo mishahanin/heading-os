@@ -1,4 +1,4 @@
-<!-- version: 1.0.1 | last-updated: 2026-07-03 -->
+<!-- version: 1.2.0 | last-updated: 2026-07-17 -->
 # Telegram and alerts
 
 Connect HEADING OS to Telegram, create your own capture and alert channels, and tune
@@ -20,17 +20,21 @@ both, for different jobs. Getting this straight up front saves confusion later.
 | What it is | Your own Telegram, the one you log into on your phone | A separate robot account you create with @BotFather |
 | How it signs in | `api_id` + `api_hash` from my.telegram.org, plus your phone | A bot **token** from @BotFather |
 | What it can do | Read and send as **you**, in any of your chats and channels | Only see chats it was explicitly added to; posts as the bot |
-| Used in HEADING OS by | `/telegram`, `/viraid`, the Sentinel monitor, the alert nudges | The optional Fireside team daemon only |
+| Used in HEADING OS by | `/telegram`, `/viraid`, the Sentinel monitor | The optional Fireside team daemon, and the system alert nudges (Odin cadence, ops-radar, council model-freshness, reminders, critical daemon alerts) |
 
-**Almost everything you care about uses your user account.** Capturing notes with
-Viraid, getting urgent alerts, reading and sending messages: all of that runs through
-*your* Telegram, so it can reach *your* private channels without being added to them.
+**Reading and capturing always uses your user account.** Viraid capture, Sentinel's chat
+monitoring, and anything you drive with `/telegram` runs through *your* Telegram, so it
+can reach *your* private channels without being added to them.
 
-You only need a bot if you run the optional Fireside team daemon. If you are setting up
-a personal workspace, you can skip the bot section entirely.
+**Sending system nudges now uses a bot, not your account.** A message your own account
+sends to a channel it already owns does not reliably push-notify your phone - a bot
+message always does, since Telegram treats it like a message from any other contact. A
+second, personal notifications bot (section 7) is recommended even if you never touch
+Fireside, specifically so alerts actually reach your phone.
 
 The rest of this page: first wire your user account (sections 2 to 4), then create your
-channels (5 to 6), then point each feature at them (7 to 9). The bot is section 10.
+channels (5 to 6), then the notifications bot (7), then point each feature at them (8 to
+10). The Fireside team bot is section 11.
 
 ---
 
@@ -130,7 +134,7 @@ give it a name, set it **Private**, and skip adding members. On **desktop**: ham
 menu, **New Channel**, same steps.
 
 Name them whatever you like. Two of the features (Viraid) currently expect a specific
-name, so either reuse the maintainer's names or note section 8, which shows where to
+name, so either reuse the maintainer's names or note section 9, which shows where to
 change the expected name.
 
 ---
@@ -156,37 +160,84 @@ You can also refer to a channel by:
 - **name** in quotes, for example `"Urgent Stuff for M"` (matched loosely, so close is
   fine);
 - **@username**, if you gave the channel a public username, for example `@my_alerts`;
-- **`me`**, which is your own **Saved Messages** (a good safe default while testing).
+- **`me`**, which is your own **Saved Messages** - resolvable **only** for your user
+  account (`/telegram send me "..."`, `/viraid`, etc.). The notifications bot in section 7
+  cannot resolve `me`/`self`/`saved` (a bot has no concept of "its own" account the way
+  your user session does), so none of the `*_TELEGRAM_TARGET` settings below may use it.
 
 ---
 
-## 7. Where alerts and nudges are sent
+## 7. Create a notifications bot for reliable alerts
 
-Two small background scripts send you reminders: the Odin cadence nudge and the ops-radar
-nudge. Each reads an optional setting in `.env` that says which channel to send to. If you
-set nothing, both fall back to `me` (your Saved Messages), which is a safe default.
+Do this section even if you never touch Fireside. It fixes a real problem: a message your
+own account sends to a channel it already owns does not reliably trigger a phone push, so
+the system alert nudges in section 8 can go silently unnoticed. A dedicated bot always
+push-notifies, because Telegram treats a bot message like a message from any other
+contact.
+
+1. In Telegram, open a chat with **@BotFather** (the official bot-maker).
+2. Send `/newbot`. Answer its two questions: a display name (for example `HEADING OS`),
+   then a username that must end in `bot` (for example `headingos_bot`).
+3. @BotFather replies with a **token**, a line like `123456789:AAE...`. Treat it like a
+   password.
+4. Put the token in `.env`:
+
+   ```bash
+   TELEGRAM_NOTIFY_BOT_TOKEN=123456789:AAE-your-token-here
+   ```
+
+5. **Add the bot to your alerts channel** (the same one from section 5/6 - no new channel
+   needed) as an administrator, or it cannot post there. Open the channel, Administrators,
+   Add admin, search your bot's username, add it.
+
+   *Direct-message alternative:* instead of a channel you can have the bot message you
+   privately. Open the bot's chat and press **Start** once (a bot cannot DM you until you
+   do), then point the target (section 8) at your own numeric user id rather than a channel
+   id. A bot cannot resolve a `@username` to a private chat, so the DM target must be the
+   numeric id.
+6. Smoke test it:
+
+   ```bash
+   uv run python3 -c "from scripts.utils import telegram_notify; print(telegram_notify.notify('<your channel id or @username>', 'HEADING OS notify-bot smoke test'))"
+   ```
+
+   `True` and a real phone push means it worked.
+
+This bot is completely separate from your user-account credentials (section 3) and from
+any Fireside bot token (section 11) - never reuse a token across them.
+
+---
+
+## 8. Where alerts and nudges are sent
+
+Several background scripts send you reminders: the Odin cadence nudge, the ops-radar
+nudge, the council model-freshness nudge, due reminders, and critical daemon alerts. Each
+reads an optional setting in `.env` that says which channel to send to, and all of them
+deliver through the notifications bot from section 7 - never to your account's own Saved
+Messages. If a target is unset (or would resolve to `me`/`self`/`saved`), no notification
+is sent; the miss is logged, and `/prime` backstops the same signal.
 
 Add either or both of these lines to `.env` (they are optional and not in the example
 file by default):
 
 ```bash
-# where the weekly Odin nudge goes (also the fallback for ops-radar)
+# where the weekly Odin nudge goes (also the fallback for ops-radar, council, reminders)
 ODIN_CADENCE_TELEGRAM_TARGET=-1001234567890
 
-# where ops-radar nudges go; if unset, falls back to ODIN_CADENCE_TELEGRAM_TARGET, then to "me"
+# where ops-radar nudges go; if unset, falls back to ODIN_CADENCE_TELEGRAM_TARGET
 OPS_RADAR_TELEGRAM_TARGET=@my_alerts
 ```
 
-The value can be a numeric ID (from section 6), an `@username`, a channel name in the
-same loose-matched form, or `me`. To send both kinds of nudge to one alerts channel, just
-set `ODIN_CADENCE_TELEGRAM_TARGET` and leave the other unset.
+The value can be a numeric ID (from section 6) or an `@username` - NOT `me`, since the
+notifications bot cannot resolve it. To send every kind of nudge to one alerts channel,
+just set `ODIN_CADENCE_TELEGRAM_TARGET` and leave the rest unset.
 
 > The Sentinel monitor has its **own** alert-channel setting, in a config file rather than
-> `.env`. That is section 9.
+> `.env`. That is section 10.
 
 ---
 
-## 8. How Viraid works, and how to use your own channel
+## 9. How Viraid works, and how to use your own channel
 
 **Viraid** is a capture inbox. During the day you send yourself quick lines in your
 capture channel: "follow up with Alex on the ISO cert", "book the dentist", "read that
@@ -223,14 +274,14 @@ touches it (see [MAKE-IT-YOURS](MAKE-IT-YOURS.html#7-what-happens-when-you-updat
 
 ---
 
-## 9. Configure the Sentinel monitor
+## 10. Configure the Sentinel monitor
 
 **Sentinel** is an always-on background watcher. Every so often (15 minutes by default) it
 checks your email inbox and chosen Telegram chats, scores each new item for urgency with a
 quick AI pass, and sends the urgent ones to your alerts channel. It can also auto-handle
 meeting invites against your calendar rules and send you a morning and evening digest.
 
-### 9.1 Make your own config file
+### 10.1 Make your own config file
 
 Sentinel ships a template. Copy it into your private data overlay and edit the copy (never
 the template):
@@ -243,7 +294,7 @@ cp scripts/sentinel_config.example.yaml ../.heading-os-data/config/sentinel_conf
 Your live config now lives at `.heading-os-data/config/sentinel_config.yaml`, in your
 private data (not in the shared engine). Open it in any text editor.
 
-### 9.2 The settings that matter most
+### 10.2 The settings that matter most
 
 The file is grouped into sections. You do not need to touch all of them; these are the
 ones people actually change.
@@ -286,7 +337,7 @@ telegram:
 ```
 
 **Where alerts land:** this is Sentinel's own alert-channel setting (separate from the
-`.env` ones in section 7). Point it at your alerts channel:
+`.env` ones in section 8). Point it at your alerts channel:
 
 ```yaml
 notification:
@@ -307,7 +358,7 @@ The `calendar:` section controls automatic meeting-invite handling (auto-accept,
 or escalate against protected time blocks). It is powerful but optional; leave
 `calendar.enabled: false` until you have your email working and want it.
 
-### 9.3 Start, stop, check
+### 10.3 Start, stop, check
 
 ```bash
 # start it in the background
@@ -332,11 +383,12 @@ change to take effect.
 
 ---
 
-## 10. Optional: create a bot for Fireside
+## 11. Optional: create a bot for Fireside
 
 Skip this section unless you run the Fireside team daemon. Fireside posts to a team channel
 as a **bot**, which is the right choice for something shared, since a bot has its own
-identity and only sees the chats it is added to.
+identity and only sees the chats it is added to. This is a separate bot and token from the
+personal notifications bot in section 7 - never reuse one token for both.
 
 1. In Telegram, open a chat with **@BotFather** (the official bot-maker).
 2. Send `/newbot`. Answer its two questions: a display name, then a username that must end
@@ -353,29 +405,31 @@ the bot and check the daemon's log, which prints the chat ID it sees).
 
 ---
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
 | `setup` says credentials missing | `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_PHONE` are not set in `.env`. Recheck section 3. |
 | The login code never arrives | It comes **inside the Telegram app**, from the "Telegram" account, not by SMS. Check your other logged-in Telegram sessions. |
 | It keeps asking me to log in | The `.sessions/telegram/` file was deleted or cannot be written. Re-run `setup` then `verify`. |
-| Viraid reads the wrong (or no) channel | The channel name in the two skill files does not match your channel. See section 8. |
+| Viraid reads the wrong (or no) channel | The channel name in the two skill files does not match your channel. See section 9. |
 | Sentinel sends nothing | Either nothing scored above `urgency_threshold`, or the daemon is not running (`--status`), or `target_chat` does not resolve. Try `--test` and read `.sentinel/sentinel.log`. |
-| Alerts go to Saved Messages instead of my channel | The target is unset or unresolved, so it fell back to `me`. Set `ODIN_CADENCE_TELEGRAM_TARGET` (section 7) or `notification.target_chat` (section 9), preferably to a numeric ID. |
+| Alert nudges send nothing | Either `TELEGRAM_NOTIFY_BOT_TOKEN` is unset (section 7), or the target is unset/resolves to `me`/`self`/`saved` (not valid for the bot - section 8), or the bot was never added as admin to the alerts channel. Nothing falls back to Saved Messages; a miss is logged, not silently redirected. |
 | "Datacenter IP" block when reading | Some networks rate-limit. See the VPN note in [Prerequisites](prerequisites.html). |
 
 ---
 
-## 12. Reference
+## 13. Reference
 
 | File / setting | Role |
 |---|---|
 | `.env` `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_PHONE` | Your user-account login |
 | `.sessions/telegram/telegram.session` | Saved login (gitignored, one per machine) |
 | `.claude/skills/telegram/scripts/telegram_client.py` | The Telegram client (`setup`, `verify`, `chats`, `info`, `read`, `send`) |
-| `.env` `ODIN_CADENCE_TELEGRAM_TARGET` | Channel for the weekly Odin nudge (fallback: `me`) |
-| `.env` `OPS_RADAR_TELEGRAM_TARGET` | Channel for ops-radar nudges (fallback: the Odin target, then `me`) |
+| `.env` `TELEGRAM_NOTIFY_BOT_TOKEN` | Dedicated notifications bot token (section 7) |
+| `scripts/utils/telegram_notify.py` | `notify(target, message) -> bool` - what every system nudge/alert sends through |
+| `.env` `ODIN_CADENCE_TELEGRAM_TARGET` | Channel for the weekly Odin nudge (fallback: unconfigured, no send) |
+| `.env` `OPS_RADAR_TELEGRAM_TARGET` | Channel for ops-radar nudges (fallback: the Odin target, then unconfigured) |
 | `.env` `VIRAID_CHANNEL_NAME` | The channel `/viraid` reads (default `M's VIRAID`) |
 | `scripts/sentinel_config.example.yaml` | Sentinel config template (copy it, do not edit it) |
 | `.heading-os-data/config/sentinel_config.yaml` | Your live Sentinel config (private data) |

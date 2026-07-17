@@ -15,7 +15,9 @@ still-pending bump. Adoption is always the CEO's one-command `--set`.
 
 Recipient is read from the gitignored engine .env, never hardcoded here:
     COUNCIL_MODELS_TELEGRAM_TARGET -> OPS_RADAR_TELEGRAM_TARGET
-    -> ODIN_CADENCE_TELEGRAM_TARGET -> "me" (Saved Messages)
+    -> ODIN_CADENCE_TELEGRAM_TARGET -> unconfigured (no send)
+
+Delivery is via the dedicated notifications bot (scripts/utils/telegram_notify.py).
 
 A transient failure (probe or send) is logged and SWALLOWED (exit 0) so the
 oneshot systemd unit is never left `failed`. Invoked by
@@ -30,7 +32,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -39,10 +40,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.workspace import get_outputs_dir, get_workspace_root  # noqa: E402
 from scripts.utils.paths import load_env  # noqa: E402
+from scripts.utils import telegram_notify  # noqa: E402
 
-TELEGRAM_CLIENT = ".claude/skills/telegram/scripts/telegram_client.py"
 STATE_RELPATH = "operations/council/freshness-nudge-state.json"  # under get_outputs_dir()
-DEFAULT_RECIPIENT = "me"
+# Unconfigured default when no env target is set -- never a send attempt
+# (Telegram's own-account "me"/Saved Messages sentinel is not a valid
+# fallback anywhere in this system).
+DEFAULT_RECIPIENT = ""
 
 
 def _log(msg: str) -> None:
@@ -119,21 +123,8 @@ def main() -> int:
         or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")
         or DEFAULT_RECIPIENT
     )
-    tg = root / TELEGRAM_CLIENT
-    if not tg.exists():
-        _log(f"telegram client absent ({tg}); nudge not delivered, /prime will backstop")
-        return 0
-    try:
-        send = subprocess.run(
-            [sys.executable, str(tg), "send", recipient, line],
-            cwd=str(root), capture_output=True, text=True, timeout=120,
-        )
-    except Exception as exc:  # noqa: BLE001 - transient send error is non-critical
-        _log(f"telegram send raised ({type(exc).__name__}: {exc}); /prime will backstop")
-        return 0
-
-    if send.returncode != 0:
-        _log(f"telegram send exit {send.returncode}: {send.stderr.strip()[:200]}; /prime will backstop")
+    if not telegram_notify.notify(recipient, line):
+        _log("nudge not delivered (see telegram_notify log); /prime will backstop")
         return 0
 
     _save_signature(signature)

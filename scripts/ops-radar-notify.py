@@ -12,10 +12,11 @@ SWALLOWED (exit 0) so the oneshot systemd unit is never left `failed` -- the nex
 
 The recipient is read from the gitignored engine `.env`, never hardcoded in this
 engine-routed (eventually-public) file:
-    OPS_RADAR_TELEGRAM_TARGET -> ODIN_CADENCE_TELEGRAM_TARGET -> "me"
+    OPS_RADAR_TELEGRAM_TARGET -> ODIN_CADENCE_TELEGRAM_TARGET -> unconfigured (no send)
 The fallback chain gives zero-config continuity after the standalone Odin push
 retires (the Odin signal is now folded into ops-radar). Counts-only on the wire
-keeps the sovereignty contract identical to the Odin push it replaces.
+keeps the sovereignty contract identical to the Odin push it replaces. Delivery
+is via the dedicated notifications bot (scripts/utils/telegram_notify.py).
 
 Invoked by scripts/templates/systemd/ops-radar.service (daily timer). Also
 runnable by hand:
@@ -34,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 from scripts.utils.paths import load_env  # noqa: E402
+from scripts.utils import telegram_notify  # noqa: E402
 
-TELEGRAM_CLIENT = ".claude/skills/telegram/scripts/telegram_client.py"
 OPS_RADAR = "scripts/ops-radar.py"
 
 # Tier-A heal can trigger an incremental memory-index build; rebuild_index caps
@@ -43,8 +44,10 @@ OPS_RADAR = "scripts/ops-radar.py"
 HEAL_TIMEOUT = 1900
 QUIET_TIMEOUT = 120
 
-# Fleet-safe default recipient (Saved Messages) when no env target is set.
-DEFAULT_RECIPIENT = "me"
+# Unconfigured default when no env target is set -- never a send attempt
+# (Telegram's own-account "me"/Saved Messages sentinel is not a valid
+# fallback anywhere in this system).
+DEFAULT_RECIPIENT = ""
 
 
 def _log(msg: str) -> None:
@@ -87,24 +90,10 @@ def main() -> int:
         or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")
         or DEFAULT_RECIPIENT
     )
-    tg = root / TELEGRAM_CLIENT
-    if not tg.exists():
-        _log(f"telegram client absent ({tg}); nudge not delivered, /prime will backstop")
-        return 0
-    try:
-        send = subprocess.run(
-            [sys.executable, str(tg), "send", recipient, line],
-            cwd=str(root), capture_output=True, text=True, timeout=120,
-        )
-    except Exception as exc:  # noqa: BLE001 - transient send error is non-critical
-        _log(f"telegram send raised ({type(exc).__name__}: {exc}); /prime will backstop")
-        return 0
-
-    if send.returncode != 0:
-        _log(f"telegram send exit {send.returncode}: {send.stderr.strip()[:200]}; /prime will backstop")
-        return 0
-
-    _log(f"nudge delivered to {recipient}: {line}")
+    if telegram_notify.notify(recipient, line):
+        _log(f"nudge delivered to {recipient}: {line}")
+    else:
+        _log("nudge not delivered (see telegram_notify log); /prime will backstop")
     return 0
 
 

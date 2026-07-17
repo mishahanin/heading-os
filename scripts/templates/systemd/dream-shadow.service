@@ -1,0 +1,16 @@
+[Unit]
+Description=31C dream-shadow scan (nightly salience-ranked memory consolidation worklist)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+# Detector only - writes a dated report and NEVER mutates memory. Advisory-only:
+# always exits 0 on a clean run (no gate, unlike memory-hygiene.py's exit-1
+# objective-defect gate); only exit 2 (script error) marks the unit failed.
+# Resolution stays with /dream (human-gated). Report lands under
+# outputs/operations/dream/.
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/dream-shadow.py
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

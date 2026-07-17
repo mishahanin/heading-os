@@ -51,19 +51,42 @@ REGISTRY = {
 
 DEFAULT_BUDGET_USD = 0.50
 
-# Default-deny: a skill runs headless only if listed here; the value is its tier.
+# The "propose" tier's write grant is scoped to this one proposal-output
+# directory, and its deny is scoped to the sensitive brain directory --
+# both resolved absolute (//-anchored) from the data root at call time, since
+# the headless process's cwd is the engine workspace root, not the data root.
+# leak-guard: ok (data-root-relative fragment, not a hardcoded absolute path;
+# the data root comes from the get_data_root() seam in _abs_pattern below).
+PROPOSE_WRITE_REL = "outputs/operations/odin-reflect-proposals"  # leak-guard: ok
+ODIN_BRAIN_DENY_REL = "knowledge/odin-brain"  # leak-guard: ok
+# A first-cut default (4x the runner's normal $0.50) for a real reflect-cluster-
+# drafting pass -- tune after observing real costs (plan Open Question 2).
+PROPOSE_DEFAULT_BUDGET_USD = 2.00
+
+# Default-deny: a skill runs headless only if listed here; the value names its
+# tier and, optionally, the exact leading args it is allowed to run with
+# (`args_prefix`) -- a skill with no args_prefix is allowed with any args.
 SKILL_ALLOWLIST = {
-    "state-check": "read-only",
+    "state-check": {"tier": "read-only"},
     # queue-draft is the reference draft-tier skill: it DEPOSITS a gated card and
     # can never approve/send (the draft tier grants deposit but not the send
     # transports, enforced in build_skill_command + SEND_DENY).
-    "queue-draft": "draft",
+    "queue-draft": {"tier": "draft"},
+    # odin is allowlisted for exactly ONE invocation shape: `reflect --propose`.
+    # Every other Odin mode (learn, log, teach, collect, consult, compile,
+    # skill-proposal, and reflect WITHOUT --propose) is refused before any
+    # vendor call -- the args_prefix gate is what makes the tier narrow in
+    # practice, not just at the tool-permission layer.
+    "odin": {"tier": "propose", "args_prefix": ["reflect", "--propose"]},
 }
 
 # The --allowedTools set per tier. The read-only tier grants only Read; the draft
 # tier adds Write and the action-queue DEPOSIT subcommand (staging a gated card),
-# but NEVER approve/send. A tier grants only what it needs, so the send transports
-# are unreachable by construction (the allowlist-first send boundary).
+# but NEVER approve/send. The propose tier grants only Read here -- its Write
+# grant is a single path-scoped Edit(...) pattern appended dynamically in
+# build_skill_command (it depends on the data root, resolved at call time).
+# A tier grants only what it needs, so the send transports are unreachable by
+# construction (the allowlist-first send boundary).
 TIER_ALLOWED = {
     "read-only": ["Read"],
     "draft": [
@@ -72,6 +95,7 @@ TIER_ALLOWED = {
         "Bash(python scripts/action-queue.py deposit:*)",
         "Bash(python3 scripts/action-queue.py deposit:*)",
     ],
+    "propose": ["Read"],
 }
 
 # Defense-in-depth denylist: every outbound transport, blocked regardless of tier.
@@ -85,16 +109,40 @@ SEND_DENY = [
 ]
 
 
+def _abs_pattern(root: Path, rel: str) -> str:
+    """Build a `//`-anchored (filesystem-root-absolute) Edit(...) permission
+    pattern for `root / rel`, e.g. Edit(//home/.../knowledge/odin-brain/**).
+
+    Confirmed against code.claude.com/docs/en/permissions.md: `//` anchors an
+    absolute path (Read(//Users/alice/secrets/**) matches /Users/alice/secrets/**)
+    -- the resolved path's own leading `/` must be stripped first, since
+    interpolating it directly after `//` produces a three-slash string
+    (`Edit(///...)`) that matches nothing.
+    """
+    return f"Edit(//{str((root / rel).resolve()).lstrip('/')}/**)"
+
+
 def build_skill_command(skill, args, *, tier, budget_usd=DEFAULT_BUDGET_USD, model=None):
     """Build the `claude -p` argv for a headless skill run.
 
     Pure apart from a cheap deterministic data-root resolve (for the --add-dir
-    grant). The send boundary lives here: every tier's --allowedTools excludes
-    the send transports, and SEND_DENY names them under --disallowedTools.
+    grant and the propose tier's path-scoped Edit(...) patterns). The send
+    boundary lives here: every tier's --allowedTools excludes the send
+    transports, and SEND_DENY names them under --disallowedTools.
     """
     prompt = "/" + skill
     if args:
         prompt = prompt + " " + " ".join(args)
+    data_root = get_data_root()
+    # Fresh copies -- never bind directly to TIER_ALLOWED[tier]/SEND_DENY
+    # themselves, since a later .append() on an uncopied reference would
+    # permanently grow the shared module-level constant across every
+    # subsequent call in the same process.
+    allowed = list(TIER_ALLOWED[tier])
+    disallowed = list(SEND_DENY)
+    if tier == "propose":
+        allowed.append(_abs_pattern(data_root, PROPOSE_WRITE_REL))
+        disallowed.append(_abs_pattern(data_root, ODIN_BRAIN_DENY_REL))
     cmd = [
         "claude",
         "-p",
@@ -106,16 +154,15 @@ def build_skill_command(skill, args, *, tier, budget_usd=DEFAULT_BUDGET_USD, mod
         "--max-budget-usd",
         str(budget_usd),
         "--allowedTools",
-        *TIER_ALLOWED[tier],
+        *allowed,
         "--disallowedTools",
-        *SEND_DENY,
+        *disallowed,
     ]
     if model:
         cmd += ["--model", model]
     # Grant read access to the data overlay (H1): a skill's inputs can live under
     # the data root, which the data-path-redirect hook rewrites OUTSIDE cwd. Claude
     # limits file tools to cwd + --add-dir, so without this a headless read is denied.
-    data_root = get_data_root()
     if data_root != get_workspace_root():
         cmd += ["--add-dir", str(data_root)]
     return cmd
@@ -141,12 +188,22 @@ def _dispatch(script_path: Path, args: list[str]) -> int:
 def run_skill(skill, args, *, budget_usd=DEFAULT_BUDGET_USD, model=None) -> int:
     """Run an allowlisted skill headless via `claude -p`. Exit-code primary.
 
-    Returns 2 (refused: not allowlisted, before any vendor call), 3 (claude
+    Returns 2 (refused: not allowlisted, or args don't match the skill's
+    required args_prefix -- either way, before any vendor call), 3 (claude
     binary absent, degrade clearly), or the `claude` process exit code otherwise.
     """
-    if skill not in SKILL_ALLOWLIST:
+    entry = SKILL_ALLOWLIST.get(skill)
+    if entry is None:
         print(
             f"heading: skill not allowlisted for headless run: {skill}",
+            file=sys.stderr,
+        )
+        return 2
+    args_prefix = entry.get("args_prefix")
+    if args_prefix and list(args[: len(args_prefix)]) != list(args_prefix):
+        print(
+            f"heading: skill '{skill}' is only allowlisted for headless run with "
+            f"args {args_prefix!r} as the leading arguments; refusing {args!r}",
             file=sys.stderr,
         )
         return 2
@@ -157,7 +214,7 @@ def run_skill(skill, args, *, budget_usd=DEFAULT_BUDGET_USD, model=None) -> int:
         )
         return 3
     cmd = build_skill_command(
-        skill, args, tier=SKILL_ALLOWLIST[skill], budget_usd=budget_usd, model=model
+        skill, args, tier=entry["tier"], budget_usd=budget_usd, model=model
     )
     proc = subprocess.run(cmd, capture_output=True, text=True)
     # Exit code is authoritative; the JSON envelope is best-effort enrichment.

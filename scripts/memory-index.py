@@ -54,6 +54,7 @@ except ImportError as exc:
     )
     sys.exit(1)
 
+from scripts.utils import salience
 from scripts.utils.air_gap import is_denied
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.embeddings import EmbeddingError, embed
@@ -156,6 +157,8 @@ CREATE TABLE IF NOT EXISTS notes (
     status     TEXT,
     classification TEXT,
     chunk     INTEGER NOT NULL DEFAULT 0,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    last_accessed TEXT,
     embedding BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (
@@ -194,29 +197,39 @@ def open_store(root: Path, store_rel: str = STORE_REL) -> sqlite3.Connection:
     # `build` re-chunks the long-form layers. Non-destructive, like the above.
     if "chunk" not in cols:
         conn.execute("ALTER TABLE notes ADD COLUMN chunk INTEGER NOT NULL DEFAULT 0")
+    # Access-tracking migration (Gap #2, non-destructive, same pattern as above):
+    # an existing index gains access_count (default 0) and last_accessed (NULL).
+    # `build` repopulates both from frontmatter; `memory-touch.py` bumps them
+    # in place on the source file, and the next build picks the new values up.
+    if "access_count" not in cols:
+        conn.execute("ALTER TABLE notes ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
+    if "last_accessed" not in cols:
+        conn.execute("ALTER TABLE notes ADD COLUMN last_accessed TEXT")
     return conn
 
 
 def upsert_note(conn, *, id_, path, title, layer, ntype, mtime, body, vec,
                 created="", updated="", confidence="", status="",
-                classification="", chunk=0) -> None:
+                classification="", chunk=0, access_count=0, last_accessed="") -> None:
     blob = np.asarray(vec, dtype=np.float32).tobytes()
     conn.execute(
         """
         INSERT INTO notes (id, path, title, layer, ntype, mtime, dim, body,
                            created, updated, confidence, status, classification,
-                           chunk, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           chunk, access_count, last_accessed, embedding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             path=excluded.path, title=excluded.title, layer=excluded.layer,
             ntype=excluded.ntype, mtime=excluded.mtime, dim=excluded.dim,
             body=excluded.body, created=excluded.created, updated=excluded.updated,
             confidence=excluded.confidence, status=excluded.status,
             classification=excluded.classification, chunk=excluded.chunk,
+            access_count=excluded.access_count, last_accessed=excluded.last_accessed,
             embedding=excluded.embedding
         """,
         (id_, path, title, layer, ntype, mtime, len(vec), body,
-         created, updated, confidence, status, classification, chunk, blob),
+         created, updated, confidence, status, classification, chunk,
+         access_count, last_accessed, blob),
     )
 
 
@@ -330,6 +343,8 @@ def parse_note(text: str) -> dict:
     """
     title, ntype = "", ""
     created = updated = confidence = status = ""
+    access_count = 0
+    last_accessed = ""
     body = text
     fm = FRONTMATTER_RE.match(text)
     if fm:
@@ -343,6 +358,20 @@ def parse_note(text: str) -> dict:
                 updated = str(meta.get("updated", "") or "")
                 confidence = str(meta.get("confidence", "") or "")
                 status = str(meta.get("status", "") or "")
+                # access_count/last_accessed (Gap #2): auto-memory's real
+                # frontmatter nests these under `metadata:` (confirmed against
+                # a real auto-memory file), so a top-level key wins if present,
+                # falling back to the nested `metadata.*` form.
+                nested = meta.get("metadata")
+                nested = nested if isinstance(nested, dict) else {}
+                raw_access_count = meta.get("access_count", nested.get("access_count", 0))
+                try:
+                    access_count = int(raw_access_count or 0)
+                except (TypeError, ValueError):
+                    access_count = 0
+                last_accessed = str(
+                    meta.get("last_accessed", "") or nested.get("last_accessed", "") or ""
+                )
         except yaml.YAMLError:
             pass
     if not title:
@@ -356,6 +385,7 @@ def parse_note(text: str) -> dict:
         "raw_body": body,   # frontmatter-stripped, newline-preserving (for chunk_text)
         "created": created, "updated": updated,
         "confidence": confidence, "status": status,
+        "access_count": access_count, "last_accessed": last_accessed,
     }
 
 
@@ -551,6 +581,7 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
                     created=info["created"], updated=info["updated"],
                     confidence=info["confidence"], status=info["status"],
                     classification=get_classification(r), chunk=idx,
+                    access_count=info["access_count"], last_accessed=info["last_accessed"],
                 )
             conn.commit()  # file boundary: durable + resumable
             done_chunks += len(items)
@@ -593,18 +624,21 @@ def _load_index(conn):
     """
     rows = conn.execute(
         "SELECT id, path, title, layer, ntype, dim, mtime, "
-        "created, updated, confidence, status, classification, chunk, embedding FROM notes"
+        "created, updated, confidence, status, classification, chunk, "
+        "access_count, last_accessed, embedding FROM notes"
     ).fetchall()
     if not rows:
         return [], {}, None
     ids, metas, vecs = [], {}, []
-    for id_, path, title, lyr, ntype, dim, mtime, created, updated, confidence, status, classification, chunk, blob in rows:
+    for (id_, path, title, lyr, ntype, dim, mtime, created, updated, confidence,
+         status, classification, chunk, access_count, last_accessed, blob) in rows:
         ids.append(id_)
         metas[id_] = {
             "path": path, "title": title, "layer": lyr, "ntype": ntype,
             "mtime": mtime, "created": created, "updated": updated,
             "confidence": confidence, "status": status,
             "classification": classification or "", "chunk": chunk or 0,
+            "access_count": access_count or 0, "last_accessed": last_accessed or "",
         }
         vecs.append(np.frombuffer(blob, dtype=np.float32, count=dim))
     matrix = np.vstack(vecs).astype(np.float32)
@@ -683,6 +717,10 @@ def _rrf_fuse(dense_ids, sparse_ids, k=RRF_K):
 
 _CONFIDENCE_SCORE = {"high": 1.0, "medium": 0.7, "med": 0.7, "low": 0.4}
 _EVERGREEN_FLOOR = 0.7  # neutral recency for timeless / unknown-age notes
+# Gap #2: a high-confidence fact decays slower (longer effective half-life);
+# a low-confidence one decays faster. First-cut defaults -- tune after
+# observing real dream-shadow reports and /recall ranking behaviour.
+CONF_HALFLIFE_MULT = {"high": 1.5, "medium": 1.0, "med": 1.0, "low": 0.6}
 
 
 def _date_to_ts(s):
@@ -705,26 +743,40 @@ def _recency_score(meta, halflife_days, now_ts):
     """Exponential recency in (0, 1]. ``status: evergreen`` floors at ~0.7 so
     timeless positions/sources are not buried by age (e.g. the 2026-03-18
     valuation-path position). Falls back to mtime when no created/updated date
-    is present; unknown age stays neutral rather than penalised."""
+    is present; unknown age stays neutral rather than penalised.
+
+    Gap #2: a `last_accessed` date more recent than `updated`/`created`/`mtime`
+    resets the effective age to the citation date (a fact /recall keeps citing
+    stays "fresh" even if its content hasn't been edited), and the half-life
+    itself scales with confidence (CONF_HALFLIFE_MULT) so a high-confidence
+    fact decays slower than a low-confidence one at the same age."""
     if (meta.get("status") or "").strip().lower() == "evergreen":
         return _EVERGREEN_FLOOR
     ts = _date_to_ts(meta.get("updated")) or _date_to_ts(meta.get("created"))
     if ts is None:
         ts = meta.get("mtime")
+    access_ts = _date_to_ts(meta.get("last_accessed"))
+    if access_ts is not None and (ts is None or access_ts > ts):
+        ts = access_ts
     if not ts:
         return _EVERGREEN_FLOOR
     age_days = max(0.0, (now_ts - ts) / 86400.0)
     halflife = halflife_days if halflife_days and halflife_days > 0 else 180
-    return float(0.5 ** (age_days / halflife))
+    conf_mult = CONF_HALFLIFE_MULT.get((meta.get("confidence") or "").strip().lower(), 1.0)
+    effective_halflife = halflife * conf_mult
+    return float(0.5 ** (age_days / effective_halflife))
 
 
 def _importance_score(meta):
     """Importance from confidence (high/medium/low -> 1.0/0.7/0.4); episodes
-    biased down (event logs are less load-bearing for advice). Default medium."""
+    biased down (event logs are less load-bearing for advice). Default medium.
+
+    Gap #2: scaled by a reinforcement bonus from `access_count` -- a fact
+    /recall keeps citing ranks above an otherwise-identical, never-cited one."""
     base = _CONFIDENCE_SCORE.get((meta.get("confidence") or "").strip().lower(), 0.7)
     if (meta.get("ntype") or "").strip().lower() == "episode":
         base *= 0.8
-    return base
+    return base * salience.reinforcement_bonus(int(meta.get("access_count") or 0))
 
 
 def _combined(cos, recency, importance, weights):

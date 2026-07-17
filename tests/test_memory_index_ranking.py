@@ -91,6 +91,39 @@ def test_combined_is_weighted_sum():
     assert mod._combined(0.9, 1, 1, w) > mod._combined(0.5, 1, 1, w)
 
 
+# --- Gap #2: decay (confidence-scaled half-life, access-aware recency) +
+# reinforcement (access-count bonus) --------------------------------------
+
+def test_recency_high_confidence_outlasts_low_confidence_same_age():
+    mod = load_module()
+    now = mod._date_to_ts("2026-06-03")
+    high = mod._recency_score({"created": "2026-01-01", "confidence": "high"}, 180, now)
+    low = mod._recency_score({"created": "2026-01-01", "confidence": "low"}, 180, now)
+    assert high > low
+
+
+def test_recency_last_accessed_more_recent_than_updated_wins():
+    mod = load_module()
+    now = mod._date_to_ts("2026-06-03")
+    stale_but_cited = mod._recency_score(
+        {"created": "2020-01-01", "updated": "2020-01-01", "last_accessed": "2026-06-01"},
+        180, now,
+    )
+    stale_never_cited = mod._recency_score(
+        {"created": "2020-01-01", "updated": "2020-01-01"}, 180, now,
+    )
+    assert stale_but_cited > stale_never_cited
+
+
+def test_importance_reinforcement_bonus_monotonic_up_to_cap():
+    mod = load_module()
+    base = mod._importance_score({"confidence": "medium"})
+    bumped = mod._importance_score({"confidence": "medium", "access_count": 5})
+    capped = mod._importance_score({"confidence": "medium", "access_count": 10000})
+    assert bumped > base
+    assert capped == pytest.approx(base * mod.salience.REINFORCE_CAP)
+
+
 # --- End-to-end: same cosine, combiner decides order ----------------------
 
 @pytest.fixture

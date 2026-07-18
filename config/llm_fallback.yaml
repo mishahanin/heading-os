@@ -5,7 +5,13 @@
 # (Anthropic) call fails with a retriable error (5xx, 429, timeout, connection
 # reset), llm_fallback.call_anthropic_with_fallback() cascades through the
 # named vendors using the existing council wrappers (gemini-consult.py,
-# grok-consult.py) imported as libraries (NOT subprocess).
+# grok-consult.py, kimi-consult.py) imported as libraries (NOT subprocess).
+# The wrappers now route through CLIProxyAPI (see the proxy-transport
+# migration plan) rather than calling each vendor's API directly; vendor
+# `kimi` (`consult_kimi()`) is a supported chain step alongside `gemini` and
+# `grok`. `llm_fallback` deliberately pins the kimi step to the
+# `kimi-for-coding` proxy model (fast, quota-light) - it does not use k3 and
+# does not pass `reasoning_effort`.
 #
 # Permanent errors (401/403 auth fail, 400 bad request) are NOT retried -
 # fallback would just waste budget on a request the next vendor would also
@@ -18,34 +24,38 @@
 #   "opus"   -> opus
 #
 # Vendor strings are case-sensitive identifiers expected by llm_fallback:
-#   gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite -> consult_gemini()
-#   grok-4, grok-4-fast                                     -> consult_grok()
+#   gemini-3.1-flash-lite, gemini-3-flash, gemini-3.1-pro-low -> consult_gemini()
+#   grok-3-mini-fast, grok-4.5                                -> consult_grok()
+#   kimi-for-coding                                           -> consult_kimi()
 #
-# Cross-vendor model choice is informed by Artificial Analysis benchmarks
-# (Intelligence Index v4.0, snapshot 2026-05-24). Re-check when AA publishes
-# a new Index version or when a tier gains a materially-better non-Anthropic peer.
+# Cross-vendor model choice is informed by Artificial Analysis benchmarks.
+# Kimi leads the sonnet/opus chains (proxy-transport migration, kimi-for-coding
+# tier). Re-check when AA publishes a new Index version or when a tier gains
+# a materially-better peer.
 
 tiers:
   haiku:
     chain:
       - vendor: gemini
-        model: gemini-2.5-flash-lite
+        model: gemini-3.1-flash-lite
       - vendor: grok
-        model: grok-4-fast
+        model: grok-3-mini-fast
   sonnet:
     chain:
+      - vendor: kimi
+        model: kimi-for-coding
       - vendor: gemini
-        model: gemini-2.5-pro
+        model: gemini-3-flash
       - vendor: grok
-        model: grok-4
+        model: grok-4.5
   opus:
     chain:
-      # No frontier-tier non-Anthropic peer in 2026-05; substitute capable
-      # models. Quality compromise is the explicit tradeoff vs full outage.
+      - vendor: kimi
+        model: kimi-for-coding
       - vendor: gemini
-        model: gemini-2.5-pro
+        model: gemini-3.1-pro-low
       - vendor: grok
-        model: grok-4
+        model: grok-4.5
 
 # Errors that trigger fallback (retriable). Other errors re-raise immediately.
 # Class names match the anthropic Python SDK exception hierarchy.

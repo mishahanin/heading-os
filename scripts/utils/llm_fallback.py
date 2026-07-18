@@ -49,7 +49,7 @@ class LLMResult:
     them).
     """
     text: str
-    vendor: str           # "anthropic" | "gemini" | "grok"
+    vendor: str           # "anthropic" | "gemini" | "grok" | "kimi"
     model_id: str
     fallback_triggered: bool
     primary_error: str | None = None
@@ -372,4 +372,7 @@ def _invoke_vendor(vendor: str, model: str, prompt: str, max_tokens: int, temper
     if vendor == "grok":
         consult_grok = _load_consult_fn("scripts/grok-consult.py", "consult_grok")
         return consult_grok(prompt, model=model, temperature=temperature, max_tokens=max_tokens)
+    if vendor == "kimi":
+        consult_kimi = _load_consult_fn("scripts/kimi-consult.py", "consult_kimi")
+        return consult_kimi(prompt, model=model, temperature=temperature, max_tokens=max_tokens)
     raise ValueError(f"unknown fallback vendor: {vendor!r}")

@@ -243,3 +243,20 @@ def test_downgrade_signal_returns_none_for_non_anthropic_shape():
     """Gemini/Grok wrappers return strings - signal heuristic n/a."""
     assert F._compute_downgrade_signal("plain string from gemini", "gemini-2.5-pro") is None
     assert F._compute_downgrade_signal(None, "grok-4") is None
+
+
+# ============================================================
+# _invoke_vendor: kimi branch + unknown-vendor rejection
+# ============================================================
+def test_invoke_vendor_supports_kimi(monkeypatch):
+    monkeypatch.setattr(
+        F, "_load_consult_fn",
+        lambda path, fn: (lambda prompt, model, temperature, max_tokens: "kimi says hi"),
+    )
+    out = F._invoke_vendor("kimi", "kimi-for-coding", "prompt", 1000, 0.7)
+    assert out == "kimi says hi"
+
+
+def test_invoke_vendor_rejects_unknown():
+    with pytest.raises(ValueError, match="unknown fallback vendor"):
+        F._invoke_vendor("mistral", "x", "p", 100, 0.5)

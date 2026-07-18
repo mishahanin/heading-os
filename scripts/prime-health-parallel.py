@@ -34,7 +34,11 @@ from typing import Any
 # Workspace import bootstrap (per development-standards.md)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils.workspace import get_outputs_dir, get_workspace_root  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    get_default_tz,
+    get_outputs_dir,
+    get_workspace_root,
+)
 
 
 # ============================================================
@@ -397,11 +401,11 @@ def run_reminders_due(workspace_root: Path) -> dict[str, Any]:
     Never mutates the store, never marks fired. ceo-only surface via outputs/;
     omit_if_empty keeps the brief clean when nothing is due or upcoming.
     """
-    from datetime import date as _date
+    from datetime import datetime as _dt
 
     try:
         from scripts.utils import reminders_store as rs
-        today = _date.today()
+        today = _dt.now(get_default_tz()).date()
         due = rs.due_records(today)
         upcoming = rs.upcoming(today, days=7)
     except Exception as exc:  # noqa: BLE001 - boundary; reported inline

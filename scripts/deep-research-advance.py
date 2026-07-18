@@ -40,6 +40,7 @@ from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, RESET  # noqa: E402
 from scripts.utils.proxy_transport import call_model as _proxy_call_model  # noqa: E402
 from scripts.utils.perplexity_client import research as pplx_research  # noqa: E402
+from scripts.utils.council_freshness import probe_proxy  # noqa: E402
 from scripts.utils.deep_research_prompts import (  # noqa: E402
     build_decompose_prompt,
     build_reason_prompt,
@@ -58,6 +59,19 @@ def kimi_reason(prompt, model="k3", temperature=0.3, max_tokens=12000, timeout=1
     return _proxy_call_model(model, prompt, temperature=temperature,
                              max_tokens=max_tokens, timeout=timeout,
                              reasoning_effort=reasoning_effort)
+
+
+def _reason_model_for(catalog):
+    """Pick (model, reasoning_effort) for the reasoning phases from the proxy
+    catalog. k3 at max thinking when k3 is on the proxy; when the catalog is
+    known and lacks k3, fall back to kimi-for-coding with no effort so the
+    analysis phase still runs (mirrors /council's k3->kimi-for-coding degrade)
+    instead of dropping to corpus-only. An unreachable catalog (None) stays
+    optimistic on k3 — a real k3 failure is still caught by the phase-level
+    degrade below."""
+    if catalog is not None and "k3" not in catalog:
+        return "kimi-for-coding", None
+    return "k3", "max"
 
 DEFAULT_DEPTH = 4
 MAX_DEPTH = 8
@@ -118,9 +132,19 @@ def run(question: str, depth: int = DEFAULT_DEPTH, critical: bool = False,
         "degraded_reason": "",
     }
 
+    # Choose the reasoning model once: k3/max normally, kimi-for-coding when k3
+    # has dropped off the proxy catalog — so a missing k3 degrades to shallower
+    # analysis rather than to no analysis at all.
+    reason_model, reason_effort = _reason_model_for(probe_proxy())
+    if reason_model != "k3":
+        print(f"{YELLOW}k3 absent from the proxy catalog; reasoning falls back to "
+              f"{reason_model}.{RESET}", file=sys.stderr)
+
     # Phase 0 — decompose (Kimi). Fall back to the bare question on failure.
     try:
-        raw = kimi_reason(build_decompose_prompt(question, depth), max_tokens=8192)
+        raw = kimi_reason(build_decompose_prompt(question, depth),
+                          model=reason_model, reasoning_effort=reason_effort,
+                          max_tokens=8192)
         angles = extract_json(raw)
         if not isinstance(angles, list) or not angles:
             raise ValueError("decompose did not return a non-empty list")
@@ -161,7 +185,9 @@ def run(question: str, depth: int = DEFAULT_DEPTH, critical: bool = False,
     last_err = None
     for attempt in range(2):
         try:
-            raw = kimi_reason(reason_prompt, max_tokens=8192, timeout=180.0)
+            raw = kimi_reason(reason_prompt, model=reason_model,
+                              reasoning_effort=reason_effort,
+                              max_tokens=8192, timeout=180.0)
             result["kimi_analysis"] = extract_json(raw)
             last_err = None
             break

@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- **Deep-research degrades a missing `k3` to `kimi-for-coding`, not to corpus-only:** `deep-research-advance.py` now probes the proxy catalog once per run (`_reason_model_for(probe_proxy())`) and picks `k3`/`max` when `k3` is present, else `kimi-for-coding` with no `reasoning_effort` — so if `k3` ever drops off the proxy, the Phase 0/2 reasoning still runs (shallower) instead of falling all the way through to a corpus-without-analysis run. This mirrors `/council`'s `k3`->`kimi-for-coding` degrade and closes the single-point-of-failure the v0.6.0 migration introduced by hard-pinning research to `k3`. An unreachable catalog stays optimistic on `k3` (the existing phase-level degrade still catches a real failure). New tests in `tests/test_deep_research_advance.py` (`_reason_model_for` selection matrix + a run-level assertion that both reasoning calls use the fallback model when `k3` is absent).
+
 ## [0.6.0] - 2026-07-18
 
 ### Added

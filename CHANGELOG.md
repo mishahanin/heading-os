@@ -6,8 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-18
+
 ### Added
-- **Odin propose-tier weekly delivery surface (C+):** the headless `odin reflect --propose` tier (shipped in v0.4.0) now has a live automatic trigger — a dedicated weekly systemd-user timer `odin-propose.timer` (Monday 05:31, `{{TZ}}`-pinned) running `scripts/odin-cadence-notify.py --propose-only`. The new `--propose-only` mode skips the counts nudge entirely (ops-radar already surfaces the counts daily) and delivers to the CEO's Telegram DM ONLY a real outcome: a standalone, phone-readable (DATA-relative) proposal path when a proposal is produced, or the CRITICAL brain-integrity alert; otherwise it is silent. `odin-cadence-notify.py` was refactored to extract `_run_headless_propose(root) -> Optional[Path]`, with `_maybe_headless_propose` kept as a behavior-preserving wrapper for the normal path. Installer `scripts/install-odin-propose-timer.sh` (with `--uninstall`) mirrors the sibling timer installers and bakes in all three reboot-survival mechanisms (`Persistent=true`, `systemctl --user enable`, `loginctl enable-linger`). Closes the Step-16 loop-back from the notification-bot plan (`odin-cadence.timer` disabled since 2026-06-26; `ops-radar.py` reads `odin-cadence.py` directly). Options A (re-enable `odin-cadence.timer`) and B (fold into `ops-radar.py`) were rejected. New `--propose-only` cases in `tests/test_odin_cadence_notify.py`. Design: `docs/design/F-10.3-headless-skill-runner.md`.
+- **Odin propose-tier weekly delivery surface (C+):** the headless `odin reflect --propose` tier (shipped in v0.4.0) now has a live automatic trigger — a dedicated weekly systemd-user timer `odin-propose.timer` (Monday 05:31, `{{TZ}}`-pinned) running `scripts/odin-cadence-notify.py --propose-only`. The new `--propose-only` mode skips the counts nudge entirely (ops-radar already surfaces the counts daily) and delivers to the CEO's Telegram DM ONLY a real outcome: a standalone, phone-readable (DATA-relative) proposal path when a proposal is produced, or the CRITICAL brain-integrity alert; otherwise it is silent. `odin-cadence-notify.py` was refactored to extract `_run_headless_propose(root) -> Optional[Path]`, with `_maybe_headless_propose` kept as a behavior-preserving wrapper for the normal path. Installer `scripts/install-odin-propose-timer.sh` (with `--uninstall`) mirrors the sibling timer installers and bakes in all three reboot-survival mechanisms (`Persistent=true`, `systemctl --user enable`, `loginctl enable-linger`). Closes the Step-16 loop-back from the notification-bot plan (`odin-cadence.timer` disabled since 2026-06-26; `ops-radar.py` reads `odin-cadence.py` directly). Options A (re-enable `odin-cadence.timer`) and B (fold into `ops-radar.py`) were rejected. The just-produced proposal is located by a same-run mtime fallback when the harness session-date that names the file and the Python `get_default_tz()` reconstruction diverge (a `HEADING_OS_TZ` edit without re-running the installer, or the up-to-600s headless call crossing local midnight), so a produced proposal is never silently withheld. New `--propose-only` cases in `tests/test_odin_cadence_notify.py`. Design: `docs/design/F-10.3-headless-skill-runner.md`.
 
 ## [0.4.0] - 2026-07-17
 
@@ -107,7 +109,8 @@ Initial public release.
 - **Memory and ODIN**: a local associative-memory index behind `/recall` and a persistent knowledge brain.
 - The published documentation site at [mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/), the deployment guide, and the focused setup guides for models, integrations, and personalization.
 
-[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/mishahanin/heading-os/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/mishahanin/heading-os/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mishahanin/heading-os/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mishahanin/heading-os/compare/v0.1.0...v0.2.0

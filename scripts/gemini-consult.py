@@ -2,18 +2,22 @@
 """
 gemini-consult.py - Council second-opinion API wrapper.
 
-Calls Gemini with a structured prompt and returns the response on stdout.
-Pure API wrapper - no disk writes, no orchestration logic. The /council
-skill handles inputs, output formatting, and transcript persistence.
+Calls Gemini through the local CLIProxyAPI proxy seam (scripts/utils/proxy_transport)
+and returns the response on stdout. Pure API wrapper - no disk writes, no
+orchestration logic. The /council skill handles inputs, output formatting,
+and transcript persistence.
 
-SDK: google-genai==2.2.0 (pinned in requirements.txt). The legacy
-google-generativeai SDK is NOT used. Update DEFAULT_MODEL and the pinned
-version in requirements.txt when Google releases a new Pro tier or SDK release.
+Transport, auth, retry, and error classification all live in proxy_transport.call_model;
+this module is a thin delegate that owns only the Gemini-specific prompt/CLI surface.
+The google-genai SDK is no longer used - the proxy fronts the subscription instead.
+
+Update DEFAULT_MODEL when Google ships a new flagship tier (via
+config/council-models.json, see scripts/council-models.py --set).
 
 Usage:
   python scripts/gemini-consult.py --mode independent --question "..." [--context "..."]
   python scripts/gemini-consult.py --mode critique    --draft "..."    [--context "..."]
-  python scripts/gemini-consult.py --mode independent --question "..." --model gemini-2.5-flash
+  python scripts/gemini-consult.py --mode independent --question "..." --model gemini-3-flash
 
 Exit codes:
   0  success, response printed to stdout
@@ -30,14 +34,13 @@ from typing import Optional
 
 # Workspace imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.api import load_api_key  # noqa: E402
 from scripts.utils.colors import RED, RESET  # noqa: E402
 from scripts.utils.council_models import get_model  # noqa: E402
 from scripts.utils.council_prompts import (  # noqa: E402
-    THIRTY_ONE_C_BLOCK,
     build_independent_prompt,
     build_critique_prompt,
 )
+from scripts.utils.proxy_transport import call_model  # noqa: E402
 
 # ============================================================
 # Configuration
@@ -62,93 +65,8 @@ def consult_gemini(
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
-    """
-    Send the prompt to Gemini and return the response text.
-
-    Uses the google-genai SDK (NOT the legacy google-generativeai). Pattern:
-        client = genai.Client(api_key=...)
-        client.models.generate_content(model=..., contents=..., config=...)
-
-    We configure max_output_tokens and temperature explicitly. Raises
-    RuntimeError on missing-key, auth, rate-limit/quota, timeout, invalid-arg,
-    and other API errors. Error classification uses structured APIError.code/status
-    attributes when available, with message-pattern fallback for non-APIError
-    exceptions (e.g., network errors).
-    """
-    try:
-        from google import genai
-        from google.genai import types as genai_types
-    except ImportError as e:
-        raise RuntimeError(
-            "google-genai SDK is not installed. "
-            "Run: pip install google-genai==2.2.0 (see requirements.txt)"
-        ) from e
-
-    # required=False so the missing-key path raises RuntimeError here instead of
-    # sys.exit() inside load_api_key. main() maps the RuntimeError to exit code 2.
-    api_key = load_api_key("GEMINI_API_KEY", required=False)
-    if not api_key:
-        raise RuntimeError(
-            "GEMINI_API_KEY is missing from .env. "
-            "Add it before invoking the council."
-        )
-
-    client = genai.Client(api_key=api_key)
-
-    try:
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-            ),
-        )
-    except Exception as e:
-        # Hybrid classification: structured google-genai APIError attributes (.code, .status)
-        # when available, falling back to message-pattern for non-APIError exceptions.
-        # The message-pattern fallback catches network-level errors and SDK-version
-        # variations where the structured attributes might not be populated.
-        code = getattr(e, "code", None)
-        status = getattr(e, "status", "") or ""
-        msg = str(e)
-
-        if code == 429 or "RESOURCE_EXHAUSTED" in status or "quota" in msg.lower():
-            raise RuntimeError(
-                f"Gemini API rate-limited or quota exceeded: {e}. "
-                "Retry in 60 seconds, rerun with --model gemini-2.5-flash, "
-                "or enable billing on the Google AI Studio project."
-            ) from e
-        if code in (401, 403) or any(s in status for s in ("PERMISSION_DENIED", "UNAUTHENTICATED")):
-            raise RuntimeError(
-                f"Gemini API auth failed: {e}. "
-                "Check GEMINI_API_KEY in .env (rotate if it was leaked)."
-            ) from e
-        if code == 504 or "DEADLINE_EXCEEDED" in status or "timeout" in msg.lower():
-            raise RuntimeError(
-                f"Gemini API timeout: {e}. "
-                "Retry, or reduce --max-tokens / use --model gemini-2.5-flash."
-            ) from e
-        if code == 400 or "INVALID_ARGUMENT" in status:
-            raise RuntimeError(
-                f"Gemini API rejected the request: {e}. "
-                "Check --model spelling and prompt content."
-            ) from e
-        if isinstance(code, int) and 500 <= code < 600:
-            raise RuntimeError(
-                f"Gemini API server error ({code}): {e}. "
-                "This is transient (e.g., 500 INTERNAL or 503 UNAVAILABLE). "
-                "Retry in 30 seconds."
-            ) from e
-        raise RuntimeError(f"Gemini API call failed: {e}") from e
-
-    if not response.text:
-        raise RuntimeError(
-            "Gemini returned an empty response. "
-            "This often means the prompt was blocked by safety filters."
-        )
-
-    return response.text
+    """Send the council prompt to Gemini through the proxy; return the answer text."""
+    return call_model(model, prompt, temperature=temperature, max_tokens=max_tokens)
 
 
 # ============================================================
@@ -241,7 +159,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     except RuntimeError as e:
         msg = str(e)
-        if "GEMINI_API_KEY" in msg:
+        if "is missing from .env" in msg:  # narrow sentinel: missing-key path only, NOT auth failures
             print(f"{RED}Error:{RESET} {msg}", file=sys.stderr)
             return 2
         print(f"{RED}Error:{RESET} {msg}", file=sys.stderr)

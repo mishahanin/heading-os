@@ -16,16 +16,9 @@ _spec.loader.exec_module(kc)
 
 
 def test_default_model_from_council_config():
-    # DEFAULT_MODEL is resolved from config/council-models.json (single source of
-    # truth), not hardcoded — assert the wiring, so a version bump never breaks this.
     from scripts.utils.council_models import get_model
-
     assert get_model("kimi") == kc.DEFAULT_MODEL
-    assert kc.DEFAULT_MODEL.endswith(":cloud")
-
-
-def test_base_url_is_local_ollama():
-    assert kc.OLLAMA_BASE_URL == "http://localhost:11434/v1"
+    assert kc.DEFAULT_MODEL == "kimi-for-coding"
 
 
 def test_independent_requires_question():
@@ -50,143 +43,38 @@ def test_critique_temperature_default_lower():
 
 def test_main_returns_2_on_missing_key(monkeypatch):
     def _raise(*_a, **_k):
-        raise RuntimeError("OLLAMA_API_KEY not set. Add it to .env")
-
+        raise RuntimeError("CLIPROXY_API_KEY is missing from .env.")
     monkeypatch.setattr(kc, "consult_kimi", _raise)
     assert kc.main(["--mode", "independent", "--question", "Q?"]) == 2
 
 
 def test_main_returns_3_on_api_error(monkeypatch):
     def _raise(*_a, **_k):
-        raise RuntimeError("ollama refused the connection at localhost:11434")
-
+        raise RuntimeError("Proxy connection failed for kimi-for-coding")
     monkeypatch.setattr(kc, "consult_kimi", _raise)
     assert kc.main(["--mode", "independent", "--question", "Q?"]) == 3
 
 
-# ============================================================
-# consult_kimi() finish_reason handling — reasoning-model truncation
-#
-# kimi-k2.6 is a thinking model: it streams its chain-of-thought into a separate
-# `reasoning` field BEFORE the visible answer. When max_tokens is exhausted during
-# that reasoning phase, `content` is empty and finish_reason == "length". The wrapper
-# must disambiguate this from a genuine safety block (content_filter) or empty answer
-# (stop), retry once at a higher budget on length-truncation, and never misattribute
-# a budget truncation to "safety filters". These fakes drive that behaviour without
-# any network call.
-# ============================================================
-
-class _FakeMsg:
-    def __init__(self, content, reasoning=""):
-        self.content = content
-        self.reasoning = reasoning
-        self.model_extra = {"reasoning": reasoning}
+def test_main_returns_3_on_auth_failure(monkeypatch):
+    # Auth failure mentions CLIPROXY_API_KEY but is NOT a missing key -> exit 3,
+    # not 2. Guards the narrow "is missing from .env" sentinel.
+    def _raise(*_a, **_k):
+        raise RuntimeError("Proxy auth failed for kimi-for-coding: 401. "
+                           "Check CLIPROXY_API_KEY in .env.")
+    monkeypatch.setattr(kc, "consult_kimi", _raise)
+    assert kc.main(["--mode", "independent", "--question", "Q?"]) == 3
 
 
-class _FakeChoice:
-    def __init__(self, content, finish_reason, reasoning=""):
-        self.message = _FakeMsg(content, reasoning)
-        self.finish_reason = finish_reason
-
-
-class _FakeUsage:
-    prompt_tokens = 10
-    completion_tokens = 10
-
-
-class _FakeResp:
-    def __init__(self, content, finish_reason, reasoning=""):
-        self.choices = [_FakeChoice(content, finish_reason, reasoning)]
-        self.usage = _FakeUsage()
-        self.model = "kimi-k2.6"
-
-
-class _FakeCompletions:
-    """Returns scripted responses in order; the last one repeats if calls exceed the script."""
-    def __init__(self, scripted):
-        self._scripted = list(scripted)
-        self.calls = []
-
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        idx = min(len(self.calls) - 1, len(self._scripted) - 1)
-        return self._scripted[idx]
-
-
-def _install_fake_kimi(monkeypatch, scripted):
-    """Patch openai.OpenAI + load_api_key so consult_kimi runs offline. Returns the
-    _FakeCompletions so a test can assert call count and per-call max_tokens."""
-    import openai
-    comp = _FakeCompletions(scripted)
-
-    class _FakeChat:
-        completions = comp
-
-    class _FakeClient:
-        def __init__(self, *a, **k):
-            self.chat = _FakeChat()
-
-    monkeypatch.setattr(openai, "OpenAI", _FakeClient)
-    monkeypatch.setattr(kc, "load_api_key", lambda *a, **k: "test-key")
-    return comp
-
-
-def test_empty_length_retries_then_succeeds(monkeypatch):
-    """Empty content + finish_reason=length -> retry once at a higher budget; succeed."""
-    comp = _install_fake_kimi(monkeypatch, [
-        _FakeResp("", "length", reasoning="x" * 600),
-        _FakeResp("FINAL ANSWER", "stop", reasoning="x" * 600),
-    ])
-    out = kc.consult_kimi("q", max_tokens=120)
-    assert out == "FINAL ANSWER"
-    assert len(comp.calls) == 2
-    # the retry must escalate the token budget, not repeat the same starved call
-    assert comp.calls[1]["max_tokens"] > comp.calls[0]["max_tokens"]
-
-
-def test_empty_length_exhausted_raises_precise_error(monkeypatch):
-    """Truncation even after the retry -> accurate error, NOT a safety-filter claim."""
-    _install_fake_kimi(monkeypatch, [
-        _FakeResp("", "length", reasoning="x" * 600),
-        _FakeResp("", "length", reasoning="x" * 600),
-    ])
-    with pytest.raises(RuntimeError) as ei:
-        kc.consult_kimi("q", max_tokens=120)
-    msg = str(ei.value).lower()
-    assert "reasoning" in msg              # names the real mechanism
-    assert "max-tokens" in msg             # gives the actionable fix
-    assert "blocked by safety" not in msg  # must NOT misattribute to a safety block
-
-
-def test_empty_content_filter_raises_safety_error(monkeypatch):
-    """Empty + content_filter -> safety message, single call (no length retry)."""
-    comp = _install_fake_kimi(monkeypatch, [_FakeResp("", "content_filter")])
-    with pytest.raises(RuntimeError) as ei:
-        kc.consult_kimi("q", max_tokens=8192)
-    assert "safet" in str(ei.value).lower()
-    assert len(comp.calls) == 1
-
-
-def test_empty_stop_raises_empty_answer_error(monkeypatch):
-    """Empty + stop -> 'empty answer', not a truncation or safety claim. No retry."""
-    comp = _install_fake_kimi(monkeypatch, [_FakeResp("", "stop")])
-    with pytest.raises(RuntimeError) as ei:
-        kc.consult_kimi("q")
-    m = str(ei.value).lower()
-    assert "empty" in m
-    assert "safety" not in m
-    assert len(comp.calls) == 1
-
-
-def test_nonempty_returns_without_retry(monkeypatch):
-    """Content present + stop -> return immediately, exactly one call."""
-    comp = _install_fake_kimi(monkeypatch, [_FakeResp("hello", "stop")])
-    assert kc.consult_kimi("q") == "hello"
-    assert len(comp.calls) == 1
-
-
-def test_nonempty_length_returns_partial_without_retry(monkeypatch):
-    """Content present + length (answer itself truncated) -> return it, no retry."""
-    comp = _install_fake_kimi(monkeypatch, [_FakeResp("partial...", "length")])
-    assert kc.consult_kimi("q") == "partial..."
-    assert len(comp.calls) == 1
+def test_consult_kimi_forwards_kwargs_to_call_model(monkeypatch):
+    # The thin delegate must pass model/temperature/max_tokens straight through.
+    captured = {}
+    def _fake(model, prompt, *, temperature, max_tokens, timeout=120.0):
+        captured.update(model=model, prompt=prompt,
+                        temperature=temperature, max_tokens=max_tokens)
+        return "ok"
+    monkeypatch.setattr(kc, "call_model", _fake)  # kc imported call_model by name
+    out = kc.consult_kimi("the draft", model="kimi-for-coding",
+                          temperature=0.4, max_tokens=1234)
+    assert out == "ok"
+    assert captured == {"model": "kimi-for-coding", "prompt": "the draft",
+                        "temperature": 0.4, "max_tokens": 1234}

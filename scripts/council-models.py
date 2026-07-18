@@ -10,7 +10,7 @@ scripts/utils/council_models.py. This CLI is the console-first way to keep
 Usage:
   python scripts/council-models.py --show
   python scripts/council-models.py --set grok=grok-4.6
-  python scripts/council-models.py --set grok=grok-4.6 kimi=kimi-k2.8:cloud
+  python scripts/council-models.py --set grok=grok-4.6 kimi=k3
   python scripts/council-models.py --check              # freshness check (human)
   python scripts/council-models.py --check --quiet      # one-line nudge, empty when all OK
   python scripts/council-models.py --check --json       # structured findings
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         "--set",
         nargs="+",
         metavar="PROVIDER=MODEL",
-        help="Set one or more pins, e.g. --set grok=grok-4.6 kimi=kimi-k2.8:cloud.",
+        help="Set one or more pins, e.g. --set grok=grok-4.6 kimi=k3.",
     )
     group.add_argument(
         "--check",

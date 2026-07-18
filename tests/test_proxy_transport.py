@@ -34,9 +34,9 @@ def test_returns_content():
 
 
 def test_missing_key_raises_named_error():
-    with mock.patch.object(pt, "load_api_key", return_value=""):
-        with pytest.raises(RuntimeError, match="CLIPROXY_API_KEY"):
-            pt.call_model("grok-4.5", "q")
+    with mock.patch.object(pt, "load_api_key", return_value=""), \
+         pytest.raises(RuntimeError, match="CLIPROXY_API_KEY"):
+        pt.call_model("grok-4.5", "q")
 
 
 def test_empty_length_retries_then_succeeds():
@@ -56,9 +56,8 @@ def test_empty_length_exhausted_raises_precise_error():
     client = mock.MagicMock()
     client.chat.completions.create.side_effect = [_resp("", "length"), _resp("", "length")]
     with mock.patch.object(pt, "_make_client", return_value=client), \
-         mock.patch.object(pt, "load_api_key", return_value="cpx-test"):
-        with pytest.raises(RuntimeError) as ei:
-            pt.call_model("kimi-for-coding", "q", max_tokens=120)
+         mock.patch.object(pt, "load_api_key", return_value="cpx-test"), pytest.raises(RuntimeError) as ei:
+        pt.call_model("kimi-for-coding", "q", max_tokens=120)
     m = str(ei.value).lower()
     assert "reasoning" in m and "max-tokens" in m
     assert "blocked by safety" not in m
@@ -68,18 +67,18 @@ def test_empty_content_filter_raises_safety_error():
     client = mock.MagicMock()
     client.chat.completions.create.return_value = _resp("", "content_filter")
     with mock.patch.object(pt, "_make_client", return_value=client), \
-         mock.patch.object(pt, "load_api_key", return_value="cpx-test"):
-        with pytest.raises(RuntimeError, match="content_filter"):
-            pt.call_model("gemini-3-flash", "q")
+         mock.patch.object(pt, "load_api_key", return_value="cpx-test"), \
+         pytest.raises(RuntimeError, match="content_filter"):
+        pt.call_model("gemini-3-flash", "q")
 
 
 def test_empty_stop_raises_empty_answer():
     client = mock.MagicMock()
     client.chat.completions.create.return_value = _resp("", "stop")
     with mock.patch.object(pt, "_make_client", return_value=client), \
-         mock.patch.object(pt, "load_api_key", return_value="cpx-test"):
-        with pytest.raises(RuntimeError, match="finish_reason=stop"):
-            pt.call_model("gemini-3-flash", "q")
+         mock.patch.object(pt, "load_api_key", return_value="cpx-test"), \
+         pytest.raises(RuntimeError, match="finish_reason=stop"):
+        pt.call_model("gemini-3-flash", "q")
 
 
 def test_forwards_timeout_to_client():

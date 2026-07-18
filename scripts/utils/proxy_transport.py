@@ -65,12 +65,12 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
     client = _make_client(api_key, timeout=timeout)
 
     def _call(tok_budget):
-        create_kwargs = dict(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=tok_budget,
-        )
+        create_kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": tok_budget,
+        }
         if reasoning_effort:
             create_kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
         try:

@@ -38,12 +38,26 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, RESET  # noqa: E402
-from scripts.utils.kimi_transport import reason as kimi_reason  # noqa: E402
+from scripts.utils.proxy_transport import call_model as _proxy_call_model  # noqa: E402
 from scripts.utils.perplexity_client import research as pplx_research  # noqa: E402
 from scripts.utils.deep_research_prompts import (  # noqa: E402
     build_decompose_prompt,
     build_reason_prompt,
 )
+
+
+def kimi_reason(prompt, model="k3", temperature=0.3, max_tokens=12000, timeout=180.0,
+                reasoning_effort="max"):
+    """Deep-research reasoning via the shared proxy transport (was ollama Kimi).
+
+    Uses k3 at max thinking effort — deep research is the deepest-reasoning caller
+    (2026-07-18 amendment). Kept as a named local shim so the existing call sites
+    read unchanged. Sends a raw prompt (no 31C coupling) — the privacy boundary
+    that used to live in kimi_transport is preserved here. k3 always thinks and
+    eats budget, so the default max_tokens/timeout are raised."""
+    return _proxy_call_model(model, prompt, temperature=temperature,
+                             max_tokens=max_tokens, timeout=timeout,
+                             reasoning_effort=reasoning_effort)
 
 DEFAULT_DEPTH = 4
 MAX_DEPTH = 8
@@ -106,7 +120,7 @@ def run(question: str, depth: int = DEFAULT_DEPTH, critical: bool = False,
 
     # Phase 0 — decompose (Kimi). Fall back to the bare question on failure.
     try:
-        raw = kimi_reason(build_decompose_prompt(question, depth), max_tokens=2048)
+        raw = kimi_reason(build_decompose_prompt(question, depth), max_tokens=8192)
         angles = extract_json(raw)
         if not isinstance(angles, list) or not angles:
             raise ValueError("decompose did not return a non-empty list")

@@ -107,6 +107,7 @@
   "scripts/memory-index.py::B905": 1,
   "scripts/memory-index.py::C416": 1,
   "scripts/memory-index.py::SIM113": 1,
+  "scripts/memory-touch.py::B904": 1,
   "scripts/modem-tune.py::B007": 1,
   "scripts/modem-tune.py::SIM105": 1,
   "scripts/mullvad-fastest.py::S310": 2,
@@ -118,7 +119,9 @@
   "scripts/osint-advanced-sync.py::S310": 4,
   "scripts/pencil-export.py::B905": 1,
   "scripts/polymarket.py::S310": 2,
+  "scripts/prime-health-parallel.py::DTZ011": 1,
   "scripts/promote-knowledge.py::SIM201": 1,
+  "scripts/reminders-notify.py::DTZ011": 2,
   "scripts/render-doctype.py::SIM108": 2,
   "scripts/sanitize-check.py::SIM103": 1,
   "scripts/scrutinize-replay.py::B905": 1,
@@ -175,7 +178,6 @@
   "tests/test_api_load_key_raises.py::SIM117": 1,
   "tests/test_data_path_redirect.py::A001": 1,
   "tests/test_dead_letter.py::B905": 1,
-  "tests/test_kimi_transport.py::SIM117": 2,
   "tests/test_llm_fallback.py::SIM117": 1,
   "tests/test_memory_index_chunking.py::C408": 1,
   "tests/test_memory_index_coverage.py::C408": 1,
@@ -183,5 +185,6 @@
   "tests/test_perplexity_client.py::SIM117": 1,
   "tests/test_polymarket.py::SIM117": 1,
   "tests/test_resolve_entity.py::SIM117": 3,
-  "tests/test_send_email_threaded.py::A002": 1
+  "tests/test_send_email_threaded.py::A002": 1,
+  "tests/test_telegram_bot.py::S105": 1
 }

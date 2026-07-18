@@ -9,7 +9,7 @@ and transcript persistence.
 
 Transport, auth, retry, and error classification all live in proxy_transport.call_model;
 this module is a thin delegate that owns only the Gemini-specific prompt/CLI surface.
-The google-genai SDK is no longer used - the proxy fronts the subscription instead.
+The direct vendor SDK is no longer used - the proxy fronts the subscription instead.
 
 Update DEFAULT_MODEL when Google ships a new flagship tier (via
 config/council-models.json, see scripts/council-models.py --set).

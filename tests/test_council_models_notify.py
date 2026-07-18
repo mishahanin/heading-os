@@ -21,12 +21,12 @@ def _finding(provider, status, candidate=None):
 
 def test_signature_only_actionable_sorted():
     findings = [
-        _finding("grok", "newer", "grok-4.6"),
-        _finding("gemini", "ok"),
         _finding("kimi", "broken"),
+        _finding("gemini", "ok"),
+        _finding("grok", "broken"),
     ]
     sig = notify._signature(findings)
-    assert sig == ["grok:newer:grok-4.6", "kimi:broken:-"]
+    assert sig == ["grok:broken:-", "kimi:broken:-"]
 
 
 def test_signature_empty_when_all_ok():

@@ -66,7 +66,7 @@ Manually-invoked quality gate. Runs a maximum-effort VIIA pass (Validate - Ident
 - `--no-refute` (flag) - skip Phase 2.5 (refutation + debate); findings emit directly to the approval block with scorer-emitted confidence only. Recorded in the saved report.
 - `--include-low-confidence` (flag) - show findings below the confidence threshold (default 75) in the approval block; default hides them but logs them in the saved report.
 - `--include-ambiguous` (flag) - surface AMBIGUOUS debate verdicts with an `[AMBIGUOUS]` tag for CEO adjudication; default drops them.
-- `--no-code-review` (flag) - skip the Kimi-Code code-specialist voice on code targets (see Phase 1 + `references/code-review-voice.md`); default runs it on code.
+- `--no-code-review` (flag) - skip the Kimi code-specialist voice on code targets (see Phase 1 + `references/code-review-voice.md`); default runs it on code.
 
 ---
 
@@ -112,7 +112,7 @@ Apply the four phases from `references/viia-framework.md`:
 
 For any `SKILL.md`, `scripts/*.py`, rule, or reference file in scope: call `python3 scripts/artifact-evaluator.py --path <file> --json` first to pick up deterministic findings, then add qualitative VIIA layer on top.
 
-**Code targets — Kimi-Code + GLM specialist voices (auto-on unless `--no-code-review` / `--no-glm-review`):** when the target is code (a `file:`/`dir:` of code, or an `execution` whose diff touches code), dispatch the external code voice(s) in parallel with the Identify pass — independent non-Claude code-specialist reads (GLM's 1M context takes large targets whole). Their candidate findings merge into the Identify set (de-duped against Claude's and each other) and then face Phase 2.5 refutation like any other. Full firing rules, dispatch commands, merge/attribution, and `## Judge layer` logging: `references/code-review-voice.md`. Skip silently for `plan`/`workspace`/`trajectory`, and when ollama/a code-voice tag is unavailable (note it in the header, never fail the pass).
+**Code targets — Kimi + Claude-native specialist voices (auto-on unless `--no-code-review`):** when the target is code (a `file:`/`dir:` of code, or an `execution` whose diff touches code), dispatch the external Kimi code voice (via the proxy) in parallel with the Identify pass — an independent non-Claude code-specialist read; Claude-native handles large targets whole. Its candidate findings merge into the Identify set (de-duped against Claude's) and then face Phase 2.5 refutation like any other. Full firing rules, dispatch commands, merge/attribution, and `## Judge layer` logging: `references/code-review-voice.md`. Skip silently for `plan`/`workspace`/`trajectory`, and when the proxy/the Kimi code-voice pin is unavailable (note it in the header, never fail the pass).
 
 **Sentinel execution targets:** when the target includes `scripts/sentinel.py` or any `tests/integration/` file, also run `python3 scripts/run-integration-tests.py --quiet --no-cov`; treat any failure as an automatic `HIGH` (or `BLOCKER` if it is a daemon crash-safety regression).
 

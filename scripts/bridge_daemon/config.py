@@ -66,11 +66,10 @@ def load_config(workspace_root: Path) -> dict[str, Any]:
     if user.exists():
         cfg = _deep_merge(cfg, yaml.safe_load(user.read_text()) or {})
     # Resolve the operator's slug through the identity seam when no config layer
-    # set it. Established instance -> legacy "misha" (byte-identical); fresh clone
-    # -> generic "operator". Shim removed in v0.5.0.
+    # set it (operator.yaml / env; generic "operator" on a fresh clone).
     if not cfg.get("user_slug"):
-        from scripts.utils.workspace import operator_identity_default
-        cfg["user_slug"] = operator_identity_default("slug", "misha")
+        from scripts.utils.operator import operator_slug
+        cfg["user_slug"] = operator_slug()
     return cfg
 
 

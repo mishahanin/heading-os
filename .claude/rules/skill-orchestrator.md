@@ -16,7 +16,7 @@ Detects compound workflows and dispatches parallel agents for research phases wh
 
 Before dispatching any parallel pattern, read the SKILL.md frontmatter of each skill you plan to dispatch. Orchestration metadata lives under the namespaced `x-heading-orchestration:` block. Decide parallelization based on `x-heading-orchestration.parallel_safe` and `x-heading-orchestration.shared_state`.
 
-The `x-` prefix marks this as a workspace extension, not part of Anthropic's standard SKILL.md spec. See `.claude/rules/development-standards.md` for the full frontmatter contract and an example shape. The parsers still accept the legacy 31C-prefixed namespace through the v0.5.0 transition; new skills use `x-heading-*`.
+The `x-` prefix marks this as a workspace extension, not part of Anthropic's standard SKILL.md spec. See `.claude/rules/development-standards.md` for the full frontmatter contract and an example shape. As of v0.5.0 the parsers accept only `x-heading-*`; the legacy 31C-prefixed namespace was removed.
 
 ### Parallel Safety Levels
 

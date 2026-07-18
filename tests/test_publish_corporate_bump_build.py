@@ -28,10 +28,10 @@ def _load():
 def M(tmp_path, monkeypatch):
     mod = _load()
     monkeypatch.setattr(mod, "CORPORATE_ROOT", tmp_path)
-    # The publisher is stamped through the operator seam; pin it to the legacy
-    # value so the assertion is deterministic regardless of the ambient operator
-    # identity (established host vs data-less CI clone).
-    monkeypatch.setattr(mod, "operator_identity_default", lambda field, legacy: legacy)
+    # The publisher is stamped through the operator seam; pin it deterministically
+    # so the assertion holds regardless of the ambient operator identity
+    # (established host vs data-less CI clone).
+    monkeypatch.setattr(mod, "operator_slug", lambda: "misha-hanin")
     return mod
 
 

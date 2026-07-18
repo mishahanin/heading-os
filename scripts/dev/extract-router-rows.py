@@ -9,7 +9,7 @@ the inverse of ``scripts/generate-skill-router.py``: split on the exact separato
 generator joins on, so the round-trip reproduces each cell (modulo separator whitespace,
 which folds into the one consciously-approved normalization diff).
 
-Kept in-repo for provenance, like ``scripts/dev/rename-x31c-namespace.py``. Idempotent: an
+Kept in-repo for provenance. Idempotent: an
 existing ``x-heading-routing`` block is replaced, not duplicated. The block is appended to
 the end of the frontmatter as text (yaml.dump for correct quoting), so the rest of each
 SKILL.md - folded scalars, key order, body - is never reflowed.

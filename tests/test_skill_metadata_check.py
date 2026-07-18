@@ -143,3 +143,38 @@ def test_classify_size_boundaries():
     assert chk.classify_size(0, chk.BYTE_HARD_CAP + 1) == "HARD"
     assert chk.classify_size(chk.LINE_HARD_CAP, 0) == "OK"
     assert chk.classify_size(chk.LINE_HARD_CAP + 1, 0) == "HARD"
+
+
+# The single intentional legacy-namespace mention in the whole test tree: a
+# SKILL.md that carries ONLY the retired x-31c-orchestration block, used to prove
+# the parser rejects it (dual-key removed in v0.5.0). Kept in tests, never in
+# production code (the success-signal grep is scoped to scripts/).
+_LEGACY_FRONTMATTER = """---
+name: {name}
+description: "legacy skill {name}"
+metadata:
+  author: Misha Hanin
+  email: misha.hanin@odinix.com
+  version: "1.0"
+x-31c-orchestration:
+  parallel_safe: false
+  shared_state: []
+  triggers: []
+---
+# {name}
+
+"""
+
+
+def test_legacy_x31c_orchestration_now_rejected(fixture_root):
+    """A SKILL.md carrying only the legacy x-31c-orchestration block is reported
+    missing the required x-heading-orchestration block. This proves the dual-key
+    acceptance was removed in v0.5.0 (the parser no longer falls back to it)."""
+    _, skills_dir = fixture_root
+    d = skills_dir / "legacy-only"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(
+        _LEGACY_FRONTMATTER.format(name="legacy-only"), encoding="utf-8"
+    )
+    result = chk.check_skill(d)
+    assert "x-heading-orchestration" in result["missing_required"]

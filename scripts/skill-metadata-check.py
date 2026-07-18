@@ -14,9 +14,7 @@ Recommended:
 
 The orchestration fields live under a namespaced x-heading-orchestration: block
 in SKILL.md. This signals "workspace extension, not part of Anthropic's standard
-SKILL.md spec" so future stricter validation does not strip them. The legacy
-x-31c-orchestration: key is still accepted through the v0.5.0 transition; a
-skill still on it is reported as a deprecation, not a failure.
+SKILL.md spec" so future stricter validation does not strip them.
 
 Skills lacking the orchestration block (or its fields) default to
 parallel_safe=false per the orchestrator's safety model, which is invisible.
@@ -66,7 +64,6 @@ REQUIRED_ORCH_FIELDS = ["parallel_safe", "shared_state", "triggers"]
 REQUIRED_METADATA = ["author", "version"]
 RECOMMENDED_FIELDS = ["argument-hint", "allowed-tools"]
 ORCHESTRATION_BLOCK = "x-heading-orchestration"
-ORCHESTRATION_BLOCK_LEGACY = "x-31c-orchestration"
 
 VALID_PARALLEL_SAFE = {"true", "false", "partial", True, False}
 
@@ -250,7 +247,6 @@ def check_skill(skill_dir: Path, baseline: frozenset = frozenset()) -> dict:
         "missing_recommended": [],
         "invalid_values": [],
         "error": "",
-        "legacy_namespace": False,
         "status": "UNKNOWN",
         "size_lines": 0,
         "size_bytes": 0,
@@ -302,12 +298,7 @@ def check_skill(skill_dir: Path, baseline: frozenset = frozenset()) -> dict:
 
     # Orchestration block (x-heading-orchestration) - workspace extension,
     # namespaced to signal "not part of Anthropic's standard SKILL.md spec".
-    # Dual-key: prefer x-heading-orchestration, fall back to the legacy
-    # x-31c-orchestration through v0.5.0 (reported as a deprecation).
     orch = frontmatter.get(ORCHESTRATION_BLOCK)
-    if orch is None and ORCHESTRATION_BLOCK_LEGACY in frontmatter:
-        orch = frontmatter.get(ORCHESTRATION_BLOCK_LEGACY)
-        result["legacy_namespace"] = True
     if orch is None:
         result["missing_required"].append(ORCHESTRATION_BLOCK)
     elif not isinstance(orch, dict):
@@ -388,13 +379,6 @@ def print_report(results: list[dict], summary_only: bool = False,
     print(f"  {YELLOW}WARN:{RESET}  {counts['WARN']}  (missing recommended fields only)")
     print(f"  {RED}FAIL:{RESET}  {counts['FAIL']}  (missing required fields or invalid values)")
     print(f"  {RED}ERROR:{RESET} {counts['ERROR']} (no SKILL.md or malformed frontmatter)")
-
-    legacy = [r for r in results if r.get("legacy_namespace")]
-    if legacy:
-        print(f"\n{GRAY}deprecation: {len(legacy)} skill(s) still use the legacy "
-              f"{ORCHESTRATION_BLOCK_LEGACY} key (accepted through v0.5.0):{RESET}")
-        for r in legacy:
-            print(f"  {GRAY}- {r['name']}{RESET}")
 
     # Size budget (F-5.3). Always printed, even under --summary, so the pre-commit
     # hook (which runs with --summary) still surfaces every WARN/HARD line.

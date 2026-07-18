@@ -159,12 +159,8 @@ def list_capabilities(workspace_root: Path) -> dict:
         author = _clean(meta.get("author"))
         # x-heading-capability block (what / how / when) - the plain-language
         # self-explanation rendered on the Capabilities page. Absent on skills
-        # not yet annotated; the page falls back to the description. Dual-key:
-        # prefer x-heading-capability, fall back to the legacy x-31c-capability
-        # through the v0.5.0 transition.
+        # not yet annotated; the page falls back to the description.
         cap_raw = fm.get("x-heading-capability")
-        if not isinstance(cap_raw, dict):
-            cap_raw = fm.get("x-31c-capability")
         cap = cap_raw if isinstance(cap_raw, dict) else {}
         capability = {
             "what": _clean(cap.get("what")),

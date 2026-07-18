@@ -50,8 +50,8 @@ from scripts.utils.workspace import (  # noqa: E402
     get_data_root,
     get_routing_destination,
     get_workspace_root,
-    operator_identity_default,
 )
+from scripts.utils.operator import operator_slug  # noqa: E402
 
 # Identity gate reads .workspace-identity.json from the engine clone root.
 WORKSPACE_ROOT = get_workspace_root()
@@ -366,7 +366,7 @@ def bump_build(summary: str = "Workspace update", structural: bool = False,
         "version": f"{major}.{minor}.{patch}",
         "build": new_build,
         "timestamp": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "publisher": operator_identity_default("slug", "misha-hanin"),
+        "publisher": operator_slug(),
         "summary": summary,
         "files_changed": files_changed,
     }

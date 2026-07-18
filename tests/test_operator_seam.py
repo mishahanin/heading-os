@@ -4,11 +4,12 @@ Covers:
   - env-var precedence (highest tier)
   - overlay/file precedence over the generic default
   - generic default on an unconfigured clone
-  - the workspace.py compatibility shim (established instance -> legacy literal;
-    fresh clone -> generic), scheduled for removal in v0.5.0
-  - a regression guard asserting no operator-identity default literal survives
-    in the load-bearing engine sites, outside the operator_identity_default()
-    shim and allowlisted public-author identity.
+  - configured operator.yaml resolves the real identity through the seam (the
+    path every de-shimmed call site relies on as of v0.5.0)
+  - a regression guard asserting no personal operator-identity literal survives
+    in the load-bearing engine sites (the shim is gone as of v0.5.0; identity
+    resolves through scripts/utils/operator.py, so no personal literal may appear
+    in engine code).
 """
 import re
 from pathlib import Path
@@ -16,7 +17,6 @@ from pathlib import Path
 import pytest
 
 import scripts.utils.operator as operator
-import scripts.utils.workspace as workspace
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -88,47 +88,31 @@ def test_never_raises_on_bad_yaml(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Compatibility shim (workspace.operator_identity_default)
+# Configured-identity resolution (post-shim; v0.5.0)
 # --------------------------------------------------------------------------
 
-def test_shim_established_instance_returns_legacy(monkeypatch):
-    """Unconfigured operator + established instance -> legacy literal + warning."""
-    monkeypatch.setattr(operator, "_resolve_file", lambda: (operator._EXAMPLE_PATH, False))
-    operator._reset_cache()
-    monkeypatch.setattr(workspace, "_is_established_instance", lambda: True)
-    workspace._SHIM_WARNED.clear()
-    with pytest.warns(DeprecationWarning):
-        assert workspace.operator_identity_default("slug", "misha-hanin") == "misha-hanin"
-
-
-def test_shim_fresh_clone_returns_generic(monkeypatch):
-    """Unconfigured operator + fresh clone (no admin.json) -> generic value."""
-    monkeypatch.setattr(operator, "_resolve_file", lambda: (operator._EXAMPLE_PATH, False))
-    operator._reset_cache()
-    monkeypatch.setattr(workspace, "_is_established_instance", lambda: False)
-    workspace._SHIM_WARNED.clear()
-    assert workspace.operator_identity_default("slug", "misha-hanin") == "operator"
-
-
-def test_shim_configured_operator_wins(monkeypatch, tmp_path):
-    """A configured operator.yaml bypasses the shim entirely (no legacy, no warn)."""
+def test_configured_operator_yaml_resolves_identity(monkeypatch, tmp_path):
+    """A written operator.yaml resolves the real identity through the seam - the
+    path every de-shimmed call site now relies on (no shim, no legacy literal)."""
     f = tmp_path / "operator.yaml"
-    f.write_text("slug: ada-lovelace\n", encoding="utf-8")
+    f.write_text(
+        "name: Ada Lovelace\nslug: ada-lovelace\ngithub_org: adalovelace\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(operator, "_resolve_file", lambda: (f, True))
     operator._reset_cache()
-    monkeypatch.setattr(workspace, "_is_established_instance", lambda: True)
-    workspace._SHIM_WARNED.clear()
-    assert workspace.operator_identity_default("slug", "misha-hanin") == "ada-lovelace"
+    assert operator.operator_slug() == "ada-lovelace"
+    assert operator.operator_org() == "adalovelace"
+    assert operator.operator_is_default() is False
 
 
 # --------------------------------------------------------------------------
-# Regression guard: no operator-identity default literal outside the shim
+# Regression guard: no personal operator-identity literal in engine code
 # --------------------------------------------------------------------------
 
-# The load-bearing engine sites de-personalized in F-4.1. Every personal
-# identity slug/org literal in these files must now be an argument to
-# operator_identity_default() (the guarded, v0.5.0-timeboxed compatibility shim),
-# never a bare default.
+# The load-bearing engine sites de-personalized in F-4.1 and fully cut over to the
+# operator seam in v0.5.0. No personal identity slug/org literal may appear in
+# these files at all - identity resolves through scripts/utils/operator.py.
 FIXED_FILES = [
     "scripts/utils/workspace.py",
     "scripts/bridge_daemon/config.py",
@@ -170,19 +154,21 @@ def _code_lines(text: str):
         yield i, raw
 
 
-def test_no_personal_identity_default_outside_shim():
-    """Every personal slug/org literal in a fixed file's code is a shim arg."""
+def test_no_personal_identity_literal_in_engine():
+    """No personal slug/org literal survives in any fixed engine file's code.
+
+    The v0.5.0 close-out removed the operator-identity compatibility shim; identity
+    now resolves through scripts/utils/operator.py, so a bare personal literal in
+    these files is a regression. Category-c prose (single-line docstrings,
+    argparse/usage examples, trailing inline comments) is still allowed."""
     offenders = []
     for rel in FIXED_FILES:
         text = (ROOT / rel).read_text(encoding="utf-8")
         for lineno, line in _code_lines(text):
             if not _PERSONAL_RE.search(line):
                 continue
-            # Allowlisted: the compatibility-shim call carrying the legacy literal.
-            if "operator_identity_default(" in line:
-                continue
             # Allowlisted category-c prose that lives on a code line: single-line
-            # docstrings and argparse/usage examples (the plan preserves these).
+            # docstrings and argparse/usage examples.
             if '"""' in line or "'''" in line or "e.g." in line or "help=" in line:
                 continue
             # Allowlisted: a trailing inline comment carrying the token (prose).
@@ -191,8 +177,8 @@ def test_no_personal_identity_default_outside_shim():
                 continue
             offenders.append(f"{rel}:{lineno}: {line.strip()}")
     assert not offenders, (
-        "operator-identity default literal outside operator_identity_default():\n"
-        + "\n".join(offenders)
+        "personal operator-identity literal in engine code (identity must resolve "
+        "through scripts/utils/operator.py):\n" + "\n".join(offenders)
     )
 
 

@@ -17,6 +17,7 @@ Usage:
 
 Choice values: claude | gemini | grok | kimi | mix | reject
 - claude / gemini / grok / kimi: that single model's answer landed best
+- kimi: Kimi's answer landed best
 - mix: took useful pieces from multiple; no single winner
 - reject: none of the answers moved the decision; used something else
 

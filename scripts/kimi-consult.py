@@ -63,9 +63,11 @@ def consult_kimi(
     model: str = DEFAULT_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    reasoning_effort: Optional[str] = None,
 ) -> str:
     """Send the council prompt to Kimi through the proxy; return the answer text."""
-    return call_model(model, prompt, temperature=temperature, max_tokens=max_tokens)
+    return call_model(model, prompt, temperature=temperature, max_tokens=max_tokens,
+                      reasoning_effort=reasoning_effort)
 
 
 # ============================================================
@@ -120,6 +122,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=DEFAULT_MAX_TOKENS,
         help=f"Max output tokens. Default: {DEFAULT_MAX_TOKENS}",
     )
+    p.add_argument(
+        "--reasoning-effort",
+        choices=["low", "high", "max"],
+        default=None,
+        help="k3 thinking effort (proxy request param); omit for kimi-for-coding",
+    )
     args = p.parse_args(argv)
 
     if args.mode == "independent" and not args.question.strip():
@@ -155,6 +163,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             model=args.model,
             temperature=args.temperature,
             max_tokens=args.max_tokens,
+            reasoning_effort=args.reasoning_effort,
         )
     except RuntimeError as e:
         msg = str(e)

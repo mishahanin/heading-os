@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-18
+
+### Added
+- **One shared proxy-transport seam for every external-model call (`scripts/utils/proxy_transport.py`):** `/council`, `/scrutinize`, `deep-research-advance`, and the Anthropic `llm_fallback` cascade now reach Kimi/Grok/Gemini through a single prompt-agnostic function, `call_model(model, prompt, *, temperature, max_tokens, timeout, reasoning_effort) -> str`, pointed at the local CLIProxyAPI proxy (`http://127.0.0.1:8317/v1`, OpenAI-compatible) and authenticated with `CLIPROXY_API_KEY` from the gitignored engine `.env`. The seam sends the prompt verbatim and injects no system block, so each caller keeps ownership of its own prompt coupling (council injects the 31C block via `council_prompts`; deep-research sends raw prompts and never leaks business context into a third-party cloud). It reproduces the thinking-model truncation retry once — empty content plus `finish_reason=length` retries at `max(max_tokens*2, 16384)` and then raises an accurate `length` truncation error, never a safety-block claim — routes `content_filter` to a distinct safety error, and classifies every OpenAI SDK exception (auth, rate-limit, 404, bad-request, timeout, connection, 5xx) into an actionable `RuntimeError`. New `tests/test_proxy_transport.py` (10 cases: base-URL, missing-key, length-retry success and exhaustion, content-filter vs empty-stop, timeout forwarding, and `reasoning_effort` presence/omission).
+- **Kimi K3 wired as a per-voice reasoning upgrade (thinking `low`/`high`/`max` via request field, not config):** the seam threads an optional `reasoning_effort` that rides `extra_body={"reasoning_effort": ...}` and is sent ONLY when set. Deep-research reasons through `k3` at `max`, the `/council` Kimi voice dispatches `k3` at `high` (with graceful degrade to `kimi-for-coding` when `k3` is absent from the catalog), and the `/scrutinize` Kimi code voice reviews at `k3` `high`. `kimi-consult.py` gained a `--reasoning-effort {low,high,max}` flag. The `llm_fallback` cascade and the default Kimi council pin stay on `kimi-for-coding` (fast, quota-light) and pass no effort field.
+
+### Changed
+- **Council trimmed to three proxy voices; pins live in `config/council-models.json`:** `gemini-3-flash` / `grok-4.5` / `kimi-for-coding`. The three consult adapters (`gemini`/`grok`/`kimi-consult.py`) are now thin delegates over `call_model`; their exit-code contract keys on the seam's `"is missing from .env"` sentinel (missing key -> exit 2, any other proxy failure -> exit 3). `/scrutinize` code voices repoint to proxy Kimi (`k3` `high`) plus Claude-native review inside Claude Code. `/council` SKILL.md 1.3 -> 1.4.
+- **Council freshness checks the proxy catalog, not vendor APIs or Ollama:** `scripts/utils/council_freshness.py` was rewritten to `probe_proxy()` + `classify_proxy_model(provider, pin, catalog)` (absent pin -> broken, unknown -> unknown, present -> ok) + `assess()` over gemini/grok/kimi; ten now-orphaned vendor/Ollama probe helpers were deleted. The daily freshness nudge and `/prime`'s health line are unchanged externally.
+- **`llm_fallback.yaml` chains refreshed; Kimi leads Sonnet/Opus:** haiku = [`gemini-3.1-flash-lite`, `grok-3-mini-fast`], sonnet = [`kimi-for-coding`, `gemini-3-flash`, `grok-4.5`], opus = [`kimi-for-coding`, `gemini-3.1-pro-low`, `grok-4.5`]. `_invoke_vendor` gained a `kimi` branch (calls `consult_kimi`, no `reasoning_effort`).
+- **Deep-research reasons through the proxy:** `deep-research-advance.py` now calls a local `kimi_reason()` shim over `proxy_transport` (`k3`, `reasoning_effort="max"`) in place of the deleted Ollama-cloud transport.
+- **Single-transport posture is intentional (no paid-key fallback):** a proxy outage now degrades `/council` and deep-research rather than silently falling back to metered vendor keys. The fix is to restore or replace CLIProxyAPI, not to re-add vendor keys. Ollama keeps ONLY `bge-m3` embeddings and the `gemma3` chronicle model.
+- **Lint baseline rebaselined honestly:** `.lint-baseline.json` was regenerated after the migration, and the four pre-existing findings surfaced by the whole-tree ratchet were fixed properly rather than baselined away — `B904` (`raise ... from None`) in `memory-touch.py`, `DTZ011` (`date.today()` -> `datetime.now(get_default_tz()).date()`) in `prime-health-parallel.py` and `reminders-notify.py`, and `S105` (`# noqa` on a fake test token) in `test_telegram_bot.py`.
+
+### Removed
+- **Legacy metered transports and dead voices:** `scripts/utils/kimi_transport.py` and `tests/test_kimi_transport.py` are deleted (deep-research no longer reaches Kimi via Ollama-cloud); the GLM voice and the Kimi-2.6 / Kimi-Code voices are dropped from `/council` and `/scrutinize`; the `glm` choice is removed from `council-record-verdict.py`'s valid verdicts and tally.
+- **Unused `google-genai` dependency:** removed from the `ai-extra` optional group in `pyproject.toml`, `uv.lock`, and the regenerated `requirements.txt` — the direct Google SDK path is gone now that Gemini routes through the proxy.
+
+> Executed via `superpowers:subagent-driven-development` (Tasks 0-10 plus a K3-wiring amendment) with a two-stage review per task — a task-reviewer subagent plus a `k3`-`high` proxy review — and a final Opus whole-branch review that returned zero Critical/Important findings. Full suite green (2762 passed); live smokes SMOKE-OK for gemini/grok/kimi and K3-OK for `k3`-`high`; freshness green. Design and plan live in the gitignored `docs/superpowers/{specs,plans}/2026-07-18-*proxy-transport*` (CEO design archive, not shipped).
+
 ## [0.5.0] - 2026-07-18
 
 ### Removed
@@ -115,7 +135,8 @@ Initial public release.
 - **Memory and ODIN**: a local associative-memory index behind `/recall` and a persistent knowledge brain.
 - The published documentation site at [mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/), the deployment guide, and the focused setup guides for models, integrations, and personalization.
 
-[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/mishahanin/heading-os/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mishahanin/heading-os/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/mishahanin/heading-os/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/mishahanin/heading-os/compare/v0.3.0...v0.4.0

@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly 31C Odin reflect-propose (Monday 05:31, configured timezone)
+
+[Timer]
+# Monday 05:31 in the configured timezone. The installer substitutes {{TZ}} from
+# HEADING_OS_TZ (default UTC); the trailing timezone pins the fire even when the
+# host's local timezone differs (systemd >= 252). Persistent=true catches a fire
+# missed because the host was off, running it on next boot. 05:31 is an odd minute
+# clear of the 03:00-03:30 nightly batch.
+OnCalendar=Mon *-*-* 05:31:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

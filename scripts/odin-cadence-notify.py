@@ -15,10 +15,21 @@ It runs `odin-cadence.py --quiet`, whose stdout IS the canonical suggestion line
 here from `--json` -- guarantees the Telegram text can never drift from the line
 the CEO sees at `/prime`, and keeps the counts-only contract in one place.
 
-Invoked by scripts/templates/systemd/odin-cadence.service (weekly timer). Also
-runnable by hand for a dry-run:
-    python3 scripts/odin-cadence-notify.py            # send only if a nudge is due
-    python3 scripts/odin-cadence-notify.py --min-entries 1   # force-test delivery
+Two surfaces share this entrypoint:
+  - Normal mode (odin-cadence.service, retired timer / manual): send the counts
+    line, folding in a proposal path when the propose flow produces one.
+  - `--propose-only` mode (odin-propose.service, the live weekly surface): skip
+    the counts subprocess and the counts send entirely (ops-radar already
+    surfaces the counts daily) and deliver ONLY a real outcome -- a standalone
+    proposal-path message when a proposal is produced, or the CRITICAL
+    integrity alert -- else nothing. `--min-entries` is inert in this mode
+    (cluster presence is min_entries-independent).
+
+Invoked by scripts/templates/systemd/odin-propose.service (weekly timer). Also
+runnable by hand:
+    python3 scripts/odin-cadence-notify.py                 # counts nudge if due
+    python3 scripts/odin-cadence-notify.py --min-entries 1 # force-test counts delivery
+    python3 scripts/odin-cadence-notify.py --propose-only  # propose surface (silent unless a proposal is produced)
 """
 
 from __future__ import annotations
@@ -28,8 +39,10 @@ import importlib.util
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # Workspace import bootstrap (per development-standards.md)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -82,23 +95,28 @@ def _brain_snapshot(brain_dir: Path) -> dict:
     return snap
 
 
-def _maybe_headless_propose(root: Path, line: str) -> str:
-    """If ODIN_REFLECT_PROPOSE_ENABLED is truthy and a fresh in-process cadence
-    compute finds a non-empty cluster_detail, run the headless
-    `odin reflect --propose` call and fold its proposal-file path into `line`.
+def _run_headless_propose(root: Path) -> Optional[Path]:
+    """Run the headless `odin reflect --propose` flow, returning the proposal Path.
 
-    Integrity-check backstop (pre-impl gate finding, council-confirmed): this
-    does NOT trust Claude Code's own --allowedTools/--disallowedTools
-    enforcement alone. It snapshots knowledge/odin-brain/ immediately before and
-    after the headless call, in plain Python, independent of whether the
-    vendor CLI's permission layer worked -- mirroring tiered-risk.md's "the
-    ledger is data, the send-gate is code" pattern. ANY detected change is a
-    CRITICAL integrity failure: logged loudly, and the proposal path is
-    withheld from the Telegram line entirely (send the deterministic-only line,
-    same as the up-to-date case). Never raises; always returns a line to send.
+    If ODIN_REFLECT_PROPOSE_ENABLED is truthy and a fresh in-process cadence
+    compute finds a non-empty cluster_detail, run the headless
+    `odin reflect --propose` call and return the deterministic proposal-file
+    Path. Returns None on any non-delivery outcome: flag unset, no cluster,
+    compute/subprocess failure, integrity failure, non-zero exit, or a missing
+    proposal file. `cluster_detail` is min_entries-independent
+    (analyze_reflect_clusters does not use it), so no min_entries is threaded.
+
+    Integrity-check backstop (council-confirmed): this does NOT trust Claude
+    Code's own --allowedTools/--disallowedTools enforcement alone. It snapshots
+    knowledge/odin-brain/ immediately before and after the headless call, in
+    plain Python, independent of whether the vendor CLI's permission layer
+    worked -- mirroring tiered-risk.md's "the ledger is data, the send-gate is
+    code" pattern. ANY detected change is a CRITICAL integrity failure: logged
+    loudly, escalated to the CEO over Telegram, and the proposal path is
+    withheld (return None). NEVER raises.
     """
     if not os.environ.get("ODIN_REFLECT_PROPOSE_ENABLED"):
-        return line
+        return None
 
     cadence_path = root / CADENCE_SCRIPT
     try:
@@ -106,11 +124,11 @@ def _maybe_headless_propose(root: Path, line: str) -> str:
         result = oc.compute(get_data_root(), oc.DEFAULT_MIN_ENTRIES)
     except Exception as exc:  # noqa: BLE001 - boundary; a missed propose run is non-critical
         _log(f"in-process cadence compute failed ({type(exc).__name__}: {exc}); skipping propose")
-        return line
+        return None
 
     cluster_detail = result.get("cluster_detail") or []
     if not cluster_detail:
-        return line
+        return None
 
     from scripts.heading_cli import PROPOSE_DEFAULT_BUDGET_USD  # local: only needed here
 
@@ -123,6 +141,7 @@ def _maybe_headless_propose(root: Path, line: str) -> str:
         "--budget", str(PROPOSE_DEFAULT_BUDGET_USD),
         "odin", "reflect", "--propose",
     ]
+    started = time.time()
     try:
         proc = subprocess.run(
             cmd, cwd=str(root), capture_output=True, text=True,
@@ -130,14 +149,14 @@ def _maybe_headless_propose(root: Path, line: str) -> str:
         )
     except Exception as exc:  # noqa: BLE001 - boundary; a missed propose run is non-critical
         _log(f"headless propose call failed to run ({type(exc).__name__}: {exc}); skipping")
-        return line
+        return None
 
     brain_after = _brain_snapshot(brain_dir)
     if brain_before != brain_after:
         _log(
             "CRITICAL: knowledge/odin-brain/ changed during a headless "
             "odin reflect --propose run -- integrity check failed; withholding "
-            "the proposal path from this week's Telegram line"
+            "the proposal path"
         )
         # "Logged loudly" (F-10.3 Decision 9) must reach the CEO off-machine,
         # not just journald: an unauthorized brain write in a mode that never
@@ -152,35 +171,91 @@ def _maybe_headless_propose(root: Path, line: str) -> str:
             "odin reflect --propose run -- integrity check failed. The proposal "
             "was withheld; inspect the brain and the run immediately.",
         )
-        return line
+        return None
 
     if proc.returncode != 0:
         _log(f"headless propose call exited {proc.returncode}: {proc.stderr.strip()[:200]}")
-        return line
+        return None
 
     # The proposal filename is fully deterministic (mode-catalog.md's --propose
     # sub-flow spec) -- constructing it directly is more robust than parsing an
     # LLM's free-form stdout/JSON envelope for the path.
+    proposals_dir = get_data_root() / "outputs" / "operations" / "odin-reflect-proposals"
     today = datetime.now(get_default_tz()).date()
-    proposal_path = (
-        get_data_root() / "outputs" / "operations" / "odin-reflect-proposals"
-        / f"{today.isoformat()}_odin-reflect-proposal.md"
-    )
-    if not proposal_path.exists():
-        _log("headless propose call succeeded but no proposal file found at the expected path")
-        return line
+    proposal_path = proposals_dir / f"{today.isoformat()}_odin-reflect-proposal.md"
+    if proposal_path.exists():
+        return proposal_path
 
-    return f"{line} Proposal: {proposal_path}"
+    # Same-run fallback (scrutiny M1): the date that NAMES the file is the
+    # headless run's session-date (libc TZ), while `today` above is a Python
+    # reconstruction via get_default_tz() (HEADING_OS_TZ). Those two bases can
+    # diverge -- HEADING_OS_TZ edited without re-running the installer, or the
+    # up-to-600s call crossing local midnight -- and the exact-date path then
+    # misses a file that was really written. Recover it directly: the newest
+    # proposal file touched since THIS call started is, by construction, the one
+    # this run produced (single weekly timer, no concurrent writer). The 2s
+    # grace absorbs coarse mtime resolution on 9P/FAT mounts.
+    fresh = sorted(
+        (p for p in proposals_dir.glob("*_odin-reflect-proposal.md")
+         if p.stat().st_mtime >= started - 2),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if fresh:
+        return fresh[-1]
+
+    _log("headless propose call succeeded but no proposal file found (exact-date or fresh)")
+    return None
+
+
+def _maybe_headless_propose(root: Path, line: str) -> str:
+    """Normal-path wrapper: fold the propose outcome into the counts `line`.
+
+    Behavior-preserving over the pre-refactor version -- when a proposal is
+    produced, append its (absolute) path to the counts line exactly as before;
+    otherwise return the line unchanged. The `--propose-only` surface calls
+    `_run_headless_propose` directly instead of this wrapper.
+    """
+    p = _run_headless_propose(root)
+    return f"{line} Proposal: {p}" if p else line
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Push the Odin cadence nudge to Telegram on a nudge.")
     ap.add_argument("--min-entries", type=int, default=None,
                     help="override the un-harvested threshold (for dry-run testing)")
+    ap.add_argument("--propose-only", action="store_true",
+                    help="run ONLY the headless propose flow (odin-propose.timer): "
+                         "skip the counts nudge; deliver a standalone proposal-path "
+                         "message only when a proposal is produced")
     args = ap.parse_args()
 
     root = get_workspace_root()
-    load_env(root)  # make .env (ODIN_CADENCE_TELEGRAM_TARGET) visible under systemd too
+    load_env(root)  # make .env (ODIN_REFLECT_PROPOSE_ENABLED / target) visible under systemd too
+
+    if args.propose_only:
+        # Propose-only surface (odin-propose.timer). Placed immediately after
+        # load_env so the propose gate + recipient are read from .env under
+        # systemd, and deliberately NOT behind the counts `cadence.exists()`
+        # guard (_run_headless_propose loads odin-cadence itself and degrades on
+        # absence). Skip the counts subprocess + counts send entirely -- ops-radar
+        # already surfaces the counts daily. Deliver ONLY a real outcome: the
+        # proposal path (relative, phone-readable), or nothing. Any CRITICAL
+        # integrity alert is sent inside _run_headless_propose.
+        p = _run_headless_propose(root)
+        if p is None:
+            _log("propose-only: no proposal this run")
+            return 0
+        recipient = os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET", DEFAULT_RECIPIENT)
+        try:
+            rel = p.relative_to(get_data_root())
+        except ValueError:
+            rel = p
+        if telegram_notify.notify(recipient, f"Odin reflect proposal ready: {rel}"):
+            _log(f"propose-only: proposal delivered to {recipient}: {rel}")
+        else:
+            _log("propose-only: proposal not delivered (see telegram_notify log)")
+        return 0
+
     cadence = root / CADENCE_SCRIPT
     if not cadence.exists():
         _log(f"cadence script absent ({cadence}); nothing to do")

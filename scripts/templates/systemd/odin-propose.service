@@ -1,0 +1,18 @@
+[Unit]
+Description=31C Odin reflect-propose (weekly headless draft -> Telegram DM)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/odin-cadence-notify.py --propose-only
+# TZ aligns the headless run's session-date basis with the get_default_tz()
+# reconstruction that names the expected proposal file -- both derive from
+# HEADING_OS_TZ, substituted here at install time (default UTC). TZ does not
+# itself compute the filename; a same-run mtime fallback in
+# odin-cadence-notify.py recovers the file if the two bases ever diverge.
+# journald avoids double-writing a log path on a /mnt/c 9P mount.
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

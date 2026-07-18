@@ -239,6 +239,14 @@ class Config: ...
 class StateManager: ...
 ```
 
+**Scheduled tasks (systemd-user timers) MUST survive reboot.** Every scheduled task in this workspace -- every existing timer and every future one -- ships as a systemd-user timer built to fire after an unattended reboot, never as a session-scoped `CronCreate` task (those are NOT durable -- see `.claude/rules/skill-router.md` § Scheduled & Background Tasks). Reboot survival requires all THREE mechanisms, and an installer must include every one (copy an existing sibling installer such as `scripts/install-router-accuracy-timer.sh`, which already bakes them in -- do not hand-roll a partial one):
+
+1. **`Persistent=true`** in the `.timer` unit -- runs a fire missed while the machine was off, on the next boot.
+2. **`systemctl --user enable`** with `WantedBy=timers.target` in the unit -- the timer starts at boot.
+3. **`loginctl enable-linger "$USER"`** in the installer -- user units run without an interactive login session. This is the one most often forgotten; without it a user timer stays silent after an unattended reboot.
+
+Make reboot survival an explicit Constraint + Validation item in any plan that adds a timer, and verify after install: `systemctl --user is-enabled <name>.timer` = `enabled`, `loginctl show-user "$USER"` shows `Linger=yes`, and the rendered `~/.config/systemd/user/<name>.timer` contains `Persistent=true`. Timer/service templates live in `scripts/templates/systemd/` and carry no geographic literal -- timezone via the `{{TZ}}` substitution token the installer fills from `HEADING_OS_TZ`.
+
 ## Reference File Standards
 
 Every file in `reference/` must include:

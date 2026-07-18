@@ -28,20 +28,13 @@ from scripts.utils.workspace import get_workspace_root  # noqa: E402
 # reject any provider not listed here. Kept in sync with the values shipped in
 # config/council-models.json so a missing config reproduces current behaviour.
 FALLBACKS = {
-    "gemini": "gemini-3.5-flash",
+    # Proxy pins (CLIProxyAPI, 127.0.0.1:8317). Bump with:
+    #   python scripts/council-models.py --set gemini=<new>
+    # Model ids are the proxy's own catalog names (`cliproxy models`), NOT the
+    # vendor-direct names — the proxy fronts the subscriptions.
+    "gemini": "gemini-3-flash",
     "grok": "grok-4.5",
-    # kimi is served through the local ollama daemon (cloud-routed), so the pin
-    # must match a tag actually registered there (`ollama list`). Bump only after
-    # `ollama pull kimi-<new>:cloud` on this machine.
-    "kimi": "kimi-k2.6:cloud",
-    # kimi-code: coding-specialised Kimi, the optional 4th /council voice that
-    # joins on code tasks (and /scrutinize code reviews). Also ollama-served, so
-    # the same pull-then-pin rule applies.
-    "kimi-code": "kimi-k2.7-code:cloud",
-    # glm: Zhipu GLM, the 4th BASE /council voice (peer of gemini/grok/kimi).
-    # Also served through the local ollama daemon (cloud-routed), so the pin must
-    # match a tag actually registered there; bump only after `ollama pull glm-<new>:cloud`.
-    "glm": "glm-5.2:cloud",
+    "kimi": "kimi-for-coding",
 }
 
 PROVIDERS = tuple(FALLBACKS.keys())

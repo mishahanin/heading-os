@@ -24,10 +24,10 @@ def _write(path: Path, data: dict) -> None:
 
 
 def test_get_model_reads_config(tmp_config):
-    _write(tmp_config, {"grok": "grok-9.9", "gemini": "gemini-x", "kimi": "kimi-z:cloud"})
+    _write(tmp_config, {"grok": "grok-9.9", "gemini": "gemini-x", "kimi": "kimi-z"})
     assert cm.get_model("grok") == "grok-9.9"
     assert cm.get_model("gemini") == "gemini-x"
-    assert cm.get_model("kimi") == "kimi-z:cloud"
+    assert cm.get_model("kimi") == "kimi-z"
 
 
 def test_missing_config_falls_back(tmp_config):
@@ -71,9 +71,9 @@ def test_set_model_round_trip_preserves_other_keys(tmp_config):
 
 def test_set_model_creates_config_when_absent(tmp_config):
     assert not tmp_config.exists()
-    cm.set_model("kimi", "kimi-fresh:cloud")
+    cm.set_model("kimi", "kimi-fresh")
     assert tmp_config.exists()
-    assert cm.get_model("kimi") == "kimi-fresh:cloud"
+    assert cm.get_model("kimi") == "kimi-fresh"
 
 
 def test_set_model_rejects_unknown_provider(tmp_config):
@@ -89,3 +89,23 @@ def test_set_model_rejects_empty_model(tmp_config):
 def test_load_all_covers_every_provider(tmp_config):
     result = cm.load_all()
     assert set(result.keys()) == set(cm.PROVIDERS)
+
+
+def test_providers_are_the_three_proxy_voices():
+    from scripts.utils.council_models import PROVIDERS
+    assert set(PROVIDERS) == {"gemini", "grok", "kimi"}
+
+
+def test_glm_and_kimi_code_are_unknown_providers():
+    import pytest
+    from scripts.utils.council_models import get_model
+    for gone in ("glm", "kimi-code"):
+        with pytest.raises(ValueError):
+            get_model(gone)
+
+
+def test_proxy_pins_resolve():
+    from scripts.utils.council_models import get_model
+    assert get_model("gemini") == "gemini-3-flash"
+    assert get_model("grok") == "grok-4.5"
+    assert get_model("kimi") == "kimi-for-coding"

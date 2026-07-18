@@ -130,7 +130,7 @@ Workspace orchestration extension (under `x-heading-orchestration:` namespaced b
 - `shared_state` -- list of file/directory paths this skill writes to, e.g., `["crm/contacts/", "context/pipeline.md"]`. Empty list `[]` if read-only.
 - `triggers` -- list of natural-language phrases that should invoke this skill, e.g., `["investigate", "research", "dig into"]`. Empty list `[]` if not auto-routable.
 
-The `x-` prefix signals "workspace extension, not part of Anthropic's standard SKILL.md spec." Anthropic's tooling ignores unknown frontmatter fields today; the namespaced block keeps that contract intact even if a future release tightens validation. New skills use the `x-heading-*` namespace; the parsers (`scripts/skill-metadata-check.py`, `scripts/bridge_daemon/sources/capabilities.py`) still accept the legacy 31C-prefixed key through the v0.5.0 transition, when it is removed.
+The `x-` prefix signals "workspace extension, not part of Anthropic's standard SKILL.md spec." Anthropic's tooling ignores unknown frontmatter fields today; the namespaced block keeps that contract intact even if a future release tightens validation. New skills use the `x-heading-*` namespace; as of v0.5.0 the parsers (`scripts/skill-metadata-check.py`, `scripts/bridge_daemon/sources/capabilities.py`) accept only `x-heading-*` — the legacy 31C-prefixed key was removed.
 
 Example shape:
 

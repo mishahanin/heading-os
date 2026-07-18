@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-18
+
+### Removed
+- **Legacy `x-31c-*` frontmatter namespace (F-4.2 close-out):** both frontmatter parsers (`scripts/skill-metadata-check.py`, `scripts/bridge_daemon/sources/capabilities.py`) now accept ONLY `x-heading-*`; a `x-31c-*`-only SKILL.md is rejected as missing its required block. All 94 skills were migrated to `x-heading-*` in v0.4.0, so nothing regresses. The completed one-shot migration tool `scripts/dev/rename-x31c-namespace.py` is deleted — its provenance lives in the git history and the v0.4.0 F-4.2 changelog entry.
+- **Operator-identity compatibility shim:** `operator_identity_default()` and its `_is_established_instance()` / `_SHIM_WARNED` helpers are removed from `scripts/utils/workspace.py`; all ~13 call sites (workspace, aggregate-crm, merge/transfer-contact, publish-corporate, and the bridge daemon) now resolve identity through the real operator seam (`operator_slug()` / `operator_org()` / `get_operator()`), so no personal identity literal remains in engine code. An operator sets identity in `config/operator.yaml` (env / data overlay), per `scripts/operator.example.yaml`; a fresh clone still resolves to a neutral "operator". The `tests/test_operator_seam.py` regression guard now forbids any personal literal in the engine sites with no shim exception, and a new `tests/test_skill_metadata_check.py` case proves a legacy-only SKILL.md is rejected.
+
 ## [0.4.1] - 2026-07-18
 
 ### Added
@@ -109,7 +115,8 @@ Initial public release.
 - **Memory and ODIN**: a local associative-memory index behind `/recall` and a persistent knowledge brain.
 - The published documentation site at [mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/), the deployment guide, and the focused setup guides for models, integrations, and personalization.
 
-[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mishahanin/heading-os/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/mishahanin/heading-os/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/mishahanin/heading-os/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mishahanin/heading-os/compare/v0.2.0...v0.3.0

@@ -4357,7 +4357,7 @@ body[data-sidebar="collapsed"] .nav-item {
   line-height: 1.45;
 }
 
-/* What/How/When self-explanation lines (x-31c-capability). The "what" uses
+/* What/How/When self-explanation lines (x-heading-capability). The "what" uses
    .cap-desc above; How and When are compact labelled lines beneath it. */
 .cap-row .cap-meta {
   font-size: 11.5px;

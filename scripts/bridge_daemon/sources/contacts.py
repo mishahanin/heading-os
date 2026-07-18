@@ -26,7 +26,8 @@ from scripts.bridge_daemon.sources.tribe import (
     _parse_frontmatter,
 )
 from scripts.utils.paths import get_data_root
-from scripts.utils.workspace import get_all_active_exec_slugs, operator_identity_default
+from scripts.utils.workspace import get_all_active_exec_slugs
+from scripts.utils.operator import operator_slug
 
 CRM_CENTRAL_DIRNAME = "31c-crm-central"
 PER_EXEC_REPO_PREFIX = "31c-crm-"
@@ -41,7 +42,7 @@ def _crm_central_self_dir() -> str:
     mirror; it holds a stale snapshot (the live crm/contacts/ is used instead),
     so it is skipped. Resolved through the operator seam: established instance ->
     legacy 'misha-hanin' (byte-identical), fresh clone -> generic 'operator'."""
-    return operator_identity_default("slug", "misha-hanin")
+    return operator_slug()
 
 
 def _resolve_exec_contacts_dir(workspace_root: Path, owner: str) -> Path | None:

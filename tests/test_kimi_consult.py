@@ -68,7 +68,7 @@ def test_main_returns_3_on_auth_failure(monkeypatch):
 def test_consult_kimi_forwards_kwargs_to_call_model(monkeypatch):
     # The thin delegate must pass model/temperature/max_tokens straight through.
     captured = {}
-    def _fake(model, prompt, *, temperature, max_tokens, timeout=120.0):
+    def _fake(model, prompt, *, temperature, max_tokens, timeout=120.0, reasoning_effort=None):
         captured.update(model=model, prompt=prompt,
                         temperature=temperature, max_tokens=max_tokens)
         return "ok"
@@ -78,3 +78,25 @@ def test_consult_kimi_forwards_kwargs_to_call_model(monkeypatch):
     assert out == "ok"
     assert captured == {"model": "kimi-for-coding", "prompt": "the draft",
                         "temperature": 0.4, "max_tokens": 1234}
+
+
+def test_consult_kimi_forwards_reasoning_effort(monkeypatch):
+    captured = {}
+    def _fake(model, prompt, *, temperature, max_tokens, timeout=120.0, reasoning_effort=None):
+        captured["reasoning_effort"] = reasoning_effort
+        return "ok"
+    monkeypatch.setattr(kc, "call_model", _fake)
+    kc.consult_kimi("draft", model="k3", temperature=0.4, max_tokens=1234, reasoning_effort="high")
+    assert captured["reasoning_effort"] == "high"
+
+
+def test_cli_reasoning_effort_passed_through(monkeypatch):
+    captured = {}
+    def _fake(prompt, model=kc.DEFAULT_MODEL, temperature=kc.DEFAULT_TEMPERATURE,
+              max_tokens=kc.DEFAULT_MAX_TOKENS, reasoning_effort=None):
+        captured["reasoning_effort"] = reasoning_effort
+        return "answer"
+    monkeypatch.setattr(kc, "consult_kimi", _fake)
+    assert kc.main(["--mode", "independent", "--question", "Q?",
+                    "--model", "k3", "--reasoning-effort", "max"]) == 0
+    assert captured["reasoning_effort"] == "max"

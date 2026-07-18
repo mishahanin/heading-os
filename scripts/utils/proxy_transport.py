@@ -30,13 +30,19 @@ def _make_client(api_key, timeout=DEFAULT_TIMEOUT):
     return OpenAI(api_key=api_key, base_url=PROXY_BASE_URL, timeout=timeout)
 
 
-def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAULT_TIMEOUT):
+def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAULT_TIMEOUT,
+               reasoning_effort=None):
     """Send `prompt` to `model` through the proxy; return the visible answer text.
 
     Raises RuntimeError on missing key, API failure, or a genuine empty/truncated
     answer. On empty content + finish_reason=length (reasoning ate the budget),
     retries once at a strictly higher budget before raising an accurate truncation
     error — never a safety-block claim.
+
+    `reasoning_effort` (low/high/max) is optional and honored by thinking models
+    (e.g. k3); when set it rides `extra_body={"reasoning_effort": ...}`. Omit it
+    (leave as None) for models that don't support the field, such as the default
+    kimi-for-coding.
     """
     from openai import (
         APIError,
@@ -59,13 +65,16 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
     client = _make_client(api_key, timeout=timeout)
 
     def _call(tok_budget):
+        create_kwargs = dict(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=tok_budget,
+        )
+        if reasoning_effort:
+            create_kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
         try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=tok_budget,
-            )
+            resp = client.chat.completions.create(**create_kwargs)
         except AuthenticationError as e:
             raise RuntimeError(
                 f"Proxy auth failed for {model}: {e}. Check CLIPROXY_API_KEY in .env."

@@ -95,3 +95,23 @@ def test_forwards_timeout_to_client():
          mock.patch.object(pt, "load_api_key", return_value="cpx-test"):
         pt.call_model("grok-4.5", "q", timeout=200.0)
     assert captured["timeout"] == 200.0
+
+
+def test_reasoning_effort_rides_extra_body():
+    client = mock.MagicMock()
+    client.chat.completions.create.return_value = _resp("ok", "stop")
+    with mock.patch.object(pt, "_make_client", return_value=client), \
+         mock.patch.object(pt, "load_api_key", return_value="cpx-test"):
+        pt.call_model("k3", "q", reasoning_effort="high")
+    _, kwargs = client.chat.completions.create.call_args
+    assert kwargs["extra_body"] == {"reasoning_effort": "high"}
+
+
+def test_reasoning_effort_omitted_when_none():
+    client = mock.MagicMock()
+    client.chat.completions.create.return_value = _resp("ok", "stop")
+    with mock.patch.object(pt, "_make_client", return_value=client), \
+         mock.patch.object(pt, "load_api_key", return_value="cpx-test"):
+        pt.call_model("kimi-for-coding", "q")
+    _, kwargs = client.chat.completions.create.call_args
+    assert "extra_body" not in kwargs

@@ -88,126 +88,49 @@ def test_critique_prompt_includes_context_when_provided():
 
 
 # ============================================================
-# consult_grok() finish_reason handling — parity with kimi-consult
-#
-# grok-4.3 has built-in reasoning. xAI keeps the chain-of-thought in a separate
-# `reasoning_content` field, so empirically the visible `content` is rarely starved
-# (a tiny max_tokens truncates the answer but still returns content). These tests pin
-# the SHARED defect fix anyway: empty content must be disambiguated by finish_reason,
-# retried once on length-truncation, and never misattributed to a safety block. Fakes
-# drive every branch with no network call.
+# DEFAULT_MODEL wiring + main() exit-code branch + thin-delegate forwarding
 # ============================================================
 
-class _FakeMsg:
-    def __init__(self, content, reasoning=""):
-        self.content = content
-        self.reasoning_content = reasoning
-        self.model_extra = {"reasoning_content": reasoning}
+def test_default_model_from_council_config():
+    from scripts.utils.council_models import get_model
+    assert get_model("grok") == gc.DEFAULT_MODEL
+    assert gc.DEFAULT_MODEL == "grok-4.5"
 
 
-class _FakeChoice:
-    def __init__(self, content, finish_reason, reasoning=""):
-        self.message = _FakeMsg(content, reasoning)
-        self.finish_reason = finish_reason
+def test_main_returns_2_on_missing_key(monkeypatch):
+    def _raise(*_a, **_k):
+        raise RuntimeError("CLIPROXY_API_KEY is missing from .env.")
+    monkeypatch.setattr(gc, "consult_grok", _raise)
+    assert gc.main(["--mode", "independent", "--question", "Q?"]) == 2
 
 
-class _FakeUsage:
-    prompt_tokens = 10
-    completion_tokens = 10
+def test_main_returns_3_on_api_error(monkeypatch):
+    def _raise(*_a, **_k):
+        raise RuntimeError("Proxy connection failed for grok-4.5")
+    monkeypatch.setattr(gc, "consult_grok", _raise)
+    assert gc.main(["--mode", "independent", "--question", "Q?"]) == 3
 
 
-class _FakeResp:
-    def __init__(self, content, finish_reason, reasoning=""):
-        self.choices = [_FakeChoice(content, finish_reason, reasoning)]
-        self.usage = _FakeUsage()
-        self.model = "grok-4.3"
+def test_main_returns_3_on_auth_failure(monkeypatch):
+    # Auth failure mentions CLIPROXY_API_KEY but is NOT a missing key -> exit 3,
+    # not 2. Guards the narrow "is missing from .env" sentinel.
+    def _raise(*_a, **_k):
+        raise RuntimeError("Proxy auth failed for grok-4.5: 401. "
+                           "Check CLIPROXY_API_KEY in .env.")
+    monkeypatch.setattr(gc, "consult_grok", _raise)
+    assert gc.main(["--mode", "independent", "--question", "Q?"]) == 3
 
 
-class _FakeCompletions:
-    """Returns scripted responses in order; the last one repeats if calls exceed the script."""
-    def __init__(self, scripted):
-        self._scripted = list(scripted)
-        self.calls = []
-
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        idx = min(len(self.calls) - 1, len(self._scripted) - 1)
-        return self._scripted[idx]
-
-
-def _install_fake_grok(monkeypatch, scripted):
-    """Patch openai.OpenAI + load_api_key so consult_grok runs offline. Returns the
-    _FakeCompletions so a test can assert call count and per-call max_tokens."""
-    import openai
-    comp = _FakeCompletions(scripted)
-
-    class _FakeChat:
-        completions = comp
-
-    class _FakeClient:
-        def __init__(self, *a, **k):
-            self.chat = _FakeChat()
-
-    monkeypatch.setattr(openai, "OpenAI", _FakeClient)
-    monkeypatch.setattr(gc, "load_api_key", lambda *a, **k: "test-key")
-    return comp
-
-
-def test_empty_length_retries_then_succeeds(monkeypatch):
-    """Empty content + finish_reason=length -> retry once at a higher budget; succeed."""
-    comp = _install_fake_grok(monkeypatch, [
-        _FakeResp("", "length", reasoning="x" * 600),
-        _FakeResp("FINAL ANSWER", "stop", reasoning="x" * 600),
-    ])
-    out = gc.consult_grok("q", max_tokens=120)
-    assert out == "FINAL ANSWER"
-    assert len(comp.calls) == 2
-    assert comp.calls[1]["max_tokens"] > comp.calls[0]["max_tokens"]
-
-
-def test_empty_length_exhausted_raises_precise_error(monkeypatch):
-    """Truncation even after the retry -> accurate error, NOT a safety-filter claim."""
-    _install_fake_grok(monkeypatch, [
-        _FakeResp("", "length", reasoning="x" * 600),
-        _FakeResp("", "length", reasoning="x" * 600),
-    ])
-    with pytest.raises(RuntimeError) as ei:
-        gc.consult_grok("q", max_tokens=120)
-    msg = str(ei.value).lower()
-    assert "reasoning" in msg
-    assert "max-tokens" in msg
-    assert "blocked by safety" not in msg
-
-
-def test_empty_content_filter_raises_safety_error(monkeypatch):
-    """Empty + content_filter -> safety message, single call (no length retry)."""
-    comp = _install_fake_grok(monkeypatch, [_FakeResp("", "content_filter")])
-    with pytest.raises(RuntimeError) as ei:
-        gc.consult_grok("q", max_tokens=8192)
-    assert "safet" in str(ei.value).lower()
-    assert len(comp.calls) == 1
-
-
-def test_empty_stop_raises_empty_answer_error(monkeypatch):
-    """Empty + stop -> 'empty answer', not a truncation or safety claim. No retry."""
-    comp = _install_fake_grok(monkeypatch, [_FakeResp("", "stop")])
-    with pytest.raises(RuntimeError) as ei:
-        gc.consult_grok("q")
-    m = str(ei.value).lower()
-    assert "empty" in m
-    assert "safety" not in m
-    assert len(comp.calls) == 1
-
-
-def test_nonempty_returns_without_retry(monkeypatch):
-    """Content present + stop -> return immediately, exactly one call."""
-    comp = _install_fake_grok(monkeypatch, [_FakeResp("hello", "stop")])
-    assert gc.consult_grok("q") == "hello"
-    assert len(comp.calls) == 1
-
-
-def test_nonempty_length_returns_partial_without_retry(monkeypatch):
-    """Content present + length (grok's normal truncation) -> return it, no retry."""
-    comp = _install_fake_grok(monkeypatch, [_FakeResp("partial...", "length")])
-    assert gc.consult_grok("q") == "partial..."
-    assert len(comp.calls) == 1
+def test_consult_grok_forwards_kwargs_to_call_model(monkeypatch):
+    # The thin delegate must pass model/temperature/max_tokens straight through.
+    captured = {}
+    def _fake(model, prompt, *, temperature, max_tokens, timeout=120.0):
+        captured.update(model=model, prompt=prompt,
+                        temperature=temperature, max_tokens=max_tokens)
+        return "ok"
+    monkeypatch.setattr(gc, "call_model", _fake)  # gc imported call_model by name
+    out = gc.consult_grok("the draft", model="grok-4.5",
+                          temperature=0.4, max_tokens=1234)
+    assert out == "ok"
+    assert captured == {"model": "grok-4.5", "prompt": "the draft",
+                        "temperature": 0.4, "max_tokens": 1234}

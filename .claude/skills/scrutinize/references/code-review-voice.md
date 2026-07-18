@@ -29,9 +29,10 @@ agent already covers code), or `trajectory` targets.
 Availability: the voice needs its pin present in the proxy catalog (`cliproxy
 models`). If the proxy is down, skip the Kimi voice, continue the pass, and
 note `code-review: unavailable` in the report header. Never fail the scrutiny
-because the code voice is down. Large targets are read whole by the
-Claude-native voice in Claude Code - no second external voice is needed for
-full-context coverage.
+because the code voice is down. On our plan k3 carries a 1M-token context, so
+for a deep audit the Kimi voice can read a large target whole too (see Dispatch,
+wide mode); for routine large targets the Claude-native voice remains the
+full-context reader.
 
 ## Dispatch
 
@@ -62,9 +63,15 @@ Review brief:
 
 Run in parallel with the Claude VIIA Identify pass (single assistant message,
 alongside the other Phase 1 work) so it adds no serial latency. Escape single
-quotes in the code as `'\''`. The voice caps the draft to the highest-risk
-files when the code exceeds its context (note the truncation in the report);
-large targets are read whole by the Claude-native voice instead.
+quotes in the code as `'\''`. Default (focused-diff) review: if the
+draft exceeds k3's context the voice caps it to the highest-risk files and notes
+the truncation. **Wide mode** for a deep audit (`--relentless`, or an explicit
+whole-subsystem review): pass the full target to k3 rather than trimming - its
+1M-token context covers whole subsystems, giving a second independent
+full-context read alongside the Claude-native voice, and raise `--max-tokens` to
+`16000` for the larger findings set. Wide mode is opt-in because k3 is slow and
+verbose (deep-batch, not latency-sensitive), so the routine focused-diff default
+is unchanged.
 
 ## How the findings are used
 

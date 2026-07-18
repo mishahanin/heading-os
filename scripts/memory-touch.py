@@ -140,7 +140,7 @@ def touch_file(raw_path: str, auto_memory_dir: Path, today: str) -> tuple[int, s
     try:
         resolved.relative_to(auto_memory_resolved)
     except ValueError:
-        raise TouchError(f"{raw_path}: outside auto-memory directory ({auto_memory_resolved})")
+        raise TouchError(f"{raw_path}: outside auto-memory directory ({auto_memory_resolved})") from None
     if not resolved.is_file():
         raise TouchError(f"{raw_path}: not found ({resolved})")
 

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils import telegram_bot as tb_mod
 from scripts.utils.telegram_bot import TelegramAPIError, TelegramBot
 
-TOKEN = "123456:AA-fake-secret-token-value"
+TOKEN = "123456:AA-fake-secret-token-value"  # noqa: S105 - fake token fixture, not a real secret
 
 
 class FakeResponse:

@@ -23,13 +23,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils import reminders_store as rs  # noqa: E402
-from scripts.utils.workspace import get_workspace_root  # noqa: E402
+from scripts.utils.workspace import get_default_tz, get_workspace_root  # noqa: E402
 from scripts.utils.paths import load_env  # noqa: E402
 from scripts.utils import telegram_notify  # noqa: E402
 
@@ -90,15 +90,16 @@ def main() -> int:
     argparse.ArgumentParser(description="Push due reminders to Telegram.").parse_args()
     root = get_workspace_root()
     load_env(root)  # make .env recipient vars visible under systemd
+    today = datetime.now(get_default_tz()).date()
     try:
-        due = rs.due_records(date.today())
+        due = rs.due_records(today)
     except ValueError as exc:
         _log(f"store corrupt: {exc}")
         return 1
     if not due:
         _log("nothing due")
         return 0
-    sent = send_due(date.today(), _telegram_sender())
+    sent = send_due(today, _telegram_sender())
     _log(f"sent {len(sent)}/{len(due)} due reminder(s)")
     return 0
 

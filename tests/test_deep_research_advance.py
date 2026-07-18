@@ -24,6 +24,7 @@ def test_run_writes_intermediate(tmp_path):
         ], "contradictions": []})
 
     with mock.patch.object(dra, "kimi_reason", side_effect=[decompose_json, reason_json]), \
+         mock.patch.object(dra, "probe_proxy", return_value=["k3"]), \
          mock.patch.object(dra, "pplx_research",
                            return_value=("finding", ["https://a.com"])), \
          mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path):
@@ -46,6 +47,7 @@ def test_run_marks_degraded_when_kimi_fails(tmp_path):
     # Kimi fails on BOTH the decompose and reason calls; Perplexity still yields a corpus,
     # so the run completes with degraded=true rather than aborting (exit 3).
     with mock.patch.object(dra, "kimi_reason", side_effect=RuntimeError("kimi down")), \
+         mock.patch.object(dra, "probe_proxy", return_value=["k3"]), \
          mock.patch.object(dra, "pplx_research", return_value=("finding", ["https://a.com"])), \
          mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path):
         run_dir = dra.run("q", depth=2, critical=False)
@@ -56,6 +58,7 @@ def test_run_marks_degraded_when_kimi_fails(tmp_path):
 
 def test_run_exits_3_when_no_corpus(tmp_path):
     with mock.patch.object(dra, "kimi_reason", return_value=json.dumps(["a", "b"])), \
+         mock.patch.object(dra, "probe_proxy", return_value=["k3"]), \
          mock.patch.object(dra, "pplx_research", side_effect=RuntimeError("pplx down")), \
          mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path), pytest.raises(SystemExit) as exc:
         dra.run("q", depth=2)
@@ -96,9 +99,52 @@ def test_run_retries_kimi_reason_once_before_degrading(tmp_path):
         return v
 
     with mock.patch.object(dra, "kimi_reason", side_effect=fake_kimi), \
+         mock.patch.object(dra, "probe_proxy", return_value=["k3"]), \
          mock.patch.object(dra, "pplx_research", return_value=("finding", ["https://a.com"])), \
          mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path):
         run_dir = dra.run("q", depth=2, critical=False)
     data = json.loads((run_dir / "intermediate.json").read_text())
     assert data["degraded"] is False
     assert data["kimi_analysis"]["summary"] == "s"
+
+
+def test_reason_model_for_prefers_k3_when_present():
+    assert dra._reason_model_for(["k3", "kimi-for-coding", "grok-4.5"]) == ("k3", "max")
+
+
+def test_reason_model_for_falls_back_when_k3_absent():
+    # k3 dropped from the proxy catalog -> shallower analysis, not corpus-only.
+    assert dra._reason_model_for(["kimi-for-coding", "grok-4.5"]) == ("kimi-for-coding", None)
+
+
+def test_reason_model_for_optimistic_when_catalog_unreachable():
+    # Probe failed (None): stay on k3; a real k3 failure is caught downstream.
+    assert dra._reason_model_for(None) == ("k3", "max")
+
+
+def _capture_reason_calls(tmp_path, catalog):
+    """Run once with a fixed catalog, returning the (model, effort) of each
+    kimi_reason call the run issued."""
+    outputs = iter(['["a", "b"]', '{"summary": "s", "claims": [], "contradictions": []}'])
+    seen = []
+
+    def fake_kimi(prompt, **kw):
+        seen.append((kw.get("model"), kw.get("reasoning_effort")))
+        return next(outputs)
+
+    with mock.patch.object(dra, "kimi_reason", side_effect=fake_kimi), \
+         mock.patch.object(dra, "probe_proxy", return_value=catalog), \
+         mock.patch.object(dra, "pplx_research", return_value=("finding", ["https://a.com"])), \
+         mock.patch.object(dra, "get_outputs_dir", return_value=tmp_path):
+        dra.run("q", depth=2, critical=False)
+    return seen
+
+
+def test_run_uses_k3_max_when_present(tmp_path):
+    seen = _capture_reason_calls(tmp_path, ["k3", "kimi-for-coding"])
+    assert seen and all(m == "k3" and e == "max" for m, e in seen)
+
+
+def test_run_falls_back_to_kimi_for_coding_when_k3_absent(tmp_path):
+    seen = _capture_reason_calls(tmp_path, ["kimi-for-coding", "grok-4.5"])
+    assert seen and all(m == "kimi-for-coding" and e is None for m, e in seen)

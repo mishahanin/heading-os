@@ -72,10 +72,15 @@ DEFAULT_WINDOW_DAYS = 14  # default lookback when no marker exists
 # Weak/ambiguous words ("personal", "личное", "medical", "family") are left to
 # the model's primary-subject judgment - they fire constantly in meta-work ABOUT
 # the personal-tagging system and would over-wall genuine engineering sessions.
-PERSONAL_KEYWORDS = (
-    "REDACTED", "REDACTED", "REDACTED", "REDACTED", "REDACTED",
-    "REDACTED", "REDACTED", "REDACTED", "mortgage", "ипотек", "REDACTED", "REDACTED",
-    "villa purchase", "house purchase", "personal home",
+#
+# This public engine repo ships only GENERIC defaults - no operator-private
+# proper nouns. The operator's real private markers (family names, their bank,
+# their property) load at runtime from a private file in the data overlay
+# (`<data_root>/config/chronicle-personal-keywords.txt`, one keyword per line),
+# so a private entity never lives in this shareable engine tree. On a public
+# clone that file is absent and only these generic defaults apply.
+_DEFAULT_PERSONAL_KEYWORDS = (
+    "mortgage", "ипотек", "house purchase", "home purchase", "personal home",
 )
 
 PROMPT = """You classify and summarize a past AI-assistant work session.
@@ -223,9 +228,40 @@ def envelope_body(envelope: dict) -> str:
     return "\n".join(turns)[:BODY_CHAR_BUDGET]
 
 
+_PERSONAL_KEYWORDS_CACHE: tuple[str, ...] | None = None
+
+
+def _personal_keywords() -> tuple[str, ...]:
+    """Generic engine defaults merged with the operator's private keyword file.
+
+    The private file (`<data_root>/config/chronicle-personal-keywords.txt`) lives
+    only in the private data overlay; on a public clone it is absent and just the
+    generic defaults apply. One keyword per line; blank lines and `#` comments are
+    ignored; matched case-insensitively. Cached after first load.
+    """
+    global _PERSONAL_KEYWORDS_CACHE
+    if _PERSONAL_KEYWORDS_CACHE is not None:
+        return _PERSONAL_KEYWORDS_CACHE
+    keywords = list(_DEFAULT_PERSONAL_KEYWORDS)
+    private_file = get_data_root() / "config" / "chronicle-personal-keywords.txt"
+    try:
+        text = private_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    except OSError as exc:
+        print(f"chronicle: could not read {private_file}: {exc}", file=sys.stderr)
+        text = ""
+    for line in text.splitlines():
+        kw = line.strip().lower()
+        if kw and not kw.startswith("#"):
+            keywords.append(kw)
+    _PERSONAL_KEYWORDS_CACHE = tuple(dict.fromkeys(keywords))
+    return _PERSONAL_KEYWORDS_CACHE
+
+
 def _keyword_personal(body: str) -> bool:
     low = body.lower()
-    return any(k in low for k in PERSONAL_KEYWORDS)
+    return any(k in low for k in _personal_keywords())
 
 
 def _extract_json(text: str) -> dict | None:

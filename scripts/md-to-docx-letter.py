@@ -219,6 +219,6 @@ def add_formatted_text(paragraph, text):
 
 
 if __name__ == '__main__':
-    md_path = str(get_outputs_dir() / 'documents' / 'REDACTED.md')
-    docx_path = str(get_outputs_dir() / 'documents' / 'REDACTED.docx')
+    md_path = str(get_outputs_dir() / 'documents' / 'example-support-letter.md')
+    docx_path = str(get_outputs_dir() / 'documents' / 'example-support-letter.docx')
     create_letter_docx(md_path, docx_path)

@@ -97,8 +97,9 @@ def test_title_fallback_word_boundary():
 # --- _keyword_personal: strong personal-life nouns only -------------------
 
 def test_keyword_personal_strong_nouns():
-    assert _keyword_personal("REDACTED mortgage for the villa in REDACTED")
-    assert _keyword_personal("REDACTED and REDACTED REDACTED reimbursement")
+    # Generic engine defaults fire without any private keyword file present.
+    assert _keyword_personal("we went over the mortgage refinance last week")
+    assert _keyword_personal("notes on the house purchase and the personal home move")
 
 
 def test_keyword_personal_ignores_engineering_meta():
@@ -116,7 +117,7 @@ def test_cosine_identity_and_orthogonal():
 
 
 def test_lexical_score_overlap_fraction():
-    assert _lexical_score("villa mortgage REDACTED", "the villa in REDACTED") == 2 / 3
+    assert _lexical_score("cabin loan lakeside", "the cabin at lakeside") == 2 / 3
     assert _lexical_score("nothing here", "unrelated text") == 0.0
 
 

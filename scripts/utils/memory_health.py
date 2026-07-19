@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime
 import math
+import re
 from pathlib import Path
 
 from scripts.utils.workspace import get_default_tz
@@ -28,6 +29,133 @@ from scripts.utils.workspace import get_default_tz
 # Budget + staleness thresholds (kept identical to the prior inlined values).
 MEMORY_BUDGET_LINES = 200
 STALE_DAYS = 45
+
+# ---------------------------------------------------------------------------
+# Volatile-hook guard (advisory) — enforces the memory-discipline convention:
+# a MEMORY.md index hook names the TOPIC and points to the file; it must NOT
+# quote a live/volatile value (a price, ceiling, offer, live count, live
+# deadline, current status). Volatile values belong in the record body, read on
+# demand — a hook that never quotes a live number cannot go stale into a wrong
+# number (see .claude/rules/memory-discipline.md).
+#
+# The heuristic is deliberately HIGH-PRECISION, not high-recall: it targets the
+# money/quantitative-state class that caused the stale-money-hook failure, and accepts that
+# some volatile prose (bare live counts/dates with no money signal) is not
+# caught. It is ADVISORY (never gates), so a rare false positive is a review
+# nudge, not a build break.
+#
+# Volatile signals (flag) — precision-first money detection:
+#   - currency:        €/$/£ or an ISO code (USD/EUR/GBP/AED/CHF) adjacent to a digit
+#   - money magnitude: a 'k'/'K'/'m'/'M' thousands/millions suffix, ONLY when a
+#                      money-context word is present in the same text (price, offer,
+#                      seller, loan, mortgage, budget, deal, LTV, pipeline, ...).
+# The money-context co-factor is what keeps SPEC magnitudes from false-flagging:
+# "128k context", "1M-context", "5K display", "10k RPM", "i9-13900K", "~7-8B" carry
+# a k/M/B token but NO money word, so they do not flag. A bare money-VOCABULARY
+# signal was rejected earlier (it flagged "local ceiling ~7-8B"); here vocabulary is
+# only a REQUIRED co-factor for a magnitude token, never a standalone trigger, so
+# that false-positive class stays closed. "ceiling" is intentionally NOT a money
+# word here.
+#
+# Recall is deliberately PARTIAL (see .claude/rules/memory-discipline.md): this
+# guard closes the MONEY-hook class that caused the stale-money-hook failure. Non-money
+# volatile prose (live dates like "due 2026-09-05", live counts, "70%", status) is
+# NOT mechanically caught — that breadth is the always-on principle's job, not a
+# reason to widen this heuristic into a false-positive machine. The guard is
+# ADVISORY and never gates. It scans BOTH the MEMORY.md index hooks and each memory
+# file's frontmatter `description:` (both are pointer-layer summaries that go stale).
+_VH_CURRENCY_RE = re.compile(r"(?:[€$£]|\b(?:USD|EUR|GBP|AED|CHF)\b)\s?\d")
+_VH_MAGNITUDE_RE = re.compile(r"\b\d+(?:\.\d+)?[kKmM]\b")
+_VH_MONEY_CTX_RE = re.compile(
+    r"\b(price|offer|seller|buyer|loan|mortgage|budget|deal|asking|valuation|"
+    r"salary|revenue|ARR|cash|equity|fee|fees|deposit|rent|proceeds|pipeline|LTV)\b",
+    re.IGNORECASE,
+)
+# A MEMORY.md index hook: "- [Title](file.md) — hook". Pointers under threads/ are
+# skipped (generated pointers to live records, not memory hooks); a bare filename
+# OR a future memory-subdir hook is still scanned (do NOT skip on any '/').
+_VH_HOOK_LINE_RE = re.compile(r"^\s*-\s*\[[^\]]+\]\(([^)]+\.md)\)")
+_VH_DESC_RE = re.compile(r"^description:\s*(.*)$")
+
+
+def _volatile_signals(text: str) -> list:
+    """Return the volatile-money signals present in a single string (see module
+    comment). Currency is standalone; a magnitude token needs a money-context word."""
+    signals: list[str] = []
+    if _VH_CURRENCY_RE.search(text):
+        signals.append("currency")
+    if _VH_MAGNITUDE_RE.search(text) and _VH_MONEY_CTX_RE.search(text):
+        signals.append("money-magnitude")
+    return signals
+
+
+def _extract_description(path) -> str:
+    """Pull the frontmatter `description:` value from a memory file (single line).
+    Returns '' when absent/unreadable. READS ONLY."""
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            head = [next(fh, "") for _ in range(20)]
+    except OSError:
+        return ""
+    if not head or not head[0].startswith("---"):
+        return ""
+    for line in head[1:]:
+        if line.strip() == "---":
+            break
+        m = _VH_DESC_RE.match(line)
+        if m:
+            return m.group(1).strip().strip('"').strip("'")
+    return ""
+
+
+def scan_volatile_hooks(memory_dir) -> dict:
+    """Advisory: flag volatile-state values in MEMORY.md index hooks AND in each
+    memory file's frontmatter `description:` (both are pointer-layer summaries that
+    can go stale). READS ONLY; never mutates. High-precision money heuristic.
+
+    Returns:
+        {
+          "ok": bool,
+          "flagged": [{"target": str, "line": str, "signals": [...]}, ...],
+          "flagged_descriptions": [{"file": str, "description": str, "signals": [...]}, ...],
+          "note": str,
+        }
+    """
+    memory_dir = Path(memory_dir)
+    memory_file = memory_dir / "MEMORY.md"
+    flagged: list[dict] = []
+    if memory_file.exists():
+        try:
+            text = memory_file.read_text(encoding="utf-8", errors="ignore")
+        except OSError as exc:
+            return {
+                "ok": False,
+                "flagged": [],
+                "flagged_descriptions": [],
+                "note": f"unreadable MEMORY.md: {exc}",
+            }
+        for raw in text.splitlines():
+            m = _VH_HOOK_LINE_RE.match(raw)
+            if not m or m.group(1).startswith("threads/"):  # leak-guard: ok (relative prefix match on a MEMORY.md link target, not a path join)
+                continue
+            signals = _volatile_signals(raw)
+            if signals:
+                flagged.append({"target": m.group(1), "line": raw.strip(), "signals": signals})
+
+    flagged_desc: list[dict] = []
+    for p in sorted(memory_dir.glob("*.md")):
+        if p.name == "MEMORY.md":
+            continue
+        desc = _extract_description(p)
+        if desc and (signals := _volatile_signals(desc)):
+            flagged_desc.append({"file": p.name, "description": desc, "signals": signals})
+
+    return {
+        "ok": True,
+        "flagged": flagged,
+        "flagged_descriptions": flagged_desc,
+        "note": f"{len(flagged)} volatile hook(s), {len(flagged_desc)} volatile description(s)",
+    }
 
 
 def compute_memory_defects(memory_dir: Path) -> dict:

@@ -51,6 +51,7 @@ How the engine interprets a request and routes it to the right work.
 | `skill-router.md` | Always-on | Matches a natural-language message to the right skill, with a full skill registry, exclusions, and compound-trigger handoff. |
 | `skill-orchestrator.md` | Always-on | Detects compound workflows and dispatches parallel research agents while serialising writes, bounded by a concurrency cap and approval gates. |
 | `console-first.md` | Always-on | Every capability must be operable from the terminal and chat. The web dashboard is a convenience layer, never a dependency. |
+| `memory-discipline.md` | Always-on | Before any consequential action, open the authoritative record, not the pointer that surfaced it (an index hook, recalled snippet, or summary); and keep the always-loaded pointer layer lean - hooks carry topic + pointer, never volatile state. Enforced advisory by `scripts/memory-hygiene.py`. |
 
 ### Corporate output and design
 

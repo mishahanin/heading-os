@@ -37,7 +37,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.memory_health import compute_memory_defects, scan_redundancy  # noqa: E402
+from scripts.utils.memory_health import (  # noqa: E402
+    compute_memory_defects,
+    scan_redundancy,
+    scan_volatile_hooks,
+)
 from scripts.utils.workspace import (  # noqa: E402
     get_data_root,
     get_default_tz,
@@ -100,6 +104,7 @@ def gather() -> dict:
     mem_dir = get_data_root() / "auto-memory"
     mem = compute_memory_defects(mem_dir)
     redundancy = scan_redundancy(mem_dir, threshold=_near_dup_threshold())
+    volatile = scan_volatile_hooks(mem_dir)
     brain = collect_brain_compile()
     bdata = brain["data"] or {}
     temporal = bdata.get("temporal_validity") or {}
@@ -130,6 +135,7 @@ def gather() -> dict:
         "gate_count": gate_count,
         "advisory": advisory,
         "redundancy": redundancy,
+        "volatile_hooks": volatile,
     }
 
 
@@ -142,6 +148,7 @@ def render_report(result: dict, generated_iso: str) -> str:
     gate = result["gate"]
     adv = result["advisory"]
     redundancy = result["redundancy"]
+    volatile = result.get("volatile_hooks", {"flagged": []})
     lines: list[str] = []
     lines.append("# Memory Hygiene Report")
     lines.append("")
@@ -229,6 +236,31 @@ def render_report(result: dict, generated_iso: str) -> str:
             lines.append(f"- {p['a']} <-> {p['b']} (score {p['score']}) - candidate merge; resolve via /dream")
     lines.append("")
 
+    vh = volatile.get("flagged", [])
+    vd = volatile.get("flagged_descriptions", [])
+    lines.append("## Volatile pointers (advisory - not gated)")
+    lines.append("")
+    lines.append(
+        "A MEMORY.md index hook or a memory's frontmatter `description:` must name "
+        "the topic and point to the file, not quote a live money value. Move "
+        "volatile figures into the record body (see memory-discipline.md)."
+    )
+    lines.append("")
+    lines.append(f"### Volatile index hooks: {len(vh)}")
+    if not vh:
+        lines.append("- none")
+    else:
+        for f in vh:
+            lines.append(f"- {f['target']} [{', '.join(f['signals'])}]: {f['line']}")
+    lines.append("")
+    lines.append(f"### Volatile frontmatter descriptions: {len(vd)}")
+    if not vd:
+        lines.append("- none")
+    else:
+        for f in vd:
+            lines.append(f"- {f['file']} [{', '.join(f['signals'])}]: {f['description']}")
+    lines.append("")
+
     lines.append("---")
     lines.append("")
     lines.append(
@@ -313,6 +345,14 @@ def main() -> int:
             print(f"  {GRAY}resolve via /dream (this tool never mutates memory){RESET}")
         if not args.quiet and not result["brain_ok"]:
             print(f"  {YELLOW}note{RESET}: {result['brain_note']}")
+        vol = result.get("volatile_hooks", {})
+        vh, vd = vol.get("flagged", []), vol.get("flagged_descriptions", [])
+        if not args.quiet and (vh or vd):
+            print(
+                f"  {YELLOW}advisory{RESET}: {len(vh)} volatile hook(s) + "
+                f"{len(vd)} volatile description(s) "
+                f"(move live values to the body - see memory-discipline.md)"
+            )
 
     return 1 if gate_count else 0
 

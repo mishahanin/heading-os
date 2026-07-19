@@ -6,9 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-19
+
+The memory-reliability release. One stale one-line index hook once produced a confidently wrong answer on a live decision; this release makes that class of failure structural rather than incidental (a fetch-the-record discipline, a mechanical guard on the pointer layer, a leaner always-on footprint), and hardens operator privacy in the public engine.
+
+### Added
+- **Memory-discipline rule (`.claude/rules/memory-discipline.md`), always-on:** before any consequential action (a commitment, a decision, a fact or figure, a deadline, a live state), open the authoritative record, not the pointer that surfaced it (a `MEMORY.md` index hook, a recalled snippet, a summary). Freshness order is primary source, then the full record file, then the index hook; a contradiction between layers is flagged, never papered over. The rule's second half keeps the always-loaded pointer layer lean: hooks carry a topic and a pointer, never a volatile value (a price, a ceiling, a live count, a live date), and a record's one-line hook is synced whenever its body changes. Engine-classified, fleet-wide.
+- **Volatile-pointer guard (`scan_volatile_hooks` in `scripts/utils/memory_health.py`, wired advisory into `/memory-hygiene`):** a high-precision, advisory scanner that flags any `MEMORY.md` index hook or memory-file `description:` frontmatter quoting live money state (a currency figure, or a magnitude token beside a money-context word), the exact class that can go stale into a wrong number. Spec magnitudes with no money context (`128k context`, `i9-13900K`, `1M-context`, a local model ceiling) are deliberately not flagged, and `threads/` pointers are out of scope. It never gates. Both directions are pinned by `tests/test_memory_volatile_hooks.py`.
+
 ### Changed
+- **Always-on context economy, `humanization.md` compressed 40% (22,022 to 13,215 bytes):** the empirical-datapoint prose and the full banned-vocabulary catalog moved to `reference/humanization-empirical-basis.md` and `reference/humanization-banned-vocabulary.md`, loaded on demand; every operative directive plus the Step-0 calibration gate and the sub-15% byte-immutability directive stay resident verbatim. A behavioral A/B check (two agents, identical prose samples, only the rule version differing) confirmed the compressed rule drives the same humanization decisions as the full one, including reaching the moved banned-vocabulary catalog through the on-demand read path.
 - **`/scrutinize` Kimi code voice gains an opt-in 1M-context "wide" mode:** `references/code-review-voice.md` now documents that on our plan `k3` carries a 1M-token context, so for a deep audit (`--relentless` or an explicit whole-subsystem review) the Kimi voice can be handed the full target instead of trimming to the highest-risk files — a second independent full-context read alongside the Claude-native voice. The routine focused-diff default is unchanged (wide mode is opt-in because `k3` is slow and verbose). Paired with a proxy-side addition of the `kimi-for-coding-highspeed` model (K2.7 Code HighSpeed, ~2s vs `k3`'s ~18-20s in a live probe) for latency-sensitive Kimi paths; the transport seam already reaches it by id, no engine code change.
 - **Deep-research degrades a missing `k3` to `kimi-for-coding`, not to corpus-only:** `deep-research-advance.py` now probes the proxy catalog once per run (`_reason_model_for(probe_proxy())`) and picks `k3`/`max` when `k3` is present, else `kimi-for-coding` with no `reasoning_effort` — so if `k3` ever drops off the proxy, the Phase 0/2 reasoning still runs (shallower) instead of falling all the way through to a corpus-without-analysis run. This mirrors `/council`'s `k3`->`kimi-for-coding` degrade and closes the single-point-of-failure the v0.6.0 migration introduced by hard-pinning research to `k3`. An unreachable catalog stays optimistic on `k3` (the existing phase-level degrade still catches a real failure). New tests in `tests/test_deep_research_advance.py` (`_reason_model_for` selection matrix + a run-level assertion that both reasoning calls use the fallback model when `k3` is absent).
+
+### Fixed
+- **Operator-private entities removed from the public engine and scrubbed from git history:** `scripts/chronicle.py` no longer hardcodes personal proper nouns; its keyword pre-filter became generic engine defaults merged at runtime with a private keyword file from the data overlay (`_personal_keywords()` reading `<data_root>/config/chronicle-personal-keywords.txt`), so a real private entity never lives in the shareable engine tree while detection behavior is preserved on the operator machine. The `md-to-docx-letter.py` demo path and the `test_chronicle.py` plus new `test_memory_volatile_hooks.py` fixtures were made fully fictional. The public history was then rewritten with `git-filter-repo` (141 commits, private strings replaced by `REDACTED`) and force-pushed, with branch protection recorded, toggled, and restored around the push; a fresh clone confirms zero occurrences across every ref and tag.
 
 ## [0.6.0] - 2026-07-18
 
@@ -139,7 +151,8 @@ Initial public release.
 - **Memory and ODIN**: a local associative-memory index behind `/recall` and a persistent knowledge brain.
 - The published documentation site at [mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/), the deployment guide, and the focused setup guides for models, integrations, and personalization.
 
-[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/mishahanin/heading-os/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mishahanin/heading-os/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mishahanin/heading-os/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/mishahanin/heading-os/compare/v0.4.0...v0.4.1

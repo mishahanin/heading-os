@@ -24,7 +24,7 @@ def run_health(comp: Component) -> bool:
     try:
         res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
                              timeout=60, check=False)
-    except subprocess.TimeoutExpired:
+    except (subprocess.SubprocessError, OSError):
         return False
     want = comp.health.get("expect_substr")
     out = res.stdout + res.stderr

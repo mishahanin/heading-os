@@ -63,3 +63,34 @@ def test_auto_due_circuit_breaker():
     assert ua._auto_due({"status": "waiting"}) is False          # notify, not auto's job
     assert ua._auto_due({"status": "failed", "fail_count": 2}) is True
     assert ua._auto_due({"status": "failed", "fail_count": 3}) is False  # breaker tripped
+
+def test_run_health_returns_false_when_probe_raises(monkeypatch):
+    comp = _comp(health={"cmd": "does-not-matter"})
+    def _boom(*a, **k):
+        raise FileNotFoundError("bash gone")
+    monkeypatch.setattr(ua.subprocess, "run", _boom)
+    assert ua.run_health(comp) is False   # probe error -> unhealthy, never raises
+
+def test_cmd_apply_isolates_failure_and_marks_state(tmp_path, monkeypatch):
+    import json, types
+    from scripts.utils.update_registry import Component
+    c1 = Component(name="a", tier="auto", current={"via": "shell", "cmd": "echo 1"},
+                   latest={"via": "pypi", "package": "a"},
+                   apply={"cmd": "true", "rollback_cmd": "true"})
+    c2 = Component(name="b", tier="auto", current={"via": "shell", "cmd": "echo 1"},
+                   latest={"via": "pypi", "package": "b"},
+                   apply={"cmd": "true", "rollback_cmd": "true"})
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"components": {
+        "a": {"status": "pending-auto", "fail_count": 0},
+        "b": {"status": "pending-auto", "fail_count": 0}}}))
+    monkeypatch.setattr(ua, "resolve_current", lambda comp: "1")
+    monkeypatch.setattr(ua, "_default_applier", lambda comp: (lambda: None))
+    monkeypatch.setattr(ua, "run_health", lambda comp: comp.name != "a")  # a fails, b passes
+    args = types.SimpleNamespace(auto=True, name=None)
+    rc = ua.cmd_apply(args, [c1, c2], state)
+    data = json.loads(state.read_text())
+    assert data["components"]["a"]["status"] == "failed"
+    assert data["components"]["a"]["fail_count"] == 1
+    assert data["components"]["b"]["status"] == "pending-auto"  # b applied cleanly, not marked
+    assert rc == 1

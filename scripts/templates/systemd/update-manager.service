@@ -1,0 +1,12 @@
+[Unit]
+Description=HEADING OS update manager (check then apply auto-tier)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+ExecStart=/bin/bash -c '{{PYTHON}} {{WORKSPACE}}/scripts/update-manager.py check && {{PYTHON}} {{WORKSPACE}}/scripts/update-manager.py apply --auto'
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

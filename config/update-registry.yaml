@@ -1,0 +1,61 @@
+# Update-manager component registry. Loaded by scripts/update-manager.py.
+# Tiers: auto (timer applies), notify (checked, applied by one command),
+# observed (read-only version surface; component owns its own updater).
+# Invariant: an `observed` entry may not carry an `apply` (enforced by
+# scripts/utils/update_registry.py).
+components:
+
+  cliproxyapi:
+    tier: notify
+    display: CLIProxyAPI
+    current:
+      via: shell
+      cmd: "$HOME/cliproxyapi/cli-proxy-api -version 2>&1 | head -5"
+      regex: 'Version:\s*([0-9.]+)'
+    latest:
+      via: github_release
+      repo: router-for-me/CLIProxyAPI
+    apply:
+      script: scripts/updaters/cliproxyapi_update.py
+    health:
+      cmd: "$HOME/.local/bin/cliproxy health"
+      expect_substr: "HTTP 200"
+
+  yt-dlp:
+    tier: auto
+    display: yt-dlp
+    current:
+      via: shell
+      cmd: "yt-dlp --version"
+    latest:
+      via: pypi
+      package: yt-dlp
+    apply:
+      cmd: "uv tool upgrade yt-dlp"
+      # {prev} is substituted with the version captured before the upgrade, so a
+      # health failure restores it (auto-never-broken invariant).
+      rollback_cmd: "uv tool install 'yt-dlp=={prev}'"
+    health:
+      cmd: "yt-dlp --version"
+
+  ollama:
+    tier: observed
+    display: Ollama
+    current:
+      via: shell
+      cmd: "ollama --version 2>/dev/null"
+      regex: '([0-9]+\.[0-9]+\.[0-9]+)'
+    latest:
+      via: github_release
+      repo: ollama/ollama
+
+  claude-cli:
+    tier: observed
+    display: Claude Code CLI
+    current:
+      via: shell
+      cmd: "claude --version 2>/dev/null"
+      regex: '([0-9]+\.[0-9]+\.[0-9]+)'
+    latest:
+      via: npm
+      package: "@anthropic-ai/claude-code"

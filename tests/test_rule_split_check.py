@@ -1,0 +1,103 @@
+import re
+import sys
+import pathlib
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from scripts.rule_split_check import extract_imperatives, check_split, SEED
+from scripts.rule_split_check import _norm, check_inventories
+
+
+def _n(t):
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def test_extractor_recall_on_markdown_fixture():
+    got = [_n(g) for g in extract_imperatives(SEED)]
+    for needle in ["Use `pathlib.Path` objects, not string paths.", "You MUST run the scan.",
+                   "NEVER pass --no-verify.", "**Do not** delete pre-existing dead code.",
+                   "Every skill must have: name, description, version.",
+                   "DO NOT execute any CRM writes.", "Always pin exact versions.",
+                   "Avoid bare except."]:
+        assert any(_n(needle) in g for g in got), f"extractor missed: {needle!r}"
+
+
+def test_extractor_catches_real_flagship_directives():
+    # H1: exercise the extractor against REAL rule grammar. GLOB the union of
+    # development-standards*.md so the test survives the Wave 1 split (k3 1.2): pre-split
+    # it matches one file, post-split it matches core+detail, and the moved directives
+    # stay in the union either way. Reading only the live core file would self-destruct
+    # the moment Step 13 moves "must have"/"Use pathlib.Path" into the detail file.
+    import glob
+    text = "\n".join(pathlib.Path(p).read_text(encoding="utf-8")
+                     for p in sorted(glob.glob(".claude/rules/development-standards*.md")))
+    imps = [_n(i) for i in extract_imperatives(text)]
+    for probe in ["must have", "must follow", "must include", "Use `pathlib.Path`"]:
+        assert any(_n(probe) in i for i in imps), f"flagship directive missed: {probe!r}"
+
+
+def test_check_split_detects_loss_and_pass():
+    original = "You MUST scan. NEVER skip the gate."
+    assert check_split(original, ["You MUST scan.", "NEVER skip the gate."]) == []
+    assert check_split(original, ["You MUST scan."]) == ["NEVER skip the gate."]
+
+
+def test_check_split_tolerates_newline_span():
+    # H2: a directive reassembled as its own sentence across a hard wrap is NOT lost.
+    # Surrounding prose is sentence-terminated (realistic rule grammar), so the wrapped
+    # directive reassembles as a standalone sentence and matches exactly.
+    original = "You MUST scan the file before commit."
+    wrapped_successor = "Preamble.\nYou MUST scan the\nfile before commit.\nMore prose."
+    assert check_split(original, [wrapped_successor]) == []
+
+
+def test_check_split_rejects_inversion():
+    # k3 #1: a dropped directive that is a substring of an OPPOSITE successor sentence
+    # must be reported lost, not silently accepted (the old substring check passed this).
+    assert check_split("Use caching.", ["Do not use caching."]) == ["Use caching."]
+
+
+def test_check_split_rejects_leading_context_absorption():
+    # k3 #1/#2: a directive absorbed as a non-leading fragment of a longer successor
+    # sentence is reported lost (old substring-in-blob wrongly passed this).
+    assert check_split("Run the suite.", ["Please Run the suite. Deploy after."]) == ["Run the suite."]
+
+
+def test_check_split_rejects_cross_sentence_fabrication():
+    # k3 #2: a directive must not be stitched together from fragments of two different
+    # successor sentences.
+    lost = check_split("Run the suite. Always.", ["We Run the suite here.", "Always deploy on green."])
+    assert "Run the suite." in lost
+
+
+def test_check_split_count_aware_catches_dropped_duplicate():
+    # k3 #2/#4: a directive stated twice, with one copy dropped, is reported lost even
+    # though an identical copy survives (count-aware membership, not bare set membership).
+    assert check_split("Skip. Skip.", ["Skip."]) == ["Skip."]
+
+
+def test_norm_is_negation_invariant():
+    # k3 #4: _norm is the linchpin. It collapses whitespace ONLY — it must preserve case
+    # and punctuation, so a directive never normalizes equal to its own negation.
+    assert _norm("Use caching.") != _norm("Do not use caching.")
+    assert _norm("  USE  the\n scan.  ") == "USE the scan."
+    assert _norm("Never send.") != _norm("Always send.")
+
+
+def test_check_inventories_guards_against_drop(tmp_path):
+    # Task 1e / D4: a snapshot frozen at split time must fail --check if a later edit
+    # drops one of its directives. The snapshot survives across the core+detail union.
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "widget.md").write_text("You MUST scan the file.\n", encoding="utf-8")
+    (rules / "widget-detail.md").write_text("NEVER skip the gate.\n", encoding="utf-8")
+    inv = tmp_path / "inv"
+    inv.mkdir()
+    (inv / "widget.md.txt").write_text("You MUST scan the file.\nNEVER skip the gate.\n", encoding="utf-8")
+
+    # Both directives present across the union -> clean.
+    assert check_inventories(inventory_dir=inv, rules_dir=str(rules)) == []
+
+    # Drop the detail directive -> --check must flag it.
+    (rules / "widget-detail.md").write_text("some unrelated prose.\n", encoding="utf-8")
+    bad = check_inventories(inventory_dir=inv, rules_dir=str(rules))
+    assert bad == [("widget.md", "NEVER skip the gate.")]

@@ -64,6 +64,19 @@ def test_auto_due_circuit_breaker():
     assert ua._auto_due({"status": "failed", "fail_count": 2}) is True
     assert ua._auto_due({"status": "failed", "fail_count": 3}) is False  # breaker tripped
 
+def test_script_apply_trusts_exit_code_skips_outer_health(monkeypatch):
+    from scripts.utils.update_registry import Component
+    comp = Component(name="cpx", tier="notify", current={"via": "shell", "cmd": "echo 1"},
+                     latest={"via": "github_release", "repo": "x/y"},
+                     apply={"script": "scripts/updaters/x.py"},
+                     health={"cmd": "false", "expect_substr": "HTTP 200"})
+    monkeypatch.setattr(ua, "run_health", lambda comp: False)  # outer probe flaps
+    calls = []
+    result = ua.apply_one(comp, applier=lambda: calls.append("applied"),
+                          rollback=lambda: calls.append("rolled-back"))
+    assert result == "applied"      # trusted the script's exit 0
+    assert calls == ["applied"]     # rollback NOT called
+
 def test_run_health_returns_false_when_probe_raises(monkeypatch):
     comp = _comp(health={"cmd": "does-not-matter"})
     def _boom(*a, **k):

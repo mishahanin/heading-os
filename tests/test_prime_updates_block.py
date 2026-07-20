@@ -34,6 +34,16 @@ def test_no_state_is_silent(tmp_path, monkeypatch):
     res = ph.run_updates(Path("/nonexistent"))
     assert res["output"] == ""
 
+def test_failed_status_renders_with_fail_count(tmp_path, monkeypatch):
+    root = _state(tmp_path, {"yt-dlp": {"display": "yt-dlp", "tier": "auto",
+        "current": "2026.1.1", "latest": "2026.2.2", "delta": True,
+        "status": "failed", "fail_count": 2}})
+    monkeypatch.setattr(ph, "get_outputs_dir", lambda: root)
+    res = ph.run_updates(Path("/nonexistent"))
+    assert "yt-dlp" in res["output"]
+    assert "FAILED" in res["output"]
+    assert "2" in res["output"]   # fail_count surfaced
+
 def test_observed_stale_renders_without_apply_hint(tmp_path, monkeypatch):
     root = _state(tmp_path, {"ollama": {"display": "Ollama", "tier": "observed",
                     "current": "0.1.0", "latest": "0.2.0", "delta": True, "status": "observed-stale"}})

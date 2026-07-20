@@ -115,6 +115,7 @@ rules:
   "datastore/intelligence/": private          # competitor/industry/market-reference intel — CEO-only
   "datastore/investment/": private            # investor decks + financial materials — CEO-only
   "datastore/personal/": private              # CEO personal/family records (medical, etc.) — CEO-only, never published
+  "datastore/operations/partnerships/deals/": private     # per-partner deal documents (LOIs, term sheets) — CEO-only; partner names live only in the private DATA overlay, not in this public engine map
   "datastore/brand/design-system/": private   # embeds CEO-only investor-deck renders + figures — CEO-only
   "reference/workspace-overview.md": private  # decision: live catalogue of this CEO instance's internals
   # 2026-06-13 CEO audit: CEO strategic + personal reference content. Real partners

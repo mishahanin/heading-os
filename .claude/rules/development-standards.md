@@ -1,4 +1,4 @@
-<!-- version: 1.3.1 | last-updated: 2026-07-07 -->
+<!-- version: 1.3.2 | last-updated: 2026-07-20 -->
 ---
 paths:
   - ".claude/skills/**"
@@ -12,7 +12,7 @@ paths:
 
 Last Verified: 2026-07-08
 
-Quality gates for every workspace artifact -- skills, scripts, reference files, rules, and components. These standards apply to ALL development work, not just specific features.
+Quality gates for every workspace artifact (skills, scripts, reference files, rules) and all development work, not just specific features.
 
 ## Before Building Anything
 
@@ -23,7 +23,7 @@ Quality gates for every workspace artifact -- skills, scripts, reference files, 
 
 ## Restraint
 
-Scope discipline for every workspace edit. Two principles imported from Andrej Karpathy's LLM-coding guidelines, cherry-picked because the workspace does not already enforce them. The other two are already covered: "think before coding" by `.claude/rules/prompt-refinement.md`, "goal-driven execution" by `/create-plan` and `/implement`.
+Scope discipline for every workspace edit. Two principles from Karpathy's LLM-coding guidelines; the other two he lists are already covered ("think before coding" by `.claude/rules/prompt-refinement.md`, "goal-driven execution" by `/create-plan` and `/implement`).
 
 Tradeoff: these principles bias toward caution over speed. For trivial tasks, use judgment.
 
@@ -62,7 +62,7 @@ A mandatory fix that reaches into adjacent code is not a "surgical changes" viol
 
 ## Debugging Discipline
 
-Imported from the `/diagnose` discipline in `mattpocock/skills`, adapted to a workspace that runs daemons and scripts rather than a single application codebase. Applies whenever a script errors, a daemon misbehaves, output is wrong, or a previously working tool starts failing.
+Applies whenever a script errors, a daemon misbehaves, output is wrong, or a previously working tool starts failing.
 
 The rule: **do not hypothesise about a bug until you can reproduce it on demand.** Staring at code is not debugging. A fast pass/fail signal is. Skip a phase only when you can explicitly justify it.
 
@@ -186,7 +186,7 @@ Router registry (under `x-heading-routing:` namespaced block, required for every
 - NEVER section listing explicit prohibitions
 
 **Skill artifacts:**
-- `triggers.json` (**mandatory for routing-sensitive skills**, recommended for all) -- a JSON array of `{ "query": "...", "should_trigger": true|false }` cases, 6-10 positives and 6-10 negatives, with negatives drawn from the skill's documented router exclusions. Regression-tested by `scripts/skill-trigger-test.py` (LLM-judge, advisory). When a skill's triggers or exclusions change, update its `triggers.json` and re-run the harness. Classified the same as the skill (corporate by default; ceo-only if the skill's SKILL.md is ceo-only). A skill is *routing-sensitive* when it shares trigger vocabulary with another skill or carries a non-trivial exclusions list in `.claude/rules/skill-router.md` -- exactly the surface where a new skill can silently hijack an existing skill's queries (the documented failure mode behind the 2026-06-09 audit's routing-entropy finding). **Growth policy (2026-06-09 audit #63):** as the catalog grows past one hand-maintained router, (1) any new or re-scoped routing-sensitive skill ships with `triggers.json` in the same change; (2) `/push-updates` Phase 0 now runs `skill-trigger-test.py --changed --strict --threshold 0.85` as a **soft gate** (tests only changed routing-sensitive skills; surfaces regressions and the CEO confirms to override) -- landed 2026-06-26; promote to a hard block only once the judge's false-positive rate is characterized over several weeks of soft runs; (3) a quarterly consolidation pass merges thin single-use skills into family skills with subcommands (the `/crm` and `/marp` subcommand model is the template); (4) a deterministic keyword pre-classifier feeding a candidate set into the model router is the next structural step if routing precision degrades. Item 2 landed as a soft gate (2026-06-26); items 3-4 remain tracked initiatives, not yet enforced.
+- `triggers.json` (**mandatory for routing-sensitive skills**, recommended for all) -- a JSON array of `{ "query": "...", "should_trigger": true|false }` cases, 6-10 positives and 6-10 negatives, with negatives drawn from the skill's documented router exclusions. Regression-tested by `scripts/skill-trigger-test.py` (LLM-judge, advisory). When a skill's triggers or exclusions change, update its `triggers.json` and re-run the harness. Classified the same as the skill. A skill is *routing-sensitive* when it shares trigger vocabulary with another skill or carries a non-trivial exclusions list in `.claude/rules/skill-router.md` -- the surface where a new skill can silently hijack an existing skill's queries. **Growth policy:** any new or re-scoped routing-sensitive skill ships with `triggers.json` in the same change; `/push-updates` Phase 0 runs `skill-trigger-test.py --changed --strict --threshold 0.85` as a **soft gate** (tests only changed skills; surfaces regressions, the CEO confirms to override). Tracked, not yet enforced: quarterly consolidation of thin single-use skills into subcommand families (the `/crm`, `/marp` model), and a deterministic keyword pre-classifier feeding the model router if routing precision degrades.
   - **Coverage is now mechanically gated (F-6.1).** `scripts/skill-metadata-check.py` classifies every skill's corpus and exits 1 (UNCONDITIONALLY, so the flagless CI "Skill metadata contract" step and the `skill-size-budget` pre-commit hook both enforce it) when an **auto-routable** skill lacks a valid `triggers.json`. "Auto-routable" means `x-heading-routing.router: auto` AND NOT `disable-model-invocation: true`; a `router: manual` or `disable-model-invocation: true` skill is EXEMPT (it never auto-routes, so a routing corpus is meaningless). A valid corpus is a JSON array of `>= 6` `{query, should_trigger}` cases with `>= 4` positives and `>= 2` hard negatives. Pre-F-6.1 uncovered skills are grandfathered by the committed, only-shrinks `config/triggers-coverage-baseline.json` (regenerated shrink-only via `--write-baseline`: it removes now-covered skills, never adds a newly-shipped one), so a NEW auto-routable skill must ship a corpus. `/skill-creator` refuses to finish a new auto-routable skill without one.
 
 ### Post-synthesis brain audit

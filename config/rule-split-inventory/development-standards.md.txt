@@ -1,0 +1,68 @@
+Never rely solely on training data.
+**Check what exists.** Search the workspace for existing patterns, utilities, and conventions before creating new ones.
+Reuse `scripts/utils/` modules.
+Follow established skill/script patterns.
+**Read full files.** Read tool defaults to `limit: 10000` for source files, notes, long markdown, and generated outputs.
+Use smaller limits only for known-small files or specific ranges.
+They do not overlap, and neither overrides the other.
+- No error handling for scenarios that cannot occur.
+- Do not "improve" adjacent code, comments, or formatting.
+- Do not refactor what is not broken, even when you would write it differently.
+- Match existing style in the file you are editing.
+- Remove imports, variables, and helpers that your change orphaned.
+Do not delete it.
+It never excuses skipping a fix the workspace already requires.
+- **Review findings.** Code-review and `/scrutinize` findings are all fixed before declaring done, never triaged into fix-now versus fix-later.
+The rule: **do not hypothesise about a bug until you can reproduce it on demand.** Staring at code is not debugging.
+Skip a phase only when you can explicitly justify it.
+**If you genuinely cannot build a loop, stop and say so.** List what you tried.
+Do not proceed to guesswork.
+Run the loop.
+Prefer a debugger or REPL; fall back to targeted logs at the boundaries that distinguish hypotheses.
+Never "log everything and grep." Tag every debug log with a unique prefix (`[DEBUG-a4f2]`) so cleanup is one grep.
+Write the regression test before the fix, when a correct seam exists -- one that exercises the real bug pattern as it occurs at the call site.
+Write one test, make it pass, then the next; never a batch of tests against imagined behaviour ahead of the code.
+If the answer is a structural change, surface it to the CEO or log it to the relevant thread -- do not silently fix beyond scope (see Restraint).
+Every skill in `.claude/skills/{name}/SKILL.md` must have:
+- `name` -- kebab-case identifier (required)
+- `description` -- detailed trigger description including when to use AND when not to use (required)
+- `metadata.author` -- `Misha Hanin` (required)
+- `metadata.email` -- `misha.hanin@odinix.com` (required)
+- `metadata.version` -- semantic version, e.g., `"1.0"` (required)
+- `disable-model-invocation: true` -- the model cannot trigger the skill from natural language or as a tool.
+Use for any skill whose description already says "EXPLICIT INVOCATION ONLY" or "NEVER auto-trigger", and for high-blast-radius actions where accidental routing is unacceptable.
+Hides the skill from the `/` menu so the CEO never invokes it directly, while leaving the model free to trigger it contextually.
+Use for background-context or internal-only skills that other skills depend on but should not appear as user-facing commands.
+They are harness-enforced and supersede any prose policy ("NEVER auto-trigger") written into `description`.
+Workspace orchestration extension (under `x-heading-orchestration:` namespaced block, required):
+- `triggers` -- list of natural-language phrases that should invoke this skill, e.g., `["investigate", "research", "dig into"]`.
+category: Operations triggers: ["example phrase", "another trigger"] exclusions: ["<signal> -> /<other-skill>"]   # or ["N/A"] compound: "No" router: auto                                  # or manual (NEVER auto-trigger skills)
+Keep each field 1-2 sentences, ASCII-only, grounded in the skill's real behaviour and router exclusions.
+Router registry (under `x-heading-routing:` namespaced block, required for every routable skill; F-5.1):
+- `router` -- `auto` (routable from natural language) or `manual` (NEVER auto-trigger / `disable-model-invocation` skills).
+**The skill router is GENERATED from these blocks** by `scripts/generate-skill-router.py`, in a two-layer split (F-5.2): a compact core index (Skill + Triggers) between the `<!-- BEGIN GENERATED REGISTRY -->` / `<!-- END GENERATED REGISTRY -->` markers in the always-on `.claude/rules/skill-router.md`, plus a full per-category detail table (Skill | Triggers | Exclusions | Compound) in each `reference/skill-router/<category>.md`.
+Never hand-edit either layer: edit the skill's `x-heading-routing` frontmatter, then run `python scripts/generate-skill-router.py`.
+- Reference files must include: H1 title, "Consumed by" pointer, "Last Updated" date
+- NEVER section listing explicit prohibitions
+"Auto-routable" means `x-heading-routing.router: auto` AND NOT `disable-model-invocation: true`; a `router: manual` or `disable-model-invocation: true` skill is EXEMPT (it never auto-routes, so a routing corpus is meaningless).
+Pre-F-6.1 uncovered skills are grandfathered by the committed, only-shrinks `config/triggers-coverage-baseline.json` (regenerated shrink-only via `--write-baseline`: it removes now-covered skills, never adds a newly-shipped one), so a NEW auto-routable skill must ship a corpus.
+Any skill that produces a synthesized answer over a source set MUST invoke `/brain-audit` at the end of its synthesis phase and append the returned footer to its output.
+New synthesis skills MUST adopt the same pattern.
+Every Python script in `scripts/` must follow:
+- `snake_case.py` for (a) anything in `scripts/utils/` (library modules always), and (b) any script imported as a Python module from elsewhere in the workspace.
+If any Python file imports it, it must stay snake_case.
+- Use `from scripts.utils.workspace import get_workspace_root` (not manual path resolution)
+- Use `from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET`
+- Use `from scripts.utils.api import load_api_key` for single API keys; `load_env()` for multi-variable `.env` reads (Exchange credentials, OAuth configs)
+- Use `pathlib.Path` objects, not string paths
+- Catch `HTTPError` before `URLError` (HTTPError is a subclass -- Context7 validated)
+**Scheduled tasks (systemd-user timers) MUST survive reboot.** Every scheduled task in this workspace -- every existing timer and every future one -- ships as a systemd-user timer built to fire after an unattended reboot, never as a session-scoped `CronCreate` task (those are NOT durable -- see `.claude/rules/skill-router.md` § Scheduled & Background Tasks).
+Reboot survival requires all THREE mechanisms, and an installer must include every one (copy an existing sibling installer such as `scripts/install-router-accuracy-timer.sh`, which already bakes them in -- do not hand-roll a partial one):
+Every file in `reference/` must include:
+**Frontmatter validation:** Verify YAML parses correctly, all required fields present
+Use `/implement --evaluate` to integrate the feedback loop into implementation
+Never mark a tool as "WORKING" without testing it.
+**Update on failure.** If a previously working tool starts failing, update the registry immediately and switch to the fallback chain.
+**Never auto-update from upstream.** External tool registries (like awesome-osint) change constantly.
+New entries must be validated before adding.
+Human approval required.

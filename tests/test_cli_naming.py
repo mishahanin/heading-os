@@ -33,6 +33,7 @@ DUAL_ROLE_EXCLUSIONS = {
     "odin_pagerank.py",              # tests/test_odin_pagerank.py
     "resolve_customization.py",      # tests/test_resolve_customization.py
     "resolve_entity.py",             # tests/test_resolve_entity.py
+    "rule_split_check.py",           # tests/test_rule_split_check.py (L1 gate: imported + CLI)
     "skill_graph.py",                # next-signal.py, test_skill_graph.py
     "watchdog_core.py",              # daemon-watchdog.py, bridge-daemon.py, test_watchdog.py
 }

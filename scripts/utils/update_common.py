@@ -39,7 +39,7 @@ def resolve_current(comp: Component) -> str:
         if not out:
             return ""
         m = re.search(regex, out)
-        return m.group(1) if m else ""
+        return m.group(1) if (m and m.groups()) else ""
     return out.splitlines()[0] if out else ""
 
 

@@ -14,19 +14,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from datetime import datetime  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 from scripts.utils.update_registry import Component, load_registry  # noqa: E402
 from scripts.utils.update_common import resolve_current, versions_differ, write_state  # noqa: E402
 from scripts.utils import update_sources  # noqa: E402
-from scripts.utils.workspace import (  # noqa: E402
-    get_default_tz, get_outputs_dir, get_workspace_root,
-)
+from scripts.utils.workspace import get_outputs_dir, get_workspace_root  # noqa: E402
 
 
 def registry_path() -> Path:
@@ -52,16 +49,18 @@ def build_state(components: list[Component], prior: dict | None = None) -> dict:
         latest = resolve_latest(comp)
         delta = versions_differ(current, latest)
         prior_e = prior_comp.get(comp.name, {})
-        was_failed = prior_e.get("status") == "failed"
         fail_count = prior_e.get("fail_count", 0)
-        # A new upstream version resets the circuit breaker (fresh release to try).
-        if prior_e.get("latest") and prior_e.get("latest") != latest:
-            was_failed = False
+        # A NEW upstream version resets the circuit breaker. Guard on `latest`
+        # being truthy so a transient resolve failure (empty latest) does NOT
+        # reset it. Breaker memory lives in fail_count, so it survives a cycle
+        # where this component transiently resolves to `unknown`.
+        if latest and prior_e.get("latest") and prior_e.get("latest") != latest:
             fail_count = 0
+        was_failed = fail_count > 0
         if comp.hold or comp.pin:
             status = "held"
-        elif not latest:
-            status = "unknown"
+        elif not latest or not current:
+            status = "unknown"            # a broken probe is unknown, never "current"
         elif not delta:
             status, fail_count = "current", 0
         elif comp.tier == "observed":
@@ -69,7 +68,7 @@ def build_state(components: list[Component], prior: dict | None = None) -> dict:
         elif comp.tier == "notify":
             status = "waiting"
         elif was_failed:
-            status = "failed"             # carry a prior auto failure forward while it still lags
+            status = "failed"             # breaker remembers a prior auto failure while it still lags
         else:
             status = "pending-auto"
         entries[comp.name] = {
@@ -81,7 +80,7 @@ def build_state(components: list[Component], prior: dict | None = None) -> dict:
 
 
 def _stamp_now() -> str:
-    return datetime.now(get_default_tz()).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _read_state() -> dict:

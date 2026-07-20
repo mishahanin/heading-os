@@ -67,3 +67,17 @@ def test_fail_count_clears_when_current(monkeypatch):
     e = um.build_state([_auto_comp()], prior)["components"]["c"]
     assert e["status"] == "current"
     assert e["fail_count"] == 0
+
+def test_empty_current_is_unknown_not_current(monkeypatch):
+    monkeypatch.setattr(um, "resolve_current", lambda comp: "")   # broken probe
+    monkeypatch.setattr(um, "resolve_latest", lambda comp: "1.1")
+    e = um.build_state([_auto_comp()])["components"]["c"]
+    assert e["status"] == "unknown"   # NOT "current"
+
+def test_transient_latest_failure_preserves_fail_count(monkeypatch):
+    monkeypatch.setattr(um, "resolve_current", lambda comp: "1.0")
+    monkeypatch.setattr(um, "resolve_latest", lambda comp: "")     # transient network blip
+    prior = {"components": {"c": {"status": "failed", "fail_count": 2, "latest": "1.1"}}}
+    e = um.build_state([_auto_comp()], prior)["components"]["c"]
+    assert e["status"] == "unknown"
+    assert e["fail_count"] == 2        # breaker memory preserved, NOT reset

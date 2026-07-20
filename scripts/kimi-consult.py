@@ -64,10 +64,19 @@ def consult_kimi(
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     reasoning_effort: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> str:
-    """Send the council prompt to Kimi through the proxy; return the answer text."""
-    return call_model(model, prompt, temperature=temperature, max_tokens=max_tokens,
-                      reasoning_effort=reasoning_effort)
+    """Send the council prompt to Kimi through the proxy; return the answer text.
+
+    `timeout` overrides the proxy socket timeout (seconds). Leave None to inherit
+    proxy_transport.DEFAULT_TIMEOUT. The k3 reasoning voice on a large draft can
+    exceed the default, so long critiques should pass a higher value.
+    """
+    kwargs = {"temperature": temperature, "max_tokens": max_tokens,
+              "reasoning_effort": reasoning_effort}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return call_model(model, prompt, **kwargs)
 
 
 # ============================================================
@@ -128,6 +137,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=None,
         help="k3 thinking effort (proxy request param); omit for kimi-for-coding",
     )
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Proxy socket timeout in seconds. Omit to inherit the transport default. "
+             "Raise it (e.g. 480) for a large k3 critique that would otherwise time out.",
+    )
     args = p.parse_args(argv)
 
     if args.mode == "independent" and not args.question.strip():
@@ -164,6 +180,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             temperature=args.temperature,
             max_tokens=args.max_tokens,
             reasoning_effort=args.reasoning_effort,
+            timeout=args.timeout,
         )
     except RuntimeError as e:
         msg = str(e)

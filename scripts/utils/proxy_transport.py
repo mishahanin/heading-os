@@ -21,7 +21,11 @@ from scripts.utils.api import load_api_key  # noqa: E402
 
 PROXY_BASE_URL = "http://127.0.0.1:8317/v1"
 RETRY_CEILING = 16384
-DEFAULT_TIMEOUT = 120.0
+# 300s (was 120s): the k3 reasoning voice legitimately thinks for minutes on larger
+# inputs, and 120s cut off council/scrutinize critiques mid-reason. Callers with a
+# genuinely huge draft can still pass an explicit higher `timeout` (kimi-consult
+# exposes --timeout). This is a socket read ceiling, not a per-request target.
+DEFAULT_TIMEOUT = 300.0
 
 
 def _make_client(api_key, timeout=DEFAULT_TIMEOUT):

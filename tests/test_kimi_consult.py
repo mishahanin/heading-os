@@ -93,10 +93,12 @@ def test_consult_kimi_forwards_reasoning_effort(monkeypatch):
 def test_cli_reasoning_effort_passed_through(monkeypatch):
     captured = {}
     def _fake(prompt, model=kc.DEFAULT_MODEL, temperature=kc.DEFAULT_TEMPERATURE,
-              max_tokens=kc.DEFAULT_MAX_TOKENS, reasoning_effort=None):
+              max_tokens=kc.DEFAULT_MAX_TOKENS, reasoning_effort=None, timeout=None):
         captured["reasoning_effort"] = reasoning_effort
+        captured["timeout"] = timeout
         return "answer"
     monkeypatch.setattr(kc, "consult_kimi", _fake)
     assert kc.main(["--mode", "independent", "--question", "Q?",
-                    "--model", "k3", "--reasoning-effort", "max"]) == 0
+                    "--model", "k3", "--reasoning-effort", "max", "--timeout", "480"]) == 0
     assert captured["reasoning_effort"] == "max"
+    assert captured["timeout"] == 480.0

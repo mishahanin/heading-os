@@ -6,10 +6,10 @@
 # CVE scan: python -m pip_audit --requirement scripts/bridge_daemon/requirements.txt
 
 # fastapi bumped to 0.139.0 (F-H4 CVE fix: CVE-2025-54121, CVE-2025-62727)
-fastapi==0.139.0
+fastapi==0.139.2
 # firecrawl-py pinned per F-H3 to prevent silent version drift
-firecrawl-py==4.31.0
-uvicorn[standard]==0.50.2
+firecrawl-py==4.32.1
+uvicorn[standard]==0.51.0
 watchdog==6.0.0
 apscheduler==3.11.3
 httpx==0.28.1

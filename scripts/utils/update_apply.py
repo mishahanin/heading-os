@@ -53,7 +53,7 @@ def apply_one(comp: Component, *, applier: Callable[[], None],
     # can only produce a false negative — its rollback closure is a no-op with no
     # teeth. Only `cmd` applies need the outer health gate (their sole gate, with a
     # real rollback_cmd).
-    if comp.apply and "script" in comp.apply:
+    if comp.apply and "cmd" not in comp.apply and "script" in comp.apply:
         return "applied"
     if run_health(comp):
         return "applied"

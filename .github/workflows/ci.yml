@@ -52,6 +52,11 @@ jobs:
         run: uv run python -m pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py -q
       - name: Skill router registry generated + in sync (F-5.1)
         run: uv run python scripts/generate-skill-router.py --check
+      - name: Rule split inventory drift guard (D4)
+        # No-op until a rule split/compression writes a snapshot under
+        # config/rule-split-inventory/; then it fails the build if a later edit drops a
+        # snapshotted directive from a compressed or split always-on rule file.
+        run: uv run python scripts/rule_split_check.py --check
       - name: Skill metadata contract
         run: uv run python scripts/skill-metadata-check.py
       - name: Version sync (F-1.1)

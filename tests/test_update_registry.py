@@ -84,3 +84,8 @@ def test_apply_without_cmd_or_script_is_rejected(tmp_path):
     """)
     with pytest.raises(RegistryError, match="cmd.*script|script.*cmd"):
         load_registry(reg)
+
+def test_non_mapping_top_level_is_rejected(tmp_path):
+    reg = _write(tmp_path, "just a scalar string\n")
+    with pytest.raises(RegistryError, match="mapping"):
+        load_registry(reg)

@@ -8,7 +8,7 @@ send_capable -> gated invariant in .claude/rules/tiered-risk.md.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,9 @@ def load_registry(path: Path) -> list[Component]:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError) as exc:
         raise RegistryError(f"cannot read registry {path}: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise RegistryError(f"registry {path} must be a mapping at the top level")
 
     components = raw.get("components")
     if not isinstance(components, dict):

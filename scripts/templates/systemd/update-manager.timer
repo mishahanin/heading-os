@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily HEADING OS component update check + auto-apply (07:00, configured timezone)
+
+[Timer]
+# 07:00 daily in the configured timezone. The installer substitutes {{TZ}} from
+# HEADING_OS_TZ (default UTC); the trailing timezone pins the fire even when the
+# host's local timezone differs (systemd >= 252). Persistent=true catches a fire
+# missed because the host was off, running it on next boot.
+OnCalendar=*-*-* 07:00:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

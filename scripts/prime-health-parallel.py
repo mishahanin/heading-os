@@ -59,6 +59,7 @@ DISPLAY_ORDER = [
     "ops_radar",
     "reminders_due",
     "dream_shadow",
+    "updates",
 ]
 
 # Section banner for each block (matches /prime numbering for legibility)
@@ -74,6 +75,7 @@ SECTION_BANNERS = {
     "ops_radar": "### 2.15 Ops-Radar",
     "reminders_due": "### 2.16 Durable Reminders",
     "dream_shadow": "### 2.17 Dream-Shadow",
+    "updates": "### 2.18 Component Updates",
 }
 
 # Per-check timeout (seconds). Real budget for /prime parallel block.
@@ -467,6 +469,45 @@ def run_dream_shadow(workspace_root: Path) -> dict[str, Any]:
     }
 
 
+def run_updates(workspace_root: Path) -> dict[str, Any]:
+    """Read the update-manager state and surface waiting `notify` updates and any
+    failed auto-apply. Read-only: never runs `update-manager check` (the daily
+    timer's job). Silent when everything is current or no state exists yet.
+    """
+    try:
+        state_file = get_outputs_dir() / "operations" / "updates" / "state.json"
+    except Exception as exc:  # noqa: BLE001 - boundary; reported inline
+        return {"status": "error", "output": f"updates check failed: {exc}",
+                "omit_if_empty": True}
+    if not state_file.exists():
+        return {"status": "skipped", "output": "", "omit_if_empty": True}
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "error", "output": f"updates state unreadable: {exc}",
+                "omit_if_empty": True}
+
+    lines: list[str] = []
+    for name, e in state.get("components", {}).items():
+        status = e.get("status")
+        if status == "waiting":
+            lines.append(
+                f"{e['display']} {e['current']}->{e['latest']} "
+                f"({e['tier']} - apply: update-manager apply {name})"
+            )
+        elif status == "failed":
+            lines.append(
+                f"{e['display']}: auto-apply FAILED (rolled back, "
+                f"{e.get('fail_count', 0)}x) - check logs"
+            )
+        elif status == "observed-stale":
+            lines.append(f"{e['display']} {e['current']}->{e['latest']} (observed - self-updates)")
+    if not lines:
+        return {"status": "ok", "output": "", "omit_if_empty": True}
+    return {"status": "ok", "output": "Updates waiting:\n  " + "\n  ".join(lines),
+            "omit_if_empty": True}
+
+
 # Map check key -> (callable, friendly label)
 CHECKS = {
     "crm_health": (run_crm_health, "CRM health"),
@@ -480,6 +521,7 @@ CHECKS = {
     "ops_radar": (run_ops_radar, "Ops-radar detector"),
     "reminders_due": (run_reminders_due, "Durable reminders"),
     "dream_shadow": (run_dream_shadow, "Dream-shadow worklist"),
+    "updates": (run_updates, "Component updates"),
 }
 
 

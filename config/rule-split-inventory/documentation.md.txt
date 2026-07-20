@@ -1,0 +1,18 @@
+## Always Update Documentation
+For the router registry, do NOT hand-edit the generated layers (`.claude/rules/skill-router.md`, `reference/skill-router/<category>.md`): set the skill's `x-heading-routing` frontmatter and run `python scripts/generate-skill-router.py` (CI + pre-commit enforce `--check`).
+**New admin tool created** -> Update `templates/CEO-ADMIN-GUIDE.md` (CEO-only, never published to corporate or execs).
+**Always run the docs drift guard before committing anything under `docs/`:** `python scripts/regenerate-docs-html.py --all && git diff --exit-code docs/`.
+Run the generator from the repo `.venv` so its pygments matches the pinned toolchain the `docs-html-drift` pre-commit hook uses, avoiding false drift from an ambient interpreter.
+**Commit + classify** changed files per `config/routing-map.yaml` (private/engine stays CEO-side; corporate is prepared for publish).
+### CEO-only (stays in ceo-main only -- NEVER publish to corporate or exec workspaces):
+CEO-ADMIN-GUIDE files must NEVER be placed in the corporate repo or any exec workspace.
+- **PATCH** - typo fixes, clarifications that don't change meaning
+When editing a template, always update both fields.
+A plan is active while its work is in progress; `plans/` root should hold only plans currently being executed or about to be executed.
+Move it to `plans/archive/{YYYY}/`: `git mv plans/{filename} plans/archive/{year}/`
+Never delete a plan; archive it.
+Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not just ceo-main.
+| Four backward-compat hook shims -- `.claude/hooks/{prevent-secrets,protect-corporate,protect-docs,protect-personal-threads}.py` (28-line delegators to `_dispatch.py`) | Every exec's `settings.local.json` referencing `_dispatch.py` directly instead of the per-hook script names | All provisioned execs have re-synced a `settings.local.json` that points PreToolUse at `_dispatch.py` (verify via the next fleet `git pull` round, then `git rm` the four shims in one change) | Open -- shims still referenced by older exec settings; deliberate, never invoked on the CEO machine.
+When an item clears, delete its row and the corresponding files in the same change so this table never carries stale entries.
+## Never Deliver Barebones Documentation
+All documentation presented to executives must be:

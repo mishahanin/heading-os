@@ -1,4 +1,4 @@
-<!-- version: 1.1.1 | last-updated: 2026-07-12 -->
+<!-- version: 1.1.2 | last-updated: 2026-07-20 -->
 # Documentation Propagation Rule
 
 Last Verified: 2026-07-12
@@ -59,17 +59,14 @@ When Misha updates any shared content in ceo-main:
 2. **Publish to `../heading-os-corporate/`** via `/publish-corporate` or `/push-updates` (corporate-classified files + BUILD.json bump).
 3. **Push `../heading-os-corporate/` to GitHub** (`origin/main`) -- manual, by Misha, after confirming the changeset.
 
-`AIOS-for-the-CEO` is no longer part of this propagation chain. As of 2026-04-25 it is an independent OSS repository (`mishahanin/AIOS-for-the-CEO`) maintained outside this workspace; the previous `/export-update` skill and `scripts/export-sync.py` machinery have been archived.
+`AIOS-for-the-CEO` is not part of this chain (independent OSS repo `mishahanin/AIOS-for-the-CEO` since 2026-04-25; the old `/export-update` skill and `scripts/export-sync.py` are archived).
 
 ### Exec side (manual git pull on each exec machine)
 
-The hourly scheduled sync task is **retired**. The destructive `workspace-sync.py`
-copy-and-orphan-delete engine was removed (see
-`plans/2026-06-26-retire-workspace-sync-disk-import.md`): it deleted the engine
-tree on clean deploys and no longer matched the three-repo topology. No
-`31C-Sync-{slug}` task / launchd agent / systemd timer is installed anymore
-(only the 15-min Sentinel schedule remains). In the HEADING OS model each exec
-syncs with plain git:
+The old auto-sync (`workspace-sync.py`, a destructive copy-and-orphan-delete
+engine) is retired; no `31C-Sync-{slug}` task / launchd agent / systemd timer is
+installed anymore (only the 15-min Sentinel schedule remains). Each exec syncs
+with plain git:
 
 - **Code down:** `git pull --ff-only` on the engine clone (the exec's
   `.heading-os`). Engine code ships by cloning the engine repo, not by copying.
@@ -107,19 +104,10 @@ pull (or run `/sync`). Offline execs catch up on their next pull.
 - `GETTING-STARTED.html` -- Branded HTML version (printable, shareable)
 - `EMERGENCY-PROCEDURES.md` / `.html` -- What to do when sync/push/update chain breaks (CEO outage, corporate outage, credential leak, schedule failure)
 
-> The public deployment guide is the single canonical `docs/DEPLOYMENT.md`
-> (engine-routed, not part of the templates -> docs synced set), with
-> `docs/QUICKSTART.md` as its one-page short form. Both replaced the former
-> `SETUP-GUIDE.md` / `ZERO-TO-HERO-DEPLOYMENT.md` install guides (retired in the
-> 2026-06-27 documentation consolidation; the old dark-theme HTML and the
-> `build-setup-guide-html.py` builder were removed with them). They are not
-> exec-distributed via this sync chain.
-- `QUICKSTART.md` -- one-page public quick reference. The former `USAGE-GUIDE.md` was merged into the exec-facing `GETTING-STARTED.md` (Executive Handbook) on 2026-06-27. `QUICKSTART.md` is genericized public reference, not a hand-authored CEO guide.
-
-> `MARP-SETUP.md` was retired 2026-06-22 and removed from the engine 2026-06-29
-> (it had been kept under `docs/_archive/`, since deleted in the pre-public cruft
-> sweep). It documented manual Marp/Chromium install for a niche PDF-rendering
-> path and had not been updated since 2026-04-16.
+> The canonical public deployment guide is `docs/DEPLOYMENT.md` (engine-routed,
+> not in the templates -> docs synced set), with `docs/QUICKSTART.md` as its
+> one-page short form. Neither is exec-distributed via this sync chain.
+- `QUICKSTART.md` -- one-page genericized public reference, not a hand-authored CEO guide.
 
 ### CEO-only (stays in ceo-main only -- NEVER publish to corporate or exec workspaces):
 - `CEO-ADMIN-GUIDE.md` -- Admin workflows, provisioning, offboarding, emergency revocation
@@ -153,7 +141,7 @@ When a plan is complete (success criteria met or work abandoned):
 
 Archived plans are permanent records - they remain git-tracked and searchable via `grep -r plans/archive/`. Never delete a plan; archive it. This preserves the decision trail for future scrutiny passes and post-mortems.
 
-For the current active set, see `plans/` directly. Completed and superseded plans are moved to `plans/archive/{YYYY}/` and remain git-tracked. CEO triage cadence: archive any plan whose success criteria have been met or whose work has been abandoned before the next perf sprint.
+CEO triage cadence: archive any plan whose success criteria have been met or whose work has been abandoned before the next perf sprint.
 
 ## Migration Cruft Milestones
 

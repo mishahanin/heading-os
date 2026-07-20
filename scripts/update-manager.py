@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Workspace update manager: inventory external components and apply updates
+under a tiered autonomy model (auto / notify / observed).
+
+Usage:
+    python scripts/update-manager.py check          # poll latest, write state
+    python scripts/update-manager.py status         # print the table
+    python scripts/update-manager.py apply <name>   # apply one notify/auto
+    python scripts/update-manager.py apply --auto    # apply all auto-tier
+
+Registry: config/update-registry.yaml. State: outputs/operations/updates/state.json.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from datetime import datetime  # noqa: E402
+from scripts.utils.update_registry import Component, load_registry  # noqa: E402
+from scripts.utils.update_common import resolve_current, versions_differ, write_state  # noqa: E402
+from scripts.utils import update_sources  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    get_default_tz, get_outputs_dir, get_workspace_root,
+)
+
+
+def registry_path() -> Path:
+    return get_workspace_root() / "config" / "update-registry.yaml"
+
+
+def state_path() -> Path:
+    return get_outputs_dir() / "operations" / "updates" / "state.json"
+
+
+def resolve_latest(comp: Component) -> str:
+    try:
+        return update_sources.latest_version(comp.latest)
+    except update_sources.SourceError:
+        return ""
+
+
+def build_state(components: list[Component], prior: dict | None = None) -> dict:
+    prior_comp = (prior or {}).get("components", {})
+    entries: dict[str, dict] = {}
+    for comp in components:
+        current = resolve_current(comp)
+        latest = resolve_latest(comp)
+        delta = versions_differ(current, latest)
+        prior_e = prior_comp.get(comp.name, {})
+        was_failed = prior_e.get("status") == "failed"
+        fail_count = prior_e.get("fail_count", 0)
+        # A new upstream version resets the circuit breaker (fresh release to try).
+        if prior_e.get("latest") and prior_e.get("latest") != latest:
+            was_failed = False
+            fail_count = 0
+        if comp.hold or comp.pin:
+            status = "held"
+        elif not latest:
+            status = "unknown"
+        elif not delta:
+            status, fail_count = "current", 0
+        elif comp.tier == "observed":
+            status = "observed-stale"     # informational only; observed self-updates
+        elif comp.tier == "notify":
+            status = "waiting"
+        elif was_failed:
+            status = "failed"             # carry a prior auto failure forward while it still lags
+        else:
+            status = "pending-auto"
+        entries[comp.name] = {
+            "display": comp.display, "tier": comp.tier,
+            "current": current, "latest": latest,
+            "delta": delta, "status": status, "fail_count": fail_count,
+        }
+    return {"generated": None, "components": entries}
+
+
+def _stamp_now() -> str:
+    return datetime.now(get_default_tz()).isoformat()
+
+
+def _read_state() -> dict:
+    p = state_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def cmd_check(_args) -> int:
+    comps = load_registry(registry_path())
+    state = build_state(comps, _read_state())
+    state["generated"] = _stamp_now()
+    write_state(state, state_path())
+    waiting = [n for n, e in state["components"].items() if e["status"] == "waiting"]
+    print(f"checked {len(comps)} components; {len(waiting)} waiting")
+    return 0
+
+
+def cmd_status(_args) -> int:
+    p = state_path()
+    if not p.exists():
+        print("no state yet -- run: python scripts/update-manager.py check")
+        return 1
+    state = json.loads(p.read_text(encoding="utf-8"))
+    print(f"{'component':22} {'current':14} {'latest':14} {'tier':9} status")
+    for name, e in state["components"].items():
+        print(f"{name:22} {e['current']:14} {e['latest']:14} {e['tier']:9} {e['status']}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Workspace update manager")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("check")
+    sub.add_parser("status")
+    ap = sub.add_parser("apply")
+    ap.add_argument("name", nargs="?")
+    ap.add_argument("--auto", action="store_true")
+    args = parser.parse_args(argv)
+    if args.cmd == "check":
+        return cmd_check(args)
+    if args.cmd == "status":
+        return cmd_status(args)
+    if args.cmd == "apply":
+        import fcntl  # noqa: PLC0415
+        from scripts.utils.update_apply import cmd_apply  # noqa: PLC0415
+        lock_path = state_path().parent / ".apply.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "w") as lock_fh:
+            try:
+                fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                # Manual apply racing the 07:00 timer (or vice versa). Skip rather
+                # than interleave snapshot/swap on the same component.
+                print("another apply is in progress; skipping")
+                return 0
+            return cmd_apply(args, load_registry(registry_path()), state_path())
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

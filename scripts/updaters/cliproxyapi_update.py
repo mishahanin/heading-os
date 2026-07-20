@@ -76,8 +76,9 @@ def main() -> int:
         want = None
         asset_name = asset.rsplit("/", 1)[1]
         for line in checksums.read_text().splitlines():
-            if line.strip().endswith(asset_name):
-                want = line.split()[0]
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == asset_name:
+                want = parts[0]
                 break
         if not want:
             print("checksum for asset not found; refusing unverified swap")

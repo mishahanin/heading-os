@@ -31,7 +31,7 @@ def _strip_v(tag: str) -> str:
     return tag[1:] if tag.startswith("v") else tag
 
 
-def latest_version(spec: dict[str, Any], *, arch: str = "amd64") -> str:
+def latest_version(spec: dict[str, Any]) -> str:
     via = spec.get("via")
     if via == "github_release":
         data = _get_json(f"https://api.github.com/repos/{spec['repo']}/releases/latest")

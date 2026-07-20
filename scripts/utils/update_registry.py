@@ -67,6 +67,11 @@ def load_registry(path: Path) -> list[Component]:
             raise RegistryError(
                 f"component {name!r}: an `apply` block must contain `cmd` or `script`"
             )
+        if isinstance(apply_block, dict) and "cmd" in apply_block and "script" in apply_block:
+            raise RegistryError(
+                f"component {name!r}: an `apply` block cannot define both `cmd` "
+                "and `script` (choose one)"
+            )
         # Never-broken invariant: any `cmd` apply must define `rollback_cmd` so a
         # failed apply or health check can restore the prior version. A `script`
         # apply is exempt -- the script owns its snapshot + rollback internally.

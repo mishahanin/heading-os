@@ -85,6 +85,18 @@ def test_apply_without_cmd_or_script_is_rejected(tmp_path):
     with pytest.raises(RegistryError, match="cmd.*script|script.*cmd"):
         load_registry(reg)
 
+def test_apply_with_both_cmd_and_script_is_rejected(tmp_path):
+    reg = _write(tmp_path, """
+        components:
+          x:
+            tier: notify
+            current: {via: shell, cmd: "x --version"}
+            latest: {via: github_release, repo: x/y}
+            apply: {cmd: "true", rollback_cmd: "r", script: scripts/updaters/x.py}
+    """)
+    with pytest.raises(RegistryError, match="both"):
+        load_registry(reg)
+
 def test_non_mapping_top_level_is_rejected(tmp_path):
     reg = _write(tmp_path, "just a scalar string\n")
     with pytest.raises(RegistryError, match="mapping"):

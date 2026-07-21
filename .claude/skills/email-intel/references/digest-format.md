@@ -7,8 +7,10 @@ Two parts: per-conversation **context** blocks (what came in, enriched), then ON
 per-conversation codes -- is the approval surface, and it is backed by a persisted state
 file via `scripts/email-sweep.py` so a half-finished sweep is resumable.
 
-Last Updated: 2026-06-09 (replaced per-conversation `P1-A: a,b` notation with a single
-numbered action list + persisted state machine).
+Last Updated: 2026-07-21 (added Part 3 recommendation layer - every action carries a
+`[DO]`/`[SKIP]` stake + a recommended-set line for one-word approval; 2026-06-09 replaced
+per-conversation `P1-A: a,b` notation with a single numbered action list + persisted
+state machine).
 
 ## Part 1 - Per-Conversation Context Block
 
@@ -65,7 +67,8 @@ python scripts/email-sweep.py propose --file <proposed.json> --date YYYY-MM-DD
 python scripts/email-sweep.py list --date YYYY-MM-DD
 ```
 
-`list` renders exactly what the CEO sees:
+`list` renders the persisted numbered trail; the CEO sees it annotated with the
+recommendation layer (Part 3) on top:
 
 ```
 RECOMMENDED ACTIONS -- sweep 2026-06-09 (5 action(s))
@@ -93,6 +96,42 @@ Each proposed-action dict in the JSON payload:
 `email-sweep.py` assigns the id, resolves the tier from `type`, and sets `status=proposed`.
 Unknown types floor at `[send-gated]` (friction-maximal default).
 
+## Part 3 - Recommendation layer (lead with a stake)
+
+The numbered list tells the CEO WHAT could be done; it must also tell him what you
+WOULD do. Never present a neutral menu -- a menu forces the CEO to reason every item
+himself. Lead with your call so his reply collapses to one word plus exceptions.
+
+Render each action with an explicit stake and a <=5-word rationale:
+
+- **[DO]** -- recommend executing -- <short reason>
+- **[SKIP]** -- recommend not executing -- <short reason>
+
+Above the list, print ONE recommended-set line the CEO can accept verbatim:
+
+```
+Recommendation: do 1,2,3; skip 4. Reply "ok" to run exactly this, or name exceptions.
+```
+
+A compact table is the preferred CEO-facing render (one row per action: `# | action |
+[DO]/[SKIP] | reason`), with the recommended-set line directly above it.
+
+Rules:
+
+- Every action carries a `[DO]` or `[SKIP]` stake. No un-staked items -- an un-staked
+  menu is the failure this layer exists to prevent.
+- The recommended-set line is your honest call, not a rubber stamp. If you would skip
+  most of the batch, the line says so.
+- A `[send-gated]` action is ALWAYS surfaced as an explicit decision even when you
+  recommend it -- it is never folded silently into `ok`. The lethal-trifecta human
+  send-gate is never the default; `ok` covers only local-write/notify actions plus any
+  send you named separately and the CEO confirmed. (`.claude/rules/lethal-trifecta.md`.)
+- `ok` / `да` against a recommendation means "execute the recommended set exactly"
+  (the `[DO]` items, minus any send-gated action not separately confirmed). Treat it as
+  equivalent to approving those specific numbers.
+- The raw `email-sweep.py list` stays the persisted numbered trail; the stake +
+  recommended-set line is the CEO-facing annotation rendered on top of it.
+
 ## Approval Grammar (Phase 3)
 
 The CEO replies against the numbers. All of these are valid; plain English is also accepted
@@ -100,6 +139,7 @@ The CEO replies against the numbers. All of these are valid; plain English is al
 
 | Reply | Effect |
 |---|---|
+| `ok` / `да` | approve the recommended set exactly (the `[DO]` items, minus any send-gated action not separately confirmed) |
 | `1,3,5` | approve those actions |
 | `all` | approve every proposed action |
 | `all crm` / `all notify` / `all send` | approve every action of that tier |

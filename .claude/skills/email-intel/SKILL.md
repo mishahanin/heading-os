@@ -146,15 +146,15 @@ Two parts, per `references/digest-format.md`:
    python scripts/email-sweep.py propose --file <proposed.json> --date YYYY-MM-DD
    python scripts/email-sweep.py list --date YYYY-MM-DD
    ```
-   Each action carries a tier tag: `[crm]`/`[task]`/`[contact]`/`[know]` (local write), `[notify]` (pipeline), `[send-gated]` (outbound send). Render the `list` output to the CEO. Proposed-action JSON shape: `references/digest-format.md`.
+   Each action carries a tier tag: `[crm]`/`[task]`/`[contact]`/`[know]` (local write), `[notify]` (pipeline), `[send-gated]` (outbound send). Render the `list` output to the CEO **annotated with the recommendation layer** (`references/digest-format.md` Part 3): every action gets an explicit `[DO]`/`[SKIP]` stake plus a <=5-word reason, and a single `Recommendation: do X; skip Y` line sits above the list so the CEO can accept verbatim with one word. Never present an un-staked menu. Proposed-action JSON shape: `references/digest-format.md`.
 
 ### Phase 3 -- Approval (MANDATORY)
 
-Present the numbered list and the approval grammar line per `references/digest-format.md`.
+Present the numbered list (with the Part 3 recommendation stakes + recommended-set line) and the approval grammar line per `references/digest-format.md`.
 
 **STOP HERE. Wait for Misha's explicit response before proceeding to Phase 4.**
 
-Translate his reply (`1,3,5` | `all crm` | `2 edit: <change>` | `skip 4` | `rest skip` | `4 go`) into state-machine calls:
+Translate his reply (`ok`/`да` = the recommended set | `1,3,5` | `all crm` | `2 edit: <change>` | `skip 4` | `rest skip` | `4 go`) into state-machine calls. `ok`/`да` approves the recommended `[DO]` set exactly, minus any `[send-gated]` action the CEO did not separately confirm (the send-gate is never defaulted):
 ```bash
 python scripts/email-sweep.py approve <ids> --date YYYY-MM-DD
 python scripts/email-sweep.py edit <id> --note "<change>" --date YYYY-MM-DD

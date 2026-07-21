@@ -214,8 +214,13 @@ def classify_weekly_review(days_since: int | None) -> dict:
 
 
 def weekly_review_state(outputs_dir: Path, now: float | None = None) -> dict:
-    """Days since the newest file mtime under outputs/operations/weekly-review/."""
-    review_dir = outputs_dir / "operations" / "weekly-review"
+    """Days since the newest file mtime under outputs/operations/reviews/.
+
+    This must match where the /weekly-review skill actually saves reviews
+    (outputs/operations/reviews/YYYY-MM-DD-weekly-review.md). A prior mismatch
+    (this read operations/weekly-review/, which the skill never wrote) made the
+    signal report "never run" even when reviews existed."""
+    review_dir = outputs_dir / "operations" / "reviews"
     now = time.time() if now is None else now
     newest = None
     if review_dir.is_dir():

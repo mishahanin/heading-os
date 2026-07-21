@@ -71,7 +71,7 @@ def test_weekly_review_fs():
         s = ops.weekly_review_state(outputs)
         ok &= _check("review fs absent -> never/due", s["due"] and s["value"] == "never")
         # write a file aged 10 days
-        rd = outputs / "operations" / "weekly-review"
+        rd = outputs / "operations" / "reviews"
         rd.mkdir(parents=True)
         f = rd / "2026-06-16_weekly-review.md"
         f.write_text("x", encoding="utf-8")

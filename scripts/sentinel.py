@@ -562,6 +562,8 @@ class MeetingInviteSource:
 
 _ZERO_WIDTH = dict.fromkeys([0x200b, 0x200c, 0x200d, 0x2060, 0xfeff], None)
 
+_DEFAULT_RUNE_TOKEN = "[RUNE]"
+
 
 def _normalize_subject(s: str) -> str:
     """Strip zero-width chars, collapse whitespace, for stable tag matching."""
@@ -569,21 +571,24 @@ def _normalize_subject(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def subject_has_rune(subject: str, rune_token: str = "[RUNE]") -> bool:  # noqa: S107 — rune_token is a subject tag, not a credential
+def subject_has_rune(subject: str, rune_token: str = _DEFAULT_RUNE_TOKEN) -> bool:  # noqa: S107 — rune_token is a subject tag, not a credential
     """True when the bracketed override tag is present (case-insensitive)."""
-    token = (rune_token or "[RUNE]").strip().lower()
+    token = _normalize_subject(rune_token or _DEFAULT_RUNE_TOKEN).lower()
     return token in _normalize_subject(subject).lower()
 
 
 def build_tribe_decline_message(subject: str, alternative,
-                                rune_token: str = "[RUNE]",  # noqa: S107 — rune_token is a subject tag, not a credential
+                                rune_token: str = _DEFAULT_RUNE_TOKEN,  # noqa: S107 — rune_token is a subject tag, not a credential
                                 template: str = None) -> str:
     """Warm, Tribe-specific decline body with a ready-to-copy override example."""
     subject = subject or "your meeting"
     if template:
-        return template.format(subject=subject,
-                               alternative=alternative or "another time",
-                               rune_token=rune_token)
+        try:
+            return template.format(subject=subject,
+                                   alternative=alternative or "another time",
+                                   rune_token=rune_token)
+        except (KeyError, IndexError, ValueError):
+            pass  # malformed operator template -- fall through to the built-in default body
     parts = [
         "Thanks for the invite. This is an internal Tribe request, so it matters to me.",
         "It clashes with time I keep protected, so I can't take this exact slot.",
@@ -605,7 +610,7 @@ def select_decline_message(is_tribe: bool, subject: str, alternative,
     if is_tribe:
         return build_tribe_decline_message(
             subject, alternative,
-            calendar_config.get("rune_token", "[RUNE]"),
+            calendar_config.get("rune_token", _DEFAULT_RUNE_TOKEN),
             calendar_config.get("tribe_decline_message"),
         )
     msg = calendar_config.get(
@@ -669,7 +674,7 @@ class CalendarPolicyEngine:
 
         # RUNE override: top precedence, before any policy evaluation.
         if self.config.get("rune_override_enabled", True) and subject_has_rune(
-            subject, self.config.get("rune_token", "[RUNE]")
+            subject, self.config.get("rune_token", _DEFAULT_RUNE_TOKEN)
         ):
             return {
                 "decision": "escalate",

@@ -73,3 +73,36 @@ def test_selector_non_tribe_no_alternative_omits_how_about():
 def test_selector_honors_configured_rune_token():
     msg = select_decline_message(True, "Q3 plan", None, {"rune_token": "[HELM]"})
     assert "[HELM] Q3 plan" in msg
+
+
+import logging
+from zoneinfo import ZoneInfo
+
+from scripts.sentinel import CalendarPolicyEngine
+
+TZ = ZoneInfo("Asia/Dubai")
+LOG = logging.getLogger("test-sentinel")
+
+
+def _engine(cfg):
+    return CalendarPolicyEngine(cfg, TZ, LOG)
+
+
+def test_is_tribe_explicit_domain_list():
+    eng = _engine({"tribe_domains": ["31c.io"]})
+    assert eng._is_tribe("kolleg@31c.io") is True
+    assert eng._is_tribe("KOLLEG@31C.IO") is True
+    assert eng._is_tribe("someone@example.org") is False
+
+
+def test_is_tribe_defaults_to_operator_domain(monkeypatch):
+    monkeypatch.setattr("scripts.sentinel.get_operator",
+                        lambda: {"email": "ceo@example.org"})
+    eng = _engine({"tribe_domains": []})
+    assert eng._is_tribe("peer@example.org") is True
+    assert eng._is_tribe("outsider@other.com") is False
+
+
+def test_is_tribe_handles_empty_sender():
+    eng = _engine({"tribe_domains": ["31c.io"]})
+    assert eng._is_tribe("") is False

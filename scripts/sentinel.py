@@ -44,6 +44,7 @@ from scripts.utils.healthchecks import ping as hc_ping  # noqa: E402
 from scripts.utils.html import strip_html  # noqa: E402
 from scripts.utils.llm_fallback import call_anthropic_with_fallback  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
+from scripts.utils.operator import get_operator  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, get_workspace_root, load_env, resolve_config_with_example  # noqa: E402
 
@@ -908,6 +909,22 @@ class CalendarPolicyEngine:
                 return True
 
         return False
+
+    def _tribe_domains(self) -> list:
+        """Configured Tribe domains, defaulting to the operator's own domain."""
+        doms = [d.lower() for d in (self.config.get("tribe_domains") or [])]
+        if not doms:
+            email = (get_operator().get("email") or "").strip().lower()
+            if "@" in email:
+                doms = [email.rsplit("@", 1)[-1]]
+        return doms
+
+    def _is_tribe(self, sender_email: str) -> bool:
+        """True when the sender's domain is a Tribe (internal) domain."""
+        email = (sender_email or "").strip().lower()
+        if "@" not in email:
+            return False
+        return email.rsplit("@", 1)[-1] in self._tribe_domains()
 
     def _make_decision(self, violations: list, is_vip: bool) -> str:
         """Decide: accept, decline, or escalate."""

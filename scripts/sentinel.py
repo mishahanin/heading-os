@@ -556,6 +556,25 @@ class MeetingInviteSource:
 
 
 # ============================================================
+# Calendar invite helpers (pure, unit-tested)
+# ============================================================
+
+_ZERO_WIDTH = dict.fromkeys([0x200b, 0x200c, 0x200d, 0x2060, 0xfeff], None)
+
+
+def _normalize_subject(s: str) -> str:
+    """Strip zero-width chars, collapse whitespace, for stable tag matching."""
+    s = (s or "").translate(_ZERO_WIDTH)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def subject_has_rune(subject: str, rune_token: str = "[RUNE]") -> bool:  # noqa: S107 — rune_token is a subject tag, not a credential
+    """True when the bracketed override tag is present (case-insensitive)."""
+    token = (rune_token or "[RUNE]").strip().lower()
+    return token in _normalize_subject(subject).lower()
+
+
+# ============================================================
 # Calendar Policy Engine
 # ============================================================
 

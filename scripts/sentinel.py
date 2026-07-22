@@ -598,6 +598,24 @@ def build_tribe_decline_message(subject: str, alternative,
     return " ".join(parts)
 
 
+def select_decline_message(is_tribe: bool, subject: str, alternative,
+                           calendar_config: dict) -> str:
+    """Choose the decline body: Tribe-specific vs the generic default."""
+    if is_tribe:
+        return build_tribe_decline_message(
+            subject, alternative,
+            calendar_config.get("rune_token", "[RUNE]"),
+            calendar_config.get("tribe_decline_message"),
+        )
+    msg = calendar_config.get(
+        "decline_message",
+        "Due to some conflicts, I'd like to propose a new day and time for our meeting.",
+    )
+    if alternative:
+        msg += f" How about {alternative}?"
+    return msg
+
+
 # ============================================================
 # Calendar Policy Engine
 # ============================================================

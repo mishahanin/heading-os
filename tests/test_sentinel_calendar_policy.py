@@ -47,3 +47,29 @@ def test_tribe_message_template_override_formats_placeholders():
     tmpl = "Hi. Try {alternative}. Tag: {rune_token} {subject}"
     msg = build_tribe_decline_message("Q3 plan", "next week", template=tmpl)
     assert msg == "Hi. Try next week. Tag: [RUNE] Q3 plan"
+
+
+from scripts.sentinel import select_decline_message
+
+
+def test_selector_tribe_uses_tribe_builder():
+    msg = select_decline_message(True, "Weekly sync", "next week", {})
+    assert "internal Tribe request" in msg
+    assert "[RUNE] Weekly sync" in msg
+
+
+def test_selector_non_tribe_uses_generic_default_with_alternative():
+    msg = select_decline_message(False, "Weekly sync", "next week", {})
+    assert msg == ("Due to some conflicts, I'd like to propose a new day and time "
+                   "for our meeting. How about next week?")
+
+
+def test_selector_non_tribe_no_alternative_omits_how_about():
+    msg = select_decline_message(False, "Weekly sync", None, {})
+    assert msg == ("Due to some conflicts, I'd like to propose a new day and time "
+                   "for our meeting.")
+
+
+def test_selector_honors_configured_rune_token():
+    msg = select_decline_message(True, "Q3 plan", None, {"rune_token": "[HELM]"})
+    assert "[HELM] Q3 plan" in msg

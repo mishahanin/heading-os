@@ -2192,13 +2192,13 @@ Top senders:{senders_str}"""
                     await self._escalate_invite(invite, [f"Auto-accept failed: {e}"])
 
             elif decision == "decline" and self.config.calendar.get("auto_decline", True):
-                decline_msg = self.config.calendar.get(
-                    "decline_message",
-                    "Due to some conflicts, I'd like to propose a new day and time for our meeting."
-                )
                 alternative = result.get("proposed_alternative")
-                if alternative:
-                    decline_msg += f" How about {alternative}?"
+                decline_msg = select_decline_message(
+                    result.get("is_tribe", False),
+                    invite["subject"],
+                    alternative,
+                    self.config.calendar,
+                )
 
                 try:
                     self.invite_source.decline_invite(invite["item"], decline_msg)

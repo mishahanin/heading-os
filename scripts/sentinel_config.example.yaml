@@ -68,6 +68,20 @@ calendar:
   use_llm_for_theme: true      # Use LLM to classify meeting topic for theme-day matching
   decline_message: "Due to a scheduling conflict, I'd like to propose a new day and time for our meeting."
 
+  # RUNE override: a Tribe member puts this bracketed tag in the invite subject
+  # to force the invite to the operator's personal decision (no auto-accept,
+  # no auto-decline -- it is escalated instead). Bracket-required, case-insensitive.
+  rune_override_enabled: true
+  rune_token: "[RUNE]"
+
+  # Domains treated as internal "Tribe". Empty -> the operator's own email domain.
+  tribe_domains: []
+
+  # Optional full override of the Tribe decline body. Placeholders: {subject},
+  # {alternative}, {rune_token}. Unset -> built-in default with a ready-to-copy
+  # "[RUNE] <subject>" example so recipients know exactly how to escalate.
+  tribe_decline_message: ""
+
   # Senders to never auto-decline (always escalate)
   vip_senders:
     - "key-partner@example.com"

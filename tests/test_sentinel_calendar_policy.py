@@ -25,3 +25,25 @@ def test_rune_survives_whitespace_and_zero_width_noise():
 def test_rune_empty_subject_is_false():
     assert subject_has_rune("") is False
     assert subject_has_rune(None) is False
+
+
+from scripts.sentinel import build_tribe_decline_message
+
+
+def test_tribe_message_includes_example_subject_and_alternative():
+    msg = build_tribe_decline_message("Weekly sync", "Tuesday, July 28 at 14:30 local time")
+    assert "internal Tribe request" in msg
+    assert "Tuesday, July 28 at 14:30 local time" in msg
+    assert "[RUNE] Weekly sync" in msg  # ready-to-copy example
+
+
+def test_tribe_message_drops_alternative_sentence_when_none():
+    msg = build_tribe_decline_message("Weekly sync", None)
+    assert "Could we do" not in msg
+    assert "[RUNE] Weekly sync" in msg
+
+
+def test_tribe_message_template_override_formats_placeholders():
+    tmpl = "Hi. Try {alternative}. Tag: {rune_token} {subject}"
+    msg = build_tribe_decline_message("Q3 plan", "next week", template=tmpl)
+    assert msg == "Hi. Try next week. Tag: [RUNE] Q3 plan"

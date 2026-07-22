@@ -574,6 +574,30 @@ def subject_has_rune(subject: str, rune_token: str = "[RUNE]") -> bool:  # noqa:
     return token in _normalize_subject(subject).lower()
 
 
+def build_tribe_decline_message(subject: str, alternative,
+                                rune_token: str = "[RUNE]",  # noqa: S107 — rune_token is a subject tag, not a credential
+                                template: str = None) -> str:
+    """Warm, Tribe-specific decline body with a ready-to-copy override example."""
+    subject = subject or "your meeting"
+    if template:
+        return template.format(subject=subject,
+                               alternative=alternative or "another time",
+                               rune_token=rune_token)
+    parts = [
+        "Thanks for the invite. This is an internal Tribe request, so it matters to me.",
+        "It clashes with time I keep protected, so I can't take this exact slot.",
+    ]
+    if alternative:
+        parts.append(f"Could we do {alternative} instead?")
+    parts.append(
+        f"If it's genuinely time-critical and needs me regardless, resend the same "
+        f"invite with the tag {rune_token} added to the front of the subject, square "
+        f"brackets included, and it comes straight to me to decide personally."
+    )
+    parts.append(f"Your subject would look exactly like this: {rune_token} {subject}")
+    return " ".join(parts)
+
+
 # ============================================================
 # Calendar Policy Engine
 # ============================================================

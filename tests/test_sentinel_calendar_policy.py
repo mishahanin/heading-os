@@ -106,3 +106,47 @@ def test_is_tribe_defaults_to_operator_domain(monkeypatch):
 def test_is_tribe_handles_empty_sender():
     eng = _engine({"tribe_domains": ["31c.io"]})
     assert eng._is_tribe("") is False
+
+
+from datetime import datetime
+
+ACCEPT_CFG = {"tribe_domains": ["31c.io"], "protected_blocks": [],
+              "vip_senders": [], "external_domains": []}
+CONFLICT_CFG = {"tribe_domains": ["31c.io"],
+                "protected_blocks": [{"days": [0, 1, 2, 3, 4, 5, 6]}],
+                "vip_senders": [], "external_domains": ["example.org"]}
+
+
+def _invite(subject, sender, hour=13):
+    start = datetime(2026, 7, 25, hour, 0, tzinfo=TZ)   # Saturday
+    end = datetime(2026, 7, 25, hour, 30, tzinfo=TZ)
+    return {"subject": subject, "sender_email": sender, "start": start, "end": end,
+            "duration_minutes": 30, "attendee_count": 1, "body": ""}
+
+
+def test_rune_forces_escalate_even_when_would_accept():
+    eng = _engine(ACCEPT_CFG)
+    res = eng.evaluate(_invite("[RUNE] Weekly sync", "kolleg@31c.io"), [])
+    assert res["decision"] == "escalate"
+    assert res["is_tribe"] is True
+
+
+def test_rune_disabled_falls_through_to_normal_decision():
+    cfg = dict(ACCEPT_CFG, rune_override_enabled=False)
+    eng = _engine(cfg)
+    res = eng.evaluate(_invite("[RUNE] Weekly sync", "kolleg@31c.io"), [])
+    assert res["decision"] == "accept"
+
+
+def test_tribe_conflict_declines_and_flags_tribe():
+    eng = _engine(CONFLICT_CFG)
+    res = eng.evaluate(_invite("Weekly sync", "kolleg@31c.io"), [])
+    assert res["decision"] == "decline"
+    assert res["is_tribe"] is True
+
+
+def test_external_conflict_escalates_unchanged():
+    eng = _engine(CONFLICT_CFG)
+    res = eng.evaluate(_invite("Weekly sync", "vendor@example.org"), [])
+    assert res["decision"] == "escalate"
+    assert res["is_tribe"] is False

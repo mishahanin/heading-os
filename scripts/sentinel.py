@@ -665,6 +665,21 @@ class CalendarPolicyEngine:
         subject = invite.get("subject", "")
         sender_email = invite.get("sender_email", "")
 
+        is_tribe = self._is_tribe(sender_email)
+
+        # RUNE override: top precedence, before any policy evaluation.
+        if self.config.get("rune_override_enabled", True) and subject_has_rune(
+            subject, self.config.get("rune_token", "[RUNE]")
+        ):
+            return {
+                "decision": "escalate",
+                "reasons": ["RUNE override -- held for operator"],
+                "proposed_alternative": None,
+                "violations": [],
+                "is_vip": self._is_vip_or_external(sender_email),
+                "is_tribe": is_tribe,
+            }
+
         if start and end:
             # Check protected time
             prot = self._check_protected_time(start, end)
@@ -712,6 +727,7 @@ class CalendarPolicyEngine:
             "proposed_alternative": proposed_alternative,
             "violations": [v["type"] for v in violations],
             "is_vip": is_vip,
+            "is_tribe": is_tribe,
         }
 
     def _check_protected_time(self, start, end) -> str:

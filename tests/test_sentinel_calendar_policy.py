@@ -1,9 +1,17 @@
+import logging
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.sentinel import subject_has_rune
+from scripts.sentinel import (
+    CalendarPolicyEngine,
+    build_tribe_decline_message,
+    select_decline_message,
+    subject_has_rune,
+)
 
 
 def test_rune_matches_bracketed_tag_case_insensitive():
@@ -27,9 +35,6 @@ def test_rune_empty_subject_is_false():
     assert subject_has_rune(None) is False
 
 
-from scripts.sentinel import build_tribe_decline_message
-
-
 def test_tribe_message_includes_example_subject_and_alternative():
     msg = build_tribe_decline_message("Weekly sync", "Tuesday, July 28 at 14:30 local time")
     assert "internal Tribe request" in msg
@@ -49,7 +54,10 @@ def test_tribe_message_template_override_formats_placeholders():
     assert msg == "Hi. Try next week. Tag: [RUNE] Q3 plan"
 
 
-from scripts.sentinel import select_decline_message
+def test_tribe_message_broken_template_falls_back_to_default():
+    msg = build_tribe_decline_message("Weekly sync", "next week", template="Try {when}")
+    assert "internal Tribe request" in msg      # fell back to default body
+    assert "[RUNE] Weekly sync" in msg
 
 
 def test_selector_tribe_uses_tribe_builder():
@@ -74,11 +82,6 @@ def test_selector_honors_configured_rune_token():
     msg = select_decline_message(True, "Q3 plan", None, {"rune_token": "[HELM]"})
     assert "[HELM] Q3 plan" in msg
 
-
-import logging
-from zoneinfo import ZoneInfo
-
-from scripts.sentinel import CalendarPolicyEngine
 
 TZ = ZoneInfo("Asia/Dubai")
 LOG = logging.getLogger("test-sentinel")
@@ -107,8 +110,6 @@ def test_is_tribe_handles_empty_sender():
     eng = _engine({"tribe_domains": ["31c.io"]})
     assert eng._is_tribe("") is False
 
-
-from datetime import datetime
 
 ACCEPT_CFG = {"tribe_domains": ["31c.io"], "protected_blocks": [],
               "vip_senders": [], "external_domains": []}

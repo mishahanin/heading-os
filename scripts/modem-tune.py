@@ -1,28 +1,37 @@
 #!/usr/bin/env python3
 """
-modem-tune.py -- IMEI reconfiguration engine for a GL.iNet GL-XE300 travel router.
+modem-tune.py -- IMEI reconfiguration engine for GL.iNet travel routers.
 
-Drives the Quectel EG25-G modem over SSH (gl_modem AT bridge) to read, generate,
-and change the reported IMEI. Generated IMEIs are valid values for the configured
-device class (TAC + 6-digit serial + Luhn check) and are deduplicated against a
-ledger so a value is never reused. The device's TAC + factory IMEI are read from
-config (config/modem.json; engine ships scripts/modem.example.json).
+Drives the router's cellular modem over SSH -- gl_modem AT bridge on the
+GL-XE300 (Quectel EG25-G), ubus modem.CPU.AT on the GL-E5800 (Quectel
+RG650V-EU) -- to read, generate, and change the reported IMEI. Generated
+IMEIs are valid values for the configured device class (TAC + 6-digit serial
++ Luhn check) and are deduplicated against a shared ledger so a value is
+never reused. Per-device identity (transport, host, TAC, factory IMEI) is
+read from config (config/modem.json; engine ships scripts/modem.example.json).
 
-Subcommands (the /modem-tune skill calls these in order, with a human confirmation
-gate before reset):
+The device is auto-detected from the live modem unless --device is given
+explicitly.
 
-  status              Read live IMEI + SIM/registration/signal. Read-only.
+Subcommands (the /modem-tune skill calls these in order, with a human
+confirmation gate before reset):
+
+  detect              Identify the connected device. Read-only.
+  status              Read live IMEI(s) + SIM/registration/signal. Read-only.
   generate            Propose one fresh unique IMEI. No SSH, no ledger write.
   apply --imei X      Record old IMEI to ledger history, send AT+EGMR, expect OK.
   verify --expect X   Read live IMEI, confirm it matches X, mark ledger verified.
-  reset [--modem]     Full router reboot by default; --modem does AT+CFUN=1,1 only.
+  reset               Full router reboot.
   revert              Apply the factory IMEI (from config/modem.json).
+
+Every subcommand accepts --device {xe300,e5800}; omit it to auto-detect.
 
 Credentials come from .env (gitignored): MODEM_HOST, MODEM_USER, MODEM_SSH_PASSWORD.
 
 Usage:
+  python3 scripts/modem-tune.py detect
   python3 scripts/modem-tune.py status
-  python3 scripts/modem-tune.py generate
+  python3 scripts/modem-tune.py generate --device e5800
   python3 scripts/modem-tune.py apply --imei <15-digit-imei>
   python3 scripts/modem-tune.py reset
   python3 scripts/modem-tune.py verify --expect <15-digit-imei>
@@ -31,289 +40,194 @@ Usage:
 
 import argparse
 import json
-import os
 import re
-import subprocess
 import sys
-import tempfile
 import time
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_default_tz, get_default_tz_name, get_outputs_dir, load_env, resolve_config_with_example
+from scripts.utils.workspace import get_default_tz, get_outputs_dir, resolve_config_with_example
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
-
-# ============================================================
-# Configuration
-# ============================================================
-
-# Device identity (TAC + factory IMEI) is per-instance DATA: lives in the data
-# overlay at <data-root>/config/modem.json; the engine ships scripts/modem.example.json.
-_MODEM_CFG = json.loads(resolve_config_with_example(
-    "modem.json", Path(__file__).resolve().parent / "modem.example.json"
-).read_text(encoding="utf-8"))
-TAC = _MODEM_CFG["tac"]                 # Type Allocation Code (device class)
-FACTORY_IMEI = _MODEM_CFG["factory_imei"]  # device's original IMEI (revert target)
+from scripts.utils import modem_core as mc
+from scripts.utils.modem_ssh import ssh
+from scripts.utils.modem_drivers import driver_for
 
 LEDGER_PATH = get_outputs_dir() / "operations/reference/modem-imei-ledger.json"
 
-# 15-digit IMEI matcher used to pull the value out of gl_modem AT output.
-IMEI_RE = re.compile(r"\b(\d{15})\b")
+
+def load_config() -> dict:
+    raw = json.loads(resolve_config_with_example(
+        "modem.json", Path(__file__).resolve().parent / "modem.example.json"
+    ).read_text(encoding="utf-8"))
+    return mc.migrate_config(raw)
 
 
 def now_iso() -> str:
+    from datetime import datetime
     return datetime.now(get_default_tz()).replace(microsecond=0).isoformat()
 
 
-# ============================================================
-# IMEI math
-# ============================================================
-
-def luhn_check_digit(body14: str) -> int:
-    """Compute the Luhn check digit for the 14-digit IMEI body."""
-    total = 0
-    for i, ch in enumerate(reversed(body14)):
-        d = int(ch)
-        if i % 2 == 0:
-            d *= 2
-            if d > 9:
-                d -= 9
-        total += d
-    return (10 - (total % 10)) % 10
-
-
-def luhn_valid(imei: str) -> bool:
-    return len(imei) == 15 and imei.isdigit() and luhn_check_digit(imei[:14]) == int(imei[14])
-
-
-def make_imei(serial6: str) -> str:
-    body = TAC + serial6
-    return body + str(luhn_check_digit(body))
-
-
-def generate_unique(used: set, rng_seed: int) -> str:
-    """Generate a valid IMEI for the configured TAC, absent from `used`.
-
-    Deterministic given the seed so the function is testable; the caller passes a
-    time-derived seed for real runs. Walks serials forward from the seed until an
-    unused value is found (the 1e6 serial space dwarfs the ledger, so this is O(1)
-    in practice).
-    """
-    for offset in range(1_000_000):
-        serial = f"{(rng_seed + offset) % 1_000_000:06d}"
-        imei = make_imei(serial)
-        if imei not in used:
-            return imei
-    raise RuntimeError("IMEI serial space exhausted against ledger (impossible in practice)")
-
-
-# ============================================================
-# Ledger
-# ============================================================
-
-def load_ledger() -> dict:
-    import json
-    if LEDGER_PATH.exists():
-        return json.loads(LEDGER_PATH.read_text(encoding="utf-8"))
-    return {"tac": TAC, "current": None, "history": [], "used": []}
-
-
-def save_ledger(led: dict) -> None:
-    import json
-    LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LEDGER_PATH.write_text(json.dumps(led, indent=2) + "\n", encoding="utf-8")
-
-
-# ============================================================
-# SSH execution
-# ============================================================
-
-def _credentials() -> tuple:
-    load_env()
-    host = os.environ.get("MODEM_HOST", "192.168.8.1")
-    user = os.environ.get("MODEM_USER", "root")
-    pw = os.environ.get("MODEM_SSH_PASSWORD")
-    if not pw:
-        print(f"{RED}MODEM_SSH_PASSWORD not set in .env -- cannot authenticate.{RESET}",
-              file=sys.stderr)
-        sys.exit(2)
-    return host, user, pw
-
-
-def ssh(remote_cmd: str, timeout: int = 30) -> str:
-    """Run a command on the router over SSH using the SSH_ASKPASS mechanism.
-
-    The WSL host has neither sshpass nor non-interactive sudo, so the password is
-    fed through a transient askpass helper (never written to a tracked file).
-    Returns combined stdout+stderr with the host-key warning line stripped.
-    """
-    host, user, pw = _credentials()
-    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as fh:
-        fh.write(f"#!/bin/bash\nprintf '%s' {_shquote(pw)}\n")
-        askpass = fh.name
-    os.chmod(askpass, 0o700)
+def resolve_device(requested: str | None) -> str:
+    """Return the device id: explicit --device wins; else classify the live modem."""
+    if requested:
+        return requested
+    model = ""
+    # Try ubus (E5800) first, then gl_modem (XE300).
     try:
-        env = dict(os.environ,
-                   SSH_ASKPASS=askpass, SSH_ASKPASS_REQUIRE="force", DISPLAY=":0")
-        # This is a trusted LAN router we control and reboot frequently; each
-        # reboot can regenerate its dropbear host key. Pinning the key would make
-        # the rotation workflow fail on every reboot, so host-key checking is off
-        # and known_hosts is discarded.
-        cmd = [
-            "setsid", "-w", "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR",
-            "-o", "PubkeyAuthentication=no",
-            "-o", "PreferredAuthentications=password",
-            "-o", "NumberOfPasswordPrompts=1",
-            "-o", f"ConnectTimeout={min(timeout, 20)}",
-            f"{user}@{host}", remote_cmd,
-        ]
-        p = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL,
-                           capture_output=True, text=True, timeout=timeout)
-        out = (p.stdout or "") + (p.stderr or "")
-        return "\n".join(l for l in out.splitlines()
-                         if "Permanently added" not in l and "Warning: " not in l).strip()
-    finally:
-        try:
-            os.unlink(askpass)
-        except OSError:
-            pass
-
-
-def _shquote(s: str) -> str:
-    return "'" + s.replace("'", "'\"'\"'") + "'"
-
-
-def at(command: str, timeout: int = 30) -> str:
-    """Send one AT command via the router's gl_modem bridge."""
-    return ssh(f"gl_modem AT {_shquote(command)}", timeout=timeout)
-
-
-def read_live_imei() -> str:
-    out = at("AT+GSN")
-    m = IMEI_RE.search(out)
-    return m.group(1) if m else ""
+        info = ssh("ubus call cellular.modem info '{\"bus\":\"cpu\"}' 2>/dev/null", 15)
+        m = re.search(r'"name"\s*:\s*"([^"]+)"', info)
+        model = m.group(1) if m else ""
+        if not model:
+            model = ssh("gl_modem AT 'AT+CGMM' 2>/dev/null", 15)
+    except Exception as exc:
+        print(f"{RED}Detection failed: {exc}{RESET}", file=sys.stderr)
+        sys.exit(2)
+    device = mc.classify_modem(model)
+    if not device:
+        print(f"{RED}Could not identify modem (got '{model.strip()[:60]}'). "
+              f"Re-run with --device xe300|e5800.{RESET}", file=sys.stderr)
+        sys.exit(2)
+    print(f"{CYAN}Detected device:{RESET} {BOLD}{device}{RESET} (modem: {model.strip()[:40]})")
+    return device
 
 
 # ============================================================
 # Subcommands
 # ============================================================
 
-def cmd_status(_args) -> int:
-    print(f"{CYAN}Reading modem state...{RESET}")
-    imei = read_live_imei()
-    cpin = at('AT+CPIN?')
-    cops = at('AT+COPS?')
-    csq = at('AT+CSQ')
-    valid = luhn_valid(imei)
-    badge = f"{GREEN}valid{RESET}" if valid else f"{RED}INVALID (manual-entry typo?){RESET}"
-    print(f"\n{BOLD}IMEI:{RESET} {imei}   Luhn: {badge}")
-    sim = "READY" if "READY" in cpin else cpin.replace("\n", " ").strip()
-    print(f"{BOLD}SIM:{RESET}  {sim}")
-    op = re.search(r'\+COPS:[^\n]*', cops)
-    print(f"{BOLD}Net:{RESET}  {op.group(0) if op else cops.strip()}")
-    sig = re.search(r'\+CSQ:[^\n]*', csq)
-    print(f"{BOLD}CSQ:{RESET}  {sig.group(0) if sig else csq.strip()}")
-    led = load_ledger()
-    if led.get("current"):
-        print(f"{GRAY}Ledger current: {led['current'].get('imei')} "
-              f"(verified={led['current'].get('verified')}){RESET}")
+def _device_ctx(args):
+    """Resolve device + driver + ledger. Config is NOT loaded here -- read-only
+    commands (detect/status/verify) must not require a config entry to exist."""
+    device = resolve_device(getattr(args, "device", None))
+    drv = driver_for(device, ssh)
+    led = mc.load_ledger(LEDGER_PATH)
+    return device, drv, led
+
+
+def _require_cfg(device: str) -> dict:
+    """Config entry for a mutating command; clean exit(2) if the device is
+    unconfigured (rather than an uncaught KeyError)."""
+    try:
+        return mc.device_config(load_config(), device)
+    except KeyError:
+        print(f"{RED}No config entry for device '{device}' in config/modem.json. "
+              f"Add it before generate/apply/revert.{RESET}", file=sys.stderr)
+        sys.exit(2)
+
+
+def cmd_detect(args) -> int:
+    resolve_device(getattr(args, "device", None))
     return 0
 
 
-def cmd_generate(_args) -> int:
-    led = load_ledger()
+def cmd_status(args) -> int:
+    device, drv, led = _device_ctx(args)
+    print(f"{CYAN}Reading modem state ({device})...{RESET}")
+    st = drv.read_status()
+    for entry in st.get("imeis", []):
+        imei = entry.get("imei", "")
+        badge = f"{GREEN}valid{RESET}" if mc.luhn_valid(imei) else f"{RED}INVALID{RESET}"
+        print(f"{BOLD}IMEI slot {entry.get('slot','?')}:{RESET} {imei}   Luhn: {badge}")
+    if "sims" in st:
+        for sim in st.get("sims", []):
+            print(f"{BOLD}SIM {sim.get('slot','?')}:{RESET} {sim.get('carrier','?')}")
+    elif st.get("cpin") is not None:
+        # XE300 has no ubus SIM listing; read_status instead returns the raw
+        # +CPIN/+COPS/+CSQ AT replies -- surface them the way the pre-refactor
+        # single-device cmd_status did.
+        cpin, cops, csq = st.get("cpin", ""), st.get("cops", ""), st.get("csq", "")
+        sim = "READY" if "READY" in cpin else cpin.replace("\n", " ").strip()
+        print(f"{BOLD}SIM:{RESET}  {sim}")
+        op = re.search(r'\+COPS:[^\n]*', cops)
+        print(f"{BOLD}Net:{RESET}  {op.group(0) if op else cops.strip()}")
+        sig = re.search(r'\+CSQ:[^\n]*', csq)
+        print(f"{BOLD}CSQ:{RESET}  {sig.group(0) if sig else csq.strip()}")
+    dled = mc.device_ledger(led, device, "")   # tac irrelevant for a read-only view
+    if dled.get("current"):
+        print(f"{GRAY}Ledger current: {dled['current'].get('imei')} "
+              f"(verified={dled['current'].get('verified')}){RESET}")
+    return 0
+
+
+def cmd_generate(args) -> int:
+    device, drv, led = _device_ctx(args)
+    cfg = _require_cfg(device)
     used = set(led.get("used", []))
     seed = int(time.time() * 1000) % 1_000_000
-    imei = generate_unique(used, seed)
+    imei = mc.generate_unique(cfg["tac"], used, seed)
     print(imei)
-    print(f"{GRAY}TAC {TAC} (iPhone 13 Pro Max), Luhn valid, unique vs "
-          f"{len(used)} ledger entries.{RESET}", file=sys.stderr)
+    print(f"{GRAY}TAC {cfg['tac']} ({device}), Luhn valid, unique vs {len(used)} "
+          f"ledger entries.{RESET}", file=sys.stderr)
+    return 0
+
+
+def _apply_imei(device, drv, led, cfg, target: str, allow_used: bool) -> int:
+    dled = mc.device_ledger(led, device, cfg["tac"])
+    if not mc.luhn_valid(target):
+        print(f"{RED}Refusing: {target} is not a valid Luhn IMEI.{RESET}", file=sys.stderr)
+        return 2
+    if not allow_used and target in set(led.get("used", [])):
+        print(f"{RED}Refusing: {target} already in ledger (never-repeat).{RESET}", file=sys.stderr)
+        return 2
+    old = drv.read_imei()
+    print(f"{CYAN}Old IMEI:{RESET} {old or '(unreadable)'}\n{CYAN}New IMEI:{RESET} {target}")
+    ts = now_iso()
+    if old:
+        prev = dled.get("current") or {}
+        dled.setdefault("history", []).append(
+            {"imei": old, "applied_at": prev.get("applied_at"), "replaced_at": ts})
+        if old not in led.setdefault("used", []):
+            led["used"].append(old)
+    ok, raw = drv.send_egmr(target)
+    if not ok:
+        print(f"{RED}AT+EGMR did not return OK:{RESET}\n{raw}", file=sys.stderr)
+        mc.save_ledger(LEDGER_PATH, led)
+        return 1
+    dled["current"] = {"imei": target, "applied_at": ts,
+                       "luhn_valid": mc.luhn_valid(target), "verified": False}
+    if target not in led.setdefault("used", []):
+        led["used"].append(target)
+    mc.save_ledger(LEDGER_PATH, led)
+    print(f"{GREEN}AT+EGMR OK.{RESET} IMEI staged. Reset required.")
     return 0
 
 
 def cmd_apply(args) -> int:
-    new = args.imei
-    if not luhn_valid(new):
-        print(f"{RED}Refusing: {new} is not a valid 15-digit Luhn IMEI.{RESET}", file=sys.stderr)
-        return 2
-    led = load_ledger()
-    if new in set(led.get("used", [])):
-        print(f"{RED}Refusing: {new} already exists in the ledger (never-repeat rule).{RESET}",
-              file=sys.stderr)
-        return 2
+    device, drv, led = _device_ctx(args)
+    cfg = _require_cfg(device)
+    return _apply_imei(device, drv, led, cfg, args.imei, allow_used=False)
 
-    old = read_live_imei()
-    print(f"{CYAN}Old IMEI:{RESET} {old or '(unreadable)'}")
-    print(f"{CYAN}New IMEI:{RESET} {new}")
 
-    # Record the outgoing IMEI BEFORE mutating the modem.
-    ts = now_iso()
-    if old:
-        prev = led.get("current") or {}
-        led.setdefault("history", []).append({
-            "imei": old,
-            "applied_at": prev.get("applied_at"),
-            "replaced_at": ts,
-        })
-        led.setdefault("used", [])
-        if old not in led["used"]:
-            led["used"].append(old)
-
-    out = at(f'AT+EGMR=1,7,"{new}"')
-    if "OK" not in out:
-        print(f"{RED}AT+EGMR did not return OK:{RESET}\n{out}", file=sys.stderr)
-        save_ledger(led)   # persist the history entry we already recorded
-        return 1
-
-    led["current"] = {"imei": new, "applied_at": ts,
-                      "luhn_valid": True, "verified": False}
-    led.setdefault("used", [])
-    if new not in led["used"]:
-        led["used"].append(new)
-    save_ledger(led)
-    print(f"{GREEN}AT+EGMR OK.{RESET} IMEI staged. Reset required for it to take effect.")
-    return 0
+def cmd_revert(args) -> int:
+    device, drv, led = _device_ctx(args)
+    cfg = _require_cfg(device)
+    print(f"{YELLOW}Reverting {device} to factory IMEI {cfg['factory_imei']}...{RESET}")
+    return _apply_imei(device, drv, led, cfg, cfg["factory_imei"], allow_used=True)
 
 
 def cmd_reset(args) -> int:
-    # Full router reboot is the default: AT+CFUN=1,1 proved unreliable on this
-    # GL-XE300 (it re-enumerates the USB ports and the modem rarely picks up the
-    # new IMEI), so the modem-only path is opt-in via --modem.
-    if args.modem:
-        print(f"{YELLOW}Modem reset (AT+CFUN=1,1) -- rarely takes on this device...{RESET}")
-        at("AT+CFUN=1,1", timeout=20)
-        time.sleep(45)
-        print(f"{GREEN}Reset issued.{RESET}")
-    else:
-        print(f"{YELLOW}Full router reboot (cold boot to modem-ready can take 2-3 min)...{RESET}")
-        ssh("reboot", timeout=15)
-        # GL-XE300 cold boot + modem re-registration regularly exceeds 2 min; wait
-        # generously so the modem AT bridge is back before the caller verifies.
-        back = _wait_for_router(settle=240)
-        print(f"{GREEN if back else YELLOW}Router "
-              f"{'back online' if back else 'reboot issued (modem not yet readable)'}.{RESET}")
+    device, drv, _ = _device_ctx(args)
+    print(f"{YELLOW}Full router reboot ({device}); modem-ready can take 2-3 min...{RESET}")
+    ssh("reboot", timeout=15)
+    back = _wait_for_router(drv, settle=240)
+    print(f"{GREEN if back else YELLOW}Router "
+          f"{'back online' if back else 'reboot issued (modem not yet readable)'}.{RESET}")
     return 0
 
 
 def cmd_verify(args) -> int:
-    expect = args.expect
-    live = ""
-    # Poll up to ~2.5 min: after a reset the modem AT bridge can stay unreadable
-    # while the modem re-registers, even once SSH itself is back.
-    for attempt in range(30):
-        live = read_live_imei()
+    device, drv, led = _device_ctx(args)
+    expect, live = args.expect, ""
+    for _ in range(30):
+        live = drv.read_imei()
         if live == expect:
             break
         time.sleep(5)
-    led = load_ledger()
+    dled = mc.device_ledger(led, device, "")
     if live == expect:
-        if led.get("current", {}).get("imei") == expect:
-            led["current"]["verified"] = True
-            save_ledger(led)
+        if dled.get("current", {}).get("imei") == expect:
+            dled["current"]["verified"] = True
+            mc.save_ledger(LEDGER_PATH, led)
         print(f"{GREEN}Verified: live IMEI is {live}.{RESET}")
         return 0
     print(f"{RED}Mismatch: expected {expect}, modem reports {live or '(unreadable)'}.{RESET}",
@@ -321,33 +235,7 @@ def cmd_verify(args) -> int:
     return 1
 
 
-def cmd_revert(_args) -> int:
-    print(f"{YELLOW}Reverting to factory IMEI {FACTORY_IMEI}...{RESET}")
-    # Factory IMEI is intentionally allowed even though it sits in used[]:
-    # bypass the dedup guard by applying directly.
-    led = load_ledger()
-    old = read_live_imei()
-    ts = now_iso()
-    if old:
-        prev = led.get("current") or {}
-        led.setdefault("history", []).append(
-            {"imei": old, "applied_at": prev.get("applied_at"), "replaced_at": ts})
-        led.setdefault("used", [])
-        if old not in led["used"]:
-            led["used"].append(old)
-    out = at(f'AT+EGMR=1,7,"{FACTORY_IMEI}"')
-    if "OK" not in out:
-        print(f"{RED}AT+EGMR did not return OK:{RESET}\n{out}", file=sys.stderr)
-        save_ledger(led)
-        return 1
-    led["current"] = {"imei": FACTORY_IMEI, "applied_at": ts,
-                      "luhn_valid": luhn_valid(FACTORY_IMEI), "verified": False}
-    save_ledger(led)
-    print(f"{GREEN}Factory IMEI staged.{RESET} Reset required.")
-    return 0
-
-
-def _wait_for_router(settle: int) -> bool:
+def _wait_for_router(drv, settle: int) -> bool:
     """Block until the modem AT bridge answers again (after a full reboot).
 
     Returns True once a live IMEI is readable, False if `settle` seconds elapse
@@ -358,7 +246,7 @@ def _wait_for_router(settle: int) -> bool:
     time.sleep(35)
     while time.time() < deadline:
         try:
-            if read_live_imei():
+            if drv.read_imei():
                 return True
         except Exception as exc:
             print(f"modem-tune: IMEI poll attempt failed: {exc}", file=sys.stderr)
@@ -371,29 +259,30 @@ def _wait_for_router(settle: int) -> bool:
 # ============================================================
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="GL.iNet GL-XE300 IMEI reconfiguration engine.")
+    ap = argparse.ArgumentParser(description="GL.iNet IMEI reconfiguration engine (XE300 + E5800).")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("status", help="read live IMEI + SIM/net/signal (read-only)")
-    sub.add_parser("generate", help="propose a fresh unique IMEI (no SSH)")
+    def add_device(p):
+        p.add_argument("--device", choices=["xe300", "e5800"], default=None,
+                       help="target device (auto-detected from the live modem if omitted)")
+
+    for name, help_ in [("detect", "identify the connected device"),
+                        ("status", "read live IMEI(s) + SIM (read-only)"),
+                        ("generate", "propose a fresh unique IMEI (no SSH)"),
+                        ("reset", "full router reboot"),
+                        ("revert", "apply the factory IMEI")]:
+        add_device(sub.add_parser(name, help=help_))
 
     ap_apply = sub.add_parser("apply", help="record old IMEI + send AT+EGMR")
-    ap_apply.add_argument("--imei", required=True)
-
-    ap_reset = sub.add_parser("reset", help="full router reboot (default); --modem for AT+CFUN only")
-    ap_reset.add_argument("--modem", action="store_true",
-                          help="modem-only AT+CFUN=1,1 reset instead of a full reboot")
+    add_device(ap_apply); ap_apply.add_argument("--imei", required=True)
 
     ap_verify = sub.add_parser("verify", help="confirm live IMEI matches --expect")
-    ap_verify.add_argument("--expect", required=True)
-
-    sub.add_parser("revert", help="apply the factory IMEI")
+    add_device(ap_verify); ap_verify.add_argument("--expect", required=True)
 
     args = ap.parse_args()
-    return {
-        "status": cmd_status, "generate": cmd_generate, "apply": cmd_apply,
-        "reset": cmd_reset, "verify": cmd_verify, "revert": cmd_revert,
-    }[args.cmd](args)
+    return {"detect": cmd_detect, "status": cmd_status, "generate": cmd_generate,
+            "apply": cmd_apply, "reset": cmd_reset, "verify": cmd_verify,
+            "revert": cmd_revert}[args.cmd](args)
 
 
 if __name__ == "__main__":

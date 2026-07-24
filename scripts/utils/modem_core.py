@@ -76,6 +76,23 @@ def classify_modem(model: str) -> "str | None":
     return None
 
 
+def probe_hosts(hosts_by_device: dict, probe_fn) -> "tuple | None":
+    """Find which configured router is live when devices sit on different IPs.
+
+    `hosts_by_device` is {device_id: host}; `probe_fn(host)` returns that host's
+    modem-model string, or "" if unreachable/unknown -- probe_fn owns its own
+    error handling and must not raise. Returns `(classified_device, host)` for the
+    first host whose model classifies to a known device, else None. The device is
+    taken from the live model via `classify_modem`, not the dict key, so a
+    mislabelled host self-corrects.
+    """
+    for _device, host in hosts_by_device.items():
+        device = classify_modem(probe_fn(host))
+        if device:
+            return (device, host)
+    return None
+
+
 # ============================================================
 # Config (per-device)
 # ============================================================

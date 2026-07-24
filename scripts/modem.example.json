@@ -1,5 +1,5 @@
 {
-  "_comment": "EXAMPLE per-device travel-router identity for modem-tune. The engine ships this generic template; real device identity is private DATA at <data-root>/config/modem.json. Each device: transport (gl_modem|ubus), host, tac (8-digit device-class code), factory_imei (original 15-digit IMEI, the revert target). transport/host are per-device metadata; the active SSH target is MODEM_HOST in .env -- reserved for future multi-host support.",
+  "_comment": "EXAMPLE per-device travel-router identity for modem-tune. The engine ships this generic template; real device identity is private DATA at <data-root>/config/modem.json. Each device: transport (gl_modem|ubus), host (the device's LAN IP -- used as the SSH target so routers on different subnets resolve per-device; MODEM_HOST in .env is the fallback when a device has no host), tac (8-digit device-class code), factory_imei (original 15-digit IMEI, the revert target).",
   "devices": {
     "xe300": { "transport": "gl_modem", "host": "192.168.8.1", "tac": "00000000", "factory_imei": "000000000000000" },
     "e5800": { "transport": "ubus",     "host": "192.168.8.1", "tac": "00000000", "factory_imei": "000000000000000" }

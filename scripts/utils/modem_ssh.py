@@ -32,12 +32,16 @@ def credentials() -> tuple:
     return host, user, pw
 
 
-def ssh(remote_cmd: str, timeout: int = 30) -> str:
+def ssh(remote_cmd: str, timeout: int = 30, host: str = None) -> str:
     """Run a command on the router over SSH using the SSH_ASKPASS mechanism.
 
-    Returns combined stdout+stderr with the host-key warning lines stripped.
+    `host` overrides the credentials/env default when the caller targets a
+    specific device (routers can sit on different LAN IPs). When None, falls back
+    to MODEM_HOST from .env. Returns combined stdout+stderr with the host-key
+    warning lines stripped.
     """
-    host, user, pw = credentials()
+    default_host, user, pw = credentials()
+    host = host or default_host
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as fh:
         fh.write(f"#!/bin/bash\nprintf '%s' {shquote(pw)}\n")
         askpass = fh.name

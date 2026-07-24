@@ -40,6 +40,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -67,28 +68,69 @@ def now_iso() -> str:
     return datetime.now(get_default_tz()).replace(microsecond=0).isoformat()
 
 
-def resolve_device(requested: str | None) -> str:
-    """Return the device id: explicit --device wins; else classify the live modem."""
-    if requested:
-        return requested
-    model = ""
-    # Try ubus (E5800) first, then gl_modem (XE300).
+def _ssh_for(host: str):
+    """Return an ssh callable bound to a specific host, so a device on its own
+    LAN IP is reached correctly (routers can sit on different subnets)."""
+    return lambda cmd, timeout=30: ssh(cmd, timeout, host=host)
+
+
+def _probe_model(host: str) -> str:
+    """Best-effort live modem-model string at `host`: try ubus (E5800) then
+    gl_modem (XE300). Returns "" (never raises) if unreachable or unknown, so
+    probe_hosts can treat that as a skip; transport failures are logged."""
+    sfn = _ssh_for(host)
     try:
-        info = ssh("ubus call cellular.modem info '{\"bus\":\"cpu\"}' 2>/dev/null", 15)
+        info = sfn("ubus call cellular.modem info '{\"bus\":\"cpu\"}' 2>/dev/null", 15)
         m = re.search(r'"name"\s*:\s*"([^"]+)"', info)
-        model = m.group(1) if m else ""
-        if not model:
-            model = ssh("gl_modem AT 'AT+CGMM' 2>/dev/null", 15)
+        if m and m.group(1):
+            return m.group(1)
     except Exception as exc:
-        print(f"{RED}Detection failed: {exc}{RESET}", file=sys.stderr)
-        sys.exit(2)
-    device = mc.classify_modem(model)
+        print(f"modem-tune: ubus probe at {host} failed: {exc}", file=sys.stderr)
+    try:
+        return sfn("gl_modem AT 'AT+CGMM' 2>/dev/null", 15)
+    except Exception as exc:
+        print(f"modem-tune: gl_modem probe at {host} failed: {exc}", file=sys.stderr)
+        return ""
+
+
+def _host_for(cfg: dict, device: str) -> str:
+    """Per-device host from config, falling back to MODEM_HOST env then the
+    GL.iNet factory-default LAN IP."""
+    entry = cfg.get("devices", {}).get(device, {})
+    return entry.get("host") or os.environ.get("MODEM_HOST") or "192.168.8.1"
+
+
+def resolve_device(requested, cfg):
+    """Return (device_id, host). An explicit --device uses that device's
+    configured host; otherwise probe each configured host and classify the live
+    modem so multi-router setups on different IPs resolve automatically."""
+    devices = cfg.get("devices", {})
+    if requested:
+        host = _host_for(cfg, requested)
+        shown = _probe_model(host).strip()[:40] or "unreachable"
+        print(f"{CYAN}Detected device:{RESET} {BOLD}{requested}{RESET} "
+              f"at {host} (modem: {shown})")
+        return requested, host
+    hosts_by_device = {d: v["host"] for d, v in devices.items() if v.get("host")}
+    if hosts_by_device:
+        found = mc.probe_hosts(hosts_by_device, _probe_model)
+        if not found:
+            tried = ", ".join(sorted(set(hosts_by_device.values())))
+            print(f"{RED}Could not identify any configured router (tried: {tried}). "
+                  f"Re-run with --device xe300|e5800.{RESET}", file=sys.stderr)
+            sys.exit(2)
+        device, host = found
+        print(f"{CYAN}Detected device:{RESET} {BOLD}{device}{RESET} at {host}")
+        return device, host
+    # No configured hosts (bare example / legacy config): single env host.
+    host = os.environ.get("MODEM_HOST") or "192.168.8.1"
+    device = mc.classify_modem(_probe_model(host))
     if not device:
-        print(f"{RED}Could not identify modem (got '{model.strip()[:60]}'). "
+        print(f"{RED}Could not identify modem at {host}. "
               f"Re-run with --device xe300|e5800.{RESET}", file=sys.stderr)
         sys.exit(2)
-    print(f"{CYAN}Detected device:{RESET} {BOLD}{device}{RESET} (modem: {model.strip()[:40]})")
-    return device
+    print(f"{CYAN}Detected device:{RESET} {BOLD}{device}{RESET} at {host}")
+    return device, host
 
 
 # ============================================================
@@ -96,12 +138,15 @@ def resolve_device(requested: str | None) -> str:
 # ============================================================
 
 def _device_ctx(args):
-    """Resolve device + driver + ledger. Config is NOT loaded here -- read-only
-    commands (detect/status/verify) must not require a config entry to exist."""
-    device = resolve_device(getattr(args, "device", None))
-    drv = driver_for(device, ssh)
+    """Resolve device + host + driver + ledger. Config IS loaded (to pick the
+    device's host); read-only commands still work with no config *entry* for the
+    device -- the host then falls back to MODEM_HOST env. The driver's ssh is
+    bound to the resolved host."""
+    cfg = load_config()
+    device, host = resolve_device(getattr(args, "device", None), cfg)
+    drv = driver_for(device, _ssh_for(host))
     led = mc.load_ledger(LEDGER_PATH)
-    return device, drv, led
+    return device, host, drv, led
 
 
 def _require_cfg(device: str) -> dict:
@@ -116,12 +161,12 @@ def _require_cfg(device: str) -> dict:
 
 
 def cmd_detect(args) -> int:
-    resolve_device(getattr(args, "device", None))
+    resolve_device(getattr(args, "device", None), load_config())
     return 0
 
 
 def cmd_status(args) -> int:
-    device, drv, led = _device_ctx(args)
+    device, _host, drv, led = _device_ctx(args)
     print(f"{CYAN}Reading modem state ({device})...{RESET}")
     st = drv.read_status()
     for entry in st.get("imeis", []):
@@ -150,7 +195,7 @@ def cmd_status(args) -> int:
 
 
 def cmd_generate(args) -> int:
-    device, drv, led = _device_ctx(args)
+    device, _host, drv, led = _device_ctx(args)
     cfg = _require_cfg(device)
     used = set(led.get("used", []))
     seed = int(time.time() * 1000) % 1_000_000
@@ -193,22 +238,22 @@ def _apply_imei(device, drv, led, cfg, target: str, allow_used: bool) -> int:
 
 
 def cmd_apply(args) -> int:
-    device, drv, led = _device_ctx(args)
+    device, _host, drv, led = _device_ctx(args)
     cfg = _require_cfg(device)
     return _apply_imei(device, drv, led, cfg, args.imei, allow_used=False)
 
 
 def cmd_revert(args) -> int:
-    device, drv, led = _device_ctx(args)
+    device, _host, drv, led = _device_ctx(args)
     cfg = _require_cfg(device)
     print(f"{YELLOW}Reverting {device} to factory IMEI {cfg['factory_imei']}...{RESET}")
     return _apply_imei(device, drv, led, cfg, cfg["factory_imei"], allow_used=True)
 
 
 def cmd_reset(args) -> int:
-    device, drv, _ = _device_ctx(args)
+    device, host, drv, _ = _device_ctx(args)
     print(f"{YELLOW}Full router reboot ({device}); modem-ready can take 2-3 min...{RESET}")
-    ssh("reboot", timeout=15)
+    _ssh_for(host)("reboot", timeout=15)
     back = _wait_for_router(drv, settle=240)
     print(f"{GREEN if back else YELLOW}Router "
           f"{'back online' if back else 'reboot issued (modem not yet readable)'}.{RESET}")
@@ -216,7 +261,7 @@ def cmd_reset(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    device, drv, led = _device_ctx(args)
+    device, _host, drv, led = _device_ctx(args)
     expect, live = args.expect, ""
     for _ in range(30):
         live = drv.read_imei()

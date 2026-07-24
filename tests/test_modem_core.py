@@ -85,3 +85,16 @@ def test_save_ledger_atomic_roundtrip(tmp_path):
     mc.save_ledger(p, led)
     assert json.loads(p.read_text()) == led
     assert not list(tmp_path.glob("*.tmp"))  # temp file cleaned up
+
+
+def test_probe_hosts_returns_first_classified_device_and_host():
+    models = {"10.0.0.2": "RG650V-EU", "10.0.0.1": ""}  # first host unreachable
+    hosts = {"xe300": "10.0.0.1", "e5800": "10.0.0.2"}
+    assert mc.probe_hosts(hosts, lambda h: models[h]) == ("e5800", "10.0.0.2")
+
+def test_probe_hosts_none_when_nothing_classifies():
+    assert mc.probe_hosts({"xe300": "10.0.0.1"}, lambda h: "") is None
+
+def test_probe_hosts_classifies_by_live_model_not_dict_key():
+    # host keyed 'xe300' actually reports an E5800 modem -> classified as e5800
+    assert mc.probe_hosts({"xe300": "10.0.0.1"}, lambda h: "RG650V-EU") == ("e5800", "10.0.0.1")

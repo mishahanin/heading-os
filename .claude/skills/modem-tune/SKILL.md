@@ -1,6 +1,6 @@
 ---
 name: modem-tune
-description: "Change the reported IMEI on the configured GL.iNet GL-XE300 travel router for work testing. Generates a fresh, never-reused device-class IMEI locally (TAC from config), connects to the modem over SSH, records the outgoing IMEI with a timestamp, applies the change, confirms with the operator, resets the modem, and verifies the new IMEI is live. EXPLICIT INVOCATION ONLY via /modem-tune. Personal-hardware tool: dormant on any instance without its own private config/modem.json (device identity). Subcommand-style requests: status (read-only), revert (factory IMEI)."
+description: "Change the reported IMEI on a configured GL.iNet travel router (GL-XE300 or GL-E5800, auto-detected) for work testing. Generates a fresh, never-reused device-class IMEI locally (TAC from per-device config), connects to the modem over SSH, records the outgoing IMEI with a timestamp, applies the change, confirms the device AND the reset with the operator, resets the modem, and verifies the new IMEI is live. EXPLICIT INVOCATION ONLY via /modem-tune. Personal-hardware tool: dormant on any instance without its own private config/modem.json (per-device identity). Subcommand-style requests: status (read-only), revert (factory IMEI)."
 argument-hint: "[status | revert]"
 allowed-tools: "Bash(python3:*), Read, AskUserQuestion"
 disable-model-invocation: true
@@ -14,21 +14,23 @@ x-heading-orchestration:
   triggers: []
 x-heading-capability:
   what: >
-    Changes the reported IMEI on the GL.iNet GL-XE300 travel router over SSH -
-    generates a fresh never-reused value, stages it, and after confirmation
+    Changes the reported IMEI on a GL.iNet travel router (GL-XE300 or GL-E5800,
+    auto-detected from the live modem) over SSH - generates a fresh never-reused
+    value, stages it, and after two separate confirmations (device, then reset)
     resets and verifies it live. Personal-hardware tool; dormant without a
-    private config/modem.json on the running instance.
+    private per-device config/modem.json on the running instance.
   how: >
     Explicit invocation only - run /modem-tune (full rotation), /modem-tune
-    status (read-only), or /modem-tune revert (factory IMEI). A hard
-    confirmation gate guards the reset; never auto-triggers.
+    status (read-only), or /modem-tune revert (factory IMEI). Device is
+    auto-detected and must be confirmed before any change; a hard confirmation
+    gate also guards the reset. Never auto-triggers.
   when: >
-    Use to rotate or check the router IMEI for work testing. There is no
-    alternative skill - this is the sole owner of the IMEI ledger.
+    Use to rotate or check the IMEI on either travel router for work testing.
+    There is no alternative skill - this is the sole owner of the IMEI ledger.
 x-heading-routing:
   category: Operations
   triggers:
-    - NEVER auto-trigger. Explicit `/modem-tune [status \| revert]` only. Changes the reported IMEI on the GL.iNet GL-XE300 travel router over SSH. CEO-only
+    - NEVER auto-trigger. Explicit `/modem-tune [status \| revert]` only. Changes the reported IMEI on a GL.iNet travel router (GL-XE300 or GL-E5800) over SSH. CEO-only
     - never synced to executives.
   exclusions:
     - 'All natural language (`disable-model-invocation: true`)'
@@ -38,73 +40,101 @@ x-heading-routing:
 
 # Modem Tune -- IMEI Reconfiguration
 
-Automates changing the reported IMEI on the GL.iNet GL-XE300 travel router (Quectel
-EG25-G modem) over SSH. Personal-hardware tool. All mechanics live in
-`scripts/modem-tune.py`; this skill is the conversational wrapper that owns the
-confirmation gate before any reset.
+Automates changing the reported IMEI on either of two personal GL.iNet travel routers,
+auto-detected from the live modem: the GL-XE300 (Quectel EG25-G, `gl_modem AT` over
+SSH) and the GL-E5800 "Mudi 7" (Quectel RG650V-EU, ubus `modem.CPU.AT` over SSH). All
+mechanics live in `scripts/modem-tune.py`; this skill is the conversational wrapper
+that owns the device-confirm gate and the reset-confirm gate.
 
 Spec: `docs/superpowers/specs/2026-05-30-modem-tune-skill-design.md` (data overlay: `.heading-os-data/docs/superpowers/specs/2026-05-30-modem-tune-skill-design.md`).
 Device + procedure reference: `outputs/operations/reference/gl-inet-mobile-router-imei-reconfig.md`.
 
 ## Modes
 
-- **Default / full rotation** (`/modem-tune`): generate -> apply -> confirm -> reset -> verify.
-- **`/modem-tune status`**: read the live IMEI, SIM, network, and signal. No change.
-- **`/modem-tune revert`**: restore the factory IMEI (from `config/modem.json`), then confirm + reset + verify.
+- **Default / full rotation** (`/modem-tune`): detect -> confirm device -> status ->
+  generate -> apply -> confirm reset -> reset -> verify.
+- **`/modem-tune status`**: detect -> confirm device -> read the live IMEI(s), SIM,
+  network, and signal. No change.
+- **`/modem-tune revert`**: detect -> confirm device -> restore the factory IMEI (from
+  `config/modem.json`), then confirm reset + reset + verify.
+
+Every mode accepts an explicit `--device {xe300,e5800}`, which skips auto-detection.
 
 ## Pre-flight
 
-The router is on the LAN (`192.168.8.1`) and reached over SSH with credentials from
-`.env` (`MODEM_HOST`, `MODEM_USER`, `MODEM_SSH_PASSWORD`). No VPN pre-flight applies --
-this is a local authenticated device, not a public web service.
+Both routers are reached over SSH with credentials from `.env` (`MODEM_HOST`,
+`MODEM_USER`, `MODEM_SSH_PASSWORD` -- unchanged, shared across devices). No VPN
+pre-flight applies -- these are local authenticated devices, not public web services.
+`config/modem.json` is now per-device (one entry per router: transport, host, TAC,
+factory IMEI); an unconfigured device exits cleanly (exit 2) on `generate`/`apply`/
+`revert`, not on `detect`/`status`.
 
 If `MODEM_SSH_PASSWORD` is missing the engine exits with a clear error; tell the CEO to
 add the `MODEM_*` block to `.env` and stop.
 
-## Phase 0 -- Status (always run first)
+## Phase 0 -- Detect (always run first)
 
-Run `python3 scripts/modem-tune.py status`. Show the CEO the live IMEI, its Luhn
-validity, SIM state, operator, and signal. This confirms the router is reachable before
-anything is changed.
+Run `python3 scripts/modem-tune.py detect` (or `detect --device <xe300|e5800>` if the
+CEO already named the device). Read-only; identifies the connected modem from its
+live model string.
+
+If detection is ambiguous (the engine cannot classify the modem model), it exits
+non-zero -- do not guess. Ask the CEO for an explicit `--device` and re-run.
+
+## Phase 0.5 -- Confirm device (HARD STOP)
+
+Show the CEO the resolved device id and the modem model string the engine printed.
+Use AskUserQuestion to get an explicit "yes, that is the right device" before
+proceeding to any further phase -- wrong-device confirmation would stage an IMEI
+change against the wrong hardware.
+
+Only an explicit yes proceeds. Silence or ambiguity means WAIT. From here on, pass
+`--device <resolved>` explicitly to every subcommand so a stale auto-detect can never
+silently re-target mid-flow.
+
+## Phase 1 -- Status
+
+Run `python3 scripts/modem-tune.py status --device <resolved>`. Show the CEO the live
+IMEI(s), Luhn validity, SIM state, operator, and signal. The E5800 is dual-SIM and
+prints both slot IMEIs; the XE300 prints one. This confirms the router is reachable
+before anything is changed.
 
 For `/modem-tune status`, stop here and report.
 
-## Phase 1 -- Generate
+## Phase 2 -- Generate
 
-Run `python3 scripts/modem-tune.py generate`. Capture the proposed IMEI (stdout is the
-bare 15-digit value; the stderr line states it is a valid, unique iPhone 13 Pro Max
-value). Present `old -> new` to the CEO.
+Run `python3 scripts/modem-tune.py generate --device <resolved>`. Capture the proposed
+IMEI (stdout is the bare 15-digit value; the stderr line states it is a valid, unique
+device-class value). Present `old -> new` to the CEO.
 
 For `/modem-tune revert`, skip generation; the target is the fixed factory IMEI.
 
-## Phase 2 -- Apply (stages the change, no reset yet)
+## Phase 3 -- Apply (stages the change, no reset yet)
 
-Run `python3 scripts/modem-tune.py apply --imei <NEW>` (or `revert` for the factory
-value). The engine records the outgoing IMEI to the ledger history with a timestamp
-BEFORE sending `AT+EGMR`, then sends it and expects `OK`. The change is staged but not
-live until a reset.
+Run `python3 scripts/modem-tune.py apply --device <resolved> --imei <NEW>` (or `revert`
+for the factory value). The engine records the outgoing IMEI to the ledger history with
+a timestamp BEFORE sending `AT+EGMR`, then sends it and expects `OK`. The change is
+staged but not live until a reset. On the E5800 (dual-SIM), `apply`/`revert` act on the
+PRIMARY (slot 1) IMEI only -- slot 2 is never touched.
 
 If the engine reports the command did not return `OK`, stop and surface the raw output.
 Do not reset.
 
-## Phase 3 -- Confirmation gate (HARD STOP)
+## Phase 4 -- Confirmation gate (HARD STOP)
 
-Use AskUserQuestion to confirm the reset. State plainly what happens:
-
-- Full router reboot (the default and the reliable path on this device):
-  ~2-3 min of downtime, SSH and internet drop and return.
-- The modem-only reset (`AT+CFUN=1,1`, `reset --modem`) is opt-in and historically
-  does not take on this GL-XE300 -- offer it only if the CEO asks.
+Use AskUserQuestion to confirm the reset. State plainly what happens: a full router
+reboot -- the only reset path now (~2-3 min of downtime, SSH and internet drop and
+return).
 
 Only an explicit yes proceeds. Silence or ambiguity means WAIT. Never reset without
 this confirmation -- it is the one irreversible-feeling step.
 
-## Phase 4 -- Reset + verify
+## Phase 5 -- Reset + verify
 
 On confirmation:
 
-1. `python3 scripts/modem-tune.py reset` (full router reboot by default).
-2. `python3 scripts/modem-tune.py verify --expect <NEW>`.
+1. `python3 scripts/modem-tune.py reset --device <resolved>` (full router reboot).
+2. `python3 scripts/modem-tune.py verify --device <resolved> --expect <NEW>`.
 
 If verify still fails after the reboot, report the live value the modem reports and
 stop -- do not loop indefinitely.
@@ -119,14 +149,17 @@ hidden characters, plain prose.
 
 ## NEVER
 
-- NEVER reset or reboot without the Phase 3 confirmation.
+- NEVER proceed past Phase 0.5 without an explicit device confirmation, and NEVER
+  reset or reboot without the Phase 4 confirmation.
 - NEVER run `revert` (factory IMEI) or any IMEI rollback unless the CEO explicitly
   asks for it in that turn. Do not offer it as an automatic recovery step.
-- NEVER reuse an IMEI -- the engine enforces this via the ledger `used[]`; do not
-  hand-pick a value that bypasses it (except the deliberate factory `revert`).
+- NEVER reuse an IMEI -- the engine enforces this via the shared ledger `used[]`; do
+  not hand-pick a value that bypasses it (except the deliberate factory `revert`).
+- NEVER change the slot-2 IMEI (out of scope / unvalidated on this firmware) -- act
+  on the primary (slot 1) only, on either device.
 - NEVER write the SSH password into any tracked file, commit message, or output. It
   lives only in `.env`.
-- NEVER document this skill, the router, IMEI values, or credentials in corporate or
+- NEVER document this skill, the routers, IMEI values, or credentials in corporate or
   executive-facing files (`reference/workspace-overview.md`, `templates/`, corporate repo).
 - NEVER scrape an external IMEI generator -- generation is local and deterministic.
 - NEVER save router IMEI values or credentials to auto-memory.

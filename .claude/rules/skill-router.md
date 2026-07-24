@@ -167,7 +167,7 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 | `/implement` | implement, execute the plan, build it |
 | `/interview-prep` | interview prep, interview questions, hiring framework |
 | `/memory-hygiene` | memory hygiene, check memory health, memory rot, scan memory for defects |
-| `/modem-tune` | NEVER auto-trigger. Explicit `/modem-tune [status \| revert]` only. Changes the reported IMEI on the GL.iNet GL-XE300 travel router over SSH. CEO-only, never synced to executives. |
+| `/modem-tune` | NEVER auto-trigger. Explicit `/modem-tune [status \| revert]` only. Changes the reported IMEI on a GL.iNet travel router (GL-XE300 or GL-E5800) over SSH. CEO-only, never synced to executives. |
 | `/mullvad` | /mullvad, fastest mullvad server, switch mullvad server, check mullvad speed, mullvad connect |
 | `/next` | what next, what should I do now, logical next step, where were we, recommend next |
 | `/playwright` | screenshot this site, scrape this page, browse to, headless browser |

@@ -50,12 +50,12 @@ def _freeze(tree, anchor):
                  "--anchor", str(anchor)], tree)
 
 
-def test_freeze_prints_the_root_hash_and_the_paste_line(tree, anchor, capsys):
+def test_freeze_prints_the_root_hash_and_records_it(tree, anchor, capsys):
     assert _freeze(tree, anchor) == 0
     out = capsys.readouterr().out
     assert "root " in out.splitlines()[0]
-    assert f"canopus-anchor: {_root_of(tree)}" in out
-    assert (tree / ".canopus" / "freeze.json").exists()
+    assert "Recorded in" in out
+    assert f"canopus-anchor: {_root_of(tree)}" in anchor.read_text()
 
 
 def test_freeze_requires_an_anchor(tree, capsys):
@@ -104,6 +104,7 @@ def test_verify_of_an_anchorless_manifest_is_unconfirmed(tree, capsys):
 
 def test_verify_with_an_unrecorded_anchor_is_unconfirmed(tree, anchor, capsys):
     _freeze(tree, anchor)
+    anchor.write_text("# gate artifact\n")   # the line removed by hand
     assert _run(["verify"], tree) == 0
     assert "LOCK UNCONFIRMED" in capsys.readouterr().out
 
@@ -138,29 +139,22 @@ def test_verify_reports_the_changed_file(tree, anchor, capsys):
     assert "tests/test_alpha.py" in out
 
 
-def test_re_baselining_a_contract_is_visible_because_the_anchor_disagrees(
-    tree, anchor, capsys
-):
+def test_re_baselining_a_contract_is_refused_at_freeze_time(tree, anchor, capsys):
     """The hole a required --anchor closes: release, edit, re-freeze.
 
-    Anchorless that sequence lands on amber LOCK UNCONFIRMED and exit 0 — a
-    passing gate over a contract nobody approved. With the anchor still holding
-    the approved hash, the re-freeze fails loudly instead.
+    In wire 1 the re-freeze succeeded and `verify` caught it afterwards. It is
+    now refused outright, because the artifact still records the approved hash.
+    Deliberately widening a frozen set is the --replace-anchor path, which
+    carries a reason and a ledger entry.
     """
-    _freeze(tree, anchor)
+    assert _freeze(tree, anchor) == 0
     approved = _root_of(tree)
-    anchor.write_text(f"canopus-anchor: {approved}\n")
     assert _run(["release", "--reason", "re-baseline"], tree) == 0
 
     (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
-    assert _freeze(tree, anchor) == 0
-    assert _root_of(tree) != approved
-    capsys.readouterr()
-
-    assert _run(["verify"], tree) == 1
-    out = capsys.readouterr().out
-    assert "LOSS OF LOCK" in out
-    assert approved in out
+    assert _freeze(tree, anchor) == 1
+    assert approved in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()
 
 
 def test_verify_without_an_active_freeze_fails(tree, capsys):
@@ -548,3 +542,48 @@ def test_probe_prints_outcomes_and_writes_nothing(tree, capsys):
 def test_probe_exits_one_on_a_contract_that_would_be_refused(tree):
     _write_contract(tree, red=False)
     assert _run(["probe", "tests/contract/slice"], tree) == 1
+
+
+def test_freeze_writes_the_anchor_line_itself(tree, anchor):
+    assert _freeze(tree, anchor) == 0
+
+    assert f"canopus-anchor: {_root_of(tree)}" in anchor.read_text()
+    assert _run(["verify"], tree) == 0
+
+
+def test_freeze_refuses_an_anchor_that_already_carries_a_line(tree, anchor, capsys):
+    anchor.write_text("canopus-anchor: " + "b" * 64 + "\n")
+    before = anchor.read_bytes()
+
+    assert _freeze(tree, anchor) == 1
+    assert "already records" in capsys.readouterr().err
+    assert anchor.read_bytes() == before
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_replace_anchor_appends_and_logs_the_reason(tree, anchor):
+    assert _freeze(tree, anchor) == 0
+    first = _root_of(tree)
+    assert _run(["release", "--reason", "segment done"], tree) == 0
+
+    (tree / "tests" / "test_beta.py").write_text("def test_b():\n    assert True\n")
+    assert _run(["freeze", "tests/test_alpha.py", "tests/test_beta.py",
+                 "--label", "demo", "--anchor", str(anchor),
+                 "--replace-anchor", "--reason", "widened the frozen set"], tree) == 0
+
+    text = anchor.read_text()
+    assert f"canopus-anchor: {first}" in text
+    assert f"canopus-anchor: {_root_of(tree)}" in text
+    assert _run(["verify"], tree) == 0
+
+    ledger = (tree / ".canopus" / "history.jsonl").read_text().splitlines()
+    replaced = [json.loads(line) for line in ledger
+                if json.loads(line)["event"] == "anchor_replaced"]
+    assert replaced and replaced[-1]["reason"] == "widened the frozen set"
+
+
+def test_replace_anchor_requires_a_reason(tree, anchor, capsys):
+    anchor.write_text("canopus-anchor: " + "b" * 64 + "\n")
+    assert _run(["freeze", "tests/test_alpha.py", "--label", "demo",
+                 "--anchor", str(anchor), "--replace-anchor"], tree) == 1
+    assert "--reason" in capsys.readouterr().err

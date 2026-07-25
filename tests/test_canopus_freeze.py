@@ -873,3 +873,15 @@ def test_a_v1_manifest_is_corrupt(tmp_path):
 
     with _pytest.raises(FreezeCorrupt, match="canopus-freeze-v1"):
         read_freeze(tmp_path)
+
+
+def test_read_anchor_returns_the_last_recorded_hash(anchor: Path):
+    """A replaced anchor appends; the newest approval governs.
+
+    Returning the FIRST line would pin the artifact to a superseded hash forever
+    and make every legitimate re-freeze read as LOSS OF LOCK.
+    """
+    anchor.write_text(
+        f"# gate\n\ncanopus-anchor: {'a' * 64}\n\ncanopus-anchor: {'b' * 64}\n"
+    )
+    assert read_anchor(anchor) == (ANCHOR_RECORDED, "b" * 64)

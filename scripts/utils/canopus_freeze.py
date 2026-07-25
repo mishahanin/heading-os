@@ -239,6 +239,39 @@ def _conftest_chain(target: Path, root: Path) -> list[Path]:
     return found
 
 
+def _guard_ancestors(target: Path, root: Path, dirs: dict) -> None:
+    """Install a non-recursive composition guard on every ancestor of *target*.
+
+    Measured at the wire 2 intent audit, and this is the hole it closes. A
+    directory freeze guarded only the target directory, so a `conftest.py`
+    created in an ANCESTOR was invisible: verify held with nothing changed,
+    added or removed. That conftest can put a stub module on `sys.path`, and
+    because the mandated authoring rule resolves the code under test INSIDE the
+    test body at RUN time, the frozen contract goes from red to green with every
+    frozen byte intact. The item count is unchanged, so the baseline matches and
+    the run attests: LOCK HELD and ATTESTED over a hijacked contract.
+
+    Composition ONLY, never content. The guard answers "did a file appear beside
+    the contract", not "did anything under tests/ change" -- freezing an
+    ancestor's contents would stop a builder editing its own unit tests, and a
+    primitive that forbids that gets routed around in its first week.
+
+    The walk stops BELOW the tree root, for the reason the file-target guard
+    already gave: guarding the root's composition would deny every new top-level
+    file. An ancestor that already carries a recursive guard keeps it.
+    """
+    for ancestor in target.parents:
+        if ancestor == root:
+            break
+        rel = ancestor.relative_to(root).as_posix()
+        if rel not in dirs:
+            dirs[rel] = {
+                "mode": "members",
+                "hash": dir_members_digest(ancestor, recursive=False),
+                "members": dir_member_rels(ancestor, root, recursive=False),
+            }
+
+
 def build_manifest(
     paths: Iterable[Path],
     root: Path,
@@ -295,15 +328,7 @@ def build_manifest(
                 files[member.relative_to(resolved_root).as_posix()] = file_digest(member)
         else:
             files[rel] = file_digest(target)
-            parent = target.parent
-            if parent != resolved_root:
-                parent_rel = parent.relative_to(resolved_root).as_posix()
-                if parent_rel not in dirs:
-                    dirs[parent_rel] = {
-                        "mode": "members",
-                        "hash": dir_members_digest(parent, recursive=False),
-                        "members": dir_member_rels(parent, resolved_root, recursive=False),
-                    }
+        _guard_ancestors(target, resolved_root, dirs)
         for conftest in _conftest_chain(target, resolved_root):
             files.setdefault(
                 conftest.relative_to(resolved_root).as_posix(), file_digest(conftest)

@@ -885,3 +885,76 @@ def test_read_anchor_returns_the_last_recorded_hash(anchor: Path):
         f"# gate\n\ncanopus-anchor: {'a' * 64}\n\ncanopus-anchor: {'b' * 64}\n"
     )
     assert read_anchor(anchor) == (ANCHOR_RECORDED, "b" * 64)
+
+
+def test_a_conftest_appearing_above_a_frozen_directory_breaks_the_lock(tmp_path: Path):
+    """The C1 hole, measured at the wire 2 intent audit and closed here.
+
+    A directory freeze guarded only the target directory, so a conftest.py
+    created in an ANCESTOR was invisible: verify held with nothing changed,
+    added or removed. That conftest can insert a stub module onto sys.path, and
+    because the mandated authoring rule resolves the code under test INSIDE the
+    test body at RUN time, the frozen contract goes from red to green with every
+    frozen byte intact. The item count is unchanged, so the baseline matches and
+    the run attests. LOCK HELD and ATTESTED over a hijacked contract.
+
+    The rule that makes a contract measurable is the same rule that makes it
+    hijackable, so the composition guard has to reach every ancestor.
+    """
+    root = tmp_path / "tree"
+    (root / "tests" / "contract" / "slice").mkdir(parents=True)
+    (root / "tests" / "contract" / "slice" / "test_c.py").write_text(
+        "def test_a():\n    from target import answer\n    assert answer() == 42\n"
+    )
+    manifest = build_manifest(
+        [root / "tests" / "contract" / "slice"], root, label="l", frozen_at=STAMP
+    )
+    assert verify_manifest(manifest, root)["held"] is True
+
+    (root / "tests" / "contract" / "conftest.py").write_text("import sys\n")
+
+    report = verify_manifest(manifest, root)
+    assert report["held"] is False
+    assert "tests/contract/conftest.py" in report["added"]
+
+
+def test_the_ancestor_guard_stops_below_the_tree_root(tmp_path: Path):
+    """Guarding the root's composition would deny every new top-level file.
+
+    The same reasoning the file-target guard already applies, extended to the
+    ancestor chain rather than re-derived.
+    """
+    root = tmp_path / "tree"
+    (root / "tests" / "contract" / "slice").mkdir(parents=True)
+    (root / "tests" / "contract" / "slice" / "test_c.py").write_text(
+        "def test_a():\n    assert False\n"
+    )
+    manifest = build_manifest(
+        [root / "tests" / "contract" / "slice"], root, label="l", frozen_at=STAMP
+    )
+
+    assert "" not in manifest["dirs"]
+    assert "." not in manifest["dirs"]
+    (root / "new_top_level.py").write_text("x = 1\n")
+    assert verify_manifest(manifest, root)["held"] is True
+
+
+def test_the_ancestor_guard_does_not_freeze_the_ancestors_contents(tmp_path: Path):
+    """Composition only: a sibling test elsewhere under tests/ can still be edited.
+
+    The guard answers "did a file appear beside the contract", not "did anything
+    under tests/ change". Freezing ancestor CONTENT would stop the builder
+    editing its own unit tests, and the practice would be routed around.
+    """
+    root = tmp_path / "tree"
+    (root / "tests" / "contract" / "slice").mkdir(parents=True)
+    (root / "tests" / "contract" / "slice" / "test_c.py").write_text(
+        "def test_a():\n    assert False\n"
+    )
+    (root / "tests" / "test_builder_suite.py").write_text("def test_b():\n    assert True\n")
+    manifest = build_manifest(
+        [root / "tests" / "contract" / "slice"], root, label="l", frozen_at=STAMP
+    )
+
+    (root / "tests" / "test_builder_suite.py").write_text("def test_b():\n    assert 1\n")
+    assert verify_manifest(manifest, root)["held"] is True

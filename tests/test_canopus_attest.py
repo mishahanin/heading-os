@@ -587,3 +587,52 @@ def test_an_outlying_worker_count_still_registers(frozen_engine):
     rec.merge_worker({"canopus_deselected": {"tests/test_frozen.py": 6}})
 
     assert rec.frozen["tests/test_frozen.py"]["deselected"] == 6
+
+
+def _counts(collected, passed):
+    return {"collected": collected, "passed": passed, "failed": 0,
+            "skipped": 0, "deselected": 0}
+
+
+def test_a_subset_run_does_not_attest_against_the_baseline():
+    from scripts.utils.canopus_freeze import build_attestation
+
+    record = build_attestation(
+        root_digest="a" * 64,
+        frozen_tests={"tests/contract/s/test_a.py": _counts(1, 1)},
+        exit_status=0,
+        attested_at="2026-07-25T00:00:00+00:00",
+        baseline={"tests/contract/s/test_a.py": 7},
+    )
+
+    assert record["attested"] is False
+    assert any("collected 1 of 7" in reason for reason in record["reasons"])
+
+
+def test_a_full_run_attests_against_the_baseline():
+    from scripts.utils.canopus_freeze import build_attestation
+
+    record = build_attestation(
+        root_digest="a" * 64,
+        frozen_tests={"tests/contract/s/test_a.py": _counts(7, 7)},
+        exit_status=0,
+        attested_at="2026-07-25T00:00:00+00:00",
+        baseline={"tests/contract/s/test_a.py": 7},
+    )
+
+    assert record["attested"] is True
+    assert record["reasons"] == []
+
+
+def test_a_frozen_test_file_with_no_baseline_behaves_as_in_wire_1():
+    from scripts.utils.canopus_freeze import build_attestation
+
+    record = build_attestation(
+        root_digest="a" * 64,
+        frozen_tests={"tests/test_legacy.py": _counts(1, 1)},
+        exit_status=0,
+        attested_at="2026-07-25T00:00:00+00:00",
+        baseline={},
+    )
+
+    assert record["attested"] is True

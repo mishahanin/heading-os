@@ -127,7 +127,9 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
 
     The lock line answers "did the contract move". It cannot answer "did the
     contract run": -k, --deselect, --ignore and a bare path argument all reach
-    green with every frozen byte intact.
+    green with every frozen byte intact. From wire 2, a bare path or node id is
+    caught too whenever the file carries a freeze-time baseline, because the
+    record compares what was collected against the whole-file item count.
 
     Reports only, and deliberately: it can never change an exit code, because
     the gate that would act on it runs at pytest session start, before the run

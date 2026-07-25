@@ -93,6 +93,10 @@ class AttestationRecorder:
         self.root_digest: str | None = None
         self.frozen: dict | None = None
         self.patterns: list[str] = ["test_*.py"]
+        # The per-file item counts taken at freeze time by `freeze --contract`.
+        # Empty for a wire 1 freeze, and an absent entry keeps the wire 1
+        # behaviour for that file rather than failing it.
+        self.baseline: dict = {}
         # Deselections arrive BEFORE the tally exists (see deselected below), so
         # they are buffered by root-relative path and folded in on every route
         # that builds or rebuilds self.frozen.
@@ -114,6 +118,7 @@ class AttestationRecorder:
         if manifest is None:
             return None
         self.patterns = config.getini("python_files") or ["test_*.py"]
+        self.baseline = manifest.get("baseline") or {}
         self.root_digest = verify_manifest(manifest, self.root)["recomputed_root"]
         return frozen_test_files(manifest, self.patterns)
 
@@ -253,5 +258,6 @@ class AttestationRecorder:
             frozen_tests=self.frozen,
             exit_status=int(exitstatus),
             attested_at=datetime.now(timezone.utc).isoformat(),
+            baseline=self.baseline,
         ))
         return True

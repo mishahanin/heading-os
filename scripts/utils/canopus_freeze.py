@@ -47,11 +47,13 @@ and must not drag the workspace utility chain in.
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
+import sys
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from pathlib import Path, PurePosixPath
+from typing import Iterable, Optional, Sequence, Tuple
 
 from scripts.utils.atomic import atomic_write_text
 
@@ -633,3 +635,142 @@ def append_history(
     # append-only is the entire point of this ledger.
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+# ============================================================
+# Attestation: did the frozen tests actually run?
+# ============================================================
+#
+# The manifest answers "did the contract move". It cannot answer "did the
+# contract run", and a builder that cannot edit a frozen test can simply decline
+# to run it: pytest -k, --deselect, --ignore, --lf and a bare path argument all
+# reach green with every frozen byte intact.
+#
+# This records, it does not block. Failing a filtered run would charge every
+# inner-loop iteration for a hole that a passive record closes at the point of
+# comparison, and a primitive that forbids `pytest -k` gets routed around in its
+# first week. The one exception lives in the pytest hook, not here: an unfiltered
+# run whose frozen test file collected nothing is removal from collection, not
+# iteration, and it fails the session.
+
+ATTEST_FILENAME = "attest.json"
+ATTEST_RECIPE = "canopus-attest-v1"
+ATTESTED = "ATTESTED"
+NOT_ATTESTED = "NOT ATTESTED"
+
+
+def attest_state_path(root: Path) -> Path:
+    """Where the attestation record lives, beside the manifest it attests."""
+    return Path(root).resolve() / FREEZE_DIRNAME / ATTEST_FILENAME
+
+
+def frozen_test_files(manifest: dict, patterns: Sequence[str]) -> list[str]:
+    """Frozen paths that pytest would collect as test modules.
+
+    Patterns come from the running pytest config (`python_files`) rather than a
+    hardcoded `test_*.py`, so a repo that renames its convention does not
+    silently attest an empty set while reporting green.
+    """
+    files = manifest.get("files") or {}
+    return sorted(
+        rel for rel in files
+        if any(fnmatch.fnmatch(PurePosixPath(rel).name, pattern) for pattern in patterns)
+    )
+
+
+def build_attestation(
+    *,
+    root_digest: str,
+    frozen_tests: dict,
+    filter_reasons: Sequence[str],
+    exit_status: int,
+    attested_at: str,
+) -> dict:
+    """Assemble the record written at session finish. Pure: no disk, no pytest.
+
+    `attested` is the conjunction of everything that could make the claim false,
+    and every false condition leaves a plain-language string in `reasons`,
+    because an operator reading NOT ATTESTED at the sign-off gate needs to know
+    which one it was.
+
+    Skips are counted and deliberately do not void the record: a frozen test's
+    own platform guard is legitimate and its bytes are frozen, while a skip
+    injected from an unfrozen sibling conftest is the composition guard's job.
+
+    A freeze carrying no test files attests nothing rather than everything. The
+    same rule already governs verify, which refuses to print a green line when
+    there is no contract to check.
+    """
+    reasons: list[str] = []
+    if not frozen_tests:
+        reasons.append("the freeze contains no test files to attest")
+    reasons.extend(filter_reasons)
+    for rel, counts in sorted(frozen_tests.items()):
+        if not counts.get("collected", 0):
+            reasons.append(f"frozen test file collected nothing: {rel}")
+        if counts.get("failed", 0):
+            reasons.append(f"frozen test file reported failures: {rel}")
+    if exit_status != 0:
+        reasons.append(f"pytest exited {exit_status}")
+
+    unfiltered = not list(filter_reasons) and bool(frozen_tests) and all(
+        counts.get("collected", 0) > 0 for counts in frozen_tests.values()
+    )
+    return {
+        "recipe": ATTEST_RECIPE,
+        "root": root_digest,
+        "attested": not reasons,
+        "unfiltered": unfiltered,
+        "reasons": reasons,
+        "exit_status": exit_status,
+        "attested_at": attested_at,
+        "frozen_tests": {rel: dict(counts) for rel, counts in sorted(frozen_tests.items())},
+    }
+
+
+def read_attestation(root: Path) -> Optional[dict]:
+    """Read the attestation record, or None when absent or unusable.
+
+    Unlike the manifest, a damaged attestation is NOT fail-closed. It can never
+    make a state greener than NOT ATTESTED, so treating damage as absence is both
+    safe and quieter than raising on a path that only ever reports.
+    """
+    path = attest_state_path(root)
+    try:
+        data = json.loads(path.read_bytes().decode("utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        print(f"canopus: unusable attestation at {path}: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(data, dict):
+        print(f"canopus: unusable attestation at {path}: not an object", file=sys.stderr)
+        return None
+    return data
+
+
+def write_attestation(root: Path, attestation: dict) -> None:
+    """Persist the record atomically, beside the manifest."""
+    path = attest_state_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(attestation, indent=2, sort_keys=True) + "\n")
+
+
+def attestation_state(
+    attestation: Optional[dict], recomputed_root: str
+) -> Tuple[str, str]:
+    """The second indicator axis, as (state, reason). Never raises.
+
+    Binding the record to the recomputed root is what makes it perishable: edit
+    any frozen file after a green run and the root moves, so the attestation
+    stops applying without anyone having to remember to delete it.
+    """
+    if not isinstance(attestation, dict) or not attestation:
+        return NOT_ATTESTED, "no run has attested this freeze yet"
+    if attestation.get("recipe") != ATTEST_RECIPE:
+        return NOT_ATTESTED, "the attestation was written by a different recipe"
+    if attestation.get("root") != recomputed_root:
+        return NOT_ATTESTED, "the attestation was recorded against a different root hash"
+    if not attestation.get("attested"):
+        return NOT_ATTESTED, "the attesting run did not qualify"
+    return ATTESTED, ""

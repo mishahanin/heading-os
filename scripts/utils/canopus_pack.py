@@ -151,7 +151,15 @@ def merge_base(root: Path, ref: str) -> Optional[str]:
 
 
 def is_dirty(root: Path) -> bool:
-    """True when the working tree carries uncommitted tracked changes."""
+    """True when `git status --porcelain` reports anything at all.
+
+    That includes UNTRACKED files, not only modified tracked ones, and the
+    staleness section reads it as "the working tree has uncommitted changes". The
+    wider reading is the right one here: a new untracked implementation file is
+    exactly the thing that can make an attestation stale, and the pack reports
+    rather than blocks, so the cost of the wider net is a sentence an operator
+    reads and dismisses.
+    """
     out = _git(root, "status", "--porcelain")
     return bool(out and out.strip())
 

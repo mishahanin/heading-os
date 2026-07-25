@@ -281,12 +281,19 @@ outright: a tree with no gate cannot enforce anything.</p>
 <li><code>verify</code> is the <strong>guarantee</strong>. It recomputes digests from disk and catches a change made
   by any route.</li>
 <li>The test gate is what makes the guarantee <strong>fire</strong>. <code>tests/conftest.py</code> runs the check at
-  pytest session start and <code>scripts/run-tests.py</code> runs it before the suite, so no route
-  into the suite reaches green while the contract is moved — not <code>python
+  pytest session start and <code>scripts/run-tests.py</code> runs it before the suite, so the ordinary
+  routes into the suite do not reach green while the contract is moved — not <code>python
   scripts/run-tests.py</code>, and not the bare <code>pytest tests/test_thing.py</code> inner loop. A
   verification that is never invoked is worth nothing, however well its expected value is
   protected.</li>
 </ul>
+<p>One route is not covered, and it is named here rather than left to be discovered:
+  <code>pytest --noconftest</code> skips conftest loading altogether, so the session-start check never
+  runs. Measured: with a moved contract, <code>pytest tests/contract/s -q</code> aborts with exit 4,
+  and the same command with <code>--noconftest</code> prints <code>2 passed</code> and exits 0. That is deliberate
+  evasion rather than tampering by helpfulness, and the threat model this tool states is the
+  latter, so the gap is accepted — but <code>scripts/run-tests.py</code> is then the only gate of
+  record, and a slice signed off from a <code>--noconftest</code> run has not been gated at all.</p>
 <p><code>verify</code> reports one of three states:</p>
 <table>
 <thead>
@@ -312,7 +319,13 @@ outright: a tree with no gate cannot enforce anything.</p>
 </table>
 <p>The anchor must live outside the working tree. An anchor the build can write to is not an
 anchor. Point it at a sibling repository with its own history, so a build reaching for the
-anchor leaves a commit in a repository it had no reason to touch.</p>
+anchor dirties a repository it had no reason to touch.</p>
+<p>Be precise about what that trace is worth. <code>verify</code> reads the anchor&rsquo;s <strong>working copy</strong> and
+never consults git, and <code>freeze</code> appends the <code>canopus-anchor:</code> line to that working copy, so
+a tamper leaves an uncommitted diff in the sibling repository: visible in its <code>git status</code>,
+and erasable with <code>git checkout --</code>. It is evidence for a human who looks, not containment.
+The line becomes durable only once it is committed there, which is what <code>freeze</code> tells you
+to do on the way out.</p>
 <p>Freezing a directory is recursive. Freezing a file also guards its parent directory&rsquo;s
 immediate membership, which catches a <code>conftest.py</code> dropped beside a frozen test to
 neutralize it.</p>

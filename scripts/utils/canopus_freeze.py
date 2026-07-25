@@ -678,6 +678,22 @@ def frozen_test_files(manifest: dict, patterns: Sequence[str]) -> list[str]:
     )
 
 
+def tally_collection(frozen: Sequence[str], collected_rels: Iterable[str]) -> dict:
+    """Seed the per-file counters from what pytest actually collected.
+
+    Every frozen test file gets an entry even when nothing was collected for it,
+    because a zero is the signal that matters: it means the file was filtered
+    out, ignored, or removed from collection entirely.
+    """
+    counts = {
+        rel: {"collected": 0, "passed": 0, "failed": 0, "skipped": 0} for rel in frozen
+    }
+    for rel in collected_rels:
+        if rel in counts:
+            counts[rel]["collected"] += 1
+    return counts
+
+
 def build_attestation(
     *,
     root_digest: str,

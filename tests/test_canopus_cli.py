@@ -503,3 +503,48 @@ def test_freeze_accepts_content_only_with_no_positional_paths(tree, anchor):
 def test_freeze_requires_at_least_one_path(tree, anchor, capsys):
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor)], tree) == 1
     assert "at least one path" in capsys.readouterr().err
+
+
+def _write_contract(tree, red=True):
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True, exist_ok=True)
+    body = ("def test_a():\n    assert False\n\n\ndef test_b():\n    assert True\n"
+            if red else
+            "def test_a():\n    assert True\n\n\ndef test_b():\n    assert True\n")
+    (directory / "test_contract.py").write_text(body)
+    return directory
+
+
+def test_freeze_contract_records_the_baseline(tree, anchor):
+    _write_contract(tree)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+
+    manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
+    assert manifest["baseline"] == {"tests/contract/slice/test_contract.py": 2}
+
+
+def test_freeze_refuses_an_all_green_contract(tree, anchor, capsys):
+    _write_contract(tree, red=False)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "asserts nothing" in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_probe_prints_outcomes_and_writes_nothing(tree, capsys):
+    _write_contract(tree)
+
+    code = _run(["probe", "tests/contract/slice"], tree)
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "test_a" in out and "test_b" in out
+    assert not (tree / ".canopus").exists()
+
+
+def test_probe_exits_one_on_a_contract_that_would_be_refused(tree):
+    _write_contract(tree, red=False)
+    assert _run(["probe", "tests/contract/slice"], tree) == 1

@@ -84,10 +84,12 @@ def pytest_collection_modifyitems(config, items):
 # inner loop it was written to spare. Whole-file removal is now caught the way
 # everything else is, by producing no attestation.
 #
-# Naming a SUBSET by node id is the one case that still attests: it collects an
-# item, reports it, and fires no deselection hook. See build_attestation's
-# "WHAT IT DOES NOT CATCH" note -- ATTESTED means the frozen tests that were
-# collected all passed, not that every frozen test ran.
+# Naming a SUBSET by node id was the one case that still attested: it collects an
+# item, reports it, and fires no deselection hook. Closed in wire 2 for any file
+# carrying a freeze-time baseline, because the record compares what was collected
+# against the whole-file item count and a subset reports 1 of 7. A frozen test
+# file with NO baseline entry keeps the wire 1 reading, where ATTESTED means the
+# frozen tests that were collected all passed, not that every frozen test ran.
 #
 # Module-level state is safe here; the root conftest is loaded once per session.
 

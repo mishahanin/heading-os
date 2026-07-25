@@ -81,8 +81,13 @@ def pytest_collection_modifyitems(config, items):
 # filter, on the reasoning that removal from collection is not iteration.
 # Telling the two apart needs option sniffing, and option sniffing cannot see a
 # bare path argument: the branch fired on `pytest tests/x.py::test_one`, the
-# inner loop it was written to spare. Removal is now caught the way everything
-# else is, by producing no attestation.
+# inner loop it was written to spare. Whole-file removal is now caught the way
+# everything else is, by producing no attestation.
+#
+# Naming a SUBSET by node id is the one case that still attests: it collects an
+# item, reports it, and fires no deselection hook. See build_attestation's
+# "WHAT IT DOES NOT CATCH" note -- ATTESTED means the frozen tests that were
+# collected all passed, not that every frozen test ran.
 #
 # Module-level state is safe here; the root conftest is loaded once per session.
 

@@ -129,3 +129,18 @@ def test_check_never_raises_on_hostile_payloads(dispatch, payload):
 def test_check_is_registered_in_the_dispatch_chain(dispatch):
     module, _ = dispatch
     assert module.check_canopus_freeze in module.CHECKS
+
+
+def test_degraded_state_is_permissive_by_design_the_manifest_not_the_deny_is_the_guarantee(
+    dispatch, monkeypatch
+):
+    """When the canopus_freeze import failed to load, _CANOPUS_AVAILABLE is
+    False and the check must early-return None — never deny — even with an
+    active freeze covering the write target, and it must never raise. The
+    deny is only a convenience; `scripts/canopus.py verify` (run by
+    scripts/run-tests.py) is the actual guarantee and is unaffected by
+    whether this hook-level check is available."""
+    module, tree = dispatch
+    _freeze(tree)
+    monkeypatch.setattr(module, "_CANOPUS_AVAILABLE", False)
+    assert module.check_canopus_freeze(_write(tree / "tests" / "test_alpha.py")) is None

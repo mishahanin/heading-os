@@ -454,3 +454,58 @@ def test_the_controller_folds_worker_deselections_in(frozen_engine):
     rec.merge_worker(None)
 
     assert rec.frozen["tests/test_frozen.py"]["deselected"] == 4
+
+
+def test_clearing_the_freeze_removes_the_attestation(tmp_path):
+    """Reproduced defect: the record outlived its freeze and was revived.
+
+    clear_freeze unlinked only freeze.json, and the root hash is deterministic
+    over frozen content plus the anchor path, so re-freezing identical test
+    content resurrected the old record: a brand-new freeze with ZERO runs since
+    printed ATTESTED. Clearing the freeze must clear what attests it.
+    """
+    cf.write_attestation(tmp_path, _build({"tests/test_alpha.py": _tests()}))
+    cf.write_freeze(tmp_path, {
+        "recipe": cf.RECIPE, "label": "x", "frozen_at": "2026-07-25T00:00:00+00:00",
+        "anchor": "", "git_sha": "", "root": "a" * 64, "files": {}, "dirs": {},
+    })
+    cf.clear_freeze(tmp_path)
+
+    assert cf.freeze_state_path(tmp_path).exists() is False
+    assert cf.attest_state_path(tmp_path).exists() is False
+    assert cf.read_attestation(tmp_path) is None
+
+
+def test_clearing_is_idempotent_with_no_attestation_present(tmp_path):
+    cf.clear_freeze(tmp_path)
+    cf.clear_freeze(tmp_path)
+    assert cf.read_attestation(tmp_path) is None
+
+
+def test_worker_deselections_are_taken_at_face_value_not_summed(frozen_engine):
+    """Every xdist worker collects the FULL set and deselects identically.
+
+    Summing across workers multiplied the count by the worker number. It could
+    never produce a false green, but a wrong number in an evidence record is
+    still a wrong number.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    config = _Config(["test_*.py"])
+    rec.seed_from_ids(config, ["tests/test_frozen.py::a"])
+    rec.merge_worker({"canopus_deselected": {"tests/test_frozen.py": 4}})
+    rec.merge_worker({"canopus_deselected": {"tests/test_frozen.py": 4}})
+    rec.merge_worker({"canopus_deselected": {"tests/test_frozen.py": 4}})
+
+    assert rec.frozen["tests/test_frozen.py"]["deselected"] == 4
+
+
+def test_an_outlying_worker_count_still_registers(frozen_engine):
+    # Workers should agree; if one reports more, take the larger rather than
+    # silently under-reporting how much of the contract was filtered away.
+    tmp_path, target, manifest, rec = frozen_engine
+    config = _Config(["test_*.py"])
+    rec.seed_from_ids(config, ["tests/test_frozen.py::a"])
+    rec.merge_worker({"canopus_deselected": {"tests/test_frozen.py": 2}})
+    rec.merge_worker({"canopus_deselected": {"tests/test_frozen.py": 6}})
+
+    assert rec.frozen["tests/test_frozen.py"]["deselected"] == 6

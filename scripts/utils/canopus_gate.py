@@ -152,15 +152,20 @@ class AttestationRecorder:
         """Fold one worker's deselection counts into the controller's tally.
 
         pytest's deselection hook fires inside the worker that did the
-        collecting, so the controller learns about it only through the
-        worker's shipped-back output.
+        collecting, so the controller learns about it only through the worker's
+        shipped-back output.
+
+        Taken at face value, never summed: every xdist worker collects the FULL
+        set and deselects identically, so adding across workers multiplied the
+        count by the worker number. The larger of the two wins, so a worker that
+        somehow filtered more is not silently under-reported.
         """
         if not self.frozen or not isinstance(worker_output, dict):
             return
         for rel, count in (worker_output.get("canopus_deselected") or {}).items():
             counts = self.frozen.get(rel)
             if counts is not None:
-                counts["deselected"] += int(count)
+                counts["deselected"] = max(counts["deselected"], int(count))
 
     def deselected(self, items) -> None:
         """Count items filtered out of frozen test files.

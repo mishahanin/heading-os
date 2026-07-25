@@ -183,6 +183,32 @@ def validate_anchor_path(path: Path, root: Path) -> Path:
 # Manifest construction
 # ============================================================
 
+CONFTEST_NAME = "conftest.py"
+
+
+def _conftest_chain(target: Path, root: Path) -> list[Path]:
+    """Every conftest.py from *target*'s directory up to *root*, inclusive.
+
+    Walks the resolved ancestry rather than string prefixes, stops at the tree
+    root, and skips symlinks (the workspace forbids them) so the chain can never
+    reach outside the tree it is protecting.
+    """
+    start = target if target.is_dir() else target.parent
+    found: list[Path] = []
+    current = start
+    while True:
+        candidate = current / CONFTEST_NAME
+        if candidate.is_file() and not candidate.is_symlink():
+            found.append(candidate)
+        if current == root:
+            break
+        parent = current.parent
+        if parent == current:  # defensive: never loop at a filesystem root
+            break
+        current = parent
+    return found
+
+
 def build_manifest(
     paths: Iterable[Path],
     root: Path,
@@ -201,6 +227,16 @@ def build_manifest(
     beside a frozen test. The guard is skipped when the parent is the working
     tree root, because guarding the root's composition would deny every new
     top-level file and make the tool something people route around.
+
+    Every `conftest.py` on the path from each frozen path up to the tree root is
+    added by CONTENT. A composition guard records member paths only, so a
+    conftest sitting beside a frozen test was listed and never hashed, and that
+    file is precisely where a good-faith edit changes what the contract measures
+    without moving anything the guard watches: filtering inside
+    `pytest_collection_modifyitems` fires no deselection hook, so the
+    attestation's arithmetic still balances on a shrunken set. The tree root is
+    included here even though the composition guard skips it, because a
+    repository-root conftest is the cheapest place to filter collection from.
     """
     resolved_root = Path(root).resolve()
     files: dict[str, str] = {}
@@ -228,6 +264,10 @@ def build_manifest(
                         "hash": dir_members_digest(parent, recursive=False),
                         "members": dir_member_rels(parent, resolved_root, recursive=False),
                     }
+        for conftest in _conftest_chain(target, resolved_root):
+            files.setdefault(
+                conftest.relative_to(resolved_root).as_posix(), file_digest(conftest)
+            )
 
     manifest = {
         "recipe": RECIPE,

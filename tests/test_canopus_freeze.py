@@ -588,3 +588,110 @@ def test_history_entries_carry_a_utc_timestamp(tree: Path):
     append_history(tree, "freeze", digest="aaa", label="one")
     entry = json.loads(history_state_path(tree).read_text().strip())
     assert entry["ts"].endswith("+00:00")
+
+
+# ============================================================
+# The conftest chain (amendment 3)
+# ============================================================
+#
+# A composition guard records member PATHS, never their bytes, so a conftest.py
+# sitting beside a frozen test is listed and never hashed. That file is exactly
+# where a good-faith edit silently changes what the contract measures: pytest
+# filtering inside pytest_collection_modifyitems fires no deselection hook, so
+# the attestation's arithmetic still balances on a shrunken set.
+
+def _tree_with_conftests(tmp_path):
+    root = tmp_path / "tree"
+    (root / "tests" / "sub").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    (root / "scripts" / "run-tests.py").write_text("# stub gate\n")
+    (root / "tests" / "conftest.py").write_text("# level 1\n")
+    (root / "tests" / "sub" / "conftest.py").write_text("# level 2\n")
+    target = root / "tests" / "sub" / "test_x.py"
+    target.write_text("def test_x():\n    assert True\n")
+    return root, target
+
+
+def _anchor_for(tmp_path):
+    path = tmp_path / "outside" / "gate.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# gate\n")
+    return path
+
+
+def _manifest(paths, root, anchor):
+    return build_manifest(
+        paths, root, label="chain", frozen_at="2026-07-25T00:00:00+00:00", anchor=anchor,
+    )
+
+
+def test_freezing_a_file_pulls_in_every_conftest_above_it(tmp_path):
+    root, target = _tree_with_conftests(tmp_path)
+    manifest = _manifest([target], root, _anchor_for(tmp_path))
+
+    assert "tests/conftest.py" in manifest["files"]
+    assert "tests/sub/conftest.py" in manifest["files"]
+    assert manifest["files"]["tests/conftest.py"] != manifest["files"]["tests/sub/conftest.py"]
+
+
+def test_editing_a_pulled_in_conftest_is_a_loss_of_lock(tmp_path):
+    root, target = _tree_with_conftests(tmp_path)
+    manifest = _manifest([target], root, _anchor_for(tmp_path))
+
+    (root / "tests" / "conftest.py").write_text("# level 1, edited\n")
+    report = verify_manifest(manifest, root)
+
+    assert report["held"] is False
+    assert "tests/conftest.py" in report["changed"]
+
+
+def test_a_root_level_conftest_is_pulled_in_too(tmp_path):
+    # The composition guard deliberately skips the tree root, which leaves a
+    # repository-root conftest.py as the cheapest way to filter collection
+    # without touching anything frozen.
+    root, target = _tree_with_conftests(tmp_path)
+    (root / "conftest.py").write_text("# root level\n")
+    manifest = _manifest([target], root, _anchor_for(tmp_path))
+
+    assert "conftest.py" in manifest["files"]
+
+
+def test_a_tree_with_no_conftest_is_unchanged(tmp_path):
+    root = tmp_path / "tree"
+    (root / "tests").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    (root / "scripts" / "run-tests.py").write_text("# stub gate\n")
+    target = root / "tests" / "test_x.py"
+    target.write_text("def test_x():\n    assert True\n")
+
+    manifest = _manifest([target], root, _anchor_for(tmp_path))
+    assert list(manifest["files"]) == ["tests/test_x.py"]
+
+
+def test_an_explicitly_frozen_conftest_appears_exactly_once(tmp_path):
+    root, target = _tree_with_conftests(tmp_path)
+    conftest = root / "tests" / "conftest.py"
+    manifest = _manifest([target, conftest], root, _anchor_for(tmp_path))
+
+    assert list(manifest["files"]).count("tests/conftest.py") == 1
+    assert manifest["files"]["tests/conftest.py"] == file_digest(conftest)
+
+
+def test_the_chain_is_pulled_in_for_a_frozen_directory_too(tmp_path):
+    root, target = _tree_with_conftests(tmp_path)
+    manifest = _manifest([root / "tests" / "sub"], root, _anchor_for(tmp_path))
+
+    # The directory freeze already hashes its own conftest recursively; the
+    # chain adds the one ABOVE it, which the recursive walk never reaches.
+    assert "tests/sub/conftest.py" in manifest["files"]
+    assert "tests/conftest.py" in manifest["files"]
+
+
+def test_the_chain_never_reaches_outside_the_tree(tmp_path):
+    root, target = _tree_with_conftests(tmp_path)
+    outside = tmp_path / "conftest.py"
+    outside.write_text("# outside the tree\n")
+
+    manifest = _manifest([target], root, _anchor_for(tmp_path))
+    assert all(not rel.startswith("..") for rel in manifest["files"])
+    assert str(outside) not in manifest["files"]

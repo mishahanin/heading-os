@@ -53,6 +53,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     build_manifest,
     clear_freeze,
     lock_state,
+    read_anchor,
     read_attestation,
     read_freeze,
     validate_anchor_path,
@@ -163,6 +164,19 @@ def cmd_freeze(args) -> int:
         print("canopus: a freeze is already active; run `release` first "
               "(changing a contract reopens the approval gate)", file=sys.stderr)
         return 1
+    anchor_path = validate_anchor_path(_under_root(args.anchor, root), root)
+    status, recorded = read_anchor(anchor_path)
+    if status == ANCHOR_RECORDED and not args.replace_anchor:
+        print(f"canopus: {anchor_path} already records {recorded}. An approved "
+              f"contract's anchor is never silently overwritten. If the frozen "
+              f"SET is legitimately changing, re-run with --replace-anchor and "
+              f"--reason.", file=sys.stderr)
+        return 1
+    if args.replace_anchor and not args.reason:
+        print("canopus: --replace-anchor requires --reason; an unexplained "
+              "replacement is indistinguishable from a re-baseline",
+              file=sys.stderr)
+        return 1
     if not args.paths and not args.content and not args.contract:
         print("canopus: at least one path is required, positionally or via "
               "--content or --contract", file=sys.stderr)
@@ -189,17 +203,35 @@ def cmd_freeze(args) -> int:
         root,
         label=args.label,
         frozen_at=datetime.now(timezone.utc).isoformat(),
-        anchor=_under_root(args.anchor, root),
+        anchor=anchor_path,
         content_only=[_under_root(p, root) for p in args.content],
         baseline=baseline,
     )
     manifest["git_sha"] = _git_sha(root)
     write_freeze(root, manifest)
     append_history(root, "freeze", digest=manifest["root"], label=manifest["label"])
+    # The append runs AFTER write_freeze, and the window that opens is named
+    # rather than discovered: an OSError here (a read-only overlay, a vanished
+    # mount) leaves an ACTIVE freeze whose anchor carries no line, main returns
+    # 1, and a re-run hits "a freeze is already active". Recovery is `release
+    # --force --reason "anchor write failed"` then a fresh freeze, and the state
+    # is loud meanwhile, because verify reports LOCK UNCONFIRMED until the line
+    # lands. Ordering the append first would trade that for the worse failure:
+    # an approved-looking hash in a committed artifact with no freeze behind it.
+    #
+    # An append rather than atomic_write_text, because the anchor is a
+    # human-authored document the tool adds one line to, exactly like
+    # append_history. A full-file replace would rewrite prose the tool does not
+    # own.
+    with anchor_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n{ANCHOR_PREFIX} {manifest['root']}\n")
+    if status == ANCHOR_RECORDED:
+        append_history(root, "anchor_replaced", digest=manifest["root"],
+                       label=manifest["label"], reason=args.reason)
     _print_root(manifest["root"], manifest)
-    print(f"\nPaste this line into {manifest['anchor']} and commit it:\n")
-    print(f"    {ANCHOR_PREFIX} {manifest['root']}\n")
-    print("Until it is there, verify reports LOCK UNCONFIRMED.")
+    print(f"\nRecorded in {anchor_path}. Commit that repository so the approved "
+          f"hash is durable; reaching it from a build leaves a commit where one "
+          f"has no business being.")
     return 0
 
 
@@ -363,6 +395,11 @@ def build_parser() -> argparse.ArgumentParser:
     # Re-baselining is exactly what the anchor exists to make visible.
     freeze.add_argument("--anchor", required=True,
                         help="committed artifact OUTSIDE this tree that records the root hash")
+    freeze.add_argument("--replace-anchor", action="store_true",
+                        help="append a new hash to an anchor that already records "
+                             "one; requires --reason and is written to the ledger")
+    freeze.add_argument("--reason", default="",
+                        help="why the anchor is being replaced")
     freeze.set_defaults(func=cmd_freeze)
 
     probe = sub.add_parser("probe", help="run a contract set and show what a "

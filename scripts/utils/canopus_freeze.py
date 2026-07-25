@@ -454,13 +454,18 @@ def read_anchor(anchor_path: Path) -> Tuple[str, Optional[str]]:
     except OSError:
         # Unreadable is not "absent": treat it like a vanished anchor.
         return (ANCHOR_MISSING, None)
+    found: Optional[str] = None
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith(ANCHOR_PREFIX):
             value = stripped[len(ANCHOR_PREFIX):].strip().lower()
             if value:
-                return (ANCHOR_RECORDED, value)
-    return (ANCHOR_UNRECORDED, None)
+                # LAST wins. A replaced anchor appends rather than overwriting,
+                # so the artifact keeps the whole approval trail; pinning to the
+                # first line would make every legitimate re-freeze read as a
+                # disagreement forever.
+                found = value
+    return (ANCHOR_RECORDED, found) if found else (ANCHOR_UNRECORDED, None)
 
 
 def anchor_state(

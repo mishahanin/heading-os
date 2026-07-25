@@ -138,8 +138,8 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
         passed = sum(entry.get("passed", 0) for entry in counts)
         skipped = sum(entry.get("skipped", 0) for entry in counts)
         tail = f", {skipped} skipped" if skipped else ""
-        print(f"{GREEN}{BOLD}{ATTESTED}{RESET}  {passed} frozen tests passed in an "
-              f"unfiltered run at "
+        print(f"{GREEN}{BOLD}{ATTESTED}{RESET}  {passed} frozen tests passed, none "
+              f"deselected, at "
               f"{record.get('attested_at') or 'an unrecorded time'}{tail}")
         return
     print(f"{YELLOW}{BOLD}{NOT_ATTESTED}{RESET}  {reason}")

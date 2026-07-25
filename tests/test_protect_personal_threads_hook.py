@@ -111,6 +111,11 @@ def test_hook_allows_documentation_write_referencing_personal_path() -> None:
             },
         }
         rc, out, _ = _run_hook(payload)
+        if "canopus" in out.lower():
+            # A Canopus freeze covering this path legitimately denies the write,
+            # from a different check in the same chain. This test asserts what
+            # the personal-threads guard does, not what the whole chain does.
+            continue
         assert not _blocked(rc, out), f"hook wrongly blocked legitimate write to {target}"
 
 

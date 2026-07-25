@@ -603,3 +603,24 @@ def test_pack_reports_both_axes_and_the_uncovered_list(tree, anchor, capsys):
     assert "not covered" in out
     assert "continuity" in out
     assert "staleness" in out
+
+
+def test_freeze_contract_reports_how_much_is_already_green(tree, anchor, capsys):
+    """The redness gate needs one red in the SET, so it does not scale to the moment.
+
+    Measured during the wire 2 build: a mid-build retake froze a contract that was
+    already 11 of 14 green and was accepted, because three were still red. The
+    same gate a fully red contract passes at the start. Nothing said so, which is
+    the part that is fixable cheaply: say it, at freeze time and in the ledger,
+    and let the operator judge a retake differently from a first freeze.
+    """
+    _write_contract(tree)   # one failing, one passing
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+
+    assert "1 of 2 already green" in capsys.readouterr().out
+    entries = [json.loads(line) for line
+               in (tree / ".canopus" / "history.jsonl").read_text().splitlines()]
+    frozen = [e for e in entries if e["event"] == "freeze"]
+    assert frozen and "1 of 2 already green" in frozen[-1]["reason"]

@@ -260,6 +260,13 @@ finish, and `verify` and `status` print a second line beneath the lock state:
 | `ATTESTED` | a run of THIS exact contract collected every frozen test file in full, deselected none of them, and passed |
 | `NOT ATTESTED` | absent, recorded against a different root hash, incompletely collected, or carrying failures; the recorded reasons print beneath it |
 
+The record is **last-write-wins**, and the canonical gate must therefore be the LAST thing
+you run before reading `status` or `pack`. Measured during the wire 2 sign-off: the gate
+attested at 20:07:53, and a pre-commit hook's partial pytest run overwrote it two minutes
+later with "collected nothing". That is the correct side to fail on, because the record
+describes the LAST run and a stale-but-good record would lie about now, but it means a
+green record is not durable across a later partial run.
+
 The record measures **collection, never invocation**. Deselection is observed through
 pytest's own deselection hook, which `-k`, `-m`, `--lf` and `--deselect` all route through,
 and completeness is `passed + skipped == collected` per frozen file. Nothing inspects a

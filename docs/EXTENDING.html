@@ -354,6 +354,12 @@ finish, and <code>verify</code> and <code>status</code> print a second line bene
 </tr>
 </tbody>
 </table>
+<p>The record is <strong>last-write-wins</strong>, and the canonical gate must therefore be the LAST thing
+you run before reading <code>status</code> or <code>pack</code>. Measured during the wire 2 sign-off: the gate
+attested at 20:07:53, and a pre-commit hook&rsquo;s partial pytest run overwrote it two minutes
+later with &ldquo;collected nothing&rdquo;. That is the correct side to fail on, because the record
+describes the LAST run and a stale-but-good record would lie about now, but it means a
+green record is not durable across a later partial run.</p>
 <p>The record measures <strong>collection, never invocation</strong>. Deselection is observed through
 pytest&rsquo;s own deselection hook, which <code>-k</code>, <code>-m</code>, <code>--lf</code> and <code>--deselect</code> all route through,
 and completeness is <code>passed + skipped == collected</code> per frozen file. Nothing inspects a

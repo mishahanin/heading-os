@@ -350,7 +350,7 @@ def test_verify_anchor_override_that_does_not_exist_is_refused(tree, anchor, tmp
 # The second indicator axis: attestation
 # ============================================================
 
-def _attest(tree, root_digest, *, qualified=True, reasons=(), passed=3, skipped=0):
+def _attest(tree, root_digest, *, qualified=True, deselected=0, passed=3, skipped=0):
     from scripts.utils import canopus_freeze as cf
 
     record = cf.build_attestation(
@@ -358,8 +358,8 @@ def _attest(tree, root_digest, *, qualified=True, reasons=(), passed=3, skipped=
         frozen_tests={"tests/test_alpha.py": {
             "collected": passed + skipped, "passed": passed,
             "failed": 0 if qualified else 1, "skipped": skipped,
+            "deselected": deselected,
         }},
-        filter_reasons=list(reasons),
         exit_status=0,
         attested_at="2026-07-25T10:42:11+00:00",
     )
@@ -400,15 +400,15 @@ def test_an_attestation_against_another_root_does_not_count(tree, anchor, capsys
     assert "different root hash" in out
 
 
-def test_a_filtered_run_prints_its_reasons(tree, anchor, capsys):
+def test_a_deselecting_run_prints_its_reasons(tree, anchor, capsys):
     _freeze(tree, anchor)
     root = _root_of(tree)
     anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
-    _attest(tree, root, qualified=False, reasons=["-k restricted the run"])
+    _attest(tree, root, deselected=7)
     assert _run(["verify"], tree) == 0
     out = capsys.readouterr().out
     assert "NOT ATTESTED" in out
-    assert "-k restricted the run" in out
+    assert "7 items deselected" in out
 
 
 def test_loss_of_lock_still_shows_the_attestation_axis(tree, anchor, capsys):

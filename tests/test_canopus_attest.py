@@ -17,16 +17,15 @@ from scripts.utils import canopus_freeze as cf
 
 
 def _tests(**counts):
-    base = {"collected": 1, "passed": 1, "failed": 0, "skipped": 0}
+    base = {"collected": 1, "passed": 1, "failed": 0, "skipped": 0, "deselected": 0}
     base.update(counts)
     return base
 
 
-def _build(frozen_tests, *, reasons=(), exit_status=0, root="a" * 64):
+def _build(frozen_tests, *, exit_status=0, root="a" * 64):
     return cf.build_attestation(
         root_digest=root,
         frozen_tests=frozen_tests,
-        filter_reasons=reasons,
         exit_status=exit_status,
         attested_at="2026-07-25T10:42:11+00:00",
     )
@@ -50,19 +49,31 @@ def test_frozen_test_files_tolerates_a_manifest_without_files():
     assert cf.frozen_test_files({}, ["test_*.py"]) == []
 
 
-def test_clean_unfiltered_run_attests():
+def test_a_complete_clean_run_attests():
     record = _build({"tests/test_alpha.py": _tests(collected=3, passed=3)})
     assert record["attested"] is True
-    assert record["unfiltered"] is True
     assert record["reasons"] == []
     assert record["recipe"] == cf.ATTEST_RECIPE
 
 
-def test_a_filter_option_voids_attestation_with_a_reason():
-    record = _build({"tests/test_alpha.py": _tests()}, reasons=["-k restricted the run"])
+def test_a_deselected_item_voids_attestation():
+    record = _build({"tests/test_alpha.py": _tests(collected=3, passed=3, deselected=7)})
     assert record["attested"] is False
-    assert record["unfiltered"] is False
-    assert "-k restricted the run" in record["reasons"]
+    assert any("7 items deselected" in reason for reason in record["reasons"])
+
+
+def test_an_incomplete_tally_voids_attestation():
+    # The xdist failure mode: items collected, only some reported back.
+    record = _build({"tests/test_alpha.py": _tests(collected=28, passed=13)})
+    assert record["attested"] is False
+    assert any("13 of 28" in reason for reason in record["reasons"])
+
+
+def test_a_marker_expression_that_touches_nothing_frozen_still_attests():
+    # Regression for the defect that made scripts/run-tests.py unattestable: it
+    # always passes -m "not acceptance", which deselects nothing here.
+    record = _build({"tests/test_alpha.py": _tests(collected=3, passed=3, deselected=0)})
+    assert record["attested"] is True
 
 
 def test_a_nonzero_exit_status_voids_attestation():
@@ -80,7 +91,7 @@ def test_a_failing_frozen_test_voids_attestation():
 def test_a_frozen_test_file_that_collected_nothing_voids_attestation():
     record = _build({"tests/test_alpha.py": _tests(collected=0, passed=0)})
     assert record["attested"] is False
-    assert record["unfiltered"] is False
+    assert any("collected nothing" in reason for reason in record["reasons"])
 
 
 def test_a_freeze_with_no_test_files_attests_nothing():
@@ -88,7 +99,6 @@ def test_a_freeze_with_no_test_files_attests_nothing():
     # having no contract at all. The same rule applies to "the tests ran".
     record = _build({})
     assert record["attested"] is False
-    assert record["unfiltered"] is False
     assert any("no test files" in reason for reason in record["reasons"])
 
 
@@ -161,7 +171,7 @@ def test_tally_counts_only_frozen_files():
     assert counts["tests/test_beta.py"]["collected"] == 0
     assert "tests/test_other.py" not in counts
     assert counts["tests/test_alpha.py"] == {
-        "collected": 2, "passed": 0, "failed": 0, "skipped": 0,
+        "collected": 2, "passed": 0, "failed": 0, "skipped": 0, "deselected": 0,
     }
 
 
@@ -173,17 +183,13 @@ def test_tally_with_no_frozen_files_is_empty():
 # The pytest wiring
 # ============================================================
 #
-# The hooks live in the ROOT tests/conftest.py, which pytest has already
-# imported by the time this module runs. Reaching it through sys.modules by file
-# path exercises the shipped code rather than a copy that can drift, and calling
-# the hooks with light fakes keeps the test deterministic: driving a nested
-# pytest through `pytester` would need the engine on the child's sys.path and
-# would test the harness more than the hooks.
+# The root tests/conftest.py delegates every attestation hook to one
+# AttestationRecorder. Tests build their own recorder against a throwaway root,
+# which is the whole reason the state is an object: an earlier version
+# monkeypatched the conftest module's globals and silently corrupted the LIVE
+# session's tally, which the end-to-end check caught as "20 of 31 reported".
 
-_CONFTEST = next(
-    module for module in list(sys.modules.values())
-    if getattr(module, "__file__", None) == str(Path(__file__).resolve().parent / "conftest.py")
-)
+from scripts.utils.canopus_gate import AttestationRecorder  # noqa: E402
 
 
 class _Config:
@@ -220,7 +226,7 @@ class _Report:
 
 
 @pytest.fixture
-def frozen_engine(tmp_path, monkeypatch):
+def frozen_engine(tmp_path):
     """A throwaway tree with one frozen test file, wired as the hooks' root."""
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
@@ -233,49 +239,72 @@ def frozen_engine(tmp_path, monkeypatch):
         label="attest-fixture", frozen_at="2026-07-25T00:00:00+00:00", anchor=anchor,
     )
     cf.write_freeze(tmp_path, manifest)
-    monkeypatch.setattr(_CONFTEST, "_ENGINE_ROOT", tmp_path)
-    monkeypatch.setattr(_CONFTEST, "_CANOPUS", {})
-    return tmp_path, target, manifest
+    return tmp_path, target, manifest, AttestationRecorder(tmp_path)
 
 
 def _session(tmp_path, target, **options):
     return _Session(_Config(["test_*.py"], **options), [_Item(target)])
 
 
-def test_an_unfiltered_run_attests(frozen_engine):
-    tmp_path, target, manifest = frozen_engine
+def test_a_complete_run_attests(frozen_engine):
+    tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)
-    _CONFTEST.pytest_collection_finish(session)
-    _CONFTEST.pytest_runtest_logreport(_Report(str(target), "passed"))
-    _CONFTEST.pytest_sessionfinish(session, 0)
+    rec.collect(session)
+    rec.report(_Report(str(target), "passed"))
+    rec.finish(session, 0)
 
     record = cf.read_attestation(tmp_path)
     assert record["attested"] is True
     assert record["root"] == manifest["root"]
     assert record["frozen_tests"]["tests/test_frozen.py"] == {
-        "collected": 1, "passed": 1, "failed": 0, "skipped": 0,
+        "collected": 1, "passed": 1, "failed": 0, "skipped": 0, "deselected": 0,
     }
     assert cf.attestation_state(record, manifest["root"])[0] == cf.ATTESTED
 
 
-def test_a_filtered_run_records_the_reason_and_does_not_attest(frozen_engine):
-    tmp_path, target, manifest = frozen_engine
-    session = _session(tmp_path, target, keyword="ok")
-    _CONFTEST.pytest_collection_finish(session)
-    _CONFTEST.pytest_sessionfinish(session, 0)
+def test_deselection_is_tallied_from_the_hook(frozen_engine):
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.deselected([_Item(target), _Item(target)])
+    rec.finish(session, 0)
 
     record = cf.read_attestation(tmp_path)
+    assert record["frozen_tests"]["tests/test_frozen.py"]["deselected"] == 2
     assert record["attested"] is False
-    assert record["unfiltered"] is False
-    assert any("-k" in reason for reason in record["reasons"])
+    assert any("deselected" in reason for reason in record["reasons"])
+
+
+def test_deselection_ignores_items_outside_the_frozen_set(frozen_engine):
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.deselected([_Item(tmp_path / "tests" / "test_other.py")])
+    rec.report(_Report(str(target), "passed"))
+    rec.finish(session, 0)
+
+    record = cf.read_attestation(tmp_path)
+    assert record["frozen_tests"]["tests/test_frozen.py"]["deselected"] == 0
+    assert record["attested"] is True
+
+
+def test_a_worker_session_writes_nothing(frozen_engine):
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    session.config.workerinput = {"workerid": "gw0"}
+    rec.collect(session)
+    rec.report(_Report(str(target), "passed"))
+    rec.finish(session, 0)
+
+    assert cf.read_attestation(tmp_path) is None
 
 
 def test_a_failing_frozen_test_is_tallied(frozen_engine):
-    tmp_path, target, manifest = frozen_engine
+    tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)
-    _CONFTEST.pytest_collection_finish(session)
-    _CONFTEST.pytest_runtest_logreport(_Report(str(target), "failed"))
-    _CONFTEST.pytest_sessionfinish(session, 1)
+    rec.collect(session)
+    rec.report(_Report(str(target), "failed"))
+    rec.finish(session, 1)
 
     record = cf.read_attestation(tmp_path)
     assert record["frozen_tests"]["tests/test_frozen.py"]["failed"] == 1
@@ -283,11 +312,11 @@ def test_a_failing_frozen_test_is_tallied(frozen_engine):
 
 
 def test_a_skipped_frozen_test_is_counted_but_still_attests(frozen_engine):
-    tmp_path, target, manifest = frozen_engine
+    tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)
-    _CONFTEST.pytest_collection_finish(session)
-    _CONFTEST.pytest_runtest_logreport(_Report(str(target), "skipped", when="setup"))
-    _CONFTEST.pytest_sessionfinish(session, 0)
+    rec.collect(session)
+    rec.report(_Report(str(target), "skipped", when="setup"))
+    rec.finish(session, 0)
 
     record = cf.read_attestation(tmp_path)
     assert record["frozen_tests"]["tests/test_frozen.py"]["skipped"] == 1
@@ -295,68 +324,133 @@ def test_a_skipped_frozen_test_is_counted_but_still_attests(frozen_engine):
 
 
 def test_reports_from_unfrozen_files_are_ignored(frozen_engine):
-    tmp_path, target, manifest = frozen_engine
+    tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)
-    _CONFTEST.pytest_collection_finish(session)
-    _CONFTEST.pytest_runtest_logreport(_Report(str(tmp_path / "tests" / "test_other.py"), "failed"))
-    _CONFTEST.pytest_runtest_logreport(_Report("/nowhere/at/all/test_x.py", "failed"))
-    _CONFTEST.pytest_sessionfinish(session, 0)
+    rec.collect(session)
+    rec.report(_Report(str(tmp_path / "tests" / "test_other.py"), "failed"))
+    rec.report(_Report("/nowhere/at/all/test_x.py", "failed"))
+    rec.report(_Report(str(target), "passed"))
+    rec.finish(session, 0)
 
     record = cf.read_attestation(tmp_path)
     assert record["frozen_tests"]["tests/test_frozen.py"]["failed"] == 0
     assert record["attested"] is True
 
 
-def test_removing_a_frozen_test_from_collection_fails_the_session(frozen_engine):
-    tmp_path, target, manifest = frozen_engine
+def test_a_path_restricted_run_records_a_reason_and_never_raises(frozen_engine):
+    # The fatal branch is gone. This is the inner loop, not tampering: an
+    # explicit path argument is a filter that no option sniff can see.
+    tmp_path, target, manifest, rec = frozen_engine
     session = _Session(_Config(["test_*.py"]), [])
-    with pytest.raises(pytest.UsageError, match="were not collected"):
-        _CONFTEST.pytest_collection_finish(session)
-
-
-def test_an_explicit_filter_downgrades_the_same_case_to_a_reason(frozen_engine):
-    # Same zero-collection state, but the operator asked for a subset. That is
-    # iteration, not removal, so it records a reason instead of failing the run.
-    tmp_path, target, manifest = frozen_engine
-    session = _Session(_Config(["test_*.py"], keyword="nothing"), [])
-    _CONFTEST.pytest_collection_finish(session)
-    _CONFTEST.pytest_sessionfinish(session, 5)
+    rec.collect(session)
+    rec.finish(session, 0)
 
     record = cf.read_attestation(tmp_path)
     assert record["attested"] is False
     assert any("collected nothing" in reason for reason in record["reasons"])
 
 
-def test_no_freeze_writes_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr(_CONFTEST, "_ENGINE_ROOT", tmp_path)
-    monkeypatch.setattr(_CONFTEST, "_CANOPUS", {})
+def test_no_freeze_writes_nothing(tmp_path):
+    rec = AttestationRecorder(tmp_path)
     session = _session(tmp_path, tmp_path / "tests" / "test_frozen.py")
-    _CONFTEST.pytest_collection_finish(session)
-    _CONFTEST.pytest_runtest_logreport(_Report(str(tmp_path / "x.py"), "passed"))
-    _CONFTEST.pytest_sessionfinish(session, 0)
+    rec.collect(session)
+    rec.report(_Report(str(tmp_path / "x.py"), "passed"))
+    rec.finish(session, 0)
     assert cf.read_attestation(tmp_path) is None
 
 
-def test_a_broken_collection_never_breaks_the_run(frozen_engine, capsys):
-    tmp_path, target, manifest = frozen_engine
+def test_every_conftest_hook_swallows_a_failure(monkeypatch, capsys):
+    """The invariant: a broken recorder degrades to a printed line, never a raise.
+
+    Record-keeping that can fail a run is more dangerous than the gap it closes,
+    so each of the four hooks is checked, not just the one that seems riskiest.
+    """
+    conftest = next(
+        module for module in list(sys.modules.values())
+        if getattr(module, "__file__", None)
+        == str(Path(__file__).resolve().parent / "conftest.py")
+    )
 
     class _Exploding:
-        @property
-        def config(self):
-            raise RuntimeError("boom")
+        def __getattr__(self, name):
+            def _boom(*args, **kwargs):
+                raise RuntimeError("boom")
+            return _boom
 
-    _CONFTEST.pytest_collection_finish(_Exploding())
-    assert "attestation collection failed" in capsys.readouterr().err
+    monkeypatch.setattr(conftest, "_canopus_recorder", lambda: _Exploding())
+    conftest.pytest_collection_finish(object())
+    conftest.pytest_deselected([])
+    conftest.pytest_runtest_logreport(object())
+    conftest.pytest_sessionfinish(object(), 0)
+    # Restore before this test's own call report is emitted: while the live
+    # recorder is patched, the hook drops that report and the session's tally
+    # ends up one short. Record-keeping the suite can corrupt is the exact
+    # defect this object exists to prevent.
+    monkeypatch.undo()
+    err = capsys.readouterr().err
+    for fragment in ("attestation collection failed", "deselection tally failed",
+                     "outcome tally failed", "could not write the attestation"):
+        assert fragment in err
 
 
 def test_a_failed_write_never_changes_the_run(frozen_engine, monkeypatch, capsys):
-    tmp_path, target, manifest = frozen_engine
+    from scripts.utils import canopus_gate
+
+    tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)
-    _CONFTEST.pytest_collection_finish(session)
+    rec.collect(session)
 
     def _explode(*args, **kwargs):
         raise OSError("disk gone")
 
-    monkeypatch.setattr(cf, "write_attestation", _explode)
-    _CONFTEST.pytest_sessionfinish(session, 0)
-    assert "could not write the attestation" in capsys.readouterr().err
+    monkeypatch.setattr(canopus_gate, "write_attestation", _explode)
+    with pytest.raises(OSError, match="disk gone"):
+        rec.finish(session, 0)
+
+
+def test_the_controller_seeds_its_tally_from_worker_node_ids(frozen_engine):
+    """Under -n auto the controller runs no collection of its own.
+
+    Measured, not assumed: without this route the canonical gate records
+    "collected nothing" for every frozen file and can never attest.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    config = _Config(["test_*.py"])
+    rec.seed_from_ids(config, [
+        "tests/test_frozen.py::test_ok",
+        "tests/test_frozen.py::test_other",
+        "tests/test_elsewhere.py::test_x",
+    ])
+    assert rec.frozen["tests/test_frozen.py"]["collected"] == 2
+
+
+def test_seeding_never_overwrites_a_tally_the_session_already_built(frozen_engine):
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.seed_from_ids(session.config, ["tests/test_frozen.py::a", "tests/test_frozen.py::b"])
+    assert rec.frozen["tests/test_frozen.py"]["collected"] == 1
+
+
+def test_a_worker_ships_its_deselection_counts_home(frozen_engine):
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    session.config.workerinput = {"workerid": "gw0"}
+    session.config.workeroutput = {}
+    rec.collect(session)
+    rec.deselected([_Item(target), _Item(target)])
+
+    assert rec.finish(session, 0) is False
+    assert session.config.workeroutput["canopus_deselected"] == {"tests/test_frozen.py": 2}
+    assert cf.read_attestation(tmp_path) is None
+
+
+def test_the_controller_folds_worker_deselections_in(frozen_engine):
+    tmp_path, target, manifest, rec = frozen_engine
+    config = _Config(["test_*.py"])
+    rec.seed_from_ids(config, ["tests/test_frozen.py::a"])
+    rec.merge_worker({"canopus_deselected": {"tests/test_frozen.py": 4}})
+    rec.merge_worker({"canopus_deselected": {"tests/test_elsewhere.py": 9}})
+    rec.merge_worker(None)
+
+    assert rec.frozen["tests/test_frozen.py"]["deselected"] == 4

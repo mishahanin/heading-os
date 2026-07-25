@@ -646,12 +646,13 @@ def append_history(
 # to run it: pytest -k, --deselect, --ignore, --lf and a bare path argument all
 # reach green with every frozen byte intact.
 #
-# This records, it does not block. Failing a filtered run would charge every
-# inner-loop iteration for a hole that a passive record closes at the point of
-# comparison, and a primitive that forbids `pytest -k` gets routed around in its
-# first week. The one exception lives in the pytest hook, not here: an unfiltered
-# run whose frozen test file collected nothing is removal from collection, not
-# iteration, and it fails the session.
+# This records, it does not block, and nothing here is fatal. Failing a filtered
+# run would charge every inner-loop iteration for a hole that a passive record
+# closes at the point of comparison, and a primitive that forbids `pytest -k`
+# gets routed around in its first week. An earlier revision kept one fatal case
+# and measurement removed it: telling "removed from collection" apart from "the
+# operator named one path" needs option sniffing, and option sniffing is exactly
+# what proved unreliable.
 
 ATTEST_FILENAME = "attest.json"
 ATTEST_RECIPE = "canopus-attest-v1"
@@ -686,7 +687,8 @@ def tally_collection(frozen: Sequence[str], collected_rels: Iterable[str]) -> di
     out, ignored, or removed from collection entirely.
     """
     counts = {
-        rel: {"collected": 0, "passed": 0, "failed": 0, "skipped": 0} for rel in frozen
+        rel: {"collected": 0, "passed": 0, "failed": 0, "skipped": 0, "deselected": 0}
+        for rel in frozen
     }
     for rel in collected_rels:
         if rel in counts:
@@ -698,16 +700,22 @@ def build_attestation(
     *,
     root_digest: str,
     frozen_tests: dict,
-    filter_reasons: Sequence[str],
     exit_status: int,
     attested_at: str,
 ) -> dict:
     """Assemble the record written at session finish. Pure: no disk, no pytest.
 
-    `attested` is the conjunction of everything that could make the claim false,
-    and every false condition leaves a plain-language string in `reasons`,
-    because an operator reading NOT ATTESTED at the sign-off gate needs to know
-    which one it was.
+    Measures COLLECTION, never INVOCATION. An earlier revision classified pytest
+    options (-k, -m, --ignore and friends) and shipped four defects: it marked
+    the canonical gate's own `-m "not acceptance"` as a filter and so could never
+    attest anything, it could not see a bare path argument at all, its fatal
+    branch fired on ordinary single-test runs, and it knew nothing about parallel
+    workers. Counting what was collected, deselected, and reported answers all
+    four without knowing how pytest was called.
+
+    Every false condition leaves a plain-language string in `reasons`, because an
+    operator reading NOT ATTESTED at the sign-off gate needs to know which one it
+    was.
 
     Skips are counted and deliberately do not void the record: a frozen test's
     own platform guard is legitimate and its bytes are frozen, while a skip
@@ -720,23 +728,29 @@ def build_attestation(
     reasons: list[str] = []
     if not frozen_tests:
         reasons.append("the freeze contains no test files to attest")
-    reasons.extend(filter_reasons)
     for rel, counts in sorted(frozen_tests.items()):
-        if not counts.get("collected", 0):
+        collected = counts.get("collected", 0)
+        reported = counts.get("passed", 0) + counts.get("skipped", 0)
+        if not collected:
             reasons.append(f"frozen test file collected nothing: {rel}")
+        elif counts.get("deselected", 0):
+            reasons.append(
+                f"frozen test file had {counts['deselected']} items deselected: {rel}"
+            )
         if counts.get("failed", 0):
             reasons.append(f"frozen test file reported failures: {rel}")
+        elif collected and reported != collected:
+            reasons.append(
+                f"frozen test file reported an incomplete tally: {rel} "
+                f"({reported} of {collected})"
+            )
     if exit_status != 0:
         reasons.append(f"pytest exited {exit_status}")
 
-    unfiltered = not list(filter_reasons) and bool(frozen_tests) and all(
-        counts.get("collected", 0) > 0 for counts in frozen_tests.values()
-    )
     return {
         "recipe": ATTEST_RECIPE,
         "root": root_digest,
         "attested": not reasons,
-        "unfiltered": unfiltered,
         "reasons": reasons,
         "exit_status": exit_status,
         "attested_at": attested_at,

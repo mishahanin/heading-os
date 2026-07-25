@@ -587,3 +587,19 @@ def test_replace_anchor_requires_a_reason(tree, anchor, capsys):
     assert _run(["freeze", "tests/test_alpha.py", "--label", "demo",
                  "--anchor", str(anchor), "--replace-anchor"], tree) == 1
     assert "--reason" in capsys.readouterr().err
+
+
+def test_pack_exits_nonzero_with_no_freeze(tree, capsys):
+    assert _run(["pack"], tree) == 1
+    assert "no active freeze" in capsys.readouterr().err
+
+
+def test_pack_reports_both_axes_and_the_uncovered_list(tree, anchor, capsys):
+    assert _freeze(tree, anchor) == 0
+    assert _run(["pack"], tree) == 0
+    out = capsys.readouterr().out
+    assert "LOCK HELD" in out
+    assert "NOT ATTESTED" in out          # no run has attested this freeze yet
+    assert "not covered" in out
+    assert "continuity" in out
+    assert "staleness" in out

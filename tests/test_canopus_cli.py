@@ -344,3 +344,104 @@ def test_verify_anchor_override_that_does_not_exist_is_refused(tree, anchor, tmp
     err = capsys.readouterr().err
     assert "does not exist or is not a file" in err
     assert "LOSS OF LOCK" not in err
+
+
+# ============================================================
+# The second indicator axis: attestation
+# ============================================================
+
+def _attest(tree, root_digest, *, qualified=True, reasons=(), passed=3, skipped=0):
+    from scripts.utils import canopus_freeze as cf
+
+    record = cf.build_attestation(
+        root_digest=root_digest,
+        frozen_tests={"tests/test_alpha.py": {
+            "collected": passed + skipped, "passed": passed,
+            "failed": 0 if qualified else 1, "skipped": skipped,
+        }},
+        filter_reasons=list(reasons),
+        exit_status=0,
+        attested_at="2026-07-25T10:42:11+00:00",
+    )
+    cf.write_attestation(tree, record)
+    return record
+
+
+def test_verify_reports_attested_when_the_run_matches(tree, anchor, capsys):
+    _freeze(tree, anchor)
+    root = _root_of(tree)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
+    _attest(tree, root)
+    assert _run(["verify"], tree) == 0
+    out = capsys.readouterr().out
+    assert "LOCK HELD" in out
+    assert "NOT ATTESTED" not in out
+    assert "ATTESTED" in out
+    assert "3 frozen tests passed" in out
+
+
+def test_verify_reports_not_attested_when_no_run_has_attested(tree, anchor, capsys):
+    _freeze(tree, anchor)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {_root_of(tree)}\n")
+    assert _run(["verify"], tree) == 0
+    out = capsys.readouterr().out
+    assert "LOCK HELD" in out
+    assert "NOT ATTESTED" in out
+    assert "no run has attested" in out
+
+
+def test_an_attestation_against_another_root_does_not_count(tree, anchor, capsys):
+    _freeze(tree, anchor)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {_root_of(tree)}\n")
+    _attest(tree, "b" * 64)
+    assert _run(["verify"], tree) == 0
+    out = capsys.readouterr().out
+    assert "NOT ATTESTED" in out
+    assert "different root hash" in out
+
+
+def test_a_filtered_run_prints_its_reasons(tree, anchor, capsys):
+    _freeze(tree, anchor)
+    root = _root_of(tree)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
+    _attest(tree, root, qualified=False, reasons=["-k restricted the run"])
+    assert _run(["verify"], tree) == 0
+    out = capsys.readouterr().out
+    assert "NOT ATTESTED" in out
+    assert "-k restricted the run" in out
+
+
+def test_loss_of_lock_still_shows_the_attestation_axis(tree, anchor, capsys):
+    _freeze(tree, anchor)
+    root = _root_of(tree)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
+    _attest(tree, root)
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+    assert _run(["verify"], tree) == 1
+    out = capsys.readouterr().out
+    assert "LOSS OF LOCK" in out
+    # The edit moved the root, so the earlier attestation stops applying without
+    # anyone having to remember to delete it.
+    assert "NOT ATTESTED" in out
+
+
+def test_status_carries_the_attestation_line(tree, anchor, capsys):
+    _freeze(tree, anchor)
+    root = _root_of(tree)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
+    _attest(tree, root, skipped=2)
+    assert _run(["status"], tree) == 0
+    out = capsys.readouterr().out
+    assert "ATTESTED" in out
+    assert "2 skipped" in out
+
+
+def test_a_damaged_attestation_changes_no_exit_code(tree, anchor, capsys):
+    from scripts.utils import canopus_freeze as cf
+
+    _freeze(tree, anchor)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {_root_of(tree)}\n")
+    cf.attest_state_path(tree).write_text("{ not json", encoding="utf-8")
+    assert _run(["verify"], tree) == 0
+    assert _run(["status"], tree) == 0
+    assert "NOT ATTESTED" in capsys.readouterr().out

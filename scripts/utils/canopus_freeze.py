@@ -419,6 +419,122 @@ def history_state_path(root: Path) -> Path:
     return Path(root) / FREEZE_DIRNAME / HISTORY_FILENAME
 
 
+_DIR_MODES = ("members", "recursive")
+_STR_SCALAR_KEYS = ("label", "frozen_at", "anchor", "git_sha", "root")
+
+
+def _require(condition: bool, message: str) -> None:
+    """Raise FreezeCorrupt with *message* unless *condition* holds."""
+    if not condition:
+        raise FreezeCorrupt(message)
+
+
+def _validate_manifest_shape(manifest: dict, path: Path) -> None:
+    """Validate every key and value type build_manifest() ever produces.
+
+    read_freeze() calls this right after JSON decoding and the recipe check,
+    before recompute()/verify_manifest()/frozen_reason() dereference a single
+    key. build_manifest()'s output is a closed, small shape, so validating all
+    of it in one pass is proportionate -- and it is the fix for a bug class,
+    not a single escape: round one guarded the top-level manifest keys; a
+    second review reproduced the same class one level deeper, where a `dirs`
+    entry's `members` list held a dict instead of a str and `verify_manifest`
+    crashed on `set(entry["members"])` with an uncaught TypeError. Patching
+    escapes one shape at a time is what produced two rounds; this validates
+    the complete shape instead.
+
+    `entry["hash"]` specifically is never read by any caller in this repo --
+    `recompute()` only overwrites it with a freshly computed digest -- but it
+    stays validated here because the manifest is the serialized form of
+    build_manifest()'s output, and checking one sibling key's shape while
+    leaving another unchecked is exactly what produced the escape this
+    function exists to close.
+
+    Every violation raises FreezeCorrupt naming the offending key or path and
+    the type expected, so a syntactically valid-but-wrong-shaped manifest
+    fails here -- not as an uncaught TypeError/AttributeError deep in a caller
+    that only expects FreezeCorrupt/OSError (the PreToolUse dispatcher catches
+    exactly those two and denies fail-closed; anything else falls through its
+    outer catch-all, logs an advisory, and continues -- fail OPEN).
+    """
+    for key in (*_STR_SCALAR_KEYS, "files", "dirs"):
+        _require(key in manifest, f"freeze manifest at {path} is missing {key!r}")
+
+    for key in _STR_SCALAR_KEYS:
+        value = manifest[key]
+        _require(
+            isinstance(value, str),
+            f"freeze manifest at {path} has a non-string {key!r} value "
+            f"({type(value).__name__}), expected a string",
+        )
+
+    files = manifest["files"]
+    _require(
+        isinstance(files, dict),
+        f"freeze manifest at {path} has a non-dict 'files' value "
+        f"({type(files).__name__}), expected a dict",
+    )
+    for rel, digest in files.items():
+        _require(
+            isinstance(rel, str),
+            f"freeze manifest at {path} has a non-string key in 'files' "
+            f"({type(rel).__name__}), expected a string",
+        )
+        _require(
+            isinstance(digest, str),
+            f"freeze manifest at {path} has a non-string value for files[{rel!r}] "
+            f"({type(digest).__name__}), expected a string",
+        )
+
+    dirs = manifest["dirs"]
+    _require(
+        isinstance(dirs, dict),
+        f"freeze manifest at {path} has a non-dict 'dirs' value "
+        f"({type(dirs).__name__}), expected a dict",
+    )
+    for rel, entry in dirs.items():
+        _require(
+            isinstance(rel, str),
+            f"freeze manifest at {path} has a non-string key in 'dirs' "
+            f"({type(rel).__name__}), expected a string",
+        )
+        # A dir entry without its recorded member list would make every existing
+        # member read as newly added. Refuse it rather than report a false alarm.
+        _require(
+            isinstance(entry, dict) and "mode" in entry and "hash" in entry and "members" in entry,
+            f"freeze manifest at {path} has an incomplete entry for directory {rel!r}",
+        )
+        mode = entry["mode"]
+        # mode gates the recompute()/frozen_reason() branch between "recursive"
+        # and "members" handling. An unrecognised mode string does not crash --
+        # recompute() just checks `entry["mode"] == "recursive"` -- it silently
+        # falls through to shallow handling, downgrading a recursive directory
+        # freeze to a shallow one without any error. That silent weakening of
+        # the guarantee is worse than a crash, so it is refused here explicitly.
+        _require(
+            isinstance(mode, str) and mode in _DIR_MODES,
+            f"freeze manifest at {path} has an unrecognised 'mode' {mode!r} for "
+            f"directory {rel!r}, expected one of {_DIR_MODES}",
+        )
+        _require(
+            isinstance(entry["hash"], str),
+            f"freeze manifest at {path} has a non-string 'hash' for directory "
+            f"{rel!r} ({type(entry['hash']).__name__}), expected a string",
+        )
+        members = entry["members"]
+        _require(
+            isinstance(members, list),
+            f"freeze manifest at {path} has a non-list 'members' for directory "
+            f"{rel!r} ({type(members).__name__}), expected a list",
+        )
+        for member in members:
+            _require(
+                isinstance(member, str),
+                f"freeze manifest at {path} has a non-string member in 'members' "
+                f"for directory {rel!r} ({type(member).__name__}), expected a string",
+            )
+
+
 def read_freeze(root: Path) -> Optional[dict]:
     """Load the active freeze manifest, or None when none is active.
 
@@ -439,54 +555,7 @@ def read_freeze(root: Path) -> Optional[dict]:
             f"freeze manifest at {path} carries recipe {manifest.get('recipe')!r}, "
             f"expected {RECIPE!r}"
         )
-    for key in ("files", "dirs", "root", "label"):
-        if key not in manifest:
-            raise FreezeCorrupt(f"freeze manifest at {path} is missing {key!r}")
-    # Presence alone is not enough: recompute()/verify_manifest()/frozen_reason()
-    # all dereference these keys assuming a specific shape (dict.items(), string
-    # concatenation, entry["mode"]/["hash"]/["members"]). A syntactically valid
-    # manifest with the wrong shape must fail here, not as an uncaught
-    # AttributeError deep in a caller that only expects FreezeCorrupt/OSError.
-    if not isinstance(manifest["files"], dict):
-        raise FreezeCorrupt(
-            f"freeze manifest at {path} has a non-dict 'files' value "
-            f"({type(manifest['files']).__name__}), expected a dict"
-        )
-    if not isinstance(manifest["dirs"], dict):
-        raise FreezeCorrupt(
-            f"freeze manifest at {path} has a non-dict 'dirs' value "
-            f"({type(manifest['dirs']).__name__}), expected a dict"
-        )
-    for rel, entry in manifest["dirs"].items():
-        # A dir entry without its recorded member list would make every existing
-        # member read as newly added. Refuse it rather than report a false alarm.
-        if not isinstance(entry, dict) or "members" not in entry or "mode" not in entry:
-            raise FreezeCorrupt(
-                f"freeze manifest at {path} has an incomplete entry for directory {rel!r}"
-            )
-        if "hash" not in entry:
-            raise FreezeCorrupt(
-                f"freeze manifest at {path} has a directory entry for {rel!r} missing 'hash'"
-            )
-        if not isinstance(entry["members"], list):
-            raise FreezeCorrupt(
-                f"freeze manifest at {path} has a non-list 'members' for directory {rel!r}"
-            )
-    if not isinstance(manifest["root"], str):
-        raise FreezeCorrupt(
-            f"freeze manifest at {path} has a non-string 'root' value "
-            f"({type(manifest['root']).__name__}), expected a string"
-        )
-    if not isinstance(manifest["label"], str):
-        raise FreezeCorrupt(
-            f"freeze manifest at {path} has a non-string 'label' value "
-            f"({type(manifest['label']).__name__}), expected a string"
-        )
-    if "anchor" in manifest and not isinstance(manifest["anchor"], str):
-        raise FreezeCorrupt(
-            f"freeze manifest at {path} has a non-string 'anchor' value "
-            f"({type(manifest['anchor']).__name__}), expected a string"
-        )
+    _validate_manifest_shape(manifest, path)
     return manifest
 
 

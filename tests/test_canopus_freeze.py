@@ -310,6 +310,7 @@ def test_frozen_reason_does_not_leak_across_a_similar_prefix(tree: Path):
 
 from scripts.utils.canopus_freeze import (
     FreezeCorrupt,
+    _validate_manifest_shape,
     append_history,
     clear_freeze,
     freeze_state_path,
@@ -357,56 +358,114 @@ def test_read_freeze_raises_on_a_missing_required_key(tree: Path):
         read_freeze(tree)
 
 
-def test_read_freeze_raises_when_dirs_is_not_a_dict(tree: Path):
-    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
-    manifest["dirs"] = "x"
-    path = freeze_state_path(tree)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest))
-    with pytest.raises(FreezeCorrupt, match="dirs"):
-        read_freeze(tree)
-
-
-def test_read_freeze_raises_when_files_is_not_a_dict(tree: Path):
-    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+def _corrupt_files_not_dict(manifest: dict) -> None:
     manifest["files"] = []
-    path = freeze_state_path(tree)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest))
-    with pytest.raises(FreezeCorrupt, match="files"):
-        read_freeze(tree)
 
 
-def test_read_freeze_raises_when_a_dirs_entry_is_not_a_dict(tree: Path):
-    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
-    first_dir = next(iter(manifest["dirs"]))
-    manifest["dirs"][first_dir] = "not-a-dict"
-    path = freeze_state_path(tree)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest))
-    with pytest.raises(FreezeCorrupt, match="incomplete entry"):
-        read_freeze(tree)
+def _corrupt_files_key_not_str(manifest: dict) -> None:
+    manifest["files"] = {123: "a" * 64, **manifest["files"]}
 
 
-def test_read_freeze_raises_when_a_dirs_entry_is_missing_members(tree: Path):
-    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
-    first_dir = next(iter(manifest["dirs"]))
-    del manifest["dirs"][first_dir]["members"]
-    path = freeze_state_path(tree)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest))
-    with pytest.raises(FreezeCorrupt, match="incomplete entry"):
-        read_freeze(tree)
+def _corrupt_files_value_not_str(manifest: dict) -> None:
+    first = next(iter(manifest["files"]))
+    manifest["files"][first] = 12345
 
 
-def test_read_freeze_raises_when_root_is_not_a_string(tree: Path):
-    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+def _corrupt_dirs_not_dict(manifest: dict) -> None:
+    manifest["dirs"] = "x"
+
+
+def _corrupt_dirs_entry_not_dict(manifest: dict) -> None:
+    manifest["dirs"]["tests"] = "not-a-dict"
+
+
+def _corrupt_dirs_entry_missing_mode(manifest: dict) -> None:
+    del manifest["dirs"]["tests"]["mode"]
+
+
+def _corrupt_dirs_entry_missing_hash(manifest: dict) -> None:
+    del manifest["dirs"]["tests"]["hash"]
+
+
+def _corrupt_dirs_entry_missing_members(manifest: dict) -> None:
+    del manifest["dirs"]["tests"]["members"]
+
+
+def _corrupt_mode_not_str(manifest: dict) -> None:
+    manifest["dirs"]["tests"]["mode"] = 7
+
+
+def _corrupt_mode_unrecognised(manifest: dict) -> None:
+    manifest["dirs"]["tests"]["mode"] = "shallow"
+
+
+def _corrupt_members_not_list(manifest: dict) -> None:
+    manifest["dirs"]["tests"]["members"] = {"nested": "dict"}
+
+
+def _corrupt_members_element_not_str(manifest: dict) -> None:
+    # The exact escape a second review reproduced: a `dirs` entry's `members`
+    # list holding a dict, which reaches verify_manifest()'s
+    # `set(entry["members"])` as an uncaught TypeError: unhashable type: 'dict'.
+    manifest["dirs"]["tests"]["members"] = [{"nested": "dict"}]
+
+
+def _corrupt_root_not_str(manifest: dict) -> None:
     manifest["root"] = 12345
-    path = freeze_state_path(tree)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest))
-    with pytest.raises(FreezeCorrupt, match="root"):
-        read_freeze(tree)
+
+
+def _corrupt_label_not_str(manifest: dict) -> None:
+    manifest["label"] = 42
+
+
+def _corrupt_anchor_not_str(manifest: dict) -> None:
+    manifest["anchor"] = 42
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        _corrupt_files_not_dict,
+        _corrupt_files_key_not_str,
+        _corrupt_files_value_not_str,
+        _corrupt_dirs_not_dict,
+        _corrupt_dirs_entry_not_dict,
+        _corrupt_dirs_entry_missing_mode,
+        _corrupt_dirs_entry_missing_hash,
+        _corrupt_dirs_entry_missing_members,
+        _corrupt_mode_not_str,
+        _corrupt_mode_unrecognised,
+        _corrupt_members_not_list,
+        _corrupt_members_element_not_str,
+        _corrupt_root_not_str,
+        _corrupt_label_not_str,
+        _corrupt_anchor_not_str,
+    ],
+    ids=lambda fn: fn.__name__.removeprefix("_corrupt_"),
+)
+def test_manifest_shape_validation_rejects_corrupted_shapes(tree: Path, corrupt):
+    """Table-driven regression for the complete manifest shape (round two).
+
+    Round one guarded only the top-level container types (files/dirs/root/
+    label). A second review reproduced the same bug class one level deeper: a
+    `dirs` entry's `members` list held a dict, which is a list so it passed
+    the top-level isinstance(list) check, and `verify_manifest` crashed on
+    `set(entry["members"])`. This table validates the complete shape
+    `build_manifest()` produces in one pass, so a future escape has to defeat
+    every case here at once instead of finding the next unchecked corner.
+
+    `_corrupt_files_key_not_str` is exercised against the validator directly
+    (not via a real freeze.json on disk): JSON object member names are always
+    strings by spec (RFC 8259), so a non-string dict key cannot survive a
+    json.dumps/json.loads round trip and this shape can never actually reach
+    read_freeze() from a file. The validator still refuses it (defense in
+    depth against any future non-JSON manifest source), so the case stays in
+    the table rather than being silently dropped.
+    """
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    corrupt(manifest)
+    with pytest.raises(FreezeCorrupt):
+        _validate_manifest_shape(manifest, freeze_state_path(tree))
 
 
 def test_clear_freeze_is_idempotent(tree: Path):

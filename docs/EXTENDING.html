@@ -220,9 +220,50 @@ python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>status
 python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>release<span class="w"> </span>--reason<span class="w"> </span><span class="s2">&quot;slice shipped&quot;</span>
 </code></pre></div>
 <p><code>freeze</code> writes a per-file digest manifest to a gitignored <code>.canopus/</code>, records the event
-in an append-only ledger, and prints a <strong>root hash</strong> plus the exact <code>canopus-anchor:</code> line
-to paste into the anchor artifact and commit. From then on <code>verify</code> reads the expected
-hash from that artifact by itself. Nobody types a digest and nobody compares one by eye.</p>
+in an append-only ledger, prints a <strong>root hash</strong> and writes the <code>canopus-anchor:</code> line into
+the anchor artifact itself; commit that repository so the approved hash is durable. From
+then on <code>verify</code> reads the expected hash from that artifact by itself. Nobody types a
+digest and nobody compares one by eye.</p>
+<p>Three ways to name a path, and they mean different things:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>positional</td>
+<td>a file freezes by content plus a composition guard on its parent; a directory freezes recursively</td>
+</tr>
+<tr>
+<td><code>--contract DIR</code></td>
+<td>recursive, plus a per-file item count recorded at freeze time, and a refusal unless the contract is red</td>
+</tr>
+<tr>
+<td><code>--content FILE</code></td>
+<td>the bytes only, with no composition guard on the parent</td>
+</tr>
+</tbody>
+</table>
+<p><code>--content</code> is how the enforcer files are frozen. Frozen as ordinary files they
+would guard <code>scripts/</code> and <code>scripts/utils/</code>, and a build that cannot create a
+file there cannot build anything.</p>
+<p><code>canopus probe DIR</code> runs a contract set and prints its per-test outcomes without
+freezing anything. <code>canopus pack</code> prints the Fix 2 evidence page: both
+indicators, collected against baseline, commits made while no freeze was held,
+whether the attestation has gone stale, and what is not covered.</p>
+<p>An anchor artifact that already records a hash is refused, because an approved
+contract&rsquo;s anchor is never silently overwritten. When the frozen SET legitimately
+changes mid-build, <code>freeze --replace-anchor --reason "&lt;why&gt;"</code> appends a second
+line and writes an <code>anchor_replaced</code> entry to the ledger; the artifact keeps the
+whole trail.</p>
+<p><strong>After the slice ships,</strong> release the freeze and leave the contract tests where
+they are. They become permanent regression anchors. When intended behaviour later
+changes and one of them fails because of it, the anchor is NOT edited to match:
+that reopens the approval gate, where the contract is re-approved and the old
+anchor retired deliberately.</p>
 <p><code>--anchor</code> is required. An anchorless freeze still catches a later edit, but it is the one
 route to a <em>passing</em> gate that never leaves this clone: release, edit the contract,
 re-freeze, amber, exit 0. With an anchor the same sequence fails, because the artifact
@@ -289,9 +330,10 @@ which under this standard is the correct answer.</p>
 deliberately leaves a gap in an append-only ledger.</p>
 <h3 id="did-the-frozen-tests-actually-run">Did the frozen tests actually run?</h3>
 <p>The lock states answer &ldquo;did the contract move&rdquo;. They cannot answer &ldquo;did the contract run&rdquo;:
-<code>pytest -k</code>, <code>--deselect</code>, <code>--ignore</code>, <code>--lf</code>, and a bare path argument all reach green
-with every frozen byte intact. A builder that cannot edit a frozen test can decline to run
-it.</p>
+<code>pytest -k</code>, <code>--deselect</code>, <code>--ignore</code>, and <code>--lf</code> all reach green with every frozen byte
+intact. A builder that cannot edit a frozen test can decline to run it. A bare path or a
+node id no longer does, for any file carrying a freeze-time baseline: the collected count
+is compared against that baseline, so a subset reports 1 of 7 and does not attest.</p>
 <p>So the root <code>tests/conftest.py</code> writes an attestation to <code>.canopus/attest.json</code> at session
 finish, and <code>verify</code> and <code>status</code> print a second line beneath the lock state:</p>
 <table>

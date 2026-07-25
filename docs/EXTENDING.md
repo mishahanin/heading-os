@@ -155,9 +155,39 @@ python scripts/canopus.py release --reason "slice shipped"
 ```
 
 `freeze` writes a per-file digest manifest to a gitignored `.canopus/`, records the event
-in an append-only ledger, and prints a **root hash** plus the exact `canopus-anchor:` line
-to paste into the anchor artifact and commit. From then on `verify` reads the expected
-hash from that artifact by itself. Nobody types a digest and nobody compares one by eye.
+in an append-only ledger, prints a **root hash** and writes the `canopus-anchor:` line into
+the anchor artifact itself; commit that repository so the approved hash is durable. From
+then on `verify` reads the expected hash from that artifact by itself. Nobody types a
+digest and nobody compares one by eye.
+
+Three ways to name a path, and they mean different things:
+
+| Form | Effect |
+|---|---|
+| positional | a file freezes by content plus a composition guard on its parent; a directory freezes recursively |
+| `--contract DIR` | recursive, plus a per-file item count recorded at freeze time, and a refusal unless the contract is red |
+| `--content FILE` | the bytes only, with no composition guard on the parent |
+
+`--content` is how the enforcer files are frozen. Frozen as ordinary files they
+would guard `scripts/` and `scripts/utils/`, and a build that cannot create a
+file there cannot build anything.
+
+`canopus probe DIR` runs a contract set and prints its per-test outcomes without
+freezing anything. `canopus pack` prints the Fix 2 evidence page: both
+indicators, collected against baseline, commits made while no freeze was held,
+whether the attestation has gone stale, and what is not covered.
+
+An anchor artifact that already records a hash is refused, because an approved
+contract's anchor is never silently overwritten. When the frozen SET legitimately
+changes mid-build, `freeze --replace-anchor --reason "<why>"` appends a second
+line and writes an `anchor_replaced` entry to the ledger; the artifact keeps the
+whole trail.
+
+**After the slice ships,** release the freeze and leave the contract tests where
+they are. They become permanent regression anchors. When intended behaviour later
+changes and one of them fails because of it, the anchor is NOT edited to match:
+that reopens the approval gate, where the contract is re-approved and the old
+anchor retired deliberately.
 
 `--anchor` is required. An anchorless freeze still catches a later edit, but it is the one
 route to a *passing* gate that never leaves this clone: release, edit the contract,
@@ -217,9 +247,10 @@ deliberately leaves a gap in an append-only ledger.
 ### Did the frozen tests actually run?
 
 The lock states answer "did the contract move". They cannot answer "did the contract run":
-`pytest -k`, `--deselect`, `--ignore`, `--lf`, and a bare path argument all reach green
-with every frozen byte intact. A builder that cannot edit a frozen test can decline to run
-it.
+`pytest -k`, `--deselect`, `--ignore`, and `--lf` all reach green with every frozen byte
+intact. A builder that cannot edit a frozen test can decline to run it. A bare path or a
+node id no longer does, for any file carrying a freeze-time baseline: the collected count
+is compared against that baseline, so a subset reports 1 of 7 and does not attest.
 
 So the root `tests/conftest.py` writes an attestation to `.canopus/attest.json` at session
 finish, and `verify` and `status` print a second line beneath the lock state:

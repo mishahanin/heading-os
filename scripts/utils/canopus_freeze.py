@@ -776,6 +776,11 @@ def append_history(
 # to run it: pytest -k, --deselect, --ignore, --lf and a bare path argument all
 # reach green with every frozen byte intact.
 #
+# From wire 2 a bare path or a node id is ALSO caught, for any file carrying a
+# freeze-time baseline: the record compares what was collected against how many
+# items that file yields when collected whole, so a subset reports 1 of 7. A
+# frozen test file with no baseline entry keeps the wire 1 comparison.
+#
 # This records, it does not block, and nothing here is fatal. Failing a filtered
 # run would charge every inner-loop iteration for a hole that a passive record
 # closes at the point of comparison, and a primitive that forbids `pytest -k`
@@ -832,6 +837,7 @@ def build_attestation(
     frozen_tests: dict,
     exit_status: int,
     attested_at: str,
+    baseline: Optional[dict] = None,
 ) -> dict:
     """Assemble the record written at session finish. Pure: no disk, no pytest.
 
@@ -855,30 +861,29 @@ def build_attestation(
     same rule already governs verify, which refuses to print a green line when
     there is no contract to check.
 
-    WHAT IT DOES NOT CATCH, stated so the gap is a known property rather than a
-    discovered one. A run that names a SUBSET by node id -- `pytest
-    tests/test_x.py::test_one` on a three-test frozen file -- collects one item,
-    reports one item, fires no deselection hook, and attests. Measured, and it
-    is the residual hole in "did the contract run": the record compares reported
-    against collected, and nothing anywhere knows how many items the file yields
-    when collected whole. Filters (-k, -m, --lf, --deselect) ARE caught, because
-    they leave a deselection count behind; --ignore and a vanished file are
-    caught, because they collect nothing. Closing the node-id case needs a
-    full-collection baseline taken at freeze time, which is a larger change than
-    the one this record makes, so read ATTESTED as "the frozen tests that were
-    collected all passed", not as "every frozen test ran".
+    The node-id subset case IS caught, from wire 2 onward. A contract frozen with
+    --contract carries a per-file item count taken at freeze time, so `pytest
+    tests/contract/s/test_a.py::test_one` reports 1 against 7 and does not
+    attest. A frozen test file with no baseline entry keeps the wire 1
+    behaviour, where collected is compared only against what was reported.
     """
     reasons: list[str] = []
     if not frozen_tests:
         reasons.append("the freeze contains no test files to attest")
+    expected_counts = baseline or {}
     for rel, counts in sorted(frozen_tests.items()):
         collected = counts.get("collected", 0)
         reported = counts.get("passed", 0) + counts.get("skipped", 0)
+        expected = expected_counts.get(rel)
         if not collected:
             reasons.append(f"frozen test file collected nothing: {rel}")
         elif counts.get("deselected", 0):
             reasons.append(
                 f"frozen test file had {counts['deselected']} items deselected: {rel}"
+            )
+        elif expected is not None and collected != expected:
+            reasons.append(
+                f"frozen test file collected {collected} of {expected}: {rel}"
             )
         if counts.get("failed", 0):
             reasons.append(f"frozen test file reported failures: {rel}")

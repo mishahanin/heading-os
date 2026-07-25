@@ -31,11 +31,17 @@ from typing import Optional, Tuple
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 
 # This is the dispatcher's first import from outside .claude/hooks/, and it is
-# guarded. A module-level ImportError here would take down the WHOLE PreToolUse
-# chain — secret detection included — on every single tool call, which is a far
-# worse failure than losing the freeze deny. The layering makes the degradation
-# safe: the deny is only a CONVENIENCE, and the guarantee (`verify` inside
-# scripts/run-tests.py) is untouched by whether this import resolved.
+# guarded. A module-level failure here — not just an ImportError, but any
+# exception raised by top-level code in canopus_freeze.py or a module it
+# imports (e.g. a SyntaxError in scripts/utils/atomic.py) — would take down
+# the WHOLE PreToolUse chain — secret detection included — on every single
+# tool call, which is a far worse failure than losing the freeze deny. The
+# guard therefore catches Exception broadly, not just ImportError. The
+# layering makes the degradation safe: the deny is only a CONVENIENCE, and
+# the guarantee (`verify` inside scripts/run-tests.py) is untouched by
+# whether this import resolved. The failure is never silent: it is always
+# printed to stderr, naming the exception, so a disabled deny is visible
+# rather than a silent weakening of the chain.
 sys.path.insert(0, str(WORKSPACE))
 try:
     from scripts.utils.canopus_freeze import (  # noqa: E402
@@ -45,8 +51,8 @@ try:
         read_freeze,
     )
     _CANOPUS_AVAILABLE = True
-except ImportError as _canopus_exc:  # pragma: no cover - defensive
-    print(f"[_dispatch] canopus freeze module unavailable: {_canopus_exc}", file=sys.stderr)
+except Exception as _canopus_exc:  # pragma: no cover - defensive
+    print(f"[_dispatch] canopus freeze module unavailable ({type(_canopus_exc).__name__}): {_canopus_exc}", file=sys.stderr)
     _CANOPUS_AVAILABLE = False
 
 # ============================================================
@@ -729,6 +735,7 @@ def check_canopus_freeze(payload: dict) -> Optional[dict]:
     anchor = manifest.get("anchor") or ""
     try:
         resolved = Path(target).resolve()
+        workspace_resolved = Path(WORKSPACE).resolve()
     except (OSError, ValueError):
         return None
     if anchor and str(resolved) == anchor:
@@ -739,7 +746,7 @@ def check_canopus_freeze(payload: dict) -> Optional[dict]:
         )
 
     try:
-        rel = resolved.relative_to(Path(WORKSPACE).resolve()).as_posix()
+        rel = resolved.relative_to(workspace_resolved).as_posix()
     except ValueError:
         return None
 

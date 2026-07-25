@@ -18,6 +18,7 @@ freeze is inert without it, because a verification that is never invoked fails
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -231,6 +232,11 @@ class AttestationRecorder:
         tally and its own exit status, and the last writer would win. A worker is
         the only process carrying config.workerinput.
         """
+        if os.environ.get("CANOPUS_NO_ATTEST"):
+            # The contract runner sets this in the child it spawns. `probe` can
+            # run while a freeze is held, and a probe's partial tally must never
+            # overwrite the record left by a real gate run.
+            return False
         if self.frozen is None:
             return False
         if hasattr(session.config, "workerinput"):

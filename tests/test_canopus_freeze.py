@@ -84,6 +84,41 @@ def test_dir_members_digest_recursive_differs_from_shallow(tree: Path):
     assert shallow != deep
 
 
+def test_directory_freeze_skips_tool_generated_caches(tree: Path, anchor: Path):
+    """A recursive freeze must not bind the lock to artifacts a build regenerates.
+
+    Measured at the first real use of the tool on itself, 2026-07-25: freezing a
+    test directory captured `__pycache__/*.pyc`, and removing it the way any
+    fresh clone or cache clean does reported LOSS OF LOCK for a change nobody
+    made.
+    """
+    cache = tree / "tests" / "__pycache__"
+    cache.mkdir()
+    (cache / "test_alpha.cpython-311.pyc").write_bytes(b"\x00compiled")
+    (tree / "tests" / "stray.pyc").write_bytes(b"\x00compiled")
+
+    manifest = build_manifest(
+        [tree / "tests"], tree, label="l", frozen_at=STAMP, anchor=anchor
+    )
+
+    captured = list(manifest["files"]) + manifest["dirs"]["tests"]["members"]
+    assert not [name for name in captured if "__pycache__" in name or name.endswith(".pyc")]
+
+
+def test_a_cache_appearing_after_the_freeze_holds_the_lock(tree: Path, anchor: Path):
+    """The build loop regenerates these on every run, so this is the live case."""
+    manifest = build_manifest(
+        [tree / "tests"], tree, label="l", frozen_at=STAMP, anchor=anchor
+    )
+
+    cache = tree / "tests" / "sub" / "__pycache__"
+    cache.mkdir()
+    (cache / "test_gamma.cpython-311.pyc").write_bytes(b"\x00compiled")
+
+    result = verify_manifest(manifest, tree)
+    assert result["held"], result
+
+
 def test_root_hash_ignores_label_and_timestamp(tree: Path):
     paths = [tree / "tests" / "test_alpha.py"]
     one = build_manifest(paths, tree, label="first", frozen_at=STAMP)

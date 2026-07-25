@@ -63,6 +63,25 @@ FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
 ANCHOR_PREFIX = "canopus-anchor:"
 
+# Tool-generated caches that live INSIDE a source tree. A recursive freeze that
+# captured these would bind the lock to artifacts no version control tracks: the
+# build loop rewrites them on its own, and any fresh checkout or cache clean
+# removes them, so the composition digest would report LOSS OF LOCK for a change
+# nobody made. Measured at the first real use of the tool on itself, 2026-07-25.
+#
+# A named set rather than "ask the VCS what it ignores": this module is imported
+# by the PreToolUse dispatcher on every write and stays stdlib-only, never
+# calling subprocess. The boundary is deliberate and stated rather than implied.
+# An ignored artifact outside this set still freezes, and discovering one is a
+# reason to widen the set, never a reason to route around the lock.
+CACHE_DIRNAMES = frozenset({
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+})
+CACHE_SUFFIXES = frozenset({".pyc", ".pyo"})
+
 
 class FreezeError(Exception):
     """A freeze operation was refused."""
@@ -80,15 +99,19 @@ def file_digest(path: Path) -> str:
 def _members(directory: Path, *, recursive: bool) -> list[Path]:
     """Regular files in *directory*, sorted by POSIX relative path.
 
-    Symlinks are excluded (the workspace forbids them) and anything under the
-    freeze state directory is excluded so the manifest never hashes itself.
+    Symlinks are excluded (the workspace forbids them), anything under the
+    freeze state directory is excluded so the manifest never hashes itself, and
+    tool-generated caches are excluded so the lock never binds to an artifact the
+    build regenerates (see CACHE_DIRNAMES).
     """
+    skipped_dirs = CACHE_DIRNAMES | {FREEZE_DIRNAME}
     candidates = directory.rglob("*") if recursive else directory.iterdir()
     files = [
         p for p in candidates
         if p.is_file()
         and not p.is_symlink()
-        and FREEZE_DIRNAME not in p.relative_to(directory).parts
+        and skipped_dirs.isdisjoint(p.relative_to(directory).parts)
+        and p.suffix not in CACHE_SUFFIXES
     ]
     return sorted(files, key=lambda p: p.relative_to(directory).as_posix())
 

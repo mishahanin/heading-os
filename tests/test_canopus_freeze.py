@@ -797,3 +797,79 @@ def test_same_file_positional_and_content_only_keeps_the_guard(tmp_path):
     # files is a dict, so a duplicate-key count can never exceed 1; the property
     # worth pinning is that the second write carries the SAME digest.
     assert manifest["files"]["scripts/run-tests.py"] == file_digest(target)
+
+
+def _tree_with_one_file(tmp_path):
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "test_a.py"
+    target.write_text("def test_a():\n    assert False\n", encoding="utf-8")
+    return target
+
+
+def test_baseline_enters_the_root_hash(tmp_path):
+    from scripts.utils.canopus_freeze import build_manifest
+
+    target = _tree_with_one_file(tmp_path)
+    kwargs = dict(label="t", frozen_at="2026-07-25T00:00:00+00:00")
+
+    one = build_manifest([target], tmp_path, baseline={"tests/test_a.py": 7}, **kwargs)
+    two = build_manifest([target], tmp_path, baseline={"tests/test_a.py": 1}, **kwargs)
+
+    assert one["root"] != two["root"]
+
+
+def test_edited_baseline_reads_as_loss_of_lock(tmp_path):
+    from scripts.utils.canopus_freeze import build_manifest, verify_manifest
+
+    target = _tree_with_one_file(tmp_path)
+    manifest = build_manifest(
+        [target], tmp_path, label="t", frozen_at="2026-07-25T00:00:00+00:00",
+        baseline={"tests/test_a.py": 7},
+    )
+    assert verify_manifest(manifest, tmp_path)["held"] is True
+
+    manifest["baseline"]["tests/test_a.py"] = 1
+    assert verify_manifest(manifest, tmp_path)["held"] is False
+
+
+def test_non_integer_baseline_is_corrupt(tmp_path):
+    import json
+
+    import pytest as _pytest
+
+    from scripts.utils.canopus_freeze import (
+        FreezeCorrupt, build_manifest, freeze_state_path, read_freeze, write_freeze,
+    )
+
+    target = _tree_with_one_file(tmp_path)
+    manifest = build_manifest(
+        [target], tmp_path, label="t", frozen_at="2026-07-25T00:00:00+00:00",
+        baseline={"tests/test_a.py": 7},
+    )
+    freeze_state_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    write_freeze(tmp_path, manifest)
+
+    raw = json.loads(freeze_state_path(tmp_path).read_text(encoding="utf-8"))
+    raw["baseline"]["tests/test_a.py"] = "7"
+    freeze_state_path(tmp_path).write_text(json.dumps(raw), encoding="utf-8")
+
+    with _pytest.raises(FreezeCorrupt, match="baseline"):
+        read_freeze(tmp_path)
+
+
+def test_a_v1_manifest_is_corrupt(tmp_path):
+    import json
+
+    import pytest as _pytest
+
+    from scripts.utils.canopus_freeze import FreezeCorrupt, freeze_state_path, read_freeze
+
+    state = freeze_state_path(tmp_path)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({
+        "recipe": "canopus-freeze-v1", "label": "old", "frozen_at": "",
+        "anchor": "", "git_sha": "", "root": "0" * 64, "files": {}, "dirs": {},
+    }), encoding="utf-8")
+
+    with _pytest.raises(FreezeCorrupt, match="canopus-freeze-v1"):
+        read_freeze(tmp_path)

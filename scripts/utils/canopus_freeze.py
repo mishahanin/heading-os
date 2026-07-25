@@ -26,12 +26,12 @@ this catches is tampering by helpfulness: the model hits a red assertion,
 concludes in good faith that the assertion is wrong, and edits it. A verification
 that merely runs catches that completely.
 
-Recipe `canopus-freeze-v1`, named in every manifest so a future algorithm change
+Recipe `canopus-freeze-v2`, named in every manifest so a future algorithm change
 breaks loudly instead of silently:
 
     file digest = sha256(LF-normalized bytes)
     dir digest  = sha256("".join(f"{relpath}\\n" for relpath in sorted members))
-    root hash   = sha256(canonical JSON of {recipe, anchor, files, dirs})
+    root hash   = sha256(canonical JSON of {recipe, anchor, files, dirs, baseline})
 
 Per-file bytes are LF-normalized (\\r\\n -> \\n) so a CRLF working copy and a
 fresh LF checkout agree, matching the recipe already proven in
@@ -57,7 +57,7 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 from scripts.utils.atomic import atomic_write_text
 
-RECIPE = "canopus-freeze-v1"
+RECIPE = "canopus-freeze-v2"
 FREEZE_DIRNAME = ".canopus"
 FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
@@ -146,12 +146,19 @@ def dir_member_rels(directory: Path, root: Path, *, recursive: bool) -> list[str
 
 
 def root_hash(manifest: dict) -> str:
-    """sha256 over recipe, anchor path, sorted files, sorted dirs."""
+    """sha256 over recipe, anchor path, sorted files, sorted dirs, sorted baseline.
+
+    The baseline is in here deliberately. Outside the hash it could be edited
+    down to 1 with no indicator moving, and a per-file expected item count that
+    can be silently lowered is worse than none: it reports rigour it is not
+    delivering.
+    """
     payload = {
         "recipe": manifest["recipe"],
         "anchor": manifest.get("anchor") or "",
         "files": dict(sorted(manifest["files"].items())),
         "dirs": dict(sorted(manifest["dirs"].items())),
+        "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -240,6 +247,7 @@ def build_manifest(
     frozen_at: str,
     anchor: Optional[Path] = None,
     content_only: Iterable[Path] = (),
+    baseline: Optional[dict] = None,
 ) -> dict:
     """Build a freeze manifest over *paths*, all relative to *root*.
 
@@ -323,6 +331,7 @@ def build_manifest(
         "frozen_at": frozen_at,
         "anchor": str(validate_anchor_path(anchor, resolved_root)) if anchor else "",
         "git_sha": "",
+        "baseline": dict(sorted((baseline or {}).items())),
         "files": dict(sorted(files.items())),
         "dirs": dict(sorted(dirs.items())),
     }
@@ -368,6 +377,9 @@ def recompute(manifest: dict, root: Path) -> dict:
         "anchor": manifest.get("anchor") or "",
         "files": dict(sorted(files.items())),
         "dirs": dict(sorted(dirs.items())),
+        # Carried through verbatim: the baseline is a recorded expectation, not
+        # something disk can be re-measured for.
+        "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
     }
 
 
@@ -568,7 +580,7 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
     exactly those two and denies fail-closed; anything else falls through its
     outer catch-all, logs an advisory, and continues -- fail OPEN).
     """
-    for key in (*_STR_SCALAR_KEYS, "files", "dirs"):
+    for key in (*_STR_SCALAR_KEYS, "files", "dirs", "baseline"):
         _require(key in manifest, f"freeze manifest at {path} is missing {key!r}")
 
     for key in _STR_SCALAR_KEYS:
@@ -644,6 +656,26 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
                 f"freeze manifest at {path} has a non-string member in 'members' "
                 f"for directory {rel!r} ({type(member).__name__}), expected a string",
             )
+
+    baseline = manifest["baseline"]
+    _require(
+        isinstance(baseline, dict),
+        f"freeze manifest at {path} has a non-dict 'baseline' value "
+        f"({type(baseline).__name__}), expected a dict",
+    )
+    for rel, count in baseline.items():
+        _require(
+            isinstance(rel, str),
+            f"freeze manifest at {path} has a non-string key in 'baseline' "
+            f"({type(rel).__name__}), expected a string",
+        )
+        # bool is a subclass of int; a JSON `true` here would silently compare
+        # equal to a collected count of 1.
+        _require(
+            isinstance(count, int) and not isinstance(count, bool),
+            f"freeze manifest at {path} has a non-integer 'baseline' value for "
+            f"{rel!r} ({type(count).__name__}), expected an integer",
+        )
 
 
 def read_freeze(root: Path) -> Optional[dict]:

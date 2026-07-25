@@ -239,6 +239,7 @@ def build_manifest(
     label: str,
     frozen_at: str,
     anchor: Optional[Path] = None,
+    content_only: Iterable[Path] = (),
 ) -> dict:
     """Build a freeze manifest over *paths*, all relative to *root*.
 
@@ -250,6 +251,14 @@ def build_manifest(
     beside a frozen test. The guard is skipped when the parent is the working
     tree root, because guarding the root's composition would deny every new
     top-level file and make the tool something people route around.
+
+    A `content_only` path freezes its BYTES and installs no composition guard on
+    its parent. This is how the enforcer files are frozen. Freezing
+    scripts/run-tests.py as an ordinary file would guard scripts/, and a build
+    that cannot create a file under scripts/ cannot build anything, so the
+    required practice would be unenforceable. A new file appearing beside
+    run-tests.py does not change what run-tests.py does; an edit to its bytes
+    does. The composition guard answers a question the enforcers do not ask.
 
     Every `conftest.py` on the path from each frozen path up to the tree root is
     added by CONTENT. A composition guard records member paths only, so a
@@ -287,6 +296,22 @@ def build_manifest(
                         "hash": dir_members_digest(parent, recursive=False),
                         "members": dir_member_rels(parent, resolved_root, recursive=False),
                     }
+        for conftest in _conftest_chain(target, resolved_root):
+            files.setdefault(
+                conftest.relative_to(resolved_root).as_posix(), file_digest(conftest)
+            )
+
+    # Positional paths are processed first, deliberately: a path given BOTH ways
+    # keeps the parent guard its positional form installed, and the digest
+    # written twice is the same value.
+    for raw in content_only:
+        target = validate_freeze_path(Path(raw), resolved_root)
+        if target.is_dir():
+            raise FreezeError(
+                f"{target} is a directory; --content freezes file bytes only. "
+                f"Pass it positionally to freeze it recursively."
+            )
+        files[target.relative_to(resolved_root).as_posix()] = file_digest(target)
         for conftest in _conftest_chain(target, resolved_root):
             files.setdefault(
                 conftest.relative_to(resolved_root).as_posix(), file_digest(conftest)

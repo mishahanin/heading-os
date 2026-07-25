@@ -730,3 +730,70 @@ def test_the_chain_never_reaches_outside_the_tree(tmp_path):
     manifest = _manifest([target], root, _anchor_for(tmp_path))
     assert all(not rel.startswith("..") for rel in manifest["files"])
     assert str(outside) not in manifest["files"]
+
+
+def test_content_only_file_installs_no_parent_guard(tmp_path):
+    from scripts.utils.canopus_freeze import build_manifest
+
+    (tmp_path / "scripts").mkdir()
+    target = tmp_path / "scripts" / "run-tests.py"
+    target.write_text("print('gate')\n", encoding="utf-8")
+
+    manifest = build_manifest(
+        [], tmp_path, label="t", frozen_at="2026-07-25T00:00:00+00:00",
+        content_only=[target],
+    )
+
+    assert "scripts/run-tests.py" in manifest["files"]
+    assert "scripts" not in manifest["dirs"]
+
+
+def test_content_only_ignores_a_new_sibling_but_catches_an_edit(tmp_path):
+    from scripts.utils.canopus_freeze import build_manifest, verify_manifest
+
+    (tmp_path / "scripts").mkdir()
+    target = tmp_path / "scripts" / "run-tests.py"
+    target.write_text("print('gate')\n", encoding="utf-8")
+    manifest = build_manifest(
+        [], tmp_path, label="t", frozen_at="2026-07-25T00:00:00+00:00",
+        content_only=[target],
+    )
+
+    (tmp_path / "scripts" / "new_helper.py").write_text("x = 1\n", encoding="utf-8")
+    assert verify_manifest(manifest, tmp_path)["held"] is True
+
+    target.write_text("print('moved')\n", encoding="utf-8")
+    report = verify_manifest(manifest, tmp_path)
+    assert report["held"] is False
+    assert report["changed"] == ["scripts/run-tests.py"]
+
+
+def test_content_only_refuses_a_directory(tmp_path):
+    import pytest as _pytest
+
+    from scripts.utils.canopus_freeze import FreezeError, build_manifest
+
+    (tmp_path / "scripts").mkdir()
+    with _pytest.raises(FreezeError, match="freezes file bytes only"):
+        build_manifest(
+            [], tmp_path, label="t", frozen_at="2026-07-25T00:00:00+00:00",
+            content_only=[tmp_path / "scripts"],
+        )
+
+
+def test_same_file_positional_and_content_only_keeps_the_guard(tmp_path):
+    from scripts.utils.canopus_freeze import build_manifest, file_digest
+
+    (tmp_path / "scripts").mkdir()
+    target = tmp_path / "scripts" / "run-tests.py"
+    target.write_text("print('gate')\n", encoding="utf-8")
+
+    manifest = build_manifest(
+        [target], tmp_path, label="t", frozen_at="2026-07-25T00:00:00+00:00",
+        content_only=[target],
+    )
+
+    assert manifest["dirs"]["scripts"]["mode"] == "members"
+    # files is a dict, so a duplicate-key count can never exceed 1; the property
+    # worth pinning is that the second write carries the SAME digest.
+    assert manifest["files"]["scripts/run-tests.py"] == file_digest(target)

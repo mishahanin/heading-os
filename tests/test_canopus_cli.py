@@ -487,3 +487,19 @@ def test_a_damaged_attestation_changes_no_exit_code(tree, anchor, capsys):
     assert _run(["verify"], tree) == 0
     assert _run(["status"], tree) == 0
     assert "NOT ATTESTED" in capsys.readouterr().out
+
+
+def test_freeze_accepts_content_only_with_no_positional_paths(tree, anchor):
+    (tree / "scripts" / "helper.py").write_text("x = 1\n")
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--content", "scripts/helper.py"], tree) == 0
+
+    manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
+    assert "scripts/helper.py" in manifest["files"]
+    assert "scripts" not in manifest["dirs"]
+
+
+def test_freeze_requires_at_least_one_path(tree, anchor, capsys):
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor)], tree) == 1
+    assert "at least one path" in capsys.readouterr().err

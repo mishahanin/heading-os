@@ -208,11 +208,19 @@ Three layers, and the differences matter:
 - `verify` is the **guarantee**. It recomputes digests from disk and catches a change made
   by any route.
 - The test gate is what makes the guarantee **fire**. `tests/conftest.py` runs the check at
-  pytest session start and `scripts/run-tests.py` runs it before the suite, so no route
-  into the suite reaches green while the contract is moved — not `python
+  pytest session start and `scripts/run-tests.py` runs it before the suite, so the ordinary
+  routes into the suite do not reach green while the contract is moved — not `python
   scripts/run-tests.py`, and not the bare `pytest tests/test_thing.py` inner loop. A
   verification that is never invoked is worth nothing, however well its expected value is
   protected.
+
+  One route is not covered, and it is named here rather than left to be discovered:
+  `pytest --noconftest` skips conftest loading altogether, so the session-start check never
+  runs. Measured: with a moved contract, `pytest tests/contract/s -q` aborts with exit 4,
+  and the same command with `--noconftest` prints `2 passed` and exits 0. That is deliberate
+  evasion rather than tampering by helpfulness, and the threat model this tool states is the
+  latter, so the gap is accepted — but `scripts/run-tests.py` is then the only gate of
+  record, and a slice signed off from a `--noconftest` run has not been gated at all.
 
 `verify` reports one of three states:
 
@@ -224,7 +232,14 @@ Three layers, and the differences matter:
 
 The anchor must live outside the working tree. An anchor the build can write to is not an
 anchor. Point it at a sibling repository with its own history, so a build reaching for the
-anchor leaves a commit in a repository it had no reason to touch.
+anchor dirties a repository it had no reason to touch.
+
+Be precise about what that trace is worth. `verify` reads the anchor's **working copy** and
+never consults git, and `freeze` appends the `canopus-anchor:` line to that working copy, so
+a tamper leaves an uncommitted diff in the sibling repository: visible in its `git status`,
+and erasable with `git checkout --`. It is evidence for a human who looks, not containment.
+The line becomes durable only once it is committed there, which is what `freeze` tells you
+to do on the way out.
 
 Freezing a directory is recursive. Freezing a file also guards its parent directory's
 immediate membership, which catches a `conftest.py` dropped beside a frozen test to

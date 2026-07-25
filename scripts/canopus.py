@@ -21,9 +21,15 @@ worth nothing.
 The expected root hash lives in a committed artifact OUTSIDE the working tree,
 and `verify` reads it from there. Nobody types it and nobody compares it by eye.
 Point --anchor at a sibling repository with its own history, so a build reaching
-for the anchor leaves a commit in a repository it had no reason to touch. That is
-not containment; it is a passive, permanent trap that does not depend on anyone
-being alert.
+for the anchor dirties a repository it had no reason to touch.
+
+Say exactly what that buys, and no more. `read_anchor` reads the artifact's
+WORKING COPY and never consults git, so the trace a tamper leaves is an
+uncommitted diff in the other repository: visible in its `git status`, and
+erasable with `git checkout --`. That is evidence for a human who looks, not
+containment and not a permanent record. The durable artifact is the
+`canopus-anchor:` line once someone COMMITS it there, which is why freeze says so
+in its closing line rather than leaving it to be inferred.
 """
 from __future__ import annotations
 
@@ -337,7 +343,7 @@ def cmd_pack(args) -> int:
     if attested_at is None:
         print(f"  {YELLOW}no attestation to age{RESET}  {reason}")
     elif dirty or newer:
-        for sha, when, subject in newer:
+        for sha, _when, subject in newer:
             print(f"  {YELLOW}newer than the attestation{RESET}  {sha} {subject}")
         if dirty:
             print(f"  {YELLOW}the working tree has uncommitted changes{RESET}")

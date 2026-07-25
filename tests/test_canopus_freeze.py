@@ -357,6 +357,58 @@ def test_read_freeze_raises_on_a_missing_required_key(tree: Path):
         read_freeze(tree)
 
 
+def test_read_freeze_raises_when_dirs_is_not_a_dict(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    manifest["dirs"] = "x"
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(FreezeCorrupt, match="dirs"):
+        read_freeze(tree)
+
+
+def test_read_freeze_raises_when_files_is_not_a_dict(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    manifest["files"] = []
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(FreezeCorrupt, match="files"):
+        read_freeze(tree)
+
+
+def test_read_freeze_raises_when_a_dirs_entry_is_not_a_dict(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    first_dir = next(iter(manifest["dirs"]))
+    manifest["dirs"][first_dir] = "not-a-dict"
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(FreezeCorrupt, match="incomplete entry"):
+        read_freeze(tree)
+
+
+def test_read_freeze_raises_when_a_dirs_entry_is_missing_members(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    first_dir = next(iter(manifest["dirs"]))
+    del manifest["dirs"][first_dir]["members"]
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(FreezeCorrupt, match="incomplete entry"):
+        read_freeze(tree)
+
+
+def test_read_freeze_raises_when_root_is_not_a_string(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    manifest["root"] = 12345
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(FreezeCorrupt, match="root"):
+        read_freeze(tree)
+
+
 def test_clear_freeze_is_idempotent(tree: Path):
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
     write_freeze(tree, manifest)

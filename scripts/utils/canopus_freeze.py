@@ -442,6 +442,21 @@ def read_freeze(root: Path) -> Optional[dict]:
     for key in ("files", "dirs", "root", "label"):
         if key not in manifest:
             raise FreezeCorrupt(f"freeze manifest at {path} is missing {key!r}")
+    # Presence alone is not enough: recompute()/verify_manifest()/frozen_reason()
+    # all dereference these keys assuming a specific shape (dict.items(), string
+    # concatenation, entry["mode"]/["hash"]/["members"]). A syntactically valid
+    # manifest with the wrong shape must fail here, not as an uncaught
+    # AttributeError deep in a caller that only expects FreezeCorrupt/OSError.
+    if not isinstance(manifest["files"], dict):
+        raise FreezeCorrupt(
+            f"freeze manifest at {path} has a non-dict 'files' value "
+            f"({type(manifest['files']).__name__}), expected a dict"
+        )
+    if not isinstance(manifest["dirs"], dict):
+        raise FreezeCorrupt(
+            f"freeze manifest at {path} has a non-dict 'dirs' value "
+            f"({type(manifest['dirs']).__name__}), expected a dict"
+        )
     for rel, entry in manifest["dirs"].items():
         # A dir entry without its recorded member list would make every existing
         # member read as newly added. Refuse it rather than report a false alarm.
@@ -449,6 +464,29 @@ def read_freeze(root: Path) -> Optional[dict]:
             raise FreezeCorrupt(
                 f"freeze manifest at {path} has an incomplete entry for directory {rel!r}"
             )
+        if "hash" not in entry:
+            raise FreezeCorrupt(
+                f"freeze manifest at {path} has a directory entry for {rel!r} missing 'hash'"
+            )
+        if not isinstance(entry["members"], list):
+            raise FreezeCorrupt(
+                f"freeze manifest at {path} has a non-list 'members' for directory {rel!r}"
+            )
+    if not isinstance(manifest["root"], str):
+        raise FreezeCorrupt(
+            f"freeze manifest at {path} has a non-string 'root' value "
+            f"({type(manifest['root']).__name__}), expected a string"
+        )
+    if not isinstance(manifest["label"], str):
+        raise FreezeCorrupt(
+            f"freeze manifest at {path} has a non-string 'label' value "
+            f"({type(manifest['label']).__name__}), expected a string"
+        )
+    if "anchor" in manifest and not isinstance(manifest["anchor"], str):
+        raise FreezeCorrupt(
+            f"freeze manifest at {path} has a non-string 'anchor' value "
+            f"({type(manifest['anchor']).__name__}), expected a string"
+        )
     return manifest
 
 

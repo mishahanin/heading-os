@@ -46,6 +46,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     lock_state,
     read_anchor,
     read_freeze,
+    validate_anchor_path,
     verify_manifest,
     write_freeze,
 )
@@ -102,7 +103,7 @@ def cmd_freeze(args) -> int:
         root,
         label=args.label,
         frozen_at=datetime.now(timezone.utc).isoformat(),
-        anchor=Path(args.anchor) if args.anchor else None,
+        anchor=_under_root(args.anchor, root) if args.anchor else None,
     )
     manifest["git_sha"] = _git_sha(root)
     write_freeze(root, manifest)
@@ -126,7 +127,11 @@ def cmd_verify(args) -> int:
         return 1
 
     report = verify_manifest(manifest, root)
-    anchor, status, value = _anchor_state(manifest, args.anchor)
+    override = (
+        str(validate_anchor_path(_under_root(args.anchor, root), root))
+        if args.anchor else None
+    )
+    anchor, status, value = _anchor_state(manifest, override)
     state = lock_state(report, status, value)
 
     _print_root(report["recomputed_root"], manifest)

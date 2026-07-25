@@ -180,3 +180,57 @@ def test_freeze_accepts_paths_relative_to_root_from_any_cwd(tmp_path, monkeypatc
     monkeypatch.chdir(tmp_path)
     assert main(["--root", str(root), "freeze", "tests/test_alpha.py", "--label", "demo"]) == 0
     assert (root / ".canopus" / "freeze.json").exists()
+
+
+def test_freeze_resolves_a_relative_anchor_against_root_not_cwd(tmp_path, monkeypatch):
+    """A relative --anchor is anchored to --root, exactly like the positional paths."""
+    root = tmp_path / "root-tree"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_alpha.py").write_text("def test_a():\n    assert True\n")
+
+    real_anchor = tmp_path / "notes" / "gate-artifact.md"
+    real_anchor.parent.mkdir(parents=True)
+    real_anchor.write_text("# gate artifact\n")
+
+    # Neither root itself nor its parent -- an unrelated cwd.
+    cwd = tmp_path / "unrelated" / "deep"
+    cwd.mkdir(parents=True)
+    monkeypatch.chdir(cwd)
+
+    result = main(["--root", str(root), "freeze", "tests/test_alpha.py",
+                    "--label", "demo", "--anchor", "../notes/gate-artifact.md"])
+    assert result == 0
+    manifest = json.loads((root / ".canopus" / "freeze.json").read_text())
+    assert manifest["anchor"] == str(real_anchor.resolve())
+
+
+def test_freeze_does_not_silently_anchor_to_a_decoy_under_the_cwd(tmp_path, monkeypatch):
+    """The same relative --anchor string, resolved against a spurious cwd, points at a
+    decoy file that happens to exist there. The fix must not anchor to it."""
+    root = tmp_path / "root-tree"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_alpha.py").write_text("def test_a():\n    assert True\n")
+
+    # No real anchor exists under tmp_path/notes/ -- only a same-named decoy
+    # under the cwd's own parent, which the buggy cwd-relative resolution
+    # would have silently picked up.
+    cwd = tmp_path / "unrelated" / "deep"
+    cwd.mkdir(parents=True)
+    decoy = tmp_path / "unrelated" / "notes" / "gate-artifact.md"
+    decoy.parent.mkdir(parents=True)
+    decoy.write_text("# decoy, never approved\n")
+    monkeypatch.chdir(cwd)
+
+    result = main(["--root", str(root), "freeze", "tests/test_alpha.py",
+                    "--label", "demo", "--anchor", "../notes/gate-artifact.md"])
+    assert result == 1
+    assert not (root / ".canopus" / "freeze.json").exists()
+
+
+def test_verify_anchor_override_inside_the_working_tree_is_refused(tree, capsys):
+    """The verify override must be refused the same way a freeze-time anchor is."""
+    _freeze(tree)
+    inside = tree / "gate.md"
+    inside.write_text("# nope\n")
+    assert _run(["verify", "--anchor", str(inside)], tree) == 1
+    assert "inside the working tree" in capsys.readouterr().err

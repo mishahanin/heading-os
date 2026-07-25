@@ -1,8 +1,8 @@
 ---
 name: council
 description: |
-  Second-opinion advisor. Consults Gemini, Grok, and Kimi in parallel for independent views on hard or high-stakes calls.
-  Two modes: independent (all models see the problem only, reason fresh) and critique (all stress-test a draft).
+  Second-opinion advisor. Default roster is Kimi k3 alongside Claude's own view; Gemini and Grok are opt-in via --gemini / --grok / --all.
+  Two modes: independent (the models see the problem only, reason fresh) and critique (they stress-test a draft).
   Distinct from /deep-think (Claude reasoning structured, alone) and /odin (Claude + the curated knowledge brain).
   Trigger when the user says: "council", "/council", "second opinion on", "consult the council",
   "what would Gemini/Grok/Kimi say about", "stress-test this with Gemini/Grok/Kimi", "council vote".
@@ -12,7 +12,7 @@ context: fork
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.4"
+  version: "1.5"
 x-heading-orchestration:
   parallel_safe: partial
   shared_state: ["outputs/operations/council/"]
@@ -29,11 +29,11 @@ x-heading-orchestration:
     - council vote
 x-heading-capability:
   what: >
-    Independent second opinions from Gemini, Grok, and Kimi in parallel, presented side-by-side with Claude's own view — no synthesized final answer, the CEO decides.
+    Independent second opinions presented side-by-side with Claude's own view — no synthesized final answer, the CEO decides. Default roster since 2026-07-25 is Kimi k3 only; Gemini and Grok are one flag away.
   how: >
-    Run /council <question> for independent mode, or /council --critique <draft> to stress-test a draft. Transcript saved to outputs/operations/council/ unless --no-log. Flags --gemini-only / --grok-only / --kimi-only (run one) or --no-gemini / --no-grok / --no-kimi (skip one).
+    Run /council <question> for independent mode, or /council --critique <draft> to stress-test a draft. Transcript saved to outputs/operations/council/ unless --no-log. Add voices with --gemini / --grok / --all; run exactly one with --gemini-only / --grok-only / --kimi-only; drop one with --no-gemini / --no-grok / --no-kimi.
   when: >
-    Use for a hard or high-stakes call where cross-model disagreement is itself signal. For Claude reasoning alone use /deep-think; for Claude plus the curated knowledge brain use /odin.
+    Use for a hard or high-stakes call where an independent view is worth the latency; add --all when cross-model disagreement is itself the signal. For Claude reasoning alone use /deep-think; for Claude plus the curated knowledge brain use /odin.
 x-heading-routing:
   category: Strategy
   triggers:
@@ -56,13 +56,13 @@ x-heading-routing:
   router: auto
 ---
 
-# Council - Independent Second Opinions (Gemini + Grok + Kimi)
+# Council - Independent Second Opinions (Kimi k3 by default; Gemini + Grok opt-in)
 
-Independent second opinions from Gemini, Grok, and Kimi, dispatched in parallel by default. Use when:
+Independent second opinions dispatched in parallel. Use when:
 - The user wants fresh views on a hard call (independent mode)
 - The user wants a draft stress-tested before it ships (critique mode)
 
-This skill is distinct from `/deep-think` (Claude reasoning harder, alone) and `/odin` (Claude + the curated knowledge brain). The unique value here is three models with different training pedigrees, different RLHF, and different failure modes — agreement is stronger evidence; disagreement is itself information.
+This skill is distinct from `/deep-think` (Claude reasoning harder, alone) and `/odin` (Claude + the curated knowledge brain). The unique value is a model with a different training pedigree, different RLHF, and different failure modes reaching the question independently — agreement is stronger evidence, disagreement is itself information. `--all` restores the three-model roster when breadth matters more than latency.
 
 ---
 
@@ -97,24 +97,34 @@ For CRITIQUE mode, prepare:
 
 ### Determine which models to call
 
-Scan the user's invocation text for model-selection flags. Default = run Gemini + Grok + Kimi.
+Scan the user's invocation text for model-selection flags.
+
+**Default roster = Kimi (k3) only.** The council is therefore Opus 5 (Claude's own view,
+formed in-session) plus one deep external reasoner. Set by the CEO on 2026-07-25; Gemini
+and Grok stay implemented and are one flag away, so restoring the wider roster is a
+one-word change, not a rebuild.
+
+**Opt-in flags** (combinable, add a voice back to the default roster):
+- `--gemini` — also call Gemini.
+- `--grok` — also call Grok.
+- `--all` — call Gemini + Grok + Kimi, the pre-2026-07-25 roster.
 
 **Exclusive flags** (run exactly one):
 - `--gemini-only` — call only Gemini.
 - `--grok-only` — call only Grok.
-- `--kimi-only` — call only Kimi.
+- `--kimi-only` — call only Kimi. Same as the default; accepted for symmetry.
 
 At most one `--*-only` flag is allowed.
 
 **Skip flags** (combinable):
-- `--no-gemini` — skip Gemini.
-- `--no-grok` — skip Grok.
-- `--no-kimi` — skip Kimi.
+- `--no-gemini`, `--no-grok`, `--no-kimi` — remove a voice from whatever the roster
+  resolved to. Skipping a voice that is not in the roster is a no-op, not an error.
 
 **Reject immediately** (one-line error, then stop — do not proceed to Phase 3) if:
 - More than one `--*-only` flag is set.
-- Any `--*-only` is combined with any `--no-*`.
-- All base voices end up skipped (e.g. `--no-gemini --no-grok --no-kimi`).
+- Any `--*-only` is combined with any `--no-*` or any opt-in flag.
+- All external voices end up skipped (e.g. `--no-kimi` on the default roster). Claude's
+  own view is not a council; say so rather than producing a one-voice transcript.
 
 ### Build the commands
 
@@ -134,7 +144,17 @@ python scripts/grok-consult.py   --mode critique --draft '...' --context '...'
 python scripts/kimi-consult.py   --mode critique --draft '...' --context '...' --model k3 --reasoning-effort high --max-tokens 12000
 ```
 
-**Kimi voice runs the deep model (k3).** Dispatch it with the explicit `--model k3` shown above, NOT `python scripts/council-models.py --get kimi` — that pin stays `kimi-for-coding` and is reserved for the fast/fallback path. k3 always thinks and ignores `--temperature`; give it `--max-tokens` head-room (12000, as shown). Before dispatch, check `cliproxy models` for `k3`; if it is absent, fall back to `--model "$(python scripts/council-models.py --get kimi)"` without `--reasoning-effort`, and note in the output: `kimi voice: k3 unavailable, using kimi-for-coding`.
+**Kimi voice runs the deep model (k3), and ONLY k3.** Dispatch it with the explicit
+`--model k3` shown above, NOT `python scripts/council-models.py --get kimi` — that pin
+stays `kimi-for-coding` and is reserved for other callers' fast path. k3 always thinks and
+ignores `--temperature`; give it `--max-tokens` head-room (12000, as shown). Before
+dispatch, check `cliproxy models` for `k3`.
+
+**If k3 is absent, SKIP the Kimi voice.** Do not silently fall back to `kimi-for-coding`
+(the 2.6/2.7 line): a shallower model answering in the deep model's name is a quality
+substitution nobody consented to, and on the default roster it would be the council's only
+external voice. Say plainly `kimi voice: k3 unavailable, skipped`, and since that empties
+the default roster, stop rather than presenting Claude's own view as a council.
 
 Optional model overrides (these take **proxy** ids — check `cliproxy models` for valid values):
 - `--gemini-model gemini-2.5-flash` — passed to the Gemini call as `--model gemini-2.5-flash`

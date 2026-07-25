@@ -588,9 +588,19 @@ def write_freeze(root: Path, manifest: dict) -> None:
 
 
 def clear_freeze(root: Path) -> None:
-    """Remove the active manifest. Idempotent, and never parses it, so it works
-    on a damaged file."""
+    """Remove the active manifest AND the attestation that spoke for it.
+
+    Idempotent, and never parses either file, so it works on a damaged one.
+
+    The attestation goes with the manifest because the root hash is
+    deterministic over frozen content plus the anchor path: leaving the record
+    behind meant that re-freezing identical test content revived it, and a
+    brand-new freeze with zero runs since printed ATTESTED. Reproduced, not
+    theorised. A record that outlives the contract it attests is a false green
+    waiting for a coincidence.
+    """
     freeze_state_path(root).unlink(missing_ok=True)
+    attest_state_path(root).unlink(missing_ok=True)
 
 
 def append_history(

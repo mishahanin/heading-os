@@ -92,6 +92,10 @@ class AttestationRecorder:
         self.root_digest: str | None = None
         self.frozen: dict | None = None
         self.patterns: list[str] = ["test_*.py"]
+        # Deselections arrive BEFORE the tally exists (see deselected below), so
+        # they are buffered by root-relative path and folded in on every route
+        # that builds or rebuilds self.frozen.
+        self.pending_deselected: dict[str, int] = {}
 
     def _rel(self, candidate) -> str | None:
         """Root-relative POSIX path, or None when it lies outside the tree."""
@@ -127,6 +131,7 @@ class AttestationRecorder:
             if rel is not None
         ]
         self.frozen = tally_collection(frozen, collected)
+        self._apply_pending()
 
     def seed_from_ids(self, config, ids) -> None:
         """Seed the controller's tally from a worker's collected node ids.
@@ -147,6 +152,7 @@ class AttestationRecorder:
             if rel is not None
         ]
         self.frozen = tally_collection(frozen, collected)
+        self._apply_pending()
 
     def merge_worker(self, worker_output) -> None:
         """Fold one worker's deselection counts into the controller's tally.
@@ -167,18 +173,42 @@ class AttestationRecorder:
             if counts is not None:
                 counts["deselected"] = max(counts["deselected"], int(count))
 
+    def _apply_pending(self) -> None:
+        """Fold buffered deselections into the tally, once there is one.
+
+        Never lowers a count: merge_worker may already have folded a worker's
+        larger figure in.
+        """
+        if not self.frozen:
+            return
+        for rel, count in self.pending_deselected.items():
+            counts = self.frozen.get(rel)
+            if counts is not None:
+                counts["deselected"] = max(counts["deselected"], count)
+
     def deselected(self, items) -> None:
         """Count items filtered out of frozen test files.
 
         -k, -m, --lf and --deselect all route through pytest's deselection hook,
         which is why nothing here inspects an option, or whether one was given.
+
+        BUFFERED, not written straight into the tally. pytest fires this hook
+        from inside pytest_collection_modifyitems, which runs BEFORE
+        pytest_collection_finish builds self.frozen — so an earlier revision's
+        `if not self.frozen: return` guard dropped every deselection on the
+        floor, and collect() then seeded a fresh all-zero tally over the top.
+        Measured, not theorised: `pytest -k test_a` on a 3-test frozen file
+        printed "2 deselected" and still attested "none deselected", in a plain
+        run and under -n 2 alike. The entire -k / -m / --lf / --deselect
+        detection axis was inert while its unit tests passed, because they call
+        this method after seeding the tally by hand and so invert the real hook
+        order.
         """
-        if not self.frozen:
-            return
         for item in items:
-            counts = self.frozen.get(self._rel(getattr(item, "path", "")))
-            if counts is not None:
-                counts["deselected"] += 1
+            rel = self._rel(getattr(item, "path", ""))
+            if rel is not None:
+                self.pending_deselected[rel] = self.pending_deselected.get(rel, 0) + 1
+        self._apply_pending()
 
     def report(self, report) -> None:
         """Tally one outcome, for frozen test files only."""

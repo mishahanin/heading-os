@@ -147,6 +147,32 @@ def test_a_damaged_attestation_reads_as_absent_and_never_raises(tmp_path, capsys
     assert "canopus" in capsys.readouterr().err
 
 
+def test_a_non_numeric_counter_reads_as_absent(tmp_path, capsys):
+    """The reporting side SUMS these counters, so a string in one is a crash.
+
+    Measured: a record carrying "passed": "3" made `canopus verify` raise
+    TypeError out of _print_attestation, and TypeError is outside the
+    FreezeError/FreezeCorrupt/OSError set main() catches -- so the layer billed
+    as the guarantee printed a raw traceback instead of its result. Damage reads
+    as absence here, which can only ever be NOT ATTESTED.
+    """
+    record = _build({"tests/test_alpha.py": _tests()})
+    record["frozen_tests"]["tests/test_alpha.py"]["passed"] = "3"
+    cf.write_attestation(tmp_path, record)
+
+    assert cf.read_attestation(tmp_path) is None
+    assert "integer counters" in capsys.readouterr().err
+
+
+def test_a_non_mapping_frozen_tests_reads_as_absent(tmp_path, capsys):
+    record = _build({"tests/test_alpha.py": _tests()})
+    record["frozen_tests"] = ["tests/test_alpha.py"]
+    cf.write_attestation(tmp_path, record)
+
+    assert cf.read_attestation(tmp_path) is None
+    assert "canopus" in capsys.readouterr().err
+
+
 def test_absent_attestation_is_none_and_silent(tmp_path, capsys):
     assert cf.read_attestation(tmp_path) is None
     assert capsys.readouterr().err == ""
@@ -273,6 +299,58 @@ def test_deselection_is_tallied_from_the_hook(frozen_engine):
     assert record["frozen_tests"]["tests/test_frozen.py"]["deselected"] == 2
     assert record["attested"] is False
     assert any("deselected" in reason for reason in record["reasons"])
+
+
+def test_deselection_before_collection_is_still_tallied(frozen_engine):
+    """The REAL pytest order: pytest_deselected fires before collection finish.
+
+    -k, -m, --lf and --deselect all deselect from inside
+    pytest_collection_modifyitems, which pytest runs BEFORE
+    pytest_collection_finish. The test above calls the two in the opposite
+    order, and that inversion hid a total failure of this axis: measured, a
+    plain `pytest -k test_a` over a three-test frozen file printed "2
+    deselected" and attested "none deselected", because the tally did not exist
+    yet when the hook fired and collect() then seeded a fresh zero over it.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+
+    rec.deselected([_Item(target), _Item(target)])   # hook order: deselect ...
+    rec.collect(session)                             # ... then collection finish
+    rec.finish(session, 0)
+
+    record = cf.read_attestation(tmp_path)
+    assert record["frozen_tests"]["tests/test_frozen.py"]["deselected"] == 2
+    assert record["attested"] is False
+    assert any("deselected" in reason for reason in record["reasons"])
+
+
+def test_deselection_before_controller_seeding_is_still_tallied(frozen_engine):
+    """Same inversion on the xdist route, where the controller seeds from ids."""
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+
+    rec.deselected([_Item(target)])
+    rec.seed_from_ids(session.config, ["tests/test_frozen.py::test_one"])
+    rec.finish(session, 0)
+
+    record = cf.read_attestation(tmp_path)
+    assert record["frozen_tests"]["tests/test_frozen.py"]["deselected"] == 1
+    assert record["attested"] is False
+
+
+def test_a_worker_count_is_not_lowered_by_the_controllers_own_buffer(frozen_engine):
+    """Folding the buffer in must never shrink a count merge_worker already set."""
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.merge_worker({"canopus_deselected": {"tests/test_frozen.py": 4}})
+
+    rec.deselected([_Item(target)])   # a later fold must not undercut the worker
+    rec.finish(session, 0)
+
+    record = cf.read_attestation(tmp_path)
+    assert record["frozen_tests"]["tests/test_frozen.py"]["deselected"] == 4
 
 
 def test_deselection_ignores_items_outside_the_frozen_set(frozen_engine):

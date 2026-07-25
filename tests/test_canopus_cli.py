@@ -239,6 +239,48 @@ def test_status_reports_an_active_freeze_and_its_anchor(tree, anchor, capsys):
     assert str(anchor.resolve()) in out
 
 
+def test_status_reports_the_lock_state_not_just_the_stored_root(tree, anchor, capsys):
+    """`status` on a MOVED contract must not look like `status` on an intact one.
+
+    It already pays for a full verify_manifest; an earlier revision threw the
+    answer away and printed the manifest's STORED root, so the two outputs were
+    byte-identical on the lock axis. Telling an operator the lock is on while it
+    is broken is the one failure the whole tool exists to prevent.
+    """
+    _freeze(tree, anchor)
+    anchor.write_text(f"canopus-anchor: {_root_of(tree)}\n")
+
+    assert _run(["status"], tree) == 0
+    assert canopus.LOCK_HELD in capsys.readouterr().out
+
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+
+    # Reporting only: status describes state, verify is the command that fails.
+    assert _run(["status"], tree) == 0
+    out = capsys.readouterr().out
+    assert canopus.LOSS_OF_LOCK in out
+    assert "verify" in out
+    assert _run(["verify"], tree) == 1
+
+
+def test_status_survives_an_attestation_with_a_non_numeric_counter(tree, anchor, capsys):
+    """A damaged record must not turn a report into a TypeError traceback."""
+    _freeze(tree, anchor)
+    attest = tree / ".canopus" / "attest.json"
+    attest.write_text(json.dumps({
+        "recipe": "canopus-attest-v1",
+        "root": _root_of(tree),
+        "attested": True,
+        "reasons": [],
+        "exit_status": 0,
+        "attested_at": "2026-07-25T10:42:11+00:00",
+        "frozen_tests": {"tests/test_alpha.py": {"passed": "3", "skipped": 0}},
+    }))
+
+    assert _run(["status"], tree) == 0
+    assert canopus.NOT_ATTESTED in capsys.readouterr().out
+
+
 def test_freeze_accepts_paths_relative_to_root_from_any_cwd(tmp_path, monkeypatch, anchor):
     """--root exists so the frozen tree need not be the cwd."""
     root = _make_tree(tmp_path / "elsewhere")

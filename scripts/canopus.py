@@ -248,11 +248,23 @@ def cmd_status(args) -> int:
         print("canopus: no active freeze")
         return 0
     report = verify_manifest(manifest, root)
+    anchor, status, value = anchor_state(manifest)
+    state = lock_state(report, status, value)
     _print_root(manifest["root"], manifest)
+    # The lock line, not just the attestation line. An earlier revision paid for
+    # the full verify here and then printed only the manifest's STORED root, so
+    # `status` on a moved contract was byte-identical to `status` on an intact
+    # one -- the operator was told the lock was on while it was broken, which is
+    # the one failure this whole tool exists to prevent. Reporting only: the
+    # exit code stays 0 so `status` remains a description of state, and `verify`
+    # remains the command that fails.
+    colour = {LOCK_HELD: GREEN, LOCK_UNCONFIRMED: YELLOW}.get(state, RED)
+    tail = ("  run `canopus verify` for the per-file report"
+            if state == LOSS_OF_LOCK else "")
+    print(f"{colour}{BOLD}{state}{RESET}{tail}")
     _print_attestation(root, report["recomputed_root"])
     print(f"frozen at {manifest['frozen_at']}")
     print(f"git sha   {manifest.get('git_sha') or '(not a git working tree)'}")
-    anchor, status, value = anchor_state(manifest)
     print(f"anchor    {anchor or '(none)'}  [{status}]")
     for rel in manifest["files"]:
         print(f"  file  {rel}")

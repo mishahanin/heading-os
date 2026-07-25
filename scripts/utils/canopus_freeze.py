@@ -774,6 +774,19 @@ def build_attestation(
     A freeze carrying no test files attests nothing rather than everything. The
     same rule already governs verify, which refuses to print a green line when
     there is no contract to check.
+
+    WHAT IT DOES NOT CATCH, stated so the gap is a known property rather than a
+    discovered one. A run that names a SUBSET by node id -- `pytest
+    tests/test_x.py::test_one` on a three-test frozen file -- collects one item,
+    reports one item, fires no deselection hook, and attests. Measured, and it
+    is the residual hole in "did the contract run": the record compares reported
+    against collected, and nothing anywhere knows how many items the file yields
+    when collected whole. Filters (-k, -m, --lf, --deselect) ARE caught, because
+    they leave a deselection count behind; --ignore and a vanished file are
+    caught, because they collect nothing. Closing the node-id case needs a
+    full-collection baseline taken at freeze time, which is a larger change than
+    the one this record makes, so read ATTESTED as "the frozen tests that were
+    collected all passed", not as "every frozen test ran".
     """
     reasons: list[str] = []
     if not frozen_tests:
@@ -808,6 +821,28 @@ def build_attestation(
     }
 
 
+def _counters_are_numeric(frozen_tests) -> bool:
+    """True when `frozen_tests` is the dict-of-int-counters shape readers assume.
+
+    The reporting side sums these counters (`sum(entry["passed"] ...)`), and a
+    record whose counter is a string turned `canopus verify` into a raw
+    TypeError traceback: the reporter's exception type is outside the
+    FreezeError/FreezeCorrupt/OSError set main() catches, so it escaped the
+    handler that exists precisely to stop the guarantee layer printing a stack
+    trace. Validating the shape here keeps that fix in ONE place for every
+    reader, and matches this function's stated posture -- damage reads as
+    absence, which can only ever be NOT ATTESTED.
+    """
+    if not isinstance(frozen_tests, dict):
+        return False
+    for entry in frozen_tests.values():
+        if not isinstance(entry, dict):
+            return False
+        if any(not isinstance(value, int) for value in entry.values()):
+            return False
+    return True
+
+
 def read_attestation(root: Path) -> Optional[dict]:
     """Read the attestation record, or None when absent or unusable.
 
@@ -825,6 +860,10 @@ def read_attestation(root: Path) -> Optional[dict]:
         return None
     if not isinstance(data, dict):
         print(f"canopus: unusable attestation at {path}: not an object", file=sys.stderr)
+        return None
+    if "frozen_tests" in data and not _counters_are_numeric(data["frozen_tests"]):
+        print(f"canopus: unusable attestation at {path}: 'frozen_tests' is not a "
+              f"mapping of integer counters", file=sys.stderr)
         return None
     return data
 

@@ -30,30 +30,58 @@ from typing import Optional, Tuple
 
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 
-# This is the dispatcher's first import from outside .claude/hooks/, and it is
-# guarded. A module-level failure here — not just an ImportError, but any
-# exception raised by top-level code in canopus_freeze.py or a module it
-# imports (e.g. a SyntaxError in scripts/utils/atomic.py) — would take down
-# the WHOLE PreToolUse chain — secret detection included — on every single
-# tool call, which is a far worse failure than losing the freeze deny. The
-# guard therefore catches Exception broadly, not just ImportError. The
-# layering makes the degradation safe: the deny is only a CONVENIENCE, and
-# the guarantee (`verify` inside scripts/run-tests.py) is untouched by
-# whether this import resolved. The failure is never silent: it is always
-# printed to stderr, naming the exception, so a disabled deny is visible
-# rather than a silent weakening of the chain.
-sys.path.insert(0, str(WORKSPACE))
-try:
-    from scripts.utils.canopus_freeze import (  # noqa: E402
-        FREEZE_DIRNAME,
-        FreezeCorrupt,
-        frozen_reason,
-        read_freeze,
-    )
+# The dispatcher's only import from outside .claude/hooks/, and it is both LAZY
+# and guarded.
+#
+# Lazy, because this file runs as a fresh process on every Write, Edit, Bash and
+# Read, while check_canopus_freeze returns None immediately for every non-write
+# tool — which is most calls. Importing canopus_freeze at module level dragged
+# hashlib, datetime and scripts.utils.atomic into all of them for nothing. The
+# import now happens after the _CANOPUS_WRITE_TOOLS gate, once per process, with
+# the outcome cached in _CANOPUS_AVAILABLE.
+#
+# Guarded, because a failure here — not just an ImportError, but any exception
+# raised by top-level code in canopus_freeze.py or a module it imports (e.g. a
+# SyntaxError in scripts/utils/atomic.py) — would take down the WHOLE PreToolUse
+# chain, secret detection included, on every single tool call: a far worse
+# failure than losing the freeze deny. The guard therefore catches Exception
+# broadly, not just ImportError. The layering makes the degradation safe: the
+# deny is only a CONVENIENCE, and the guarantee (the freeze check inside
+# tests/conftest.py and scripts/run-tests.py) is untouched by whether this
+# import resolved. The failure is never silent: it is always printed to stderr,
+# naming the exception, so a disabled deny is visible rather than a silent
+# weakening of the chain.
+FREEZE_DIRNAME = None
+FreezeCorrupt = None
+frozen_reason = None
+read_freeze = None
+_CANOPUS_AVAILABLE = None  # None = import not attempted yet
+
+
+def _load_canopus() -> bool:
+    """Import the freeze primitive once per process. Never raises."""
+    global FREEZE_DIRNAME, FreezeCorrupt, frozen_reason, read_freeze
+    global _CANOPUS_AVAILABLE
+    if _CANOPUS_AVAILABLE is not None:
+        return _CANOPUS_AVAILABLE
+    try:
+        sys.path.insert(0, str(WORKSPACE))
+        from scripts.utils.canopus_freeze import (
+            FREEZE_DIRNAME as _freeze_dirname,
+            FreezeCorrupt as _freeze_corrupt,
+            frozen_reason as _frozen_reason,
+            read_freeze as _read_freeze,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[_dispatch] canopus freeze module unavailable ({type(exc).__name__}): {exc}", file=sys.stderr)
+        _CANOPUS_AVAILABLE = False
+        return False
+    FREEZE_DIRNAME = _freeze_dirname
+    FreezeCorrupt = _freeze_corrupt
+    frozen_reason = _frozen_reason
+    read_freeze = _read_freeze
     _CANOPUS_AVAILABLE = True
-except Exception as _canopus_exc:  # pragma: no cover - defensive
-    print(f"[_dispatch] canopus freeze module unavailable ({type(_canopus_exc).__name__}): {_canopus_exc}", file=sys.stderr)
-    _CANOPUS_AVAILABLE = False
+    return True
 
 # ============================================================
 # check_prevent_secrets — secret patterns in content or Bash commands
@@ -681,10 +709,10 @@ def check_tool_budget(payload: dict) -> Optional[dict]:
 # check_canopus_freeze — deny writes to a frozen test contract
 # ============================================================
 # Canopus wire 1. This deny is a CONVENIENCE, not the guarantee: it only sees
-# Write/Edit tool calls, so a Bash `sed -i` or a subagent with its own toolset
-# walks past it. The guarantee is `scripts/canopus.py verify`, which
-# scripts/run-tests.py runs before every suite. Never reason that this hook
-# makes the verify step optional.
+# Write, Edit, MultiEdit and NotebookEdit tool calls, so a Bash `sed -i` or a
+# subagent with its own toolset walks past it. The guarantee is the freeze check
+# that tests/conftest.py runs at pytest session start and scripts/run-tests.py
+# runs before the suite. Never reason that this hook makes the verify optional.
 #
 # TOTALITY IS A REQUIREMENT, NOT A STYLE CHOICE. The dispatcher catches any
 # exception a check raises, emits an advisory, and continues — so a raise here
@@ -708,9 +736,11 @@ def _canopus_deny(reason: str) -> dict:
 
 def check_canopus_freeze(payload: dict) -> Optional[dict]:
     """Deny a write that lands inside the active Canopus freeze."""
-    if not _CANOPUS_AVAILABLE:
-        return None
     if payload.get("tool_name") not in _CANOPUS_WRITE_TOOLS:
+        return None
+    # Cheapest gate first, then the import: every Bash and Read call returns
+    # above this line without paying for hashlib or scripts.utils.atomic.
+    if not _load_canopus():
         return None
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):

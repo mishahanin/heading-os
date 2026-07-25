@@ -223,15 +223,28 @@ python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>release<
 in an append-only ledger, and prints a <strong>root hash</strong> plus the exact <code>canopus-anchor:</code> line
 to paste into the anchor artifact and commit. From then on <code>verify</code> reads the expected
 hash from that artifact by itself. Nobody types a digest and nobody compares one by eye.</p>
+<p><code>--anchor</code> is required. An anchorless freeze still catches a later edit, but it is the one
+route to a <em>passing</em> gate that never leaves this clone: release, edit the contract,
+re-freeze, amber, exit 0. With an anchor the same sequence fails, because the artifact
+still holds the previously approved hash. Making re-baselining visible is what the anchor
+is for.</p>
+<p><code>--root</code> defaults to this script&rsquo;s own repository root, never the shell&rsquo;s cwd. A freeze
+taken from a subdirectory would otherwise write its state where neither the deny nor the
+gate ever looks, and report success. A <code>--root</code> with no <code>scripts/run-tests.py</code> is refused
+outright: a tree with no gate cannot enforce anything.</p>
 <p>Three layers, and the differences matter:</p>
 <ul>
-<li>The PreToolUse deny is a <strong>convenience</strong>. It sees <code>Write</code> and <code>Edit</code> tool calls only, so
-  a shell <code>sed -i</code> or an agent with its own toolset walks past it.</li>
+<li>The PreToolUse deny is a <strong>convenience</strong>. It sees <code>Write</code>, <code>Edit</code>, <code>MultiEdit</code>, and
+  <code>NotebookEdit</code> tool calls only, so a shell <code>sed -i</code> or an agent with its own toolset
+  walks past it.</li>
 <li><code>verify</code> is the <strong>guarantee</strong>. It recomputes digests from disk and catches a change made
   by any route.</li>
-<li><code>scripts/run-tests.py</code> is what makes the guarantee <strong>fire</strong>. It runs the check before the
-  suite, so a build cannot reach green while its contract is moved. A verification that is
-  never invoked is worth nothing, however well its expected value is protected.</li>
+<li>The test gate is what makes the guarantee <strong>fire</strong>. <code>tests/conftest.py</code> runs the check at
+  pytest session start and <code>scripts/run-tests.py</code> runs it before the suite, so no route
+  into the suite reaches green while the contract is moved — not <code>python
+  scripts/run-tests.py</code>, and not the bare <code>pytest tests/test_thing.py</code> inner loop. A
+  verification that is never invoked is worth nothing, however well its expected value is
+  protected.</li>
 </ul>
 <p><code>verify</code> reports one of three states:</p>
 <table>
@@ -263,8 +276,17 @@ anchor leaves a commit in a repository it had no reason to touch.</p>
 immediate membership, which catches a <code>conftest.py</code> dropped beside a frozen test to
 neutralize it.</p>
 <p>If the manifest is ever damaged, every write is denied fail-closed. Clear it with
-<code>release --force</code>, which is logged. Deleting the file by hand also works and deliberately
-leaves a gap in an append-only ledger.</p>
+<code>release --force</code>, which is logged. Deleting <code>freeze.json</code> by hand also works and
+deliberately leaves a gap in an append-only ledger.</p>
+<p>Be precise about what that ledger proves. It lives inside the same gitignored <code>.canopus/</code>
+directory as the manifest, so it is evidence against an <em>edit to</em> <code>freeze.json</code>, and not
+against deletion of the directory: <code>rm -rf .canopus</code> takes the ledger with it, after which
+the gate returns 0 in silence because it cannot tell &ldquo;no freeze was ever taken&rdquo; from &ldquo;the
+freeze was removed&rdquo;, and git never saw either. Nor does the ledger record the gate: a
+passing gate writes nothing, so the absence of a <code>verify_fail</code> line does not mean the
+contract was verified. The gate&rsquo;s evidence is its exit code in the test output; the durable
+evidence that a contract was approved is the anchor artifact, committed in the other
+repository.</p>
 <p>A contract that turns out to be wrong is not edited in place. Release it, fix it,
 re-freeze it, and get the new root hash re-approved.</p>
 <hr />

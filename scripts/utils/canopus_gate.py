@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""The Canopus freeze check, as run by the single test gate.
+"""The Canopus freeze check, as run by every route into the test suite.
 
 Separate from scripts/canopus.py (an operator CLI) and from run-tests.py (which
 re-execs the interpreter at import time via ensure_venv, so it is not safely
 importable from a test).
+
+Two callers, deliberately: tests/conftest.py runs it at pytest session start,
+and scripts/run-tests.py runs it before spawning the suite. conftest covers the
+CLASS of invocations rather than one command — bare `pytest tests/test_thing.py`
+is the inner-loop command a build runs dozens of times per slice, while
+run-tests.py runs once at the end or not at all. The duplicate call costs one
+extra read_freeze.
 
 This is where the freeze guarantee actually fires. Everything else about the
 freeze is inert without it, because a verification that is never invoked fails
@@ -17,8 +24,8 @@ from scripts.utils.canopus_freeze import (
     LOCK_HELD,
     LOSS_OF_LOCK,
     FreezeCorrupt,
+    anchor_state,
     lock_state,
-    read_anchor,
     read_freeze,
     verify_manifest,
 )
@@ -45,11 +52,7 @@ def freeze_gate(root: Path) -> int:
     # not crash run-tests.py with a traceback that reads like a tooling bug.
     try:
         report = verify_manifest(manifest, root)
-        anchor = manifest.get("anchor") or ""
-        if anchor:
-            status, value = read_anchor(Path(anchor))
-        else:
-            status, value = "none", None
+        _anchor, status, value = anchor_state(manifest)
     except OSError as exc:
         print(f"{RED}canopus: the frozen contract could not be read, so it cannot "
               f"be verified: {exc}{RESET}")

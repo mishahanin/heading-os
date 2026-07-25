@@ -200,6 +200,16 @@ Freezing a directory is recursive. Freezing a file also guards its parent direct
 immediate membership, which catches a `conftest.py` dropped beside a frozen test to
 neutralize it.
 
+Every `conftest.py` from a frozen path up to the tree root is frozen by **content**,
+automatically. The composition guard records member paths only, so a conftest sitting
+beside a frozen test used to be listed and never hashed — and that file is exactly where a
+good-faith edit changes what the contract measures without moving anything the guard
+watches, because filtering inside `pytest_collection_modifyitems` fires no deselection
+hook. The tree root is included even though the composition guard skips it, since a
+repository-root `conftest.py` is the cheapest place to filter collection from. The cost is
+deliberate: a slice that legitimately edits a `conftest.py` mid-build gets `LOSS OF LOCK`,
+which under this standard is the correct answer.
+
 If the manifest is ever damaged, every write is denied fail-closed. Clear it with
 `release --force`, which is logged. Deleting `freeze.json` by hand also works and
 deliberately leaves a gap in an append-only ledger.
@@ -227,6 +237,14 @@ command-line flag, which is what lets `-m "not acceptance"` — the marker expre
 file. Under `pytest-xdist` the controller runs no collection of its own, so it seeds its
 tally from the workers' node ids and folds in the deselection counts they ship home; only
 the controller writes, because a worker holds a partial tally and its own exit status.
+
+**What attestation claims, precisely.** It covers the frozen test CONTRACT, not the
+artifact: it says a run of this exact contract was green, not that the implementation now
+in the tree is the one that produced it. Binding the record to the working tree was
+considered and deferred — as specified it makes `NOT ATTESTED` the ambient state, and an
+amber line that is amber all day stops being read. A module-level
+`pytest.skip(allow_module_level=True)` prevents collection, so such a file collects nothing
+and cannot attest; that is what "measure collection" means, and nothing works around it.
 
 **Attestation blocks nothing and changes no exit code.** It cannot: the gate that would act
 on it runs at session start, before the run it would attest has finished. It is a passive

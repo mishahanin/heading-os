@@ -275,6 +275,15 @@ anchor leaves a commit in a repository it had no reason to touch.</p>
 <p>Freezing a directory is recursive. Freezing a file also guards its parent directory&rsquo;s
 immediate membership, which catches a <code>conftest.py</code> dropped beside a frozen test to
 neutralize it.</p>
+<p>Every <code>conftest.py</code> from a frozen path up to the tree root is frozen by <strong>content</strong>,
+automatically. The composition guard records member paths only, so a conftest sitting
+beside a frozen test used to be listed and never hashed — and that file is exactly where a
+good-faith edit changes what the contract measures without moving anything the guard
+watches, because filtering inside <code>pytest_collection_modifyitems</code> fires no deselection
+hook. The tree root is included even though the composition guard skips it, since a
+repository-root <code>conftest.py</code> is the cheapest place to filter collection from. The cost is
+deliberate: a slice that legitimately edits a <code>conftest.py</code> mid-build gets <code>LOSS OF LOCK</code>,
+which under this standard is the correct answer.</p>
 <p>If the manifest is ever damaged, every write is denied fail-closed. Clear it with
 <code>release --force</code>, which is logged. Deleting <code>freeze.json</code> by hand also works and
 deliberately leaves a gap in an append-only ledger.</p>
@@ -311,6 +320,13 @@ command-line flag, which is what lets <code>-m "not acceptance"</code> — the m
 file. Under <code>pytest-xdist</code> the controller runs no collection of its own, so it seeds its
 tally from the workers&rsquo; node ids and folds in the deselection counts they ship home; only
 the controller writes, because a worker holds a partial tally and its own exit status.</p>
+<p><strong>What attestation claims, precisely.</strong> It covers the frozen test CONTRACT, not the
+artifact: it says a run of this exact contract was green, not that the implementation now
+in the tree is the one that produced it. Binding the record to the working tree was
+considered and deferred — as specified it makes <code>NOT ATTESTED</code> the ambient state, and an
+amber line that is amber all day stops being read. A module-level
+<code>pytest.skip(allow_module_level=True)</code> prevents collection, so such a file collects nothing
+and cannot attest; that is what &ldquo;measure collection&rdquo; means, and nothing works around it.</p>
 <p><strong>Attestation blocks nothing and changes no exit code.</strong> It cannot: the gate that would act
 on it runs at session start, before the run it would attest has finished. It is a passive
 record, read by a human at sign-off, where an evidence pack without <code>ATTESTED</code> cannot be

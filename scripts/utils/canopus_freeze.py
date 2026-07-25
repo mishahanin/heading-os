@@ -546,7 +546,7 @@ def read_freeze(root: Path) -> Optional[dict]:
         return None
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise FreezeCorrupt(f"freeze manifest at {path} is unreadable: {exc}") from exc
     if not isinstance(manifest, dict):
         raise FreezeCorrupt(f"freeze manifest at {path} is not a JSON object")
@@ -592,5 +592,8 @@ def append_history(
     }
     path = history_state_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Deliberately not atomic_write_text: that primitive is a full-file
+    # tmp-plus-replace overwrite, incompatible with append-only growth, and
+    # append-only is the entire point of this ledger.
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")

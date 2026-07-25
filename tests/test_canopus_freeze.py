@@ -338,6 +338,23 @@ def test_read_freeze_raises_on_malformed_json(tree: Path):
         read_freeze(tree)
 
 
+def test_read_freeze_raises_on_invalid_utf8_bytes(tree: Path):
+    """A partially written or byte-corrupted manifest must not escape as a
+    bare UnicodeDecodeError. Path.read_text(encoding="utf-8") raises
+    UnicodeDecodeError on invalid byte sequences, and UnicodeDecodeError
+    subclasses ValueError, not OSError -- so it slipped past the original
+    (OSError, json.JSONDecodeError) catch. The Task 5 dispatcher only catches
+    FreezeCorrupt and OSError specifically; anything else falls into its
+    generic handler, which logs and continues -- fail open, on frozen
+    contract paths.
+    """
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'{"recipe": "x\xff\xfe"}')
+    with pytest.raises(FreezeCorrupt, match="unreadable"):
+        read_freeze(tree)
+
+
 def test_read_freeze_raises_on_an_unknown_recipe(tree: Path):
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
     manifest["recipe"] = "canopus-freeze-v99"
@@ -422,11 +439,18 @@ def _corrupt_anchor_not_str(manifest: dict) -> None:
     manifest["anchor"] = 42
 
 
+def _corrupt_frozen_at_not_str(manifest: dict) -> None:
+    manifest["frozen_at"] = 42
+
+
+def _corrupt_git_sha_not_str(manifest: dict) -> None:
+    manifest["git_sha"] = 42
+
+
 @pytest.mark.parametrize(
     "corrupt",
     [
         _corrupt_files_not_dict,
-        _corrupt_files_key_not_str,
         _corrupt_files_value_not_str,
         _corrupt_dirs_not_dict,
         _corrupt_dirs_entry_not_dict,
@@ -440,6 +464,8 @@ def _corrupt_anchor_not_str(manifest: dict) -> None:
         _corrupt_root_not_str,
         _corrupt_label_not_str,
         _corrupt_anchor_not_str,
+        _corrupt_frozen_at_not_str,
+        _corrupt_git_sha_not_str,
     ],
     ids=lambda fn: fn.__name__.removeprefix("_corrupt_"),
 )
@@ -452,18 +478,41 @@ def test_manifest_shape_validation_rejects_corrupted_shapes(tree: Path, corrupt)
     the top-level isinstance(list) check, and `verify_manifest` crashed on
     `set(entry["members"])`. This table validates the complete shape
     `build_manifest()` produces in one pass, so a future escape has to defeat
-    every case here at once instead of finding the next unchecked corner.
+    every case here at once instead of finding the next unchecked corner. All
+    five `_STR_SCALAR_KEYS` (label, frozen_at, anchor, git_sha, root) are
+    exercised here so the completeness claim in `_validate_manifest_shape`'s
+    docstring matches the test evidence.
 
-    `_corrupt_files_key_not_str` is exercised against the validator directly
-    (not via a real freeze.json on disk): JSON object member names are always
-    strings by spec (RFC 8259), so a non-string dict key cannot survive a
-    json.dumps/json.loads round trip and this shape can never actually reach
-    read_freeze() from a file. The validator still refuses it (defense in
-    depth against any future non-JSON manifest source), so the case stays in
-    the table rather than being silently dropped.
+    Every case here is reachable through the public interface, so it is
+    routed through `read_freeze()` against a real freeze.json on disk -- that
+    exercises the validator AND the wiring a consumer actually depends on,
+    not the validator in isolation. `_corrupt_files_key_not_str` is the one
+    exception: JSON object member names are always strings by spec (RFC
+    8259), so a non-string dict key cannot survive a json.dumps/json.loads
+    round trip and this shape can never actually reach read_freeze() from a
+    file. It gets its own test below, called directly against the validator.
     """
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
     corrupt(manifest)
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(FreezeCorrupt):
+        read_freeze(tree)
+
+
+def test_manifest_shape_validation_rejects_a_non_string_files_key(tree: Path):
+    """The one unreachable corrupted shape, kept honest about why.
+
+    JSON object member names are always strings (RFC 8259), so
+    `_corrupt_files_key_not_str` cannot survive a real json.dumps/json.loads
+    round trip and can never actually reach `read_freeze()` from a file on
+    disk. Exercised directly against the validator instead, as defense in
+    depth against any future non-JSON manifest source -- not dressed up as
+    reachable through the public interface.
+    """
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    _corrupt_files_key_not_str(manifest)
     with pytest.raises(FreezeCorrupt):
         _validate_manifest_shape(manifest, freeze_state_path(tree))
 

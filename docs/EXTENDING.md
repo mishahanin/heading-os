@@ -204,6 +204,45 @@ If the manifest is ever damaged, every write is denied fail-closed. Clear it wit
 `release --force`, which is logged. Deleting `freeze.json` by hand also works and
 deliberately leaves a gap in an append-only ledger.
 
+### Did the frozen tests actually run?
+
+The lock states answer "did the contract move". They cannot answer "did the contract run":
+`pytest -k`, `--deselect`, `--ignore`, `--lf`, and a bare path argument all reach green
+with every frozen byte intact. A builder that cannot edit a frozen test can decline to run
+it.
+
+So the root `tests/conftest.py` writes an attestation to `.canopus/attest.json` at session
+finish, and `verify` and `status` print a second line beneath the lock state:
+
+| State | Meaning |
+|---|---|
+| `ATTESTED` | a run of THIS exact contract collected every frozen test file in full, deselected none of them, and passed |
+| `NOT ATTESTED` | absent, recorded against a different root hash, incompletely collected, or carrying failures; the recorded reasons print beneath it |
+
+The record measures **collection, never invocation**. Deselection is observed through
+pytest's own deselection hook, which `-k`, `-m`, `--lf` and `--deselect` all route through,
+and completeness is `passed + skipped == collected` per frozen file. Nothing inspects a
+command-line flag, which is what lets `-m "not acceptance"` — the marker expression
+`run-tests.py` always passes — attest normally: it deselects nothing inside a frozen test
+file. Under `pytest-xdist` the controller runs no collection of its own, so it seeds its
+tally from the workers' node ids and folds in the deselection counts they ship home; only
+the controller writes, because a worker holds a partial tally and its own exit status.
+
+**Attestation blocks nothing and changes no exit code.** It cannot: the gate that would act
+on it runs at session start, before the run it would attest has finished. It is a passive
+record, read by a human at sign-off, where an evidence pack without `ATTESTED` cannot be
+assembled. The record is bound to the recomputed root hash, so editing any frozen file
+after a green run makes it stop applying without anyone remembering to delete it. It is a
+true statement about *a* run of this exact contract, not necessarily the most recent one.
+
+**Freeze the enforcers.** `scripts/utils/canopus_freeze.py`, `scripts/utils/canopus_gate.py`,
+`scripts/run-tests.py`, and `tests/conftest.py` are what makes a freeze fire. A freeze that
+omits them protects the contract while leaving the thing that checks the contract editable.
+
+`.canopus/` is gitignored, so CI carries no manifest and neither the gate nor attestation
+fires there. The whole mechanism is scoped to the local build loop, and an evidence pack
+should say so.
+
 Be precise about what that ledger proves. It lives inside the same gitignored `.canopus/`
 directory as the manifest, so it is evidence against an *edit to* `freeze.json`, and not
 against deletion of the directory: `rm -rf .canopus` takes the ledger with it, after which

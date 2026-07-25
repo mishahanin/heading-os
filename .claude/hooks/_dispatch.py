@@ -30,6 +30,25 @@ from typing import Optional, Tuple
 
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 
+# This is the dispatcher's first import from outside .claude/hooks/, and it is
+# guarded. A module-level ImportError here would take down the WHOLE PreToolUse
+# chain — secret detection included — on every single tool call, which is a far
+# worse failure than losing the freeze deny. The layering makes the degradation
+# safe: the deny is only a CONVENIENCE, and the guarantee (`verify` inside
+# scripts/run-tests.py) is untouched by whether this import resolved.
+sys.path.insert(0, str(WORKSPACE))
+try:
+    from scripts.utils.canopus_freeze import (  # noqa: E402
+        FREEZE_DIRNAME,
+        FreezeCorrupt,
+        frozen_reason,
+        read_freeze,
+    )
+    _CANOPUS_AVAILABLE = True
+except ImportError as _canopus_exc:  # pragma: no cover - defensive
+    print(f"[_dispatch] canopus freeze module unavailable: {_canopus_exc}", file=sys.stderr)
+    _CANOPUS_AVAILABLE = False
+
 # ============================================================
 # check_prevent_secrets — secret patterns in content or Bash commands
 # ============================================================
@@ -653,10 +672,99 @@ def check_tool_budget(payload: dict) -> Optional[dict]:
 
 
 # ============================================================
+# check_canopus_freeze — deny writes to a frozen test contract
+# ============================================================
+# Canopus wire 1. This deny is a CONVENIENCE, not the guarantee: it only sees
+# Write/Edit tool calls, so a Bash `sed -i` or a subagent with its own toolset
+# walks past it. The guarantee is `scripts/canopus.py verify`, which
+# scripts/run-tests.py runs before every suite. Never reason that this hook
+# makes the verify step optional.
+#
+# TOTALITY IS A REQUIREMENT, NOT A STYLE CHOICE. The dispatcher catches any
+# exception a check raises, emits an advisory, and continues — so a raise here
+# fails OPEN: writes to frozen paths sail through while the hook reports
+# healthy. Every branch below returns.
+#
+# The operator gets the same deny as the builder. Under the standard, changing a
+# contract reopens the approval gate regardless of whose hand changes it, and an
+# exemption for the operator would turn the guarantee back into a promise.
+
+_CANOPUS_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+
+
+def _canopus_deny(reason: str) -> dict:
+    return {
+        "decision": "block",
+        "reason": f"Canopus freeze — intentional policy block, not an error. {reason}",
+        "_policy_deny": True,
+    }
+
+
+def check_canopus_freeze(payload: dict) -> Optional[dict]:
+    """Deny a write that lands inside the active Canopus freeze."""
+    if not _CANOPUS_AVAILABLE:
+        return None
+    if payload.get("tool_name") not in _CANOPUS_WRITE_TOOLS:
+        return None
+    tool_input = payload.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        return None
+    target = tool_input.get("file_path") or tool_input.get("notebook_path")
+    if not isinstance(target, str) or not target:
+        return None
+
+    try:
+        manifest = read_freeze(WORKSPACE)
+    except FreezeCorrupt as exc:
+        return _canopus_deny(
+            f"The freeze manifest is damaged, so every write is denied "
+            f"fail-closed: {exc}. Clear it with: python scripts/canopus.py "
+            f"release --force --reason \"<why>\""
+        )
+    except OSError as exc:
+        return _canopus_deny(f"The freeze state could not be read: {exc}")
+    if manifest is None:
+        return None
+
+    anchor = manifest.get("anchor") or ""
+    try:
+        resolved = Path(target).resolve()
+    except (OSError, ValueError):
+        return None
+    if anchor and str(resolved) == anchor:
+        return _canopus_deny(
+            f"{target} is the anchor artifact recording the approved root hash "
+            f"for label {manifest['label']}, and is not editable while the "
+            f"freeze is active."
+        )
+
+    try:
+        rel = resolved.relative_to(Path(WORKSPACE).resolve()).as_posix()
+    except ValueError:
+        return None
+
+    if rel.split("/", 1)[0] == FREEZE_DIRNAME:
+        return _canopus_deny(
+            f"{FREEZE_DIRNAME}/ holds the freeze state itself and is not editable "
+            f"while a freeze is active (label: {manifest['label']})."
+        )
+
+    reason = frozen_reason(rel, manifest)
+    if reason is None:
+        return None
+    return _canopus_deny(
+        f"{reason} (label: {manifest['label']}). The contract is not editable in "
+        f"place. Fix the code instead; a contract that is genuinely wrong reopens "
+        f"the approval gate."
+    )
+
+
+# ============================================================
 # Dispatcher main
 # ============================================================
 CHECKS = [
     check_prevent_secrets,
+    check_canopus_freeze,
     check_protect_personal_threads,
     check_protect_corporate,
     check_protect_docs,

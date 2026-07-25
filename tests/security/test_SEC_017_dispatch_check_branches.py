@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SEC-017 regression coverage for the consolidated _dispatch.py.
 
-The PreToolUse dispatcher folds seven distinct security/safety checks into
+The PreToolUse dispatcher folds eight distinct security/safety checks into
 one in-process pipeline. Each check is a pure function of the tool payload,
 so we exercise them directly rather than via subprocess. Goals:
 
@@ -11,10 +11,11 @@ so we exercise them directly rather than via subprocess. Goals:
    so the dispatcher behaves identically when invoked from Windows VSCode
    or from WSL/Linux Claude Code against the same files.
 
-All seven checks are stateless and exercised via direct payloads. (The
+All eight checks are stateless and exercised via direct payloads. (The
 `_secure/` vault and its `check_protect_secure` branch were removed in Plan 5;
 sensitivity is now the fail-closed `SENSITIVE_MODE` flag, covered by
-`tests/test_sensitive_mode.py`.)
+`tests/test_sensitive_mode.py`. `check_canopus_freeze`, covered in
+`tests/test_canopus_hook.py`, was added in Canopus wire 1, 2026-07-25.)
 """
 from __future__ import annotations
 
@@ -303,14 +304,17 @@ def test_tool_budget_allows_under_cap(dispatch, monkeypatch):
 # ============================================================
 
 
-def test_checks_list_has_seven_branches(dispatch):
+def test_checks_list_has_eight_branches(dispatch):
     """If a check is added or removed, this test forces an intentional update.
-    The dispatcher's documented contract is exactly seven checks (the eighth,
-    check_protect_secure, was removed with the vault in Plan 5)."""
-    assert len(dispatch.CHECKS) == 7
+    Eight since Canopus wire 1 (2026-07-25). check_canopus_freeze sits second:
+    secret detection is the security control and first-block-wins means whichever
+    runs first owns the message, so the freeze deny (a discipline control) yields
+    to it."""
+    assert len(dispatch.CHECKS) == 8
     names = [c.__name__ for c in dispatch.CHECKS]
     assert names == [
         "check_prevent_secrets",
+        "check_canopus_freeze",
         "check_protect_personal_threads",
         "check_protect_corporate",
         "check_protect_docs",

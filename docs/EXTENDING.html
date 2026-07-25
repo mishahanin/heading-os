@@ -210,6 +210,63 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
 <li><strong>CodeQL</strong> runs on the repository for static security analysis; address what it
   flags on a pull request.</li>
 </ul>
+<h3 id="freezing-the-test-contract">Freezing the test contract</h3>
+<p><code>scripts/canopus.py</code> locks a set of paths so the tests that prove a change cannot be
+edited by whoever is making the change.</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>freeze<span class="w"> </span>tests/test_thing.py<span class="w"> </span>--label<span class="w"> </span>my-slice<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--anchor<span class="w"> </span>../my-notes-repo/plans/2026-07-25-pre-impl-my-slice.md
+python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>verify
+python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>status
+python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>release<span class="w"> </span>--reason<span class="w"> </span><span class="s2">&quot;slice shipped&quot;</span>
+</code></pre></div>
+<p><code>freeze</code> writes a per-file digest manifest to a gitignored <code>.canopus/</code>, records the event
+in an append-only ledger, and prints a <strong>root hash</strong> plus the exact <code>canopus-anchor:</code> line
+to paste into the anchor artifact and commit. From then on <code>verify</code> reads the expected
+hash from that artifact by itself. Nobody types a digest and nobody compares one by eye.</p>
+<p>Three layers, and the differences matter:</p>
+<ul>
+<li>The PreToolUse deny is a <strong>convenience</strong>. It sees <code>Write</code> and <code>Edit</code> tool calls only, so
+  a shell <code>sed -i</code> or an agent with its own toolset walks past it.</li>
+<li><code>verify</code> is the <strong>guarantee</strong>. It recomputes digests from disk and catches a change made
+  by any route.</li>
+<li><code>scripts/run-tests.py</code> is what makes the guarantee <strong>fire</strong>. It runs the check before the
+  suite, so a build cannot reach green while its contract is moved. A verification that is
+  never invoked is worth nothing, however well its expected value is protected.</li>
+</ul>
+<p><code>verify</code> reports one of three states:</p>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LOCK HELD</code></td>
+<td>the manifest is intact and matches the hash recorded in the anchor artifact</td>
+</tr>
+<tr>
+<td><code>LOSS OF LOCK</code></td>
+<td>something changed, or the anchor disagrees or vanished. Exit code 1.</td>
+</tr>
+<tr>
+<td><code>LOCK UNCONFIRMED</code></td>
+<td>no anchor hash is recorded yet: nothing changed since the last check, which is not the same as &ldquo;this is the approved contract&rdquo;</td>
+</tr>
+</tbody>
+</table>
+<p>The anchor must live outside the working tree. An anchor the build can write to is not an
+anchor. Point it at a sibling repository with its own history, so a build reaching for the
+anchor leaves a commit in a repository it had no reason to touch.</p>
+<p>Freezing a directory is recursive. Freezing a file also guards its parent directory&rsquo;s
+immediate membership, which catches a <code>conftest.py</code> dropped beside a frozen test to
+neutralize it.</p>
+<p>If the manifest is ever damaged, every write is denied fail-closed. Clear it with
+<code>release --force</code>, which is logged. Deleting the file by hand also works and deliberately
+leaves a gap in an append-only ledger.</p>
+<p>A contract that turns out to be wrong is not edited in place. Release it, fix it,
+re-freeze it, and get the new root hash re-approved.</p>
 <hr />
 <h2 id="6-testing-discipline">6. Testing discipline</h2>
 <p>The suite lives in <code>tests/</code> (security tests in <code>tests/security/</code>). Every behavior you

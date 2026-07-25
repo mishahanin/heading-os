@@ -20,6 +20,7 @@ from scripts.utils.venv import ensure_venv  # noqa: E402
 
 ensure_venv()  # pytest/pytest-cov live only in .venv; re-exec if launched elsewhere
 
+from scripts.utils.canopus_gate import freeze_gate  # noqa: E402
 from scripts.utils.colors import GREEN, RED, RESET
 
 
@@ -54,6 +55,9 @@ def main() -> int:
                     help="run only the A+ sign-off gates instead of the regression suite")
     args = ap.parse_args()
     root = Path(__file__).resolve().parent.parent
+    if freeze_gate(root) != 0:
+        print(f"{RED}test gate: FAIL (canopus freeze){RESET}")
+        return 1
     cmd = build_command(args.acceptance)
     proc = subprocess.run(cmd, cwd=str(root))
     if proc.returncode == 0:

@@ -159,15 +159,30 @@ in an append-only ledger, and prints a **root hash** plus the exact `canopus-anc
 to paste into the anchor artifact and commit. From then on `verify` reads the expected
 hash from that artifact by itself. Nobody types a digest and nobody compares one by eye.
 
+`--anchor` is required. An anchorless freeze still catches a later edit, but it is the one
+route to a *passing* gate that never leaves this clone: release, edit the contract,
+re-freeze, amber, exit 0. With an anchor the same sequence fails, because the artifact
+still holds the previously approved hash. Making re-baselining visible is what the anchor
+is for.
+
+`--root` defaults to this script's own repository root, never the shell's cwd. A freeze
+taken from a subdirectory would otherwise write its state where neither the deny nor the
+gate ever looks, and report success. A `--root` with no `scripts/run-tests.py` is refused
+outright: a tree with no gate cannot enforce anything.
+
 Three layers, and the differences matter:
 
-- The PreToolUse deny is a **convenience**. It sees `Write` and `Edit` tool calls only, so
-  a shell `sed -i` or an agent with its own toolset walks past it.
+- The PreToolUse deny is a **convenience**. It sees `Write`, `Edit`, `MultiEdit`, and
+  `NotebookEdit` tool calls only, so a shell `sed -i` or an agent with its own toolset
+  walks past it.
 - `verify` is the **guarantee**. It recomputes digests from disk and catches a change made
   by any route.
-- `scripts/run-tests.py` is what makes the guarantee **fire**. It runs the check before the
-  suite, so a build cannot reach green while its contract is moved. A verification that is
-  never invoked is worth nothing, however well its expected value is protected.
+- The test gate is what makes the guarantee **fire**. `tests/conftest.py` runs the check at
+  pytest session start and `scripts/run-tests.py` runs it before the suite, so no route
+  into the suite reaches green while the contract is moved — not `python
+  scripts/run-tests.py`, and not the bare `pytest tests/test_thing.py` inner loop. A
+  verification that is never invoked is worth nothing, however well its expected value is
+  protected.
 
 `verify` reports one of three states:
 
@@ -186,8 +201,18 @@ immediate membership, which catches a `conftest.py` dropped beside a frozen test
 neutralize it.
 
 If the manifest is ever damaged, every write is denied fail-closed. Clear it with
-`release --force`, which is logged. Deleting the file by hand also works and deliberately
-leaves a gap in an append-only ledger.
+`release --force`, which is logged. Deleting `freeze.json` by hand also works and
+deliberately leaves a gap in an append-only ledger.
+
+Be precise about what that ledger proves. It lives inside the same gitignored `.canopus/`
+directory as the manifest, so it is evidence against an *edit to* `freeze.json`, and not
+against deletion of the directory: `rm -rf .canopus` takes the ledger with it, after which
+the gate returns 0 in silence because it cannot tell "no freeze was ever taken" from "the
+freeze was removed", and git never saw either. Nor does the ledger record the gate: a
+passing gate writes nothing, so the absence of a `verify_fail` line does not mean the
+contract was verified. The gate's evidence is its exit code in the test output; the durable
+evidence that a contract was approved is the anchor artifact, committed in the other
+repository.
 
 A contract that turns out to be wrong is not edited in place. Release it, fix it,
 re-freeze it, and get the new root hash re-approved.

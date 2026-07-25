@@ -5,14 +5,34 @@ from pathlib import Path
 import pytest
 
 from scripts.utils.canopus_freeze import (
-    FreezeError,
+    ANCHOR_MISSING,
+    ANCHOR_NONE,
+    ANCHOR_RECORDED,
+    ANCHOR_UNRECORDED,
+    LOCK_HELD,
+    LOCK_UNCONFIRMED,
+    LOSS_OF_LOCK,
     RECIPE,
+    FreezeCorrupt,
+    FreezeError,
+    _validate_manifest_shape,
+    anchor_state,
+    append_history,
     build_manifest,
+    clear_freeze,
     dir_members_digest,
     file_digest,
+    freeze_state_path,
+    frozen_reason,
+    history_state_path,
+    lock_state,
+    read_anchor,
+    read_freeze,
     root_hash,
     validate_anchor_path,
     validate_freeze_path,
+    verify_manifest,
+    write_freeze,
 )
 
 STAMP = "2026-01-01T00:00:00+00:00"
@@ -163,17 +183,6 @@ def test_manifest_is_json_serializable(tree: Path, anchor: Path):
     assert json.loads(json.dumps(manifest)) == manifest
 
 
-from scripts.utils.canopus_freeze import (
-    LOCK_HELD,
-    LOCK_UNCONFIRMED,
-    LOSS_OF_LOCK,
-    frozen_reason,
-    lock_state,
-    read_anchor,
-    verify_manifest,
-)
-
-
 def test_verify_holds_on_an_untouched_tree(tree: Path):
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
     report = verify_manifest(manifest, tree)
@@ -243,16 +252,42 @@ def test_explicit_directory_freeze_catches_a_subdirectory_addition(tree: Path):
 
 
 def test_read_anchor_reports_missing(tmp_path: Path):
-    assert read_anchor(tmp_path / "absent.md") == ("missing", None)
+    assert read_anchor(tmp_path / "absent.md") == (ANCHOR_MISSING, None)
 
 
 def test_read_anchor_reports_unrecorded(anchor: Path):
-    assert read_anchor(anchor) == ("unrecorded", None)
+    assert read_anchor(anchor) == (ANCHOR_UNRECORDED, None)
 
 
 def test_read_anchor_returns_the_recorded_hash(anchor: Path):
     anchor.write_text("# gate\n\ncanopus-anchor: " + "a" * 64 + "\n\nmore prose\n")
-    assert read_anchor(anchor) == ("recorded", "a" * 64)
+    assert read_anchor(anchor) == (ANCHOR_RECORDED, "a" * 64)
+
+
+def test_anchor_state_reads_the_manifest_anchor(tree: Path, anchor: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP,
+                              anchor=anchor)
+    anchor.write_text("canopus-anchor: " + "a" * 64 + "\n")
+    assert anchor_state(manifest) == (str(anchor.resolve()), ANCHOR_RECORDED, "a" * 64)
+
+
+def test_anchor_state_prefers_an_override(tree: Path, anchor: Path, tmp_path: Path):
+    other = tmp_path / "outside" / "other.md"
+    other.write_text("canopus-anchor: " + "b" * 64 + "\n")
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP,
+                              anchor=anchor)
+    assert anchor_state(manifest, str(other)) == (str(other), ANCHOR_RECORDED, "b" * 64)
+
+
+def test_anchor_state_reports_none_for_an_anchorless_manifest(tree: Path):
+    """One producer of the status string, so a typo cannot degrade a state.
+
+    ANCHOR_NONE is not a bare literal in either caller: lock_state matching a
+    misspelled status would silently read it as "recorded but disagreeing" and
+    report LOSS OF LOCK.
+    """
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    assert anchor_state(manifest) == ("", ANCHOR_NONE, None)
 
 
 def _report(held: bool, digest: str = "a" * 64) -> dict:
@@ -260,27 +295,27 @@ def _report(held: bool, digest: str = "a" * 64) -> dict:
 
 
 def test_lock_state_held():
-    assert lock_state(_report(True), "recorded", "a" * 64) == LOCK_HELD
+    assert lock_state(_report(True), ANCHOR_RECORDED, "a" * 64) == LOCK_HELD
 
 
 def test_lock_state_loss_on_content_change():
-    assert lock_state(_report(False), "recorded", "a" * 64) == LOSS_OF_LOCK
+    assert lock_state(_report(False), ANCHOR_RECORDED, "a" * 64) == LOSS_OF_LOCK
 
 
 def test_lock_state_loss_on_anchor_disagreement():
-    assert lock_state(_report(True), "recorded", "b" * 64) == LOSS_OF_LOCK
+    assert lock_state(_report(True), ANCHOR_RECORDED, "b" * 64) == LOSS_OF_LOCK
 
 
 def test_lock_state_loss_on_missing_anchor():
-    assert lock_state(_report(True), "missing", None) == LOSS_OF_LOCK
+    assert lock_state(_report(True), ANCHOR_MISSING, None) == LOSS_OF_LOCK
 
 
 def test_lock_state_unconfirmed_without_a_recorded_hash():
-    assert lock_state(_report(True), "unrecorded", None) == LOCK_UNCONFIRMED
+    assert lock_state(_report(True), ANCHOR_UNRECORDED, None) == LOCK_UNCONFIRMED
 
 
 def test_lock_state_unconfirmed_without_an_anchor():
-    assert lock_state(_report(True), "none", None) == LOCK_UNCONFIRMED
+    assert lock_state(_report(True), ANCHOR_NONE, None) == LOCK_UNCONFIRMED
 
 
 def test_frozen_reason_names_a_frozen_file(tree: Path):
@@ -306,18 +341,6 @@ def test_frozen_reason_is_none_for_an_unrelated_path(tree: Path):
 def test_frozen_reason_does_not_leak_across_a_similar_prefix(tree: Path):
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
     assert frozen_reason("tests_extra/test_x.py", manifest) is None
-
-
-from scripts.utils.canopus_freeze import (
-    FreezeCorrupt,
-    _validate_manifest_shape,
-    append_history,
-    clear_freeze,
-    freeze_state_path,
-    history_state_path,
-    read_freeze,
-    write_freeze,
-)
 
 
 def test_read_freeze_returns_none_when_no_freeze_is_active(tree: Path):
@@ -352,6 +375,24 @@ def test_read_freeze_raises_on_invalid_utf8_bytes(tree: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b'{"recipe": "x\xff\xfe"}')
     with pytest.raises(FreezeCorrupt, match="unreadable"):
+        read_freeze(tree)
+
+
+@pytest.mark.parametrize("payload", ["[]", "null", "42", '"a string"'],
+                         ids=["array", "null", "number", "string"])
+def test_read_freeze_raises_on_valid_json_that_is_not_an_object(tree: Path, payload):
+    """Well-formed JSON of the wrong TOP-LEVEL type is still a corrupt manifest.
+
+    This is the branch that keeps an AttributeError from escaping to the
+    dispatcher: every later step calls manifest.get(...) or subscripts it, and
+    the dispatcher catches only FreezeCorrupt and OSError — anything else falls
+    into its outer handler, which logs an advisory and CONTINUES, i.e. fails
+    open on a frozen contract path.
+    """
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload)
+    with pytest.raises(FreezeCorrupt, match="not a JSON object"):
         read_freeze(tree)
 
 

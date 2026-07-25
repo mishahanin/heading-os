@@ -7,16 +7,17 @@ logic half.
 
 Three layers, and the distinctions are load-bearing:
 
-  * The PreToolUse deny is a CONVENIENCE. It only sees Write/Edit tool calls, so
-    a Bash `sed -i`, a `python -c`, or a subagent with its own toolset walks
-    straight past it. It exists to refuse the write at the moment of the attempt
-    and save a wasted loop iteration.
+  * The PreToolUse deny is a CONVENIENCE. It only sees Write, Edit, MultiEdit,
+    and NotebookEdit tool calls, so a Bash `sed -i`, a `python -c`, or a subagent
+    with its own toolset walks straight past it. It exists to refuse the write at
+    the moment of the attempt and save a wasted loop iteration.
   * The manifest is the GUARANTEE. Verification recomputes digests from disk and
     catches a change made by any route, including routes nobody anticipated.
-  * The test gate is what makes the guarantee FIRE. scripts/run-tests.py runs the
-    check before the suite, so a build cannot reach green while its contract is
-    moved. An unrun verify fails 100% of the time no matter how well its expected
-    value is protected.
+  * The test gate is what makes the guarantee FIRE. tests/conftest.py runs the
+    check at pytest session start and scripts/run-tests.py runs it before the
+    suite, so a build cannot reach green while its contract is moved — not even
+    through the bare `pytest tests/test_thing.py` inner loop. An unrun verify
+    fails 100% of the time no matter how well its expected value is protected.
 
 Never reason that the deny makes verification optional.
 
@@ -325,12 +326,18 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
 # The anchor
 # ============================================================
 
+ANCHOR_NONE = "none"
+ANCHOR_MISSING = "missing"
+ANCHOR_UNRECORDED = "unrecorded"
+ANCHOR_RECORDED = "recorded"
+
+
 def read_anchor(anchor_path: Path) -> Tuple[str, Optional[str]]:
     """Read the expected root hash out of a committed anchor artifact.
 
-    Returns ("missing", None) when the artifact is gone, ("unrecorded", None)
-    when it exists but carries no `canopus-anchor:` line, and ("recorded", hash)
-    otherwise.
+    Returns (ANCHOR_MISSING, None) when the artifact is gone,
+    (ANCHOR_UNRECORDED, None) when it exists but carries no `canopus-anchor:`
+    line, and (ANCHOR_RECORDED, hash) otherwise.
 
     The distinction matters. Unrecorded is the expected state between freezing
     and writing the hash down, so it is amber. Missing means a recorded anchor
@@ -339,19 +346,40 @@ def read_anchor(anchor_path: Path) -> Tuple[str, Optional[str]]:
     """
     path = Path(anchor_path)
     if not path.is_file():
-        return ("missing", None)
+        return (ANCHOR_MISSING, None)
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
         # Unreadable is not "absent": treat it like a vanished anchor.
-        return ("missing", None)
+        return (ANCHOR_MISSING, None)
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith(ANCHOR_PREFIX):
             value = stripped[len(ANCHOR_PREFIX):].strip().lower()
             if value:
-                return ("recorded", value)
-    return ("unrecorded", None)
+                return (ANCHOR_RECORDED, value)
+    return (ANCHOR_UNRECORDED, None)
+
+
+def anchor_state(
+    manifest: dict, override: Optional[str] = None
+) -> Tuple[str, str, Optional[str]]:
+    """Resolve (anchor path, status, recorded hash) for a manifest.
+
+    One producer for the status string, shared by the CLI and the test gate. A
+    second hand-rolled copy of this derivation is how a typo in one of them
+    silently degrades every state to LOSS OF LOCK, because `lock_state` reads
+    an unrecognised status as "recorded but disagreeing".
+
+    ANCHOR_NONE is the manifest-carries-no-anchor case. The CLI refuses an
+    anchorless freeze, so it is reachable only from a manifest written by the
+    library directly or by an older CLI.
+    """
+    anchor = override or manifest.get("anchor") or ""
+    if not anchor:
+        return ("", ANCHOR_NONE, None)
+    status, value = read_anchor(Path(anchor))
+    return (anchor, status, value)
 
 
 def lock_state(report: dict, anchor_status: str, anchor_value: Optional[str]) -> str:
@@ -363,9 +391,9 @@ def lock_state(report: dict, anchor_status: str, anchor_value: Optional[str]) ->
     """
     if not report["held"]:
         return LOSS_OF_LOCK
-    if anchor_status == "missing":
+    if anchor_status == ANCHOR_MISSING:
         return LOSS_OF_LOCK
-    if anchor_status in ("none", "unrecorded"):
+    if anchor_status in (ANCHOR_NONE, ANCHOR_UNRECORDED):
         return LOCK_UNCONFIRMED
     return LOCK_HELD if anchor_value == report["recomputed_root"] else LOSS_OF_LOCK
 
@@ -434,20 +462,13 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
 
     read_freeze() calls this right after JSON decoding and the recipe check,
     before recompute()/verify_manifest()/frozen_reason() dereference a single
-    key. build_manifest()'s output is a closed, small shape, so validating all
-    of it in one pass is proportionate -- and it is the fix for a bug class,
-    not a single escape: round one guarded the top-level manifest keys; a
-    second review reproduced the same class one level deeper, where a `dirs`
-    entry's `members` list held a dict instead of a str and `verify_manifest`
-    crashed on `set(entry["members"])` with an uncaught TypeError. Patching
-    escapes one shape at a time is what produced two rounds; this validates
-    the complete shape instead.
+    key.
 
-    `entry["hash"]` specifically is never read by any caller in this repo --
-    `recompute()` only overwrites it with a freshly computed digest -- but it
-    stays validated here because the manifest is the serialized form of
-    build_manifest()'s output, and checking one sibling key's shape while
-    leaving another unchecked is exactly what produced the escape this
+    The rule is validate the whole closed shape, not one escape at a time.
+    build_manifest()'s output is small and closed, so a single complete pass is
+    proportionate, and it is what stops the next unchecked corner from becoming
+    the next defect. `entry["hash"]` is validated even though no caller in this
+    repo reads it: leaving one sibling key unchecked is precisely the gap this
     function exists to close.
 
     Every violation raises FreezeCorrupt naming the offending key or path and
@@ -582,6 +603,21 @@ def append_history(
 
     A separate file from the manifest on purpose: the logged escape has to work
     when the manifest cannot be parsed.
+
+    WHAT THE LEDGER RECORDS, stated so the gap is a known property rather than
+    a discovered one. It records operator intent through the CLI: `freeze`,
+    `release`, `force_release`, and a failing `verify`. It does NOT record the
+    test gate. A passing gate writes nothing, so the ABSENCE of a `verify_fail`
+    line is ambiguous between "verified clean many times" and "never verified
+    at all" — the gate's evidence is its exit code in the test output, not a
+    line here, and adding a line per gate run would bury the four events that
+    matter under noise.
+
+    It also lives in the same gitignored directory as the manifest, so it is
+    evidence against an EDIT to freeze.json, never against deletion of the
+    directory: `rm -rf .canopus` takes the ledger with it. The durable record
+    of an approved contract is the anchor artifact, committed in another
+    repository.
     """
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),

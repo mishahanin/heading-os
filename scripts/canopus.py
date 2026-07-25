@@ -11,11 +11,12 @@ the builder cannot move the target it is measured against.
     python scripts/canopus.py release --reason "slice shipped"
     python scripts/canopus.py release --force --reason "manifest damaged"
 
-Three layers. The PreToolUse deny is a CONVENIENCE: it sees Write/Edit tool calls
-only, so a shell `sed -i` walks past it. `verify` is the GUARANTEE, because it
-recomputes digests from disk. The test gate in scripts/run-tests.py is what makes
-the guarantee FIRE, because it runs `verify` before the suite and an unrun verify
-is worth nothing.
+Three layers. The PreToolUse deny is a CONVENIENCE: it sees Write, Edit,
+MultiEdit, and NotebookEdit tool calls only, so a shell `sed -i` walks past it.
+`verify` is the GUARANTEE, because it recomputes digests from disk. The test gate
+is what makes the guarantee FIRE: tests/conftest.py runs it at pytest session
+start and scripts/run-tests.py runs it before the suite, and an unrun verify is
+worth nothing.
 
 The expected root hash lives in a committed artifact OUTSIDE the working tree,
 and `verify` reads it from there. Nobody types it and nobody compares it by eye.
@@ -32,25 +33,33 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ENGINE_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ENGINE_ROOT))
 from scripts.utils.canopus_freeze import (  # noqa: E402
+    ANCHOR_MISSING,
+    ANCHOR_NONE,
     ANCHOR_PREFIX,
+    ANCHOR_RECORDED,
     LOCK_HELD,
     LOCK_UNCONFIRMED,
     LOSS_OF_LOCK,
     FreezeCorrupt,
     FreezeError,
+    anchor_state,
     append_history,
     build_manifest,
     clear_freeze,
     lock_state,
-    read_anchor,
     read_freeze,
     validate_anchor_path,
     verify_manifest,
     write_freeze,
 )
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
+
+# The gate script every root must carry. A tree without it has no place where the
+# freeze is ever checked, so a freeze taken against it is inert by construction.
+GATE_SCRIPT = Path("scripts") / "run-tests.py"
 
 
 def _git_sha(root: Path) -> str:
@@ -73,12 +82,23 @@ def _print_root(digest: str, manifest: dict) -> None:
           f"(label: {manifest['label']}, {count} {noun})")
 
 
-def _anchor_state(manifest: dict, override: str | None):
-    anchor = override or manifest.get("anchor") or ""
-    if not anchor:
-        return anchor, "none", None
-    status, value = read_anchor(Path(anchor))
-    return anchor, status, value
+def _resolve_root(args) -> Path:
+    """Resolve --root and refuse a tree that has no test gate.
+
+    --root defaults to the engine root rather than the shell's cwd. Defaulting
+    to the cwd meant `cd tests && python ../scripts/canopus.py freeze ...`
+    printed a root hash, exited 0, and wrote the state to tests/.canopus/ —
+    where neither the PreToolUse dispatcher nor the gate ever looks. The
+    operator was told the lock was on while it was inert, which is the worst
+    thing a discipline tool can do.
+    """
+    root = Path(args.root).resolve()
+    if not (root / GATE_SCRIPT).is_file():
+        raise FreezeError(
+            f"{root} has no {GATE_SCRIPT.as_posix()}; a tree with no test gate "
+            f"cannot enforce a freeze, so freezing it would be inert"
+        )
+    return root
 
 
 def _under_root(raw: str, root: Path) -> Path:
@@ -93,7 +113,7 @@ def _under_root(raw: str, root: Path) -> Path:
 
 
 def cmd_freeze(args) -> int:
-    root = Path(args.root).resolve()
+    root = _resolve_root(args)
     if read_freeze(root) is not None:
         print("canopus: a freeze is already active; run `release` first "
               "(changing a contract reopens the approval gate)", file=sys.stderr)
@@ -103,24 +123,20 @@ def cmd_freeze(args) -> int:
         root,
         label=args.label,
         frozen_at=datetime.now(timezone.utc).isoformat(),
-        anchor=_under_root(args.anchor, root) if args.anchor else None,
+        anchor=_under_root(args.anchor, root),
     )
     manifest["git_sha"] = _git_sha(root)
     write_freeze(root, manifest)
     append_history(root, "freeze", digest=manifest["root"], label=manifest["label"])
     _print_root(manifest["root"], manifest)
-    if manifest["anchor"]:
-        print(f"\nPaste this line into {manifest['anchor']} and commit it:\n")
-        print(f"    {ANCHOR_PREFIX} {manifest['root']}\n")
-        print("Until it is there, verify reports LOCK UNCONFIRMED.")
-    else:
-        print("\nNo anchor recorded. verify will only ever report LOCK UNCONFIRMED; "
-              "re-freeze with --anchor to get a checkable lock.")
+    print(f"\nPaste this line into {manifest['anchor']} and commit it:\n")
+    print(f"    {ANCHOR_PREFIX} {manifest['root']}\n")
+    print("Until it is there, verify reports LOCK UNCONFIRMED.")
     return 0
 
 
 def cmd_verify(args) -> int:
-    root = Path(args.root).resolve()
+    root = _resolve_root(args)
     manifest = read_freeze(root)
     if manifest is None:
         print("canopus: no active freeze; nothing to verify", file=sys.stderr)
@@ -131,7 +147,7 @@ def cmd_verify(args) -> int:
         str(validate_anchor_path(_under_root(args.anchor, root), root))
         if args.anchor else None
     )
-    anchor, status, value = _anchor_state(manifest, override)
+    anchor, status, value = anchor_state(manifest, override)
     state = lock_state(report, status, value)
 
     _print_root(report["recomputed_root"], manifest)
@@ -140,7 +156,7 @@ def cmd_verify(args) -> int:
         print(f"{GREEN}{BOLD}{LOCK_HELD}{RESET}  matches the hash recorded in {anchor}")
         return 0
     if state == LOCK_UNCONFIRMED:
-        detail = ("no anchor was recorded at freeze time" if status == "none"
+        detail = ("no anchor was recorded at freeze time" if status == ANCHOR_NONE
                   else f"{anchor} carries no {ANCHOR_PREFIX} line yet")
         print(f"{YELLOW}{BOLD}{LOCK_UNCONFIRMED}{RESET}  {detail}. Nothing changed "
               f"since the last check, which is NOT the same as 'this is the "
@@ -154,9 +170,9 @@ def cmd_verify(args) -> int:
         print(f"  added    {rel}")
     for rel in report["removed"]:
         print(f"  removed  {rel}")
-    if status == "missing":
+    if status == ANCHOR_MISSING:
         print(f"  anchor   {anchor} is gone")
-    elif status == "recorded" and value != report["recomputed_root"]:
+    elif status == ANCHOR_RECORDED and value != report["recomputed_root"]:
         print(f"  anchor   {anchor} records {value}")
     print("A contract that is genuinely wrong reopens the approval gate. "
           "It is never edited in place.")
@@ -166,7 +182,7 @@ def cmd_verify(args) -> int:
 
 
 def cmd_release(args) -> int:
-    root = Path(args.root).resolve()
+    root = _resolve_root(args)
     if args.force:
         # Never parses the manifest: this is the escape FROM an unparseable one.
         append_history(root, "force_release", digest="", label="", reason=args.reason)
@@ -186,7 +202,7 @@ def cmd_release(args) -> int:
 
 
 def cmd_status(args) -> int:
-    root = Path(args.root).resolve()
+    root = _resolve_root(args)
     manifest = read_freeze(root)
     if manifest is None:
         print("canopus: no active freeze")
@@ -194,7 +210,7 @@ def cmd_status(args) -> int:
     _print_root(manifest["root"], manifest)
     print(f"frozen at {manifest['frozen_at']}")
     print(f"git sha   {manifest.get('git_sha') or '(not a git working tree)'}")
-    anchor, status, value = _anchor_state(manifest, None)
+    anchor, status, value = anchor_state(manifest)
     print(f"anchor    {anchor or '(none)'}  [{status}]")
     for rel in manifest["files"]:
         print(f"  file  {rel}")
@@ -208,14 +224,21 @@ def build_parser() -> argparse.ArgumentParser:
         prog="canopus",
         description="Freeze the test contract so the builder cannot move the target.",
     )
-    parser.add_argument("--root", default=".",
-                        help="working tree root (default: current directory)")
+    parser.add_argument("--root", default=str(ENGINE_ROOT),
+                        help="working tree root (default: this script's own repository "
+                             "root, NOT the shell's cwd)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     freeze = sub.add_parser("freeze", help="lock a set of paths")
     freeze.add_argument("paths", nargs="+", help="files or directories to freeze")
     freeze.add_argument("--label", required=True, help="short name for this build")
-    freeze.add_argument("--anchor", default=None,
+    # Required, because an anchorless freeze can only ever report LOCK
+    # UNCONFIRMED. It still catches a later edit, but it is the one route to a
+    # PASSING gate that never leaves the engine clone: release, edit the
+    # contract, re-freeze, amber, exit 0. With an anchor that same sequence
+    # fails, because the artifact still holds the previously approved hash.
+    # Re-baselining is exactly what the anchor exists to make visible.
+    freeze.add_argument("--anchor", required=True,
                         help="committed artifact OUTSIDE this tree that records the root hash")
     freeze.set_defaults(func=cmd_freeze)
 
@@ -248,6 +271,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except FreezeError as exc:
         print(f"canopus: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # Same posture as the test gate: an unreadable member (permissions, a
+        # vanished mount) fails the command, it does not traceback. The exit
+        # code already failed closed; the layer billed as the guarantee should
+        # not present a raw stack trace while doing so.
+        print(f"canopus: the frozen contract could not be read, so it cannot be "
+              f"verified: {exc}", file=sys.stderr)
         return 1
 
 

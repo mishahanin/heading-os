@@ -462,7 +462,11 @@ def cmd_status(args) -> int:
     for rel in manifest["files"]:
         print(f"  file  {rel}")
     for rel, entry in manifest["dirs"].items():
-        print(f"  dir   {rel}/  ({entry['mode']})")
+        # The filter is printed because it is the guard's actual scope. A line
+        # reading "dir tests/" without it invites the reading that everything
+        # under tests/ is watched, which is the opposite of true.
+        watching = " ".join(entry["names"])
+        print(f"  dir   {rel or '.'}/  ({entry['mode']}, watching {watching})")
     return 0
 
 

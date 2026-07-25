@@ -26,12 +26,15 @@ this catches is tampering by helpfulness: the model hits a red assertion,
 concludes in good faith that the assertion is wrong, and edits it. A verification
 that merely runs catches that completely.
 
-Recipe `canopus-freeze-v2`, named in every manifest so a future algorithm change
+Recipe `canopus-freeze-v3`, named in every manifest so a future algorithm change
 breaks loudly instead of silently:
 
     file digest = sha256(LF-normalized bytes)
     dir digest  = sha256("".join(f"{relpath}\\n" for relpath in sorted members))
     root hash   = sha256(canonical JSON of {recipe, anchor, files, dirs, baseline})
+
+where a directory's members are those whose BASENAME matches one of the entry's
+recorded `names` patterns.
 
 Per-file bytes are LF-normalized (\\r\\n -> \\n) so a CRLF working copy and a
 fresh LF checkout agree, matching the recipe already proven in
@@ -57,7 +60,7 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 from scripts.utils.atomic import atomic_write_text
 
-RECIPE = "canopus-freeze-v2"
+RECIPE = "canopus-freeze-v3"
 FREEZE_DIRNAME = ".canopus"
 FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
@@ -82,6 +85,36 @@ CACHE_DIRNAMES = frozenset({
 })
 CACHE_SUFFIXES = frozenset({".pyc", ".pyo"})
 
+# Which basenames a directory guard watches, as fnmatch patterns.
+#
+# A guard is a question, and the three questions are different. A frozen
+# directory asks "did anything at all move in here", so it watches everything.
+# An ANCESTOR of a frozen path asks the narrow question the guard was invented
+# for: did a conftest.py appear above the contract. That one file is what pytest
+# imports without being told to, and it is where a stub reaches sys.path. The
+# TREE ROOT asks a third question, because pyproject declares it on sys.path
+# (`pythonpath = ["."]`): did an importable module appear at the entry the
+# contract's own imports resolve against.
+#
+# The narrowing is not timidity, it is what makes the guard usable. Watching the
+# full composition of an ancestor put 201 of this repository's 296 test files
+# under a write deny and made the builder's next ordinary unit test report LOSS
+# OF LOCK. A guard that fires on the builder doing its job is a guard that gets
+# routed around, and a routed-around guard protects nothing.
+GUARD_NAMES_ALL = ("*",)
+GUARD_NAMES_ANCESTOR = ("conftest.py",)
+GUARD_NAMES_TREE_ROOT = ("*.py",)
+
+# Stated rather than implied, because the boundary is where the next hole lives:
+# composition lists FILES, so a PACKAGE DIRECTORY appearing at the tree root
+# (`target/__init__.py` shadowing an installed `target`) is not caught, and
+# neither is a module dropped into another in-tree sys.path entry such as
+# tests/. Both are closed by practice rather than by this primitive: the
+# contract lives in its own directory under tests/contract/, which freezes
+# RECURSIVELY, so anything appearing beside it is caught by content and by
+# composition alike. Widening the guard to cover them is a reason to change this
+# set, never a reason to route around the lock.
+
 
 class FreezeError(Exception):
     """A freeze operation was refused."""
@@ -96,13 +129,21 @@ def file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
-def _members(directory: Path, *, recursive: bool) -> list[Path]:
-    """Regular files in *directory*, sorted by POSIX relative path.
+def _members(
+    directory: Path, *, recursive: bool, names: Sequence[str] = GUARD_NAMES_ALL
+) -> list[Path]:
+    """Regular files in *directory* whose basename matches *names*, sorted.
 
     Symlinks are excluded (the workspace forbids them), anything under the
     freeze state directory is excluded so the manifest never hashes itself, and
     tool-generated caches are excluded so the lock never binds to an artifact the
     build regenerates (see CACHE_DIRNAMES).
+
+    *names* is a tuple of fnmatch patterns matched against the BASENAME, so a
+    recursive guard's default `("*",)` keeps every nested member while an
+    ancestor guard keeps only the one file it has a reason to watch. Matching the
+    basename rather than the relative path is what lets the same filter serve a
+    flat listing and a nested one without two spellings of every pattern.
     """
     skipped_dirs = CACHE_DIRNAMES | {FREEZE_DIRNAME}
     candidates = directory.rglob("*") if recursive else directory.iterdir()
@@ -112,11 +153,24 @@ def _members(directory: Path, *, recursive: bool) -> list[Path]:
         and not p.is_symlink()
         and skipped_dirs.isdisjoint(p.relative_to(directory).parts)
         and p.suffix not in CACHE_SUFFIXES
+        and matches_guard(p.name, names)
     ]
     return sorted(files, key=lambda p: p.relative_to(directory).as_posix())
 
 
-def dir_members_digest(directory: Path, *, recursive: bool) -> str:
+def matches_guard(name: str, names: Sequence[str]) -> bool:
+    """True when *name* matches any of the guard's fnmatch patterns.
+
+    One predicate shared by the measurement path (_members) and the write-deny
+    path (frozen_reason). Two hand-rolled copies is how the hook ends up denying
+    a file verify no longer watches, or watching one it never denies.
+    """
+    return any(fnmatch.fnmatch(name, pattern) for pattern in names)
+
+
+def dir_members_digest(
+    directory: Path, *, recursive: bool, names: Sequence[str] = GUARD_NAMES_ALL
+) -> str:
     """sha256 over the sorted POSIX relative paths of a directory's members.
 
     Composition only, not content: this is what detects a file appearing beside
@@ -124,12 +178,14 @@ def dir_members_digest(directory: Path, *, recursive: bool) -> str:
     """
     lines = "".join(
         f"{p.relative_to(directory).as_posix()}\n"
-        for p in _members(directory, recursive=recursive)
+        for p in _members(directory, recursive=recursive, names=names)
     )
     return hashlib.sha256(lines.encode("utf-8")).hexdigest()
 
 
-def dir_member_rels(directory: Path, root: Path, *, recursive: bool) -> list[str]:
+def dir_member_rels(
+    directory: Path, root: Path, *, recursive: bool, names: Sequence[str] = GUARD_NAMES_ALL
+) -> list[str]:
     """The directory's members as sorted root-relative POSIX paths.
 
     Recorded in the manifest beside the composition digest. A digest proves
@@ -141,7 +197,7 @@ def dir_member_rels(directory: Path, root: Path, *, recursive: bool) -> list[str
     """
     return sorted(
         p.relative_to(root).as_posix()
-        for p in _members(directory, recursive=recursive)
+        for p in _members(directory, recursive=recursive, names=names)
     )
 
 
@@ -240,7 +296,7 @@ def _conftest_chain(target: Path, root: Path) -> list[Path]:
 
 
 def _guard_ancestors(target: Path, root: Path, dirs: dict) -> None:
-    """Install a non-recursive composition guard on every ancestor of *target*.
+    """Install a filtered composition guard on every ancestor of *target*.
 
     Measured at the wire 2 intent audit, and this is the hole it closes. A
     directory freeze guarded only the target directory, so a `conftest.py`
@@ -251,25 +307,39 @@ def _guard_ancestors(target: Path, root: Path, dirs: dict) -> None:
     frozen byte intact. The item count is unchanged, so the baseline matches and
     the run attests: LOCK HELD and ATTESTED over a hijacked contract.
 
-    Composition ONLY, never content. The guard answers "did a file appear beside
-    the contract", not "did anything under tests/ change" -- freezing an
-    ancestor's contents would stop a builder editing its own unit tests, and a
-    primitive that forbids that gets routed around in its first week.
+    Composition ONLY, never content. The guard answers "did an importable file
+    appear above the contract", not "did anything under tests/ change" --
+    freezing an ancestor's contents would stop a builder editing its own unit
+    tests, and a primitive that forbids that gets routed around in its first
+    week.
 
-    The walk stops BELOW the tree root, for the reason the file-target guard
-    already gave: guarding the root's composition would deny every new top-level
-    file. An ancestor that already carries a recursive guard keeps it.
+    The walk INCLUDES the tree root, under a different filter. The first version
+    of this guard stopped below the root, reasoning that guarding the root's
+    composition would deny every new top-level file. The reasoning was sound and
+    the conclusion was wrong: pyproject declares `pythonpath = ["."]`, so the
+    root is the first sys.path entry the contract's own imports resolve against,
+    and stopping there left a plain `target.py` at the root able to flip the
+    contract green while verify printed LOCK HELD. Watching `*.py` there answers
+    the objection instead of surrendering to it: a note or a lockfile written
+    during the slice is not importable and does not move the guard.
+
+    An ancestor that already carries a recursive guard keeps it.
     """
     for ancestor in target.parents:
-        if ancestor == root:
-            break
-        rel = ancestor.relative_to(root).as_posix()
+        if not ancestor.is_relative_to(root):
+            break  # defensive: never walk above the tree being protected
+        at_root = ancestor == root
+        rel = "" if at_root else ancestor.relative_to(root).as_posix()
+        names = GUARD_NAMES_TREE_ROOT if at_root else GUARD_NAMES_ANCESTOR
         if rel not in dirs:
             dirs[rel] = {
                 "mode": "members",
-                "hash": dir_members_digest(ancestor, recursive=False),
-                "members": dir_member_rels(ancestor, root, recursive=False),
+                "names": list(names),
+                "hash": dir_members_digest(ancestor, recursive=False, names=names),
+                "members": dir_member_rels(ancestor, root, recursive=False, names=names),
             }
+        if at_root:
+            break
 
 
 def build_manifest(
@@ -321,6 +391,7 @@ def build_manifest(
         if target.is_dir():
             dirs[rel] = {
                 "mode": "recursive",
+                "names": list(GUARD_NAMES_ALL),
                 "hash": dir_members_digest(target, recursive=True),
                 "members": dir_member_rels(target, resolved_root, recursive=True),
             }
@@ -389,12 +460,21 @@ def recompute(manifest: dict, root: Path) -> dict:
     for rel, entry in manifest["dirs"].items():
         candidate = resolved_root / rel
         recursive = entry["mode"] == "recursive"
+        # Read from the manifest, never re-derived from the path. Re-deriving
+        # would let a re-measurement widen or narrow a guard the approval was
+        # taken over, which is the one thing recompute must not be able to do.
+        names = entry["names"]
         alive = candidate.is_dir()
         dirs[rel] = {
             "mode": entry["mode"],
-            "hash": dir_members_digest(candidate, recursive=recursive) if alive else "",
+            "names": list(names),
+            "hash": (
+                dir_members_digest(candidate, recursive=recursive, names=names)
+                if alive else ""
+            ),
             "members": (
-                dir_member_rels(candidate, resolved_root, recursive=recursive) if alive else []
+                dir_member_rels(candidate, resolved_root, recursive=recursive, names=names)
+                if alive else []
             ),
         }
     return {
@@ -542,12 +622,15 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
     """
     if rel_posix in manifest["files"]:
         return f"{rel_posix} is a frozen contract file"
-    parent = rel_posix.rsplit("/", 1)[0] if "/" in rel_posix else ""
+    parent, _, name = rel_posix.rpartition("/")
     for dir_rel, entry in manifest["dirs"].items():
         if entry["mode"] == "recursive":
             if rel_posix == dir_rel or rel_posix.startswith(dir_rel + "/"):
                 return f"{rel_posix} is inside the frozen directory {dir_rel}/"
-        elif parent == dir_rel:
+        elif parent == dir_rel and matches_guard(name, entry["names"]):
+            # The same filter verify measures with. A deny wider than the
+            # measurement refuses writes nothing would have reported, which is
+            # how a discipline tool becomes an obstacle.
             return f"{rel_posix} would join the guarded composition of {dir_rel}/"
     return None
 
@@ -654,7 +737,9 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
         # A dir entry without its recorded member list would make every existing
         # member read as newly added. Refuse it rather than report a false alarm.
         _require(
-            isinstance(entry, dict) and "mode" in entry and "hash" in entry and "members" in entry,
+            isinstance(entry, dict)
+            and "mode" in entry and "hash" in entry
+            and "members" in entry and "names" in entry,
             f"freeze manifest at {path} has an incomplete entry for directory {rel!r}",
         )
         mode = entry["mode"]
@@ -674,6 +759,24 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
             f"freeze manifest at {path} has a non-string 'hash' for directory "
             f"{rel!r} ({type(entry['hash']).__name__}), expected a string",
         )
+        # An empty or non-list 'names' would make matches_guard() answer False
+        # for every basename, silently reducing the guard to nothing while the
+        # manifest still reports a guarded directory. Refused, like an
+        # unrecognised mode, because a guard that watches nothing and says it
+        # watches something is worse than no guard at all.
+        names = entry["names"]
+        _require(
+            isinstance(names, list) and names,
+            f"freeze manifest at {path} has an empty or non-list 'names' for "
+            f"directory {rel!r}, expected a non-empty list of patterns",
+        )
+        for pattern in names:
+            _require(
+                isinstance(pattern, str),
+                f"freeze manifest at {path} has a non-string pattern in 'names' "
+                f"for directory {rel!r} ({type(pattern).__name__}), expected a string",
+            )
+
         members = entry["members"]
         _require(
             isinstance(members, list),

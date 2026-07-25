@@ -164,9 +164,9 @@ Three ways to name a path, and they mean different things:
 
 | Form | Effect |
 |---|---|
-| positional | a file freezes by content plus a composition guard on its parent; a directory freezes recursively |
+| positional | a file freezes by content plus a composition guard on every ancestor; a directory freezes recursively |
 | `--contract DIR` | recursive, plus a per-file item count recorded at freeze time, and a refusal unless the contract is red |
-| `--content FILE` | the bytes only, with no composition guard on the parent |
+| `--content FILE` | the bytes only, with no composition guard on any ancestor |
 
 `--content` is how the enforcer files are frozen. Frozen as ordinary files they
 would guard `scripts/` and `scripts/utils/`, and a build that cannot create a
@@ -241,17 +241,36 @@ and erasable with `git checkout --`. It is evidence for a human who looks, not c
 The line becomes durable only once it is committed there, which is what `freeze` tells you
 to do on the way out.
 
-Freezing a directory is recursive. Freezing a file also guards its parent directory's
-immediate membership, which catches a `conftest.py` dropped beside a frozen test to
-neutralize it.
+Freezing a directory is recursive. Freezing a path also guards the membership of every
+ancestor directory up to and including the tree root, and each guard watches a stated set
+of basenames rather than everything:
 
-Every `conftest.py` from a frozen path up to the tree root is frozen by **content**,
-automatically. The composition guard records member paths only, so a conftest sitting
-beside a frozen test used to be listed and never hashed — and that file is exactly where a
-good-faith edit changes what the contract measures without moving anything the guard
-watches, because filtering inside `pytest_collection_modifyitems` fires no deselection
-hook. The tree root is included even though the composition guard skips it, since a
-repository-root `conftest.py` is the cheapest place to filter collection from. The cost is
+| Guarded directory | Watches | Why |
+|---|---|---|
+| the frozen directory itself | everything | a directory freeze asks whether anything at all moved inside it |
+| each ancestor | `conftest.py` | the one file pytest imports without being told to, and the place a stub reaches `sys.path` |
+| the tree root | `*.py` | `pyproject` declares `pythonpath = ["."]`, so the root is the first entry the contract's own imports resolve against |
+
+The narrowing is what makes the guard usable. A first version watched the full membership
+of every ancestor; that put 201 of this repository's 296 test files under a write deny and
+made the builder's next ordinary unit test report `LOSS OF LOCK`. A guard that fires on the
+builder doing its job gets routed around, and a routed-around guard protects nothing. After
+the narrowing the same freeze denies 2 files, both of them frozen for a stated reason.
+
+`status` prints each guard's filter beside it, because a line reading `dir tests/` on its own
+invites the reading that everything under `tests/` is watched.
+
+Composition lists **files**, so two things are outside it by construction: a package
+directory appearing at the tree root, and a module dropped into another in-tree `sys.path`
+entry such as `tests/`. Both are closed by practice rather than by the primitive: the
+contract lives in its own directory under `tests/contract/`, which freezes recursively, so
+anything appearing beside it is caught by content and by composition alike.
+
+Every `conftest.py` from a frozen path up to the tree root is additionally frozen by
+**content**. A composition guard records member paths only, so a conftest sitting beside a
+frozen test used to be listed and never hashed — and that file is exactly where a good-faith
+edit changes what the contract measures without moving anything the guard watches, because
+filtering inside `pytest_collection_modifyitems` fires no deselection hook. The cost is
 deliberate: a slice that legitimately edits a `conftest.py` mid-build gets `LOSS OF LOCK`,
 which under this standard is the correct answer.
 

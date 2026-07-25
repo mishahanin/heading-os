@@ -235,7 +235,7 @@ digest and nobody compares one by eye.</p>
 <tbody>
 <tr>
 <td>positional</td>
-<td>a file freezes by content plus a composition guard on its parent; a directory freezes recursively</td>
+<td>a file freezes by content plus a composition guard on every ancestor; a directory freezes recursively</td>
 </tr>
 <tr>
 <td><code>--contract DIR</code></td>
@@ -243,7 +243,7 @@ digest and nobody compares one by eye.</p>
 </tr>
 <tr>
 <td><code>--content FILE</code></td>
-<td>the bytes only, with no composition guard on the parent</td>
+<td>the bytes only, with no composition guard on any ancestor</td>
 </tr>
 </tbody>
 </table>
@@ -326,16 +326,52 @@ a tamper leaves an uncommitted diff in the sibling repository: visible in its <c
 and erasable with <code>git checkout --</code>. It is evidence for a human who looks, not containment.
 The line becomes durable only once it is committed there, which is what <code>freeze</code> tells you
 to do on the way out.</p>
-<p>Freezing a directory is recursive. Freezing a file also guards its parent directory&rsquo;s
-immediate membership, which catches a <code>conftest.py</code> dropped beside a frozen test to
-neutralize it.</p>
-<p>Every <code>conftest.py</code> from a frozen path up to the tree root is frozen by <strong>content</strong>,
-automatically. The composition guard records member paths only, so a conftest sitting
-beside a frozen test used to be listed and never hashed — and that file is exactly where a
-good-faith edit changes what the contract measures without moving anything the guard
-watches, because filtering inside <code>pytest_collection_modifyitems</code> fires no deselection
-hook. The tree root is included even though the composition guard skips it, since a
-repository-root <code>conftest.py</code> is the cheapest place to filter collection from. The cost is
+<p>Freezing a directory is recursive. Freezing a path also guards the membership of every
+ancestor directory up to and including the tree root, and each guard watches a stated set
+of basenames rather than everything:</p>
+<table>
+<thead>
+<tr>
+<th>Guarded directory</th>
+<th>Watches</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>the frozen directory itself</td>
+<td>everything</td>
+<td>a directory freeze asks whether anything at all moved inside it</td>
+</tr>
+<tr>
+<td>each ancestor</td>
+<td><code>conftest.py</code></td>
+<td>the one file pytest imports without being told to, and the place a stub reaches <code>sys.path</code></td>
+</tr>
+<tr>
+<td>the tree root</td>
+<td><code>*.py</code></td>
+<td><code>pyproject</code> declares <code>pythonpath = ["."]</code>, so the root is the first entry the contract&rsquo;s own imports resolve against</td>
+</tr>
+</tbody>
+</table>
+<p>The narrowing is what makes the guard usable. A first version watched the full membership
+of every ancestor; that put 201 of this repository&rsquo;s 296 test files under a write deny and
+made the builder&rsquo;s next ordinary unit test report <code>LOSS OF LOCK</code>. A guard that fires on the
+builder doing its job gets routed around, and a routed-around guard protects nothing. After
+the narrowing the same freeze denies 2 files, both of them frozen for a stated reason.</p>
+<p><code>status</code> prints each guard&rsquo;s filter beside it, because a line reading <code>dir tests/</code> on its own
+invites the reading that everything under <code>tests/</code> is watched.</p>
+<p>Composition lists <strong>files</strong>, so two things are outside it by construction: a package
+directory appearing at the tree root, and a module dropped into another in-tree <code>sys.path</code>
+entry such as <code>tests/</code>. Both are closed by practice rather than by the primitive: the
+contract lives in its own directory under <code>tests/contract/</code>, which freezes recursively, so
+anything appearing beside it is caught by content and by composition alike.</p>
+<p>Every <code>conftest.py</code> from a frozen path up to the tree root is additionally frozen by
+<strong>content</strong>. A composition guard records member paths only, so a conftest sitting beside a
+frozen test used to be listed and never hashed — and that file is exactly where a good-faith
+edit changes what the contract measures without moving anything the guard watches, because
+filtering inside <code>pytest_collection_modifyitems</code> fires no deselection hook. The cost is
 deliberate: a slice that legitimately edits a <code>conftest.py</code> mid-build gets <code>LOSS OF LOCK</code>,
 which under this standard is the correct answer.</p>
 <p>If the manifest is ever damaged, every write is denied fail-closed. Clear it with

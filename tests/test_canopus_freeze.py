@@ -172,10 +172,23 @@ def test_manifest_carries_the_recipe(tree: Path):
     assert manifest["recipe"] == RECIPE
 
 
-def test_root_level_file_gets_no_implicit_directory_guard(tree: Path):
+def test_root_level_file_guards_the_roots_importable_composition(tree: Path):
+    """Wire 1 installed no guard at all here; wire 2 measured why that was wrong.
+
+    The root is the first sys.path entry, so it is the one directory whose
+    composition the contract's own imports resolve against. The guard watches
+    what is importable and ignores the rest, which is the same objection wire 1
+    raised, answered instead of conceded.
+    """
     (tree / "conftest.py").write_text("# root conftest\n")
     manifest = build_manifest([tree / "conftest.py"], tree, label="l", frozen_at=STAMP)
-    assert manifest["dirs"] == {}
+    assert manifest["dirs"][""]["names"] == ["*.py"]
+
+    (tree / "README.md").write_text("notes\n")
+    assert verify_manifest(manifest, tree)["held"] is True
+
+    (tree / "stub.py").write_text("answer = 42\n")
+    assert verify_manifest(manifest, tree)["held"] is False
 
 
 def test_validate_refuses_a_missing_path(tree: Path):
@@ -272,10 +285,16 @@ def test_implicit_guard_reports_neither_added_nor_removed_when_nothing_moved(tre
     assert report["added"] == []
     assert report["removed"] == []
 
+    # The ancestor guard watches conftest.py, so a sibling test coming or going
+    # is the builder's business. What the guard is for is the file pytest
+    # imports on its own, and that one still moves the lock.
     (tree / "tests" / "test_beta.py").unlink()
+    assert verify_manifest(manifest, tree)["held"] is True
+
+    (tree / "tests" / "conftest.py").write_text("import sys\n")
     after = verify_manifest(manifest, tree)
     assert after["held"] is False
-    assert after["removed"] == ["tests/test_beta.py"]
+    assert after["added"] == ["tests/conftest.py"]
 
 
 def test_explicit_directory_freeze_catches_a_subdirectory_addition(tree: Path):
@@ -918,25 +937,80 @@ def test_a_conftest_appearing_above_a_frozen_directory_breaks_the_lock(tmp_path:
     assert "tests/contract/conftest.py" in report["added"]
 
 
-def test_the_ancestor_guard_stops_below_the_tree_root(tmp_path: Path):
-    """Guarding the root's composition would deny every new top-level file.
-
-    The same reasoning the file-target guard already applies, extended to the
-    ancestor chain rather than re-derived.
-    """
-    root = tmp_path / "tree"
+def _frozen_slice(root: Path) -> dict:
+    """A contract frozen in its own directory, the shape /pre-impl mandates."""
     (root / "tests" / "contract" / "slice").mkdir(parents=True)
     (root / "tests" / "contract" / "slice" / "test_c.py").write_text(
-        "def test_a():\n    assert False\n"
+        "def test_a():\n    from target import answer\n    assert answer() == 42\n"
     )
-    manifest = build_manifest(
+    return build_manifest(
         [root / "tests" / "contract" / "slice"], root, label="l", frozen_at=STAMP
     )
 
-    assert "" not in manifest["dirs"]
-    assert "." not in manifest["dirs"]
-    (root / "new_top_level.py").write_text("x = 1\n")
+
+def test_a_module_appearing_at_the_tree_root_breaks_the_lock(tmp_path: Path):
+    """The blocker the wire 2 final pass measured, closed here.
+
+    pyproject declares `pythonpath = ["."]`, so the tree root is the first entry
+    on sys.path. A module dropped there resolves the contract's in-body import
+    to a stub, and the earlier guard walked only the ancestors BELOW the root,
+    so verify printed LOCK HELD over a hijacked contract.
+    """
+    root = tmp_path / "tree"
+    manifest = _frozen_slice(root)
     assert verify_manifest(manifest, root)["held"] is True
+
+    (root / "target.py").write_text("def answer():\n    return 42\n")
+
+    report = verify_manifest(manifest, root)
+    assert report["held"] is False
+    assert "target.py" in report["added"]
+
+
+def test_a_non_python_file_at_the_tree_root_does_not_break_the_lock(tmp_path: Path):
+    """The root guard watches importable names, not the whole directory.
+
+    Guarding every top-level file would fire on a note, a config, or a
+    lockfile written during the slice, and a guard that fires on noise is one
+    people route around.
+    """
+    root = tmp_path / "tree"
+    manifest = _frozen_slice(root)
+
+    (root / "NOTES.md").write_text("scratch\n")
+    assert verify_manifest(manifest, root)["held"] is True
+
+
+def test_an_ordinary_new_unit_test_does_not_break_the_lock(tmp_path: Path):
+    """The regression the first version of this guard introduced.
+
+    An ancestor guard over the FULL composition of tests/ made every new unit
+    test read as `added`, so the builder's own next test failed the whole suite
+    with LOSS OF LOCK. The guard watches conftest.py in an ancestor, because
+    that is the file pytest imports without being told to.
+    """
+    root = tmp_path / "tree"
+    manifest = _frozen_slice(root)
+
+    (root / "tests" / "test_builder_wrote_this.py").write_text(
+        "def test_b():\n    assert True\n"
+    )
+    assert verify_manifest(manifest, root)["held"] is True
+
+
+def test_the_ancestor_guard_denies_a_conftest_but_not_an_ordinary_test(tmp_path: Path):
+    """The write-deny filter tracks the verify filter.
+
+    Leaving frozen_reason wide while narrowing verify would keep the PreToolUse
+    hook refusing 200 files it no longer has a reason to refuse.
+    """
+    root = tmp_path / "tree"
+    manifest = _frozen_slice(root)
+
+    assert "composition" in frozen_reason("tests/contract/conftest.py", manifest)
+    assert frozen_reason("tests/test_builder_wrote_this.py", manifest) is None
+    assert "composition" in frozen_reason("target.py", manifest)
+    assert frozen_reason("NOTES.md", manifest) is None
 
 
 def test_the_ancestor_guard_does_not_freeze_the_ancestors_contents(tmp_path: Path):

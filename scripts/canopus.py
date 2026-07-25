@@ -40,16 +40,20 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_NONE,
     ANCHOR_PREFIX,
     ANCHOR_RECORDED,
+    ATTESTED,
     LOCK_HELD,
     LOCK_UNCONFIRMED,
     LOSS_OF_LOCK,
+    NOT_ATTESTED,
     FreezeCorrupt,
     FreezeError,
     anchor_state,
     append_history,
+    attestation_state,
     build_manifest,
     clear_freeze,
     lock_state,
+    read_attestation,
     read_freeze,
     validate_anchor_path,
     verify_manifest,
@@ -112,6 +116,39 @@ def _under_root(raw: str, root: Path) -> Path:
     return candidate if candidate.is_absolute() else root / candidate
 
 
+def _print_attestation(root: Path, recomputed_root: str) -> None:
+    """The second axis: did the frozen tests actually RUN, and pass?
+
+    The lock line answers "did the contract move". It cannot answer "did the
+    contract run": -k, --deselect, --ignore and a bare path argument all reach
+    green with every frozen byte intact.
+
+    Reports only, and deliberately: it can never change an exit code, because
+    the gate that would act on it runs at pytest session start, before the run
+    it would attest has finished. Making it fatal would fail every run on its
+    own missing record.
+    """
+    record = read_attestation(root)
+    state, reason = attestation_state(record, recomputed_root)
+    if state == ATTESTED:
+        counts = [
+            entry for entry in (record.get("frozen_tests") or {}).values()
+            if isinstance(entry, dict)
+        ]
+        passed = sum(entry.get("passed", 0) for entry in counts)
+        skipped = sum(entry.get("skipped", 0) for entry in counts)
+        tail = f", {skipped} skipped" if skipped else ""
+        print(f"{GREEN}{BOLD}{ATTESTED}{RESET}  {passed} frozen tests passed in an "
+              f"unfiltered run at "
+              f"{record.get('attested_at') or 'an unrecorded time'}{tail}")
+        return
+    print(f"{YELLOW}{BOLD}{NOT_ATTESTED}{RESET}  {reason}")
+    listed = (record or {}).get("reasons")
+    if isinstance(listed, list):
+        for line in listed[:5]:
+            print(f"  reason   {line}")
+
+
 def cmd_freeze(args) -> int:
     root = _resolve_root(args)
     if read_freeze(root) is not None:
@@ -154,6 +191,7 @@ def cmd_verify(args) -> int:
 
     if state == LOCK_HELD:
         print(f"{GREEN}{BOLD}{LOCK_HELD}{RESET}  matches the hash recorded in {anchor}")
+        _print_attestation(root, report["recomputed_root"])
         return 0
     if state == LOCK_UNCONFIRMED:
         detail = ("no anchor was recorded at freeze time" if status == ANCHOR_NONE
@@ -161,6 +199,7 @@ def cmd_verify(args) -> int:
         print(f"{YELLOW}{BOLD}{LOCK_UNCONFIRMED}{RESET}  {detail}. Nothing changed "
               f"since the last check, which is NOT the same as 'this is the "
               f"approved contract'.")
+        _print_attestation(root, report["recomputed_root"])
         return 0
 
     print(f"{RED}{BOLD}{LOSS_OF_LOCK}{RESET}")
@@ -174,6 +213,7 @@ def cmd_verify(args) -> int:
         print(f"  anchor   {anchor} is gone")
     elif status == ANCHOR_RECORDED and value != report["recomputed_root"]:
         print(f"  anchor   {anchor} records {value}")
+    _print_attestation(root, report["recomputed_root"])
     print("A contract that is genuinely wrong reopens the approval gate. "
           "It is never edited in place.")
     append_history(root, "verify_fail", digest=report["recomputed_root"],
@@ -207,7 +247,9 @@ def cmd_status(args) -> int:
     if manifest is None:
         print("canopus: no active freeze")
         return 0
+    report = verify_manifest(manifest, root)
     _print_root(manifest["root"], manifest)
+    _print_attestation(root, report["recomputed_root"])
     print(f"frozen at {manifest['frozen_at']}")
     print(f"git sha   {manifest.get('git_sha') or '(not a git working tree)'}")
     anchor, status, value = anchor_state(manifest)

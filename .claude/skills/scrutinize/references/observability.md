@@ -17,9 +17,9 @@ Every /scrutinize pass emits one Langfuse trace per phase invocation. Phase 0 op
 | `relentless` | bool | resolved in Phase 0 (`--relentless` flag present) |
 | `iteration` | int (only during --relentless loop) | Phase 4 closure per iteration |
 | `judge_family_rotation` | `rotate` / `fixed-claude` / etc | resolved per `bias-mitigation.md` |
-| `gemini_model` | model id (e.g. `gemini-3.5-flash`) | env var or default |
-| `grok_model` | model id (e.g. `grok-4.3`) | env var or default |
-| `claude_model` | model id (e.g. `claude-opus-4-7`) | session model |
+| `kimi_model` | model id (default `k3`) | env var or default; the reasoning pin, never `kimi-for-coding` |
+| `claude_model` | model id | session model |
+| `gemini_model` / `grok_model` | model id | only when opted in via `--judge-family` |
 
 ## Per-phase span metadata
 
@@ -47,10 +47,10 @@ Each phase emits a span with structured metadata. The metadata is the same data 
 - `refuted_count`: int (findings dropped by refutation)
 - `refute_partial_count`: int (findings downgraded by refutation)
 - `survived_count`: int (findings that reached Phase 3)
-- `judge_families_used`: list (e.g. `['claude-opus-4-7', 'gemini-3.5-flash', 'grok-4.3']`)
+- `judge_families_used`: list (e.g. `['claude', 'k3']`)
 - `debate_runs`: count of Phase 2.5b debates dispatched
 - `position_swap_count`: int (number of Meta-Judge calls where Skeptic appeared first)
-- `skip_reason`: string (only when skipped: `plan-target` / `no-refute-flag` / `no-findings` / `family-unavailable` / `vault-active`)
+- `skip_reason`: string (only when skipped: `plan-target` / `no-refute-flag` / `no-findings` / `family-unavailable` / `sensitive-mode`)
 
 ### Phase 3 span
 

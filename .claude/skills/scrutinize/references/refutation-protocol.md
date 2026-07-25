@@ -22,7 +22,7 @@ Both council members (Gemini and Grok) converged on the same first-move recommen
 
 For each finding at severity BLOCKER, HIGH, or MEDIUM produced in Phase 2:
 
-1. Dispatch one refutation agent. Model family is rotated per `references/bias-mitigation.md` (default rotation: Claude Opus 4.7, Gemini 3.5 Flash, Grok 4.3). The agent does NOT see prior reasoning from the finding-emitter - it gets only the finding statement, location, evidence, and read access to the workspace.
+1. Dispatch one refutation agent. Model family is rotated per `references/bias-mitigation.md` (default rotation since 2026-07-25: the running session's Claude, alternating with Kimi k3 over the local proxy; Gemini and Grok are opt-in via `--judge-family`). The agent does NOT see prior reasoning from the finding-emitter - it gets only the finding statement, location, evidence, and read access to the workspace.
 
 2. Agent brief (template):
 
@@ -76,7 +76,7 @@ For findings that survived Phase 2.5a at severity BLOCKER or HIGH, run a Khan-st
    - `INCORRECT` (score < 60) -> finding DROPPED, logged in "Refuted" section.
    - `AMBIGUOUS` (60 <= score < 75) -> finding DROPPED from approval block by default. If `--include-ambiguous` is set, finding appears in the approval block flagged `[AMBIGUOUS]` for the CEO to manually adjudicate.
 
-6. Family rotation enforces self-preference mitigation: Advocate-Skeptic-Judge always span three different families (cycle: Claude -> Gemini -> Grok). If only Claude is available (API outages, vault mode), fall back to Phase 2.5a single-pass refutation only and surface the degradation in the approval block.
+6. Family rotation enforces self-preference mitigation. With the two-family roster the binding rule is narrower and stricter than "all three differ": the **Skeptic and the Meta-Judge must never be the same family**, because a Meta-Judge ruling on its own family's refusal to refute is the exact bias being mitigated. Default assignment is Skeptic on Kimi k3, Meta-Judge on Claude; swap per pass-start. If only Claude is reachable (proxy down, `k3` absent from `cliproxy models`, or `SENSITIVE_MODE` active), fall back to Phase 2.5a single-pass refutation only, and surface the degradation WITH ITS CAUSE in the approval block and in the `## Judge layer` section. Dropping a debate role and recording nothing but "not exercised" is a skipped mitigation dressed as a note.
 
 ## Why two phases not one
 

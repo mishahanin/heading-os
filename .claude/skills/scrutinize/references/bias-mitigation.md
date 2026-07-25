@@ -1,7 +1,8 @@
 # Bias Mitigation - /scrutinize Judge Layer
 
 **Consumed by:** `.claude/skills/scrutinize/SKILL.md` (Phase 2, 2.5)
-**Last Updated:** 2026-05-27
+**Last Updated:** 2026-07-25
+**Last Verified:** 2026-07-25
 
 Mechanical mitigations for documented LLM-as-judge biases. Closes R7 from the 2026-05-27 meta-review of /scrutinize.
 
@@ -23,41 +24,53 @@ The /scrutinize architecture as of v1.2 had zero mechanical mitigations active. 
 
 **The rule:** the LLM judge layer rotates across model families across queries within a single scrutinize pass. The deterministic layer (`scripts/artifact-evaluator.py`) stays Claude-only - it is not a judge, it is a static-analysis pass.
 
-**The default rotation:**
+**The default rotation (CEO decision, 2026-07-25):**
 
 | Slot | Model | Notes |
 |---|---|---|
-| 1 | Claude Opus 4.7 | `claude-opus-4-7` - strongest reasoning, primary Anthropic family |
-| 2 | Gemini 3.5 Flash | `gemini-3.5-flash` - Google DeepMind, GA 2026-05-19. Flagship intelligence at Flash speed (4x faster than other frontier models per Google's own benchmarks), Dynamic Thinking on by default, optimised for agentic workflows and sub-agent deployment. Knowledge cutoff January 2026. |
-| 3 | Grok 4.3 | `grok-4.3` - xAI, launched 2026-05-04. Built-in reasoning, 1M-token context, distinct training pedigree (most divergent from Claude). Intelligence Index 53 (vs 35 median). |
+| 1 | Claude, the running session's model | primary Anthropic family; dispatched in-session via the Agent tool |
+| 2 | Kimi k3 | `k3` over the local CLIProxyAPI proxy. Distinct training pedigree, distinct RLHF, a reasoning model that always thinks. This is the ONLY external voice in the default roster. |
+
+Two families, not three. The CEO cut Gemini and Grok from the standing council roster on 2026-07-25 and kept Kimi k3, and the judge layer follows the same roster: running a family the operator has retired would be diversity on paper only. Gemini and Grok stay one flag away for a pass where breadth is worth the latency.
 
 **How the rotation works:**
 
-- For Phase 2.5a single-pass refutation: agent index `i mod 3` selects the model. The Nth finding goes to family `slot[(N-1) mod 3]`.
-- For Phase 2.5b two-agent debate: Advocate, Skeptic, Meta-Judge always get three DIFFERENT families. Cycle: Claude/Gemini/Grok rotated per pass-start to avoid the same family always being Advocate.
-- For Phase 2 identification (initial finding emission): default Claude (primary reviewer is the running session). The rotation kicks in at Phase 2.5.
+- For Phase 2.5a single-pass refutation: the Nth finding goes to family `slot[(N-1) mod 2]`, so judges alternate Claude, k3, Claude, k3.
+- For Phase 2.5b two-agent debate: Advocate, Skeptic and Meta-Judge cannot all differ with two families, so the binding rule is narrower and stricter. **The Skeptic and the Meta-Judge must never be the same family**, because the Meta-Judge ruling on its own family's refusal to refute is the exact self-preference this mitigation exists to block. Assign the Skeptic to k3 and the Meta-Judge to Claude by default; swap per pass-start.
+- For Phase 2 identification (initial finding emission): default Claude, since the primary reviewer is the running session. The rotation begins at Phase 2.5.
 
 **Config knobs (CEO overrides):**
 
 | Env var or flag | Effect |
 |---|---|
-| `SCRUTINIZE_JUDGE_ROTATION=fixed-claude` | Disable rotation, use Claude for every judge call (compatibility / vault mode). |
-| `SCRUTINIZE_JUDGE_ROTATION=rotate` (default) | Three-family rotation per the table above. |
-| `--judge-family={claude\|gemini\|grok}` (one-shot) | Override rotation for this pass only. |
-| `SCRUTINIZE_GEMINI_MODEL=<model-id>` | Override the Gemini side of the rotation (e.g. flip to `gemini-3.5-pro` when it ships, or to a newer `4.x` line later). Default tracks the latest GA model. |
-| `SCRUTINIZE_GROK_MODEL=grok-4.3` | Same for Grok. |
-| `SCRUTINIZE_CLAUDE_MODEL=claude-opus-4-7` | Same for Claude. |
+| `SCRUTINIZE_JUDGE_ROTATION=fixed-claude` | Disable rotation, use Claude for every judge call (compatibility, or SENSITIVE_MODE). |
+| `SCRUTINIZE_JUDGE_ROTATION=rotate` (default) | Two-family rotation per the table above. |
+| `--judge-family={claude\|kimi\|gemini\|grok}` (one-shot) | Override rotation for this pass only. `gemini` and `grok` are reachable here even though they are out of the default roster. |
+| `SCRUTINIZE_KIMI_MODEL=k3` | Override the Kimi side of the rotation. Default `k3`; it is the reasoning pin, distinct from the `kimi-for-coding` fast pin that `scripts/council-models.py --get kimi` serves to other callers. |
+| `SCRUTINIZE_GEMINI_MODEL=<model-id>` | Override Gemini, for a pass that opts it back in. |
+| `SCRUTINIZE_GROK_MODEL=<model-id>` | Same for Grok. |
+| `SCRUTINIZE_CLAUDE_MODEL=<model-id>` | Same for Claude. Default is the running session's model. |
 
-**Invocation pattern:** the cross-family agents are dispatched via `scripts/gemini-consult.py` and `scripts/grok-consult.py` for Gemini and Grok respectively. Both scripts accept `--model` and structured I/O. Claude refutation agents run as in-session Agent tool dispatches (the running session is already Claude, so calling out-of-process makes no sense).
+**Invocation pattern.** The k3 judge is dispatched with an explicit model pin:
+
+```bash
+python scripts/kimi-consult.py --mode independent --model k3 \
+  --reasoning-effort high --max-tokens 12000 \
+  --question '<the refutation brief>' --context '<finding, location, evidence>'
+```
+
+Never substitute `kimi-for-coding` when k3 is unavailable. A fast coding pin standing in for the reasoning voice produces a judge that looks external and reasons shallowly, which is worse than an honestly recorded absence. Gemini and Grok, when opted in, go through `scripts/gemini-consult.py` and `scripts/grok-consult.py`. Claude judges run as in-session Agent dispatches, because the session is already Claude and calling out of process buys nothing.
+
+**Degradation is recorded, never assumed.** If the proxy is down or `cliproxy models` does not list `k3`, run the judge on Claude and write the REASON into the `## Judge layer` section: which call was intended for k3, and what made it unavailable. A pass that quietly runs every judge on Claude and reports "fixed-claude applies" without saying why has skipped the mitigation and hidden it in the same breath. Measured on 2026-07-25: a `--relentless` pass on a plan target ran every judge on Claude, dropped the Advocate role entirely, and recorded only that the rotation "was not exercised". That is the failure this paragraph exists to prevent.
 
 **Logging:** every scrutiny pass logs which family was used per phase to the saved report under a "Judge layer" section:
 
 ```text
 ## Judge layer
-- Phase 2 identifier: claude-opus-4-7 (session model)
-- Phase 2.5a refutations: gemini-3.5-flash x2, grok-4.3 x1, claude-opus-4-7 x2
-- Phase 2.5b debate (B1): Advocate=grok-4.3, Skeptic=gemini-3.5-flash, Judge=claude-opus-4-7
-- Phase 2.5b debate (H2): Advocate=claude-opus-4-7, Skeptic=grok-4.3, Judge=gemini-3.5-flash
+- Phase 2 identifier: claude (session model)
+- Phase 2.5a refutations: k3 x3, claude x2
+- Phase 2.5b debate (B1): Advocate=claude, Skeptic=k3, Judge=claude
+- Phase 2.5b debate (H2): Advocate=k3, Skeptic=claude, Judge=k3
 ```
 
 This is part of the audit trail that supports the human-agreement benchmark (R11).
@@ -95,9 +108,11 @@ Cross-family rotation actually REDUCES judge-layer cost vs running every judge c
 
 The ROI defends itself for BLOCKER/HIGH findings. For LOW/NIT, the rotation can be disabled via env var.
 
-## Vault behaviour
+## Sensitive-session behaviour
 
-When `_secure/.active-project` exists (vault mode active), cross-family rotation is DISABLED. Gemini and Grok calls would leak project context outside the Claude pipeline. Fall back to `SCRUTINIZE_JUDGE_ROTATION=fixed-claude` for the duration of vault session. The skill announces the degradation in the approval block header.
+When `SENSITIVE_MODE` is active (`scripts/utils/sensitive.py`), cross-family rotation is DISABLED. The external judge call would carry finding text, file paths and evidence to a third-party model, which is precisely what that flag exists to prevent. Fall back to `SCRUTINIZE_JUDGE_ROTATION=fixed-claude` for the duration of the session, and announce the degradation in the approval block header.
+
+This supersedes the earlier vault rule. The `_secure/` vault was removed in Plan 5 and `_secure/.active-project` no longer exists, so a check for it would never fire and would leave the fallback documented but dead.
 
 ## Validation
 

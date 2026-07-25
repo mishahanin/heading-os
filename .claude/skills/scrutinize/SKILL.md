@@ -5,7 +5,7 @@ description: >
   Ultrathink principal-engineer review gate. Runs a Validate-Identify-Improve-Adjust
   (VIIA) pass over a target - a plan awaiting approval, just-executed work, a specific
   file or directory, or the entire workspace - then runs an adversarial refutation
-  layer (Phase 2.5) with cross-family judge rotation (Claude / Gemini / Grok) and
+  layer (Phase 2.5) with cross-family judge rotation (Claude and Kimi k3) and
   optional two-agent debate on BLOCKER + HIGH findings before presenting findings
   with concrete proposed fixes for batched approval. Blocks forward progress until
   approved.
@@ -135,7 +135,7 @@ Inserted in v2.0. Full protocol in `references/refutation-protocol.md`. Bias mit
 - `--no-refute` flag is set
 - `target = plan` (refutation has poor grip on conversational text)
 - Phase 1/2 emitted zero BLOCKER/HIGH/MEDIUM findings
-- Vault mode active AND cross-family rotation not available
+- `SENSITIVE_MODE` active AND cross-family rotation not available
 - The user just typed `--include-low-confidence` and only LOW/NIT findings exist
 
 Announce the skip explicitly in the approval block header.
@@ -222,7 +222,8 @@ Full eligibility rules, draft-case generation, auto-scaffold workflow, target-ty
 - Never auto-create the `evals/cases/` directory - offer auto-scaffold as a CEO-gated step (`scaffold and promote ...`, `scaffold only`, or `skip`)
 - Never overwrite an existing eval-case JSON; always pick the next free `case-{N}-{slug}.json`
 - Never emit a script regression test with a real assertion the CEO has not approved
-- Never cross-feed Gemini's refutation to Grok's debate or vice versa (each agent reasons independently)
+- Never cross-feed one judge's refutation to another's debate (each agent reasons independently)
 - Never skip the `Judge Layer` section in the saved report when Phase 2.5 ran (audit trail required for human-agreement benchmark)
-- Never run cross-family rotation in vault mode - fall back to `SCRUTINIZE_JUDGE_ROTATION=fixed-claude` and surface the degradation in the approval block header
-- Never silently disable Langfuse observability - the saved report's Observability footer must always state whether it was on, off (by env var), or disabled (vault)
+- Never run every judge on Claude without naming the cause in `Judge Layer`
+- Never run cross-family rotation under `SENSITIVE_MODE` - fall back to `SCRUTINIZE_JUDGE_ROTATION=fixed-claude` and surface the degradation in the approval block header
+- Never silently disable Langfuse observability - the saved report's Observability footer must always state whether it was on, off (by env var), or disabled (`SENSITIVE_MODE`)

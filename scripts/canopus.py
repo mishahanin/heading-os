@@ -59,6 +59,12 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     verify_manifest,
     write_freeze,
 )
+from scripts.utils.canopus_contract import (  # noqa: E402
+    ContractError,
+    contract_files,
+    refusal_reasons,
+    run_contract,
+)
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
 
 # The gate script every root must carry. A tree without it has no place where the
@@ -155,17 +161,35 @@ def cmd_freeze(args) -> int:
         print("canopus: a freeze is already active; run `release` first "
               "(changing a contract reopens the approval gate)", file=sys.stderr)
         return 1
-    if not args.paths and not args.content:
+    if not args.paths and not args.content and not args.contract:
         print("canopus: at least one path is required, positionally or via "
-              "--content", file=sys.stderr)
+              "--content or --contract", file=sys.stderr)
         return 1
+    contracts = [_under_root(p, root) for p in args.contract]
+    baseline: dict[str, int] = {}
+    if contracts:
+        expected = contract_files(contracts, root)
+        if not expected:
+            print("canopus: --contract names no test modules; a contract with no "
+                  "tests can never be attested", file=sys.stderr)
+            return 1
+        counts, outcomes = run_contract(contracts, root)
+        reasons = refusal_reasons(counts, outcomes, expected)
+        if reasons:
+            print("canopus: the contract was refused, and no freeze was taken:",
+                  file=sys.stderr)
+            for reason in reasons:
+                print(f"  {reason}", file=sys.stderr)
+            return 1
+        baseline = {rel: counts[rel] for rel in expected}
     manifest = build_manifest(
-        [_under_root(p, root) for p in args.paths],
+        [_under_root(p, root) for p in args.paths] + contracts,
         root,
         label=args.label,
         frozen_at=datetime.now(timezone.utc).isoformat(),
         anchor=_under_root(args.anchor, root),
         content_only=[_under_root(p, root) for p in args.content],
+        baseline=baseline,
     )
     manifest["git_sha"] = _git_sha(root)
     write_freeze(root, manifest)
@@ -175,6 +199,34 @@ def cmd_freeze(args) -> int:
     print(f"    {ANCHOR_PREFIX} {manifest['root']}\n")
     print("Until it is there, verify reports LOCK UNCONFIRMED.")
     return 0
+
+
+def cmd_probe(args) -> int:
+    """Show what a contract would look like at freeze time. Writes nothing.
+
+    The freeze gate catches an entirely vacuous contract. It cannot catch a
+    partly vacuous one, and that is what this table is for: the operator reading
+    the Fix 1 gate sees which contract tests are ALREADY GREEN before a line of
+    implementation exists. Those are the ones to question.
+    """
+    root = _resolve_root(args)
+    paths = [_under_root(p, root) for p in args.paths]
+    expected = contract_files(paths, root)
+    if not expected:
+        print("canopus: no test modules found under those paths", file=sys.stderr)
+        return 1
+    counts, outcomes = run_contract(paths, root)
+    for rel in expected:
+        print(f"{BOLD}{rel}{RESET}  {counts.get(rel, 0)} collected")
+        for case_rel, name, outcome in outcomes:
+            if case_rel != rel:
+                continue
+            colour = GREEN if outcome == "passed" else RED
+            print(f"  {colour}{outcome:8}{RESET} {name}")
+    reasons = refusal_reasons(counts, outcomes, expected)
+    for reason in reasons:
+        print(f"{YELLOW}would be refused:{RESET} {reason}")
+    return 1 if reasons else 0
 
 
 def cmd_verify(args) -> int:
@@ -295,6 +347,11 @@ def build_parser() -> argparse.ArgumentParser:
                         dest="content",
                         help="freeze this file's BYTES only, with no composition guard "
                              "on its parent directory (use for the enforcer files)")
+    freeze.add_argument("--contract", action="append", default=[], metavar="DIR",
+                        dest="contract",
+                        help="freeze this contract directory recursively, record a "
+                             "per-file collected-item baseline, and refuse the "
+                             "freeze unless the contract is red")
     freeze.add_argument("--label", required=True, help="short name for this build")
     # Required, because an anchorless freeze can only ever report LOCK
     # UNCONFIRMED. It still catches a later edit, but it is the one route to a
@@ -305,6 +362,11 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--anchor", required=True,
                         help="committed artifact OUTSIDE this tree that records the root hash")
     freeze.set_defaults(func=cmd_freeze)
+
+    probe = sub.add_parser("probe", help="run a contract set and show what a "
+                                         "freeze would record; writes nothing")
+    probe.add_argument("paths", nargs="+", help="contract files or directories")
+    probe.set_defaults(func=cmd_probe)
 
     verify = sub.add_parser("verify", help="recompute and compare against the anchor")
     verify.add_argument("--anchor", default=None,
@@ -334,6 +396,9 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 1
     except FreezeError as exc:
+        print(f"canopus: {exc}", file=sys.stderr)
+        return 1
+    except ContractError as exc:
         print(f"canopus: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:

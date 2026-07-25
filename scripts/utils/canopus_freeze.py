@@ -390,3 +390,100 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
         elif parent == dir_rel:
             return f"{rel_posix} would join the guarded composition of {dir_rel}/"
     return None
+
+
+# ============================================================
+# On-disk state
+# ============================================================
+
+class FreezeCorrupt(FreezeError):
+    """A freeze manifest exists but is unreadable or carries an unknown recipe.
+
+    Handled fail-closed by the dispatcher: a corrupt manifest denies every write
+    rather than silently unlocking the contract, matching the house convention
+    where a broken routing map forces `private` and an unknown action type floors
+    at `gated`.
+
+    The escape is `release --force`, which is LOGGED. An escape that leaves no
+    record turns every false alarm into a routine of unlogged deletions, and
+    after the third one the operator stops reading the alarm at all. Alert
+    fatigue is the adversary here, not the model.
+    """
+
+
+def freeze_state_path(root: Path) -> Path:
+    return Path(root) / FREEZE_DIRNAME / FREEZE_FILENAME
+
+
+def history_state_path(root: Path) -> Path:
+    return Path(root) / FREEZE_DIRNAME / HISTORY_FILENAME
+
+
+def read_freeze(root: Path) -> Optional[dict]:
+    """Load the active freeze manifest, or None when none is active.
+
+    Raises FreezeCorrupt when a manifest exists but cannot be trusted. The
+    caller must never treat that as "no freeze".
+    """
+    path = freeze_state_path(root)
+    if not path.exists():
+        return None
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FreezeCorrupt(f"freeze manifest at {path} is unreadable: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise FreezeCorrupt(f"freeze manifest at {path} is not a JSON object")
+    if manifest.get("recipe") != RECIPE:
+        raise FreezeCorrupt(
+            f"freeze manifest at {path} carries recipe {manifest.get('recipe')!r}, "
+            f"expected {RECIPE!r}"
+        )
+    for key in ("files", "dirs", "root", "label"):
+        if key not in manifest:
+            raise FreezeCorrupt(f"freeze manifest at {path} is missing {key!r}")
+    for rel, entry in manifest["dirs"].items():
+        # A dir entry without its recorded member list would make every existing
+        # member read as newly added. Refuse it rather than report a false alarm.
+        if not isinstance(entry, dict) or "members" not in entry or "mode" not in entry:
+            raise FreezeCorrupt(
+                f"freeze manifest at {path} has an incomplete entry for directory {rel!r}"
+            )
+    return manifest
+
+
+def write_freeze(root: Path, manifest: dict) -> None:
+    """Write the manifest atomically (tmp file plus os.replace)."""
+    atomic_write_text(freeze_state_path(root), json.dumps(manifest, indent=2) + "\n")
+
+
+def clear_freeze(root: Path) -> None:
+    """Remove the active manifest. Idempotent, and never parses it, so it works
+    on a damaged file."""
+    freeze_state_path(root).unlink(missing_ok=True)
+
+
+def append_history(
+    root: Path,
+    event: str,
+    *,
+    digest: str,
+    label: str,
+    reason: str = "",
+) -> None:
+    """Append one line to the ledger. Never rewrites, never truncates.
+
+    A separate file from the manifest on purpose: the logged escape has to work
+    when the manifest cannot be parsed.
+    """
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        "root": digest,
+        "label": label,
+        "reason": reason,
+    }
+    path = history_state_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")

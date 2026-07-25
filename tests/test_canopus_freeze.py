@@ -306,3 +306,84 @@ def test_frozen_reason_is_none_for_an_unrelated_path(tree: Path):
 def test_frozen_reason_does_not_leak_across_a_similar_prefix(tree: Path):
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
     assert frozen_reason("tests_extra/test_x.py", manifest) is None
+
+
+from scripts.utils.canopus_freeze import (
+    FreezeCorrupt,
+    append_history,
+    clear_freeze,
+    freeze_state_path,
+    history_state_path,
+    read_freeze,
+    write_freeze,
+)
+
+
+def test_read_freeze_returns_none_when_no_freeze_is_active(tree: Path):
+    assert read_freeze(tree) is None
+
+
+def test_write_then_read_round_trips(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    write_freeze(tree, manifest)
+    assert read_freeze(tree) == manifest
+
+
+def test_read_freeze_raises_on_malformed_json(tree: Path):
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ not json")
+    with pytest.raises(FreezeCorrupt, match="unreadable"):
+        read_freeze(tree)
+
+
+def test_read_freeze_raises_on_an_unknown_recipe(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    manifest["recipe"] = "canopus-freeze-v99"
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(FreezeCorrupt, match="recipe"):
+        read_freeze(tree)
+
+
+def test_read_freeze_raises_on_a_missing_required_key(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    del manifest["files"]
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(FreezeCorrupt, match="files"):
+        read_freeze(tree)
+
+
+def test_clear_freeze_is_idempotent(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    write_freeze(tree, manifest)
+    clear_freeze(tree)
+    clear_freeze(tree)
+    assert read_freeze(tree) is None
+
+
+def test_history_is_append_only(tree: Path):
+    append_history(tree, "freeze", digest="aaa", label="one")
+    append_history(tree, "release", digest="aaa", label="one", reason="done")
+    lines = history_state_path(tree).read_text().strip().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["event"] == "freeze"
+    assert json.loads(lines[1])["reason"] == "done"
+
+
+def test_history_survives_a_corrupt_manifest(tree: Path):
+    """The logged escape must work when freeze.json cannot be parsed."""
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ not json")
+    append_history(tree, "force_release", digest="", label="", reason="corrupt")
+    assert "force_release" in history_state_path(tree).read_text()
+
+
+def test_history_entries_carry_a_utc_timestamp(tree: Path):
+    append_history(tree, "freeze", digest="aaa", label="one")
+    entry = json.loads(history_state_path(tree).read_text().strip())
+    assert entry["ts"].endswith("+00:00")

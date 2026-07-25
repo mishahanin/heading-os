@@ -306,3 +306,6 @@ config/skill-custom/*.user.toml
 # Generated plugin/marketplace build output (scripts/dev/build-plugins.py).
 # Rebuildable from the monorepo; never committed.
 /dist/
+
+# Canopus freeze state (per working tree, never committed)
+.canopus/

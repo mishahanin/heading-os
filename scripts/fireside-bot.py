@@ -13,6 +13,7 @@ Subcommands (current implementation status in parentheses):
   sunday-preview            - Post pinned weekly preview to 31C Tribe (Phase 3)
   dayof-reminders           - DM speakers Zoom link 3h before session (Phase 3)
   helmsman-brief            - Brief next week's Helmsman 7 days ahead (Phase 3)
+  helmsman set|list|gaps    - Assign / list / audit Helmsman coverage
   weekly-discrepancy-report - Report Telegram-vs-xlsx mismatches (Phase 3)
   email-backup              - Email reminder for unresponsive Tribe (Phase 3)
   stats                     - Generate stats markdown report (Phase 3)
@@ -3033,6 +3034,97 @@ def cmd_dayof_reminders(args) -> None:
 
 
 # ============================================================
+# Helmsman coverage (pure helpers - no Telegram, no disk)
+# ============================================================
+
+def helmsman_gaps(schedule: list, helmsmen: dict,
+                  on_or_after: Optional[Any] = None) -> list:
+    """Monday keys in `schedule` that have no Helmsman assigned, sorted.
+
+    Assignment has always been a manual CEO call - no code path writes a name
+    into helmsmen.json - so a rolled-over cycle starts with every week empty and
+    every renderer silently falls back to "TBD". This makes that gap queryable.
+
+    on_or_after: if given, only weeks whose Monday is on or after this date.
+    """
+    from datetime import date as _date
+
+    mondays = sorted({e["session_date"] for e in schedule if e.get("day") == "Mon"})
+    out = []
+    for m in mondays:
+        if helmsmen.get(m, {}).get("name"):
+            continue
+        if on_or_after is not None and _date.fromisoformat(m) < on_or_after:
+            continue
+        out.append(m)
+    return out
+
+
+def helmsman_brief_candidates(helmsmen: dict, today: Any,
+                              horizon_days: int = 7) -> list:
+    """Unbriefed Helmsmen whose week is still live and starts within the horizon.
+
+    Returns [(monday_date, monday_key, entry)] sorted soonest-first.
+
+    The week stays briefable through its Wednesday session (Monday + 2). The
+    earlier `today < key_date` rule silently excluded any entry created on or
+    after its own Monday, so a late assignment could never be briefed at all -
+    which is exactly what happened to the 2026-07-13 week.
+    """
+    from datetime import date as _date, timedelta
+
+    horizon = today + timedelta(days=horizon_days)
+    candidates = []
+    for key, entry in helmsmen.items():
+        if entry.get("briefed"):
+            continue
+        try:
+            key_date = _date.fromisoformat(key)
+        except ValueError:
+            continue
+        week_ends = key_date + timedelta(days=2)  # Wednesday session
+        if week_ends >= today and key_date <= horizon:
+            candidates.append((key_date, key, entry))
+    candidates.sort(key=lambda t: t[0])
+    return candidates
+
+
+def _nudge_ceo_on_helmsman_gaps(schedule: list, helmsmen: dict, today: Any,
+                                lookahead_days: int = 14) -> None:
+    """DM the CEO when a near-term week still has no Helmsman. Best-effort.
+
+    Only weeks inside the lookahead window are nudged, so a freshly rolled-over
+    cycle does not dump all ten weeks into one message.
+    """
+    from datetime import date as _date, timedelta
+
+    gaps = helmsman_gaps(schedule, helmsmen, on_or_after=today)
+    near = [g for g in gaps if _date.fromisoformat(g) <= today + timedelta(days=lookahead_days)]
+    if not near:
+        return
+
+    misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
+    if not misha_id:
+        print(f"{YELLOW}helmsman gap: {', '.join(near)} (no MISHA_TELEGRAM_USER_ID to nudge){RESET}")
+        return
+
+    weeks = "\n".join(f"  - week starting {g}" for g in near)
+    remaining = len(gaps) - len(near)
+    text = ("Fireside: no Helmsman assigned for:\n" + weeks
+            + (f"\n(+{remaining} later week(s) also unassigned)" if remaining else "")
+            + "\n\nSpeakers and the pinned preview will read 'TBD' until one is set."
+              "\nAssign: python scripts/fireside-bot.py helmsman set --week <YYYY-MM-DD> --username <handle>")
+    # Strictly best-effort: this runs BEFORE the actual brief, so a nudge that
+    # blows up must never cost the Helmsman their briefing. Logged, not swallowed.
+    try:
+        get_bot().send_message(misha_id, text, parse_mode="")
+        _log_event("helmsman_gap_nudge", weeks=near)
+    except Exception as e:
+        log_error("helmsman gap nudge failed", e)
+        print(f"{YELLOW}helmsman gap nudge failed: {e}{RESET}", file=sys.stderr)
+
+
+# ============================================================
 # Subcommand: helmsman-brief (Phase 3 task 3.5)
 # ============================================================
 
@@ -3043,32 +3135,22 @@ def cmd_helmsman_brief(args) -> None:
     failure) silently skipped the brief forever. Window-based + idempotent via `briefed` flag
     means a missed day catches up on the next run.
     """
-    from datetime import date as _date, timedelta
-
     schedule = load_state(SCHEDULE) or []
     helmsmen = load_state(HELMSMEN) or {}
     opt_ins = load_state(OPT_INS) or {"helmsman": [], "wildcard": []}
     roster = load_state(TRIBE_ROSTER) or {}
     today = _today_local_date()
-    horizon = today + timedelta(days=7)
 
-    candidates = []
-    for key, entry in helmsmen.items():
-        if entry.get("briefed"):
-            continue
-        try:
-            key_date = _date.fromisoformat(key)
-        except ValueError:
-            continue
-        if today < key_date <= horizon:
-            candidates.append((key_date, key, entry))
+    # An unassigned week is silent otherwise: this job reports "nothing to brief"
+    # and pings the healthcheck green, so a gap can run for weeks unnoticed.
+    _nudge_ceo_on_helmsman_gaps(schedule, helmsmen, today)
 
+    candidates = helmsman_brief_candidates(helmsmen, today)
     if not candidates:
         print(f"{GRAY}helmsman-brief: no pending Helmsman briefs within 7 days{RESET}")
         hc_ping("FIRESIDE_HC_HELMSMAN_BRIEF")
         return
 
-    candidates.sort(key=lambda t: t[0])
     target_date, target_week_start, helmsman_entry = candidates[0]
 
     user_id = helmsman_entry.get("user_id")
@@ -3117,6 +3199,98 @@ def cmd_helmsman_brief(args) -> None:
         hc_ping("FIRESIDE_HC_HELMSMAN_BRIEF")
     except TelegramAPIError as e:
         print(f"{RED}helmsman-brief failed: {e}{RESET}", file=sys.stderr)
+
+
+# ============================================================
+# Subcommand: helmsman (console-first assignment: set | list | gaps)
+# ============================================================
+
+def cmd_helmsman(args) -> Optional[int]:
+    """Assign, list, and audit Helmsman coverage from the terminal.
+
+    Assignment was previously a hand-edit of helmsmen.json over SSH, which is
+    how cycle 2 shipped with nine empty weeks. `gaps` exits 1 when any week in
+    the live schedule is unassigned, so it works as a check in a pipeline.
+    """
+    from datetime import date as _date
+
+    schedule = load_state(SCHEDULE) or []
+    helmsmen = load_state(HELMSMEN) or {}
+    action = args.action
+
+    if action == "gaps":
+        gaps = helmsman_gaps(schedule, helmsmen)
+        if not gaps:
+            print(f"{GREEN}helmsman gaps{RESET}: none - every week in the schedule is assigned")
+            return 0
+        print(f"{YELLOW}helmsman gaps{RESET}: {len(gaps)} week(s) unassigned")
+        for g in gaps:
+            print(f"  {g}")
+        return 1
+
+    if action == "list":
+        if not helmsmen:
+            print(f"{GRAY}No Helmsmen assigned.{RESET}")
+            return 0
+        mondays = sorted({e["session_date"] for e in schedule if e.get("day") == "Mon"})
+        for m in mondays:
+            entry = helmsmen.get(m, {})
+            name = entry.get("name") or f"{YELLOW}-- unassigned --{RESET}"
+            flag = "briefed" if entry.get("briefed") else "not briefed"
+            print(f"  {m}  {name}" + (f"  ({flag})" if entry.get("name") else ""))
+        return 0
+
+    # action == "set"
+    week = args.week
+    try:
+        week_date = _date.fromisoformat(week)
+    except ValueError:
+        print(f"{RED}helmsman set: --week must be YYYY-MM-DD{RESET}", file=sys.stderr)
+        return 1
+    if week_date.weekday() != 0:
+        print(f"{RED}helmsman set: {week} is not a Monday{RESET}", file=sys.stderr)
+        return 1
+    known = {e["session_date"] for e in schedule if e.get("day") == "Mon"}
+    if week not in known:
+        print(f"{RED}helmsman set: {week} is not a week in the current schedule{RESET}",
+              file=sys.stderr)
+        return 1
+
+    roster = load_state(TRIBE_ROSTER) or {}
+    username = args.username.lstrip("@")
+    entry = roster.get(username) or next(
+        (v for k, v in roster.items() if k.lower() == username.lower()), None)
+    if entry is None:
+        print(f"{RED}helmsman set: @{username} is not in the roster{RESET}", file=sys.stderr)
+        return 1
+    if not entry.get("active", True) or entry.get("excluded_from_fireside"):
+        print(f"{RED}helmsman set: @{username} is inactive or excluded from fireside{RESET}",
+              file=sys.stderr)
+        return 1
+    user_id = entry.get("telegram_user_id")
+    if not user_id:
+        print(f"{RED}helmsman set: @{username} has no telegram_user_id (run bootstrap){RESET}",
+              file=sys.stderr)
+        return 1
+
+    previous = helmsmen.get(week)
+    record = {
+        "name": entry.get("name"),
+        "username": username,
+        "user_id": user_id,
+        "briefed": False,
+        "assigned_at": _today_local_date().isoformat(),
+    }
+    if args.note:
+        record["note"] = args.note
+    if previous:
+        record["previous_helmsman_for_week"] = previous
+    helmsmen[week] = record
+    save_state(HELMSMEN, helmsmen)
+    _log_event("helmsman_assigned", week=week, user_id=user_id)
+    verb = "reassigned" if previous else "assigned"
+    print(f"{GREEN}helmsman set{RESET}: {week} {verb} to {record['name']} (@{username})")
+    return 0
 
 
 # ============================================================
@@ -3260,15 +3434,18 @@ def cmd_email_backup(args) -> None:
             "--subject", subject,
             "--body", body_html,
         ]
+        err = None
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
                                cwd=str(WORKSPACE_ROOT))
             ok = (r.returncode == 0)
+            if not ok:
+                err = (r.stderr or "")[:200]
         except Exception as e:
             log_error(f"email-backup subprocess failed for {email}", e)
             ok = False
-        _log_dm("email-backup", username, entry["session_date"], user_id, ok,
-                error=None if ok else r.stderr[:200] if hasattr(r, 'stderr') else None)
+            err = str(e)[:200]
+        _log_dm("email-backup", username, entry["session_date"], user_id, ok, error=err)
         if ok:
             sent += 1
     print(f"{GREEN}email-backup{RESET}: sent={sent} skipped={skipped}")
@@ -3625,6 +3802,14 @@ def main() -> int:
                                 help="Print rendered preview without posting to group")
     sub.add_parser("dayof-reminders", help="DM speakers Zoom link 3h before session (Phase 3)")
     sub.add_parser("helmsman-brief", help="Brief next week's Helmsman 7 days ahead (Phase 3)")
+    helmsman = sub.add_parser("helmsman", help="Assign / list / audit Helmsman coverage")
+    helmsman_sub = helmsman.add_subparsers(dest="action", required=True, metavar="<action>")
+    helmsman_set = helmsman_sub.add_parser("set", help="Assign a Helmsman to one week")
+    helmsman_set.add_argument("--week", required=True, help="Week-starting Monday, YYYY-MM-DD")
+    helmsman_set.add_argument("--username", required=True, help="Telegram handle from the roster")
+    helmsman_set.add_argument("--note", default="", help="Optional note stored on the record")
+    helmsman_sub.add_parser("list", help="Show every scheduled week and its Helmsman")
+    helmsman_sub.add_parser("gaps", help="List unassigned weeks; exits 1 if any")
     sub.add_parser("weekly-discrepancy-report", help="Report Telegram-vs-xlsx mismatches (Phase 3)")
     sub.add_parser("email-backup", help="Email reminder for unresponsive Tribe (Phase 3)")
     stats = sub.add_parser("stats", help="Generate stats markdown report (Phase 3)")
@@ -3667,6 +3852,7 @@ def main() -> int:
         "sunday-preview": cmd_sunday_preview,
         "dayof-reminders": cmd_dayof_reminders,
         "helmsman-brief": cmd_helmsman_brief,
+        "helmsman": cmd_helmsman,
         "weekly-discrepancy-report": cmd_weekly_discrepancy_report,
         "email-backup": cmd_email_backup,
         "stats": cmd_stats,
@@ -3686,8 +3872,9 @@ def main() -> int:
     handler = handlers.get(args.cmd)
     if handler is None:
         parser.error(f"Unknown subcommand: {args.cmd}")
-    handler(args)
-    return 0
+    # Handlers return None (success) or an explicit exit code - `helmsman gaps`
+    # exits 1 on an unassigned week so it can gate a pipeline.
+    return handler(args) or 0
 
 
 if __name__ == "__main__":

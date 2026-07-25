@@ -159,23 +159,39 @@ For each ⚠: state whether it must be resolved BEFORE `/implement` or can be mo
 
 ---
 
-## Phase 5 — Test Contract
+## Phase 5 — Test Contract (real files, not prose)
 
-Write the test suite that proves the implementation correct. This becomes the CONTRACT for `/implement`.
+The contract is written as **real test files**, not as a draft in this document.
+A prose contract and the tests that later decide whether the work is done are two
+different artifacts joined by good intentions, which is the gap Canopus wire 2
+closes.
 
-Format:
+Write them to `tests/contract/{YYYY-MM-DD}-{slug}/test_*.py`.
+
+**One authoring rule, and it is enforced:** import the code under test INSIDE the
+test body, never at module scope. At this point the implementation does not
+exist, so a module-scope import stops the file collecting at all, and a file that
+collects nothing cannot be frozen.
+
+```python
+def test_frozen_contract_records_a_baseline():
+    from scripts.utils.canopus_freeze import build_manifest   # inside the body
+
+    manifest = build_manifest(...)
+    assert manifest["baseline"] == {"tests/contract/s/test_a.py": 7}
 ```
-TEST-1 [happy-path]: Given [input], expect [output/state]. Verify: [how].
-TEST-2 [edge-case]: Given [boundary input], expect [graceful handling]. Verify: [how].
-TEST-3 [failure-mode]: When [external failure], system does [Y], not [Z]. Verify: [how].
-TEST-4 [integration]: End-to-end: [trigger] → [process] → [expected final state]. Verify: [how].
-TEST-5 [performance, if relevant]: [Operation] completes within [T]s for [N] items. Verify: [how].
-```
 
-For Python scripts: write the tests as `assert` statements in a throwaway harness block, **clearly labelled "PROPOSED TEST CONTRACT — CEO-UNAPPROVED DRAFT"**. The label matters: a downstream `/scrutinize` or `/implement` must treat these as a contract draft, not as sanctioned regression tests (the `/scrutinize` guardrail forbids emitting unapproved assertion-bearing regression tests). The CEO approves the contract at the gate decision; `/implement` then promotes the approved tests into the real suite.
-For skills/rules: write as behavioral evals ("Given prompt X, output must contain Y and must not contain Z").
+Then show the operator what the contract looks like before any code exists:
 
-Close with: "Implementation is DONE when TEST-1 through TEST-N all pass AND /scrutinize reports no new findings."
+    python scripts/canopus.py probe tests/contract/{YYYY-MM-DD}-{slug}/
+
+Paste the table into the gate output. Every test it reports as `passed` is
+already green with no implementation, so it asserts nothing yet. Name those
+explicitly and either strengthen them or justify them.
+
+Close with: "Implementation is DONE when the frozen contract is green and
+`canopus status` reports both LOCK HELD and ATTESTED, AND /scrutinize reports no
+new findings."
 
 ---
 
@@ -216,6 +232,26 @@ HANDOFF TO /implement:
 [Ready-to-paste /implement prompt: one paragraph with
  the updated plan + embedded success criteria + test contract.]
 ```
+
+### On approval: lock on Canopus
+
+The moment the operator approves, run the freeze. There is no separate command
+to remember:
+
+    python scripts/canopus.py freeze \
+      --label "{slug}" \
+      --anchor {this gate artifact's absolute path in the data overlay} \
+      --contract tests/contract/{YYYY-MM-DD}-{slug}/ \
+      --content scripts/utils/canopus_freeze.py \
+      --content scripts/utils/canopus_gate.py \
+      --content scripts/run-tests.py \
+      --content tests/conftest.py
+
+`freeze` refuses unless the contract is red, records the per-file item count, and
+writes the `canopus-anchor:` line into the gate artifact itself. Commit the data
+overlay so the approved hash is durable.
+
+Then confirm: `python scripts/canopus.py verify` must print LOCK HELD.
 
 ---
 

@@ -244,8 +244,18 @@ to remember:
       --contract tests/contract/{YYYY-MM-DD}-{slug}/ \
       --content scripts/utils/canopus_freeze.py \
       --content scripts/utils/canopus_gate.py \
+      --content scripts/utils/atomic.py \
+      --content scripts/utils/colors.py \
+      --content scripts/utils/venv.py \
       --content scripts/run-tests.py \
       --content tests/conftest.py
+
+Seven files, not four. The last three are the enforcers' transitive import tail:
+`atomic.py` writes the manifest, `venv.py` re-execs the interpreter and so chooses
+which Python runs the gate, and `colors.py` is imported by both. Leaving them out
+put the write path of the guarantee outside the guarantee. The set is pinned by
+`tests/test_canopus_freeze.py::test_the_documented_enforcer_set_covers_its_import_closure`,
+which recomputes the closure and fails when a new import escapes it.
 
 `freeze` refuses unless the contract is red, records the per-file item count, and
 writes the `canopus-anchor:` line into the gate artifact itself. Commit the data

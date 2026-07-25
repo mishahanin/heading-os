@@ -193,6 +193,7 @@ def cmd_freeze(args) -> int:
         return 1
     contracts = [_under_root(p, root) for p in args.contract]
     baseline: dict[str, int] = {}
+    contract_note = ""
     if contracts:
         expected = contract_files(contracts, root)
         if not expected:
@@ -208,6 +209,17 @@ def cmd_freeze(args) -> int:
                 print(f"  {reason}", file=sys.stderr)
             return 1
         baseline = {rel: counts[rel] for rel in expected}
+        # The redness gate needs ONE red in the SET, so it does not scale to the
+        # moment: a mid-build retake of an 11-of-14-green contract passes the
+        # same check a fully red contract passes at the start. Measured during
+        # the wire 2 build. The gate is not tightened here -- a legitimate
+        # retake must stay possible -- but the number is said out loud and
+        # written to the ledger, so an operator can judge a retake differently
+        # from a first freeze instead of reading one word for both.
+        already_green = sum(
+            1 for _rel, _name, outcome in outcomes if outcome == "passed"
+        )
+        contract_note = f"{already_green} of {sum(counts.values())} already green"
     manifest = build_manifest(
         [_under_root(p, root) for p in args.paths] + contracts,
         root,
@@ -219,7 +231,8 @@ def cmd_freeze(args) -> int:
     )
     manifest["git_sha"] = _git_sha(root)
     write_freeze(root, manifest)
-    append_history(root, "freeze", digest=manifest["root"], label=manifest["label"])
+    append_history(root, "freeze", digest=manifest["root"], label=manifest["label"],
+                   reason=contract_note)
     # The append runs AFTER write_freeze, and the window that opens is named
     # rather than discovered: an OSError here (a read-only overlay, a vanished
     # mount) leaves an ACTIVE freeze whose anchor carries no line, main returns
@@ -239,6 +252,8 @@ def cmd_freeze(args) -> int:
         append_history(root, "anchor_replaced", digest=manifest["root"],
                        label=manifest["label"], reason=args.reason)
     _print_root(manifest["root"], manifest)
+    if contract_note:
+        print(f"{YELLOW}contract{RESET}  {contract_note} before this freeze")
     print(f"\nRecorded in {anchor_path}. Commit that repository so the approved "
           f"hash is durable; reaching it from a build leaves a commit where one "
           f"has no business being.")

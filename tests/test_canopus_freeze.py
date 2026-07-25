@@ -958,3 +958,51 @@ def test_the_ancestor_guard_does_not_freeze_the_ancestors_contents(tmp_path: Pat
 
     (root / "tests" / "test_builder_suite.py").write_text("def test_b():\n    assert 1\n")
     assert verify_manifest(manifest, root)["held"] is True
+
+
+def test_the_documented_enforcer_set_covers_its_import_closure():
+    """C4, found at the wire 2 intent audit: the enforcers had an unfrozen tail.
+
+    The documented freeze command named four files, but canopus_freeze imports
+    atomic (which WRITES the manifest), run-tests imports venv (which re-execs
+    the interpreter and so chooses which Python runs the gate), and both reach
+    colors. The write path of the guarantee sat outside the guarantee.
+
+    This recomputes the transitive first-party closure rather than pinning the
+    three files that were missing on the day, so a new import cannot escape the
+    documented set silently. It asserts against the SKILL text because that is
+    the command an operator actually copies.
+    """
+    import ast
+
+    from scripts.utils.workspace import get_workspace_root
+
+    root = get_workspace_root()
+    seen: set[str] = set()
+    queue = ["scripts/utils/canopus_freeze.py", "scripts/utils/canopus_gate.py",
+             "scripts/run-tests.py", "tests/conftest.py"]
+    while queue:
+        rel = queue.pop()
+        if rel in seen:
+            continue
+        seen.add(rel)
+        for node in ast.walk(ast.parse((root / rel).read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                modules = [node.module]
+            elif isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            else:
+                continue
+            for module in modules:
+                if not module.startswith("scripts"):
+                    continue
+                candidate = root / (module.replace(".", "/") + ".py")
+                if candidate.is_file():
+                    queue.append(candidate.relative_to(root).as_posix())
+
+    skill = (root / ".claude" / "skills" / "pre-impl" / "SKILL.md").read_text(encoding="utf-8")
+    missing = sorted(rel for rel in seen if f"--content {rel}" not in skill)
+    assert not missing, (
+        f"the documented freeze command does not freeze {missing}; an enforcer's "
+        f"import tail is outside the guarantee it enforces"
+    )

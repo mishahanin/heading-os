@@ -155,12 +155,17 @@ def cmd_freeze(args) -> int:
         print("canopus: a freeze is already active; run `release` first "
               "(changing a contract reopens the approval gate)", file=sys.stderr)
         return 1
+    if not args.paths and not args.content:
+        print("canopus: at least one path is required, positionally or via "
+              "--content", file=sys.stderr)
+        return 1
     manifest = build_manifest(
         [_under_root(p, root) for p in args.paths],
         root,
         label=args.label,
         frozen_at=datetime.now(timezone.utc).isoformat(),
         anchor=_under_root(args.anchor, root),
+        content_only=[_under_root(p, root) for p in args.content],
     )
     manifest["git_sha"] = _git_sha(root)
     write_freeze(root, manifest)
@@ -284,7 +289,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     freeze = sub.add_parser("freeze", help="lock a set of paths")
-    freeze.add_argument("paths", nargs="+", help="files or directories to freeze")
+    freeze.add_argument("paths", nargs="*", default=[],
+                        help="files or directories to freeze recursively")
+    freeze.add_argument("--content", action="append", default=[], metavar="FILE",
+                        dest="content",
+                        help="freeze this file's BYTES only, with no composition guard "
+                             "on its parent directory (use for the enforcer files)")
     freeze.add_argument("--label", required=True, help="short name for this build")
     # Required, because an anchorless freeze can only ever report LOCK
     # UNCONFIRMED. It still catches a later edit, but it is the one route to a

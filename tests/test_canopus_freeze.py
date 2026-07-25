@@ -161,3 +161,148 @@ def test_validate_anchor_refuses_a_missing_file(tree: Path, tmp_path: Path):
 def test_manifest_is_json_serializable(tree: Path, anchor: Path):
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP, anchor=anchor)
     assert json.loads(json.dumps(manifest)) == manifest
+
+
+from scripts.utils.canopus_freeze import (
+    LOCK_HELD,
+    LOCK_UNCONFIRMED,
+    LOSS_OF_LOCK,
+    frozen_reason,
+    lock_state,
+    read_anchor,
+    verify_manifest,
+)
+
+
+def test_verify_holds_on_an_untouched_tree(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    report = verify_manifest(manifest, tree)
+    assert report["held"] is True
+    assert report["recomputed_root"] == manifest["root"]
+    assert report["changed"] == []
+    assert report["added"] == []
+    assert report["removed"] == []
+
+
+def test_verify_detects_a_changed_file(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+    report = verify_manifest(manifest, tree)
+    assert report["held"] is False
+    assert report["changed"] == ["tests/test_alpha.py"]
+
+
+def test_verify_detects_a_removed_file(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    (tree / "tests" / "test_beta.py").unlink()
+    report = verify_manifest(manifest, tree)
+    assert report["held"] is False
+    assert report["removed"] == ["tests/test_beta.py"]
+
+
+def test_verify_detects_a_file_added_beside_a_frozen_file(tree: Path):
+    manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
+    (tree / "tests" / "conftest.py").write_text("# neutralizes the frozen test\n")
+    report = verify_manifest(manifest, tree)
+    assert report["held"] is False
+    assert report["added"] == ["tests/conftest.py"]
+
+
+def test_implicit_guard_ignores_a_sibling_subdirectory(tree: Path):
+    manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
+    (tree / "tests" / "sub" / "test_delta.py").write_text("def test_d():\n    assert True\n")
+    report = verify_manifest(manifest, tree)
+    assert report["held"] is True
+
+
+def test_implicit_guard_reports_neither_added_nor_removed_when_nothing_moved(tree: Path):
+    """A guard covers siblings that were never frozen individually.
+
+    tests/ holds test_beta.py, which is inside the guard but outside the file
+    map. Diffing composition against the file map would call it "added" on the
+    very first verify, so the guard would cry wolf before anyone touched it.
+    """
+    manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
+    report = verify_manifest(manifest, tree)
+    assert report["held"] is True
+    assert report["added"] == []
+    assert report["removed"] == []
+
+    (tree / "tests" / "test_beta.py").unlink()
+    after = verify_manifest(manifest, tree)
+    assert after["held"] is False
+    assert after["removed"] == ["tests/test_beta.py"]
+
+
+def test_explicit_directory_freeze_catches_a_subdirectory_addition(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    (tree / "tests" / "sub" / "test_delta.py").write_text("def test_d():\n    assert True\n")
+    report = verify_manifest(manifest, tree)
+    assert report["held"] is False
+    assert report["added"] == ["tests/sub/test_delta.py"]
+
+
+def test_read_anchor_reports_missing(tmp_path: Path):
+    assert read_anchor(tmp_path / "absent.md") == ("missing", None)
+
+
+def test_read_anchor_reports_unrecorded(anchor: Path):
+    assert read_anchor(anchor) == ("unrecorded", None)
+
+
+def test_read_anchor_returns_the_recorded_hash(anchor: Path):
+    anchor.write_text("# gate\n\ncanopus-anchor: " + "a" * 64 + "\n\nmore prose\n")
+    assert read_anchor(anchor) == ("recorded", "a" * 64)
+
+
+def _report(held: bool, digest: str = "a" * 64) -> dict:
+    return {"recomputed_root": digest, "changed": [], "added": [], "removed": [], "held": held}
+
+
+def test_lock_state_held():
+    assert lock_state(_report(True), "recorded", "a" * 64) == LOCK_HELD
+
+
+def test_lock_state_loss_on_content_change():
+    assert lock_state(_report(False), "recorded", "a" * 64) == LOSS_OF_LOCK
+
+
+def test_lock_state_loss_on_anchor_disagreement():
+    assert lock_state(_report(True), "recorded", "b" * 64) == LOSS_OF_LOCK
+
+
+def test_lock_state_loss_on_missing_anchor():
+    assert lock_state(_report(True), "missing", None) == LOSS_OF_LOCK
+
+
+def test_lock_state_unconfirmed_without_a_recorded_hash():
+    assert lock_state(_report(True), "unrecorded", None) == LOCK_UNCONFIRMED
+
+
+def test_lock_state_unconfirmed_without_an_anchor():
+    assert lock_state(_report(True), "none", None) == LOCK_UNCONFIRMED
+
+
+def test_frozen_reason_names_a_frozen_file(tree: Path):
+    manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
+    assert "frozen contract file" in frozen_reason("tests/test_alpha.py", manifest)
+
+
+def test_frozen_reason_covers_the_composition_guard(tree: Path):
+    manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
+    assert "composition" in frozen_reason("tests/conftest.py", manifest)
+
+
+def test_frozen_reason_covers_a_recursive_directory(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    assert "frozen directory" in frozen_reason("tests/sub/test_delta.py", manifest)
+
+
+def test_frozen_reason_is_none_for_an_unrelated_path(tree: Path):
+    manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
+    assert frozen_reason("scripts/canopus.py", manifest) is None
+
+
+def test_frozen_reason_does_not_leak_across_a_similar_prefix(tree: Path):
+    manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
+    assert frozen_reason("tests_extra/test_x.py", manifest) is None

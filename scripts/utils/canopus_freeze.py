@@ -237,3 +237,156 @@ def build_manifest(
     }
     manifest["root"] = root_hash(manifest)
     return manifest
+
+
+# ============================================================
+# Verification
+# ============================================================
+
+LOCK_HELD = "LOCK HELD"
+LOSS_OF_LOCK = "LOSS OF LOCK"
+LOCK_UNCONFIRMED = "LOCK UNCONFIRMED"
+
+
+def recompute(manifest: dict, root: Path) -> dict:
+    """Rebuild the manifest's content keys from current disk state.
+
+    Same key set as *manifest*: a file that vanished is simply absent from the
+    result, which is what makes the recomputed root hash differ.
+    """
+    resolved_root = Path(root).resolve()
+    files: dict[str, str] = {}
+    for rel in manifest["files"]:
+        candidate = resolved_root / rel
+        if candidate.is_file() and not candidate.is_symlink():
+            files[rel] = file_digest(candidate)
+    dirs: dict[str, dict] = {}
+    for rel, entry in manifest["dirs"].items():
+        candidate = resolved_root / rel
+        recursive = entry["mode"] == "recursive"
+        alive = candidate.is_dir()
+        dirs[rel] = {
+            "mode": entry["mode"],
+            "hash": dir_members_digest(candidate, recursive=recursive) if alive else "",
+            "members": (
+                dir_member_rels(candidate, resolved_root, recursive=recursive) if alive else []
+            ),
+        }
+    return {
+        "recipe": manifest["recipe"],
+        "anchor": manifest.get("anchor") or "",
+        "files": dict(sorted(files.items())),
+        "dirs": dict(sorted(dirs.items())),
+    }
+
+
+def verify_manifest(manifest: dict, root: Path) -> dict:
+    """Compare disk against *manifest* and report what moved.
+
+    `held` is True only when the recomputed root hash matches AND no file
+    changed, was added, or was removed. Both conditions are checked rather than
+    inferred from each other, so a future recipe change cannot quietly turn a
+    real difference into a pass.
+
+    `added` and `removed` are diffed against each guarded directory's RECORDED
+    member list, never against the file map. A guard on a frozen file's parent
+    deliberately covers siblings that were not frozen individually, so a file
+    map comparison would report every pre-existing sibling as newly added.
+    """
+    resolved_root = Path(root).resolve()
+    current = recompute(manifest, resolved_root)
+
+    changed = sorted(
+        rel for rel, digest in current["files"].items()
+        if manifest["files"][rel] != digest
+    )
+
+    added: set[str] = set()
+    vanished: set[str] = set()
+    for rel, entry in manifest["dirs"].items():
+        was = set(entry["members"])
+        now = set(current["dirs"][rel]["members"])
+        added |= now - was
+        vanished |= was - now
+
+    removed = sorted((set(manifest["files"]) - set(current["files"])) | vanished)
+
+    recomputed = root_hash(current)
+    return {
+        "recomputed_root": recomputed,
+        "changed": changed,
+        "added": sorted(added),
+        "removed": removed,
+        "held": recomputed == manifest["root"] and not (changed or added or removed),
+    }
+
+
+# ============================================================
+# The anchor
+# ============================================================
+
+def read_anchor(anchor_path: Path) -> Tuple[str, Optional[str]]:
+    """Read the expected root hash out of a committed anchor artifact.
+
+    Returns ("missing", None) when the artifact is gone, ("unrecorded", None)
+    when it exists but carries no `canopus-anchor:` line, and ("recorded", hash)
+    otherwise.
+
+    The distinction matters. Unrecorded is the expected state between freezing
+    and writing the hash down, so it is amber. Missing means a recorded anchor
+    disappeared, which is a stronger signal than one that was never written, so
+    it is red.
+    """
+    path = Path(anchor_path)
+    if not path.is_file():
+        return ("missing", None)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        # Unreadable is not "absent": treat it like a vanished anchor.
+        return ("missing", None)
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(ANCHOR_PREFIX):
+            value = stripped[len(ANCHOR_PREFIX):].strip().lower()
+            if value:
+                return ("recorded", value)
+    return ("unrecorded", None)
+
+
+def lock_state(report: dict, anchor_status: str, anchor_value: Optional[str]) -> str:
+    """Resolve the three-state indicator from a verify report plus the anchor.
+
+    No prefix comparison anywhere: a truncated digest that looks rigorous and is
+    not is worse than a full one, because a builder with a shell can brute-force
+    a short prefix by appending whitespace to a frozen file.
+    """
+    if not report["held"]:
+        return LOSS_OF_LOCK
+    if anchor_status == "missing":
+        return LOSS_OF_LOCK
+    if anchor_status in ("none", "unrecorded"):
+        return LOCK_UNCONFIRMED
+    return LOCK_HELD if anchor_value == report["recomputed_root"] else LOSS_OF_LOCK
+
+
+# ============================================================
+# Membership (consumed by the PreToolUse dispatcher)
+# ============================================================
+
+def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
+    """Why *rel_posix* is frozen, or None. Pure string work, no disk access.
+
+    The dispatcher calls this on every Write/Edit, so it must stay cheap: no
+    hashing, no stat calls.
+    """
+    if rel_posix in manifest["files"]:
+        return f"{rel_posix} is a frozen contract file"
+    parent = rel_posix.rsplit("/", 1)[0] if "/" in rel_posix else ""
+    for dir_rel, entry in manifest["dirs"].items():
+        if entry["mode"] == "recursive":
+            if rel_posix == dir_rel or rel_posix.startswith(dir_rel + "/"):
+                return f"{rel_posix} is inside the frozen directory {dir_rel}/"
+        elif parent == dir_rel:
+            return f"{rel_posix} would join the guarded composition of {dir_rel}/"
+    return None

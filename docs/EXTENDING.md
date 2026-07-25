@@ -141,6 +141,57 @@ uv run python scripts/run-tests.py                      # the suite
 - **CodeQL** runs on the repository for static security analysis; address what it
   flags on a pull request.
 
+### Freezing the test contract
+
+`scripts/canopus.py` locks a set of paths so the tests that prove a change cannot be
+edited by whoever is making the change.
+
+```bash
+python scripts/canopus.py freeze tests/test_thing.py --label my-slice \
+    --anchor ../my-notes-repo/plans/2026-07-25-pre-impl-my-slice.md
+python scripts/canopus.py verify
+python scripts/canopus.py status
+python scripts/canopus.py release --reason "slice shipped"
+```
+
+`freeze` writes a per-file digest manifest to a gitignored `.canopus/`, records the event
+in an append-only ledger, and prints a **root hash** plus the exact `canopus-anchor:` line
+to paste into the anchor artifact and commit. From then on `verify` reads the expected
+hash from that artifact by itself. Nobody types a digest and nobody compares one by eye.
+
+Three layers, and the differences matter:
+
+- The PreToolUse deny is a **convenience**. It sees `Write` and `Edit` tool calls only, so
+  a shell `sed -i` or an agent with its own toolset walks past it.
+- `verify` is the **guarantee**. It recomputes digests from disk and catches a change made
+  by any route.
+- `scripts/run-tests.py` is what makes the guarantee **fire**. It runs the check before the
+  suite, so a build cannot reach green while its contract is moved. A verification that is
+  never invoked is worth nothing, however well its expected value is protected.
+
+`verify` reports one of three states:
+
+| State | Meaning |
+|---|---|
+| `LOCK HELD` | the manifest is intact and matches the hash recorded in the anchor artifact |
+| `LOSS OF LOCK` | something changed, or the anchor disagrees or vanished. Exit code 1. |
+| `LOCK UNCONFIRMED` | no anchor hash is recorded yet: nothing changed since the last check, which is not the same as "this is the approved contract" |
+
+The anchor must live outside the working tree. An anchor the build can write to is not an
+anchor. Point it at a sibling repository with its own history, so a build reaching for the
+anchor leaves a commit in a repository it had no reason to touch.
+
+Freezing a directory is recursive. Freezing a file also guards its parent directory's
+immediate membership, which catches a `conftest.py` dropped beside a frozen test to
+neutralize it.
+
+If the manifest is ever damaged, every write is denied fail-closed. Clear it with
+`release --force`, which is logged. Deleting the file by hand also works and deliberately
+leaves a gap in an append-only ledger.
+
+A contract that turns out to be wrong is not edited in place. Release it, fix it,
+re-freeze it, and get the new root hash re-approved.
+
 ---
 
 ## 6. Testing discipline

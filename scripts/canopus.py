@@ -66,6 +66,16 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     refusal_reasons,
     run_contract,
 )
+from scripts.utils.canopus_pack import (  # noqa: E402
+    commits_outside,
+    diff_stat,
+    freeze_windows,
+    git_commits,
+    is_dirty,
+    merge_base,
+    parse_ts,
+    read_ledger,
+)
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
 
 # The gate script every root must carry. A tree without it has no place where the
@@ -263,6 +273,77 @@ def cmd_probe(args) -> int:
     return 1 if reasons else 0
 
 
+def cmd_pack(args) -> int:
+    """The Fix 2 evidence page. Reports; never blocks and never writes."""
+    root = _resolve_root(args)
+    manifest = read_freeze(root)
+    if manifest is None:
+        print("canopus: no active freeze; there is no contract to build a pack "
+              "around", file=sys.stderr)
+        return 1
+
+    report = verify_manifest(manifest, root)
+    anchor, status, value = anchor_state(manifest)
+    state = lock_state(report, status, value)
+    record = read_attestation(root)
+    # _print_attestation below already renders the state; only the reason string
+    # is needed again, for the staleness section.
+    _state, reason = attestation_state(record, report["recomputed_root"])
+
+    _print_root(report["recomputed_root"], manifest)
+    colour = {LOCK_HELD: GREEN, LOCK_UNCONFIRMED: YELLOW}.get(state, RED)
+    print(f"{colour}{BOLD}{state}{RESET}   anchor {anchor or '(none)'} [{status}]")
+    _print_attestation(root, report["recomputed_root"])
+
+    baseline = manifest.get("baseline") or {}
+    if baseline:
+        print(f"\n{BOLD}contract{RESET}")
+        counts = (record or {}).get("frozen_tests") or {}
+        for rel, expected in sorted(baseline.items()):
+            entry = counts.get(rel) if isinstance(counts, dict) else None
+            got = entry.get("collected", 0) if isinstance(entry, dict) else 0
+            mark = GREEN if got == expected else YELLOW
+            print(f"  {mark}{got} of {expected}{RESET}  {rel}")
+
+    base = args.base or merge_base(root, "main") or "HEAD"
+    commits = git_commits(root, base)
+    outside = commits_outside(commits, freeze_windows(read_ledger(root)))
+    print(f"\n{BOLD}continuity{RESET}  {len(commits)} commits since {base}")
+    if outside:
+        for sha, when, subject in outside:
+            print(f"  {RED}outside the lock{RESET}  {sha} {when.isoformat()} {subject}")
+    else:
+        print(f"  {GREEN}every commit was made while a freeze was held{RESET}")
+
+    attested_at = parse_ts((record or {}).get("attested_at"))
+    newer = [c for c in commits if attested_at and c[1] > attested_at]
+    dirty = is_dirty(root)
+    print(f"\n{BOLD}staleness{RESET}")
+    if attested_at is None:
+        print(f"  {YELLOW}no attestation to age{RESET}  {reason}")
+    elif dirty or newer:
+        for sha, when, subject in newer:
+            print(f"  {YELLOW}newer than the attestation{RESET}  {sha} {subject}")
+        if dirty:
+            print(f"  {YELLOW}the working tree has uncommitted changes{RESET}")
+        print("  Re-run the gate: the attestation describes a tree that no "
+              "longer exists.")
+    else:
+        print(f"  {GREEN}the attestation is the freshest artifact here{RESET}")
+
+    stat = diff_stat(root, base)
+    if stat:
+        print(f"\n{BOLD}diff{RESET}\n{stat}")
+
+    print(f"\n{BOLD}not covered{RESET}")
+    print("  Mutation testing has not run; the contract is proven to be red "
+          "before the code existed, not proven to be strong.")
+    print("  .canopus/ is gitignored, so this ledger is evidence against an EDIT, "
+          "not against deleting the directory.")
+    print("  Staleness is a snapshot taken now, not a continuous property.")
+    return 0
+
+
 def cmd_verify(args) -> int:
     root = _resolve_root(args)
     manifest = read_freeze(root)
@@ -406,6 +487,12 @@ def build_parser() -> argparse.ArgumentParser:
                                          "freeze would record; writes nothing")
     probe.add_argument("paths", nargs="+", help="contract files or directories")
     probe.set_defaults(func=cmd_probe)
+
+    pack = sub.add_parser("pack", help="the Fix 2 evidence page")
+    pack.add_argument("--base", default=None,
+                      help="branch base for the commit range (default: the merge "
+                           "base with main)")
+    pack.set_defaults(func=cmd_pack)
 
     verify = sub.add_parser("verify", help="recompute and compare against the anchor")
     verify.add_argument("--anchor", default=None,

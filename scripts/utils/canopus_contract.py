@@ -461,10 +461,20 @@ def parse_failure_modes(xml_text: str) -> dict[tuple[str, str], str]:
         for child in case:
             if child.tag not in ("failure", "error"):
                 continue
-            blob = f"{child.get('message') or ''}\n{child.text or ''}"
+            message = child.get("message") or ""
+            blob = f"{message}\n{child.text or ''}"
             if any(marker in blob for marker in _IMPORT_MARKERS):
                 modes[(Path(rel).as_posix(), name)] = "import"
-            elif "AssertionError" in blob or "assert" in blob:
+            elif "AssertionError" in message or message.lstrip().startswith("assert"):
+                # The MESSAGE, never the body. The body carries the test's source
+                # and its docstring, so the bare word "assert" anywhere in the
+                # prose labelled the failure an assertion. Measured on wire 2.2's
+                # own contract at its Fix 1 probe: eleven tests failing on one
+                # identical TypeError printed as seven assertions and four others,
+                # decided entirely by which docstrings happened to use the word.
+                # The import branch still reads the whole blob, because its
+                # markers are specific sentences rather than a common English
+                # verb.
                 modes[(Path(rel).as_posix(), name)] = "assertion"
             else:
                 modes[(Path(rel).as_posix(), name)] = "other"

@@ -556,8 +556,14 @@ def read_anchor(anchor_path: Path) -> Tuple[str, Optional[str]]:
         return (ANCHOR_MISSING, None)
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, ValueError):
         # Unreadable is not "absent": treat it like a vanished anchor.
+        #
+        # ValueError covers UnicodeDecodeError, which is the one an OSError-only
+        # handler misses: a gate artifact holding a single non-UTF-8 byte raised
+        # straight through anchor_state, resolve_anchor and freeze_gate, and a
+        # raise in the gate fails OPEN. Measured on this tree, not reasoned:
+        # one latin-1 byte in the artifact crashed the pytest session start.
         return (ANCHOR_MISSING, None)
     found: Optional[str] = None
     for line in text.splitlines():

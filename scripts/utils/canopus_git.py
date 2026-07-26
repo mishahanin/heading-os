@@ -43,8 +43,11 @@ def git_output(root: Path, *arguments: str) -> Optional[str]:
     whose anchor directory holds one made freeze_gate raise
     `ValueError: embedded null byte`), and `text=True` decoding, where a
     non-UTF-8 gate artifact makes git's stdout raise UnicodeDecodeError, a
-    ValueError subclass. The second is currently masked by read_anchor failing
-    first on the same file, so it would surface the moment that one is fixed.
+    ValueError subclass. On the second route read_anchor reaches the same file
+    first, and that is not a mask: it was the crash, by a different door, until
+    read_anchor's own handler was widened to (OSError, ValueError). Both doors
+    are shut now, and each is pinned by its own gate test. Calling one of them
+    masked would tell a maintainer the route is dormant when it was live.
 
     This module's contract is that every function ANSWERS, and freeze_gate runs
     at every pytest session start. An exception escaping here does not report a

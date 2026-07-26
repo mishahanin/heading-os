@@ -262,9 +262,25 @@ def cmd_approve(args) -> int:
     has verified nothing.
     """
     root = _resolve_root(args)
+    if read_freeze(root) is not None:
+        # Measured, not imagined: approve set A, commit, freeze set A, verify
+        # reads LOCK HELD; then approve set B while that freeze is still active
+        # and commit it, exactly as this command's own closing line instructs,
+        # and verify reads LOSS OF LOCK with nothing on the tree having moved.
+        # `cmd_freeze` already refuses for the same reason, and the docstring of
+        # _candidate_manifest names this failure as the one to avoid.
+        print("canopus: a freeze is already active; run `release` first. "
+              "Approving a different set now turns the held lock red the moment "
+              "you commit it, and nothing on the tree will have moved.",
+              file=sys.stderr)
+        return 1
     anchor_path = validate_anchor_path(_under_root(args.anchor, root), root)
     status, recorded = read_anchor(anchor_path)
-    committed_status, committed_recorded = read_committed_anchor(anchor_path)
+    # The status is deliberately not bound: the union below needs the committed
+    # HASH and nothing else, and every non-COMMITTED status already yields None.
+    # A name bound and never read invites a maintainer to build a branch on it
+    # that duplicates a decision `resolve_anchor` already owns.
+    _, committed_recorded = read_committed_anchor(anchor_path)
     # The union of both readers, deliberately. Refusing on the working file alone
     # would let `git checkout --` erase an uncommitted approve line, so a second
     # approve over a different set never trips --replace. Refusing on the
@@ -286,16 +302,31 @@ def cmd_approve(args) -> int:
     if manifest is None:
         return 1
     # The artifact write comes before the ledger, and the order is the same one
-    # cmd_freeze reasons about: an OSError here leaves no approval anywhere,
-    # while the reverse would leave a ledger claiming an approval the artifact
-    # never received.
+    # cmd_freeze reasons about: an OSError on THIS line leaves no approval
+    # anywhere, while the reverse would leave a ledger claiming an approval the
+    # artifact never received.
+    #
+    # The ledger write below opens the opposite window, and it is named here
+    # rather than left to be discovered: by the time it runs the artifact
+    # ALREADY carries the candidate, so an OSError there is a partial approval,
+    # not a failed one. Reporting it as a plain failure is what sends an
+    # operator into a retry that demands --replace --reason for an approval they
+    # were told had not happened, so that path says which half landed.
     with anchor_path.open("a", encoding="utf-8") as handle:
         handle.write(f"\n{ANCHOR_PREFIX} {manifest['root']}\n")
-    append_history(root, "approve", digest=manifest["root"],
-                   label=args.label, reason=args.reason or "")
-    if already:
-        append_history(root, "anchor_replaced", digest=manifest["root"],
-                       label=args.label, reason=args.reason)
+    try:
+        append_history(root, "approve", digest=manifest["root"],
+                       label=args.label, reason=args.reason or "")
+        if already:
+            append_history(root, "anchor_replaced", digest=manifest["root"],
+                           label=args.label, reason=args.reason)
+    except OSError as exc:
+        print(f"canopus: the candidate {manifest['root']} WAS written to "
+              f"{anchor_path}; only the ledger entry failed: {exc}. The approval "
+              f"is on the artifact, so read it and commit it if it is the set "
+              f"you meant, and expect a re-run to ask for --replace --reason.",
+              file=sys.stderr)
+        return 1
     _print_root(manifest["root"], manifest)
     if contract_note:
         print(f"{YELLOW}contract{RESET}  {contract_note} before this approval")
@@ -669,7 +700,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="a contract directory: recursive, with a baseline")
     approve.add_argument("--replace", action="store_true",
                          help="append a new approval over a recorded one")
-    approve.add_argument("--reason", help="why the approval is being replaced")
+    approve.add_argument("--reason", default="",
+                         help="why the approval is being replaced")
     approve.set_defaults(func=cmd_approve)
 
     probe = sub.add_parser("probe", help="run a contract set and show what a "

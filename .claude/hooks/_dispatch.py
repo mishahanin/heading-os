@@ -789,10 +789,21 @@ def check_canopus_freeze(payload: dict) -> Optional[dict]:
     reason = frozen_reason(rel, manifest)
     if reason is None:
         return None
+    # Two cases, and the second one was missing while it was the ordinary one.
+    # "Fix the code instead" names an action only while the frozen path and the
+    # code being fixed are different files. Whenever this tool is under its own
+    # maintenance the frozen path IS the code — it was, for six of the seven
+    # tasks in wire 2.2 — and an operator told to fix the code instead is told to
+    # do the thing that was just denied. So the real move is named here: open a
+    # release window, make the change, re-freeze.
     return _canopus_deny(
         f"{reason} (label: {manifest['label']}). The contract is not editable in "
-        f"place. Fix the code instead; a contract that is genuinely wrong reopens "
-        f"the approval gate."
+        f"place. If the frozen path is a TEST, fix the code instead; a contract "
+        f"that is genuinely wrong reopens the approval gate. If the frozen path "
+        f"IS the code you are fixing (an enforcer under its own maintenance), "
+        f"open a release window first: python scripts/canopus.py release "
+        f"--window --reason \"<why>\", make the change, then re-approve and "
+        f"re-freeze."
     )
 
 

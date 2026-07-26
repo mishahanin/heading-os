@@ -105,13 +105,58 @@ def _open_window(root: Path) -> Optional[dict]:
 
 
 def freeze_gate(root: Path) -> int:
-    """Canopus wire 1: a build cannot reach green while its contract is moved.
+    """The claim, as it stands after wire 2.2, and no wider.
+
+    A build cannot reach green while its contract is moved, AND it cannot reach
+    green by making the anchor's repository invisible. The older wording here
+    claimed only the first half and was falsified by the second: exporting
+    GIT_DIR turned a genuine LOSS OF LOCK into LOCK HELD with exit 0, because
+    resolution fell back to the anchor's WORKING copy the moment git answered
+    no_repo or no_git. Every route to "I cannot see the anchor's repository" now
+    resolves RED, so blinding the gate is strictly worse for a builder than doing
+    nothing at all.
+
+    What it still does NOT claim, said here rather than left to be discovered.
+    Nothing in this file defends against a builder who replaces the `git` binary
+    on PATH: every answer this gate binds to comes from a child process, and a
+    substituted binary can say whatever the builder wants. And the identity binds
+    a repository's LINEAGE rather than an instance — it is a digest over the root
+    commits — so a `git clone` of the anchor's repository carries the same root
+    commits and reads as the same repository. That is deliberate (a relocated or
+    cloned repository IS the same repository, and this workspace has been
+    relocated once), and it means the binding proves which HISTORY the anchor
+    belongs to, never which copy of it a command read.
 
     Silent when no freeze is active AND no release window is open, which is the
     ordinary day. An open window is the state where the lock was deliberately
     taken off mid-slice, and before wire 2.2 that was indistinguishable here
     from never having frozen at all.
+
+    NEVER RAISES, whatever the state directory looks like. That is a SHAPE, held
+    by the wrapper below rather than by a handler per input, because this is the
+    third repair of the same invariant in one slice: a raise here fails OPEN. The
+    gate runs at every pytest session start, so an escaping exception crashes the
+    harness that was supposed to report a state, and the PreToolUse dispatcher's
+    catch-all logs an advisory and CONTINUES while writes to frozen paths sail
+    through. Measured, not reasoned: `.canopus/` at mode 000 made `read_freeze`
+    raise PermissionError out of `Path.exists()`, past a handler that named only
+    FreezeCorrupt.
     """
+    try:
+        return _freeze_gate(root)
+    except Exception as exc:  # noqa: BLE001 — totality IS the requirement
+        # Named, so this is a report rather than a swallow, and RED with exit 1
+        # so the unexpected fails closed. An operator seeing this line is looking
+        # at a gate that could not establish a state, which is not the same claim
+        # as a moved contract, and the sentence says so.
+        print(f"{RED}canopus: the freeze state could not be established, so the "
+              f"contract is treated as unverified: "
+              f"{type(exc).__name__}: {exc}{RESET}")
+        return 1
+
+
+def _freeze_gate(root: Path) -> int:
+    """The gate proper. Call `freeze_gate`; this one is allowed to raise."""
     try:
         manifest = read_freeze(root)
     except FreezeCorrupt as exc:

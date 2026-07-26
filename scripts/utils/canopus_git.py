@@ -11,6 +11,12 @@ where it is.
 Every function answers rather than raising. A missing git, a directory that is
 not a repository, and a command that fails are all ordinary states of the world
 for a tool that must run on a fresh public clone with no data overlay behind it.
+
+Both of those claims were FALSE when wire 2.1 shipped, and are recorded here as
+repairs rather than left reading like they were always true: `scripts/canopus.py`
+ran its own `rev-parse HEAD` subprocess until wire 2.2 moved it here as
+`head_sha`, and `_git_available` called `Path.cwd()` unguarded, which raises
+FileNotFoundError when the process working directory has been deleted.
 """
 from __future__ import annotations
 

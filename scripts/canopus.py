@@ -79,6 +79,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     LOSS_OF_LOCK,
     NOT_ATTESTED,
     REPO_PRESENT,
+    REPO_UNKNOWN,
     SATISFIED_PREFIX,
     FreezeCorrupt,
     FreezeError,
@@ -307,7 +308,14 @@ def _print_contract(manifest: dict, record: dict) -> None:
 
 
 def _candidate_manifest(args, root: Path, anchor_path: Path):
-    """(manifest, contract_note) for approve and freeze, or (None, "") on refusal.
+    """(manifest, contract_note, waived) for approve and freeze; manifest None on refusal.
+
+    `waived` says whether `--contract-satisfied` ACTUALLY fired: a wholly green
+    contract accepted on the stated reason. It is False on a red contract, where
+    the flag changes nothing and says so, and False when no contract ran at all.
+    Only `cmd_freeze` reads it, and only to refuse a waiver the approval on the
+    artifact does not carry — a distinction the flag's mere presence cannot make,
+    because refusing on presence would refuse the no-op runs too.
 
     One builder for both commands. Two copies of this construction is how the
     approved hash and the frozen hash come to differ over a default nobody
@@ -324,16 +332,49 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
     if not args.paths and not args.content and not args.contract:
         print("canopus: at least one path is required, positionally or via "
               "--content or --contract", file=sys.stderr)
-        return (None, "")
+        return (None, "", False)
+    # The repository questions come FIRST, ahead of the contract run, because
+    # both of their answers are refusals and neither one can be changed by
+    # anything the contract does. Behind the contract block they cost the
+    # operator a full pytest session over the contract, plus the null-stub
+    # session behind it, before being told to go and commit something: measured
+    # on `freeze --contract` against an anchor in a freshly initialised
+    # repository. A refusal that is knowable up front is said up front.
+    repo_status, repo_identity_digest = repo_identity(anchor_path.parent)
+    if repo_status == REPO_UNKNOWN:
+        # Recording a freeze here would record a LIE. `in_repo` below is
+        # `repo_status == REPO_PRESENT`, so a git that cannot be reached wrote
+        # `in_repo: false` into the manifest — the claim that the anchor was
+        # OUTSIDE any repository, which the tool has no evidence for and which
+        # was probably untrue. Every later `verify` then reads BINDING_BROKEN,
+        # "the freeze was taken blind", and blames the blinding rather than
+        # naming the real cause. Refusing is the honest answer: an unbound freeze
+        # is a positive claim about the world, not a shrug.
+        print("canopus: git could not be consulted, so the anchor's repository "
+              "cannot be identified and a freeze taken now would RECORD that the "
+              "anchor is outside any repository. That claim has no evidence "
+              "behind it. Put a working `git` on PATH (and check the anchor's "
+              "directory still exists) and run the same command again.",
+              file=sys.stderr)
+        return (None, "", False)
+    if repo_status == REPO_PRESENT and not repo_identity_digest:
+        print("canopus: the anchor's repository has no commits, so an approval "
+              "cannot be attributed to it and the identity recorded now would "
+              "change the moment you commit. Commit something in that "
+              "repository first.", file=sys.stderr)
+        return (None, "", False)
+    binding = {"in_repo": repo_status == REPO_PRESENT,
+               "identity": repo_identity_digest}
     contracts = [_under_root(p, root) for p in args.contract]
     baseline: dict[str, int] = {}
     contract_note = ""
+    waived = False
     if contracts:
         expected = contract_files(contracts, root)
         if not expected:
             print("canopus: --contract names no test modules; a contract with no "
                   "tests can never be attested", file=sys.stderr)
-            return (None, "")
+            return (None, "", False)
         # One real run, read twice. Running the contract for the outcomes and
         # again for the report would double the wall time and compare outcomes
         # from one run against failure modes from another.
@@ -380,7 +421,7 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             print("canopus: the contract was refused:", file=sys.stderr)
             for reason in reasons:
                 print(f"  {reason}", file=sys.stderr)
-            return (None, "")
+            return (None, "", False)
         # Said out loud, on the way to a successful approve or freeze. The
         # refusal above cannot fire when nothing was stubbed, and an operator
         # who is not told so reads that silence as "measured, nothing vacuous".
@@ -391,6 +432,7 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             # The waiver actually fired here, so the reason is on the surface as
             # well as in the ledger. A refusal that was overridden silently is
             # the same defect as a refusal that never fired.
+            waived = True
             print(f"{YELLOW}contract{RESET}  the contract is wholly GREEN and was "
                   f"accepted by --contract-satisfied: {satisfied}")
         baseline = {rel: counts[rel] for rel in expected}
@@ -398,15 +440,6 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             1 for _rel, _name, outcome in outcomes if outcome == "passed"
         )
         contract_note = f"{already_green} of {sum(counts.values())} already green"
-    repo_status, repo_identity_digest = repo_identity(anchor_path.parent)
-    if repo_status == REPO_PRESENT and not repo_identity_digest:
-        print("canopus: the anchor's repository has no commits, so an approval "
-              "cannot be attributed to it and the identity recorded now would "
-              "change the moment you commit. Commit something in that "
-              "repository first.", file=sys.stderr)
-        return (None, "")
-    binding = {"in_repo": repo_status == REPO_PRESENT,
-               "identity": repo_identity_digest}
     manifest = build_manifest(
         [_under_root(p, root) for p in args.paths] + contracts,
         root,
@@ -417,7 +450,7 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
         baseline=baseline,
         anchor_repo=binding,
     )
-    return (manifest, contract_note)
+    return (manifest, contract_note, waived)
 
 
 def cmd_approve(args) -> int:
@@ -446,7 +479,8 @@ def cmd_approve(args) -> int:
         # and verify reads LOSS OF LOCK with nothing on the tree having moved.
         # `cmd_freeze` already refuses for the same reason, and the docstring of
         # _candidate_manifest names this failure as the one to avoid.
-        print("canopus: a freeze is already active; run `release` first. "
+        print("canopus: a freeze is already active; run "
+              "`release --window --reason \"<why>\"` first. "
               "Approving a different set now turns the held lock red the moment "
               "you commit it, and nothing on the tree will have moved.",
               file=sys.stderr)
@@ -475,7 +509,7 @@ def cmd_approve(args) -> int:
         print("canopus: --replace requires --reason; an unexplained replacement "
               "is indistinguishable from a re-baseline", file=sys.stderr)
         return 1
-    manifest, contract_note = _candidate_manifest(args, root, anchor_path)
+    manifest, contract_note, _waived = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
         return 1
     satisfied = _satisfied_reason(args)
@@ -574,14 +608,20 @@ def cmd_freeze(args) -> int:
     whose committed approval disagrees, so `verify` reports LOSS OF LOCK and
     every pytest session fails until a human commits the new approval. A
     re-baseline that ends red is worth more than one that ends unlocked.
+
+    One refusal this command owns alone: `--contract-satisfied` is refused unless
+    the approval on the artifact carries the matching waiver. `canopus pack`
+    renders CONTRACT WAIVED from the artifact, so a freeze waived here over an
+    approval that was not produces an evidence page showing no waiver at all.
     """
     root = _resolve_root(args)
     if read_freeze(root) is not None:
-        print("canopus: a freeze is already active; run `release` first "
+        print("canopus: a freeze is already active; run "
+              "`release --window --reason \"<why>\"` first "
               "(changing a contract reopens the approval gate)", file=sys.stderr)
         return 1
     anchor_path = validate_anchor_path(_under_root(args.anchor, root), root)
-    manifest, contract_note = _candidate_manifest(args, root, anchor_path)
+    manifest, contract_note, waived = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
         return 1
     committed_status, committed_hash = read_committed_anchor(anchor_path)
@@ -599,6 +639,40 @@ def cmd_freeze(args) -> int:
               f"`approve --replace --reason \"<why>\"` and commit it.",
               file=sys.stderr)
         return 1
+    satisfied = _satisfied_reason(args)
+    if waived and not read_anchor_waiver(anchor_path, manifest["root"]):
+        # The pairing nothing refused before: `approve` WITHOUT the flag, then
+        # `freeze --contract-satisfied`. The freeze is waived, and the evidence
+        # page renders no waiver at all — `canopus pack` reads its CONTRACT
+        # WAIVED marker from the anchor artifact, which only `approve` writes. So
+        # the one surface an operator approves from reported a stronger claim
+        # than the freeze earned, and the waiver survived only in gitignored
+        # `.canopus/history.jsonl`.
+        #
+        # Bound to the waiver having FIRED, never to the flag being present. On a
+        # red contract the flag changes nothing and the command already says so;
+        # refusing there would refuse a run that made no claim at all, which is
+        # the failure mode of every guard written against a flag rather than
+        # against the act the flag performs.
+        #
+        # Read from the ARTIFACT rather than from HEAD, deliberately, and the
+        # reason is not laziness. `approve` writes the waiver line and the
+        # approval line in ONE append, so they are committed together or not at
+        # all: for any artifact a human has not hand-edited, HEAD's answer and
+        # the working copy's are the same answer. The artifact is also exactly
+        # what `pack` reads, so this refusal guarantees the marker renders, which
+        # a HEAD-scoped read would not. Whether that approval is COMMITTED is a
+        # separate axis and is already reported, loudly, a few lines below.
+        print(f"canopus: --contract-satisfied was passed, and the approval on "
+              f"{anchor_path} records no waiver for {manifest['root']}. A waiver "
+              f"the committed approval does not carry is one `canopus pack` "
+              f"cannot show: the evidence page reads the "
+              f"`{SATISFIED_PREFIX}` line off the artifact, and there is none "
+              f"here. Re-run `approve --contract-satisfied \"<why>\"` (with "
+              f"--replace --reason if an approval is already recorded), commit "
+              f"the artifact, then freeze.",
+              file=sys.stderr)
+        return 1
     manifest["git_sha"] = head_sha(root)
     write_freeze(root, manifest)
     # `reason` carries the git status when no contract note exists, and that
@@ -610,7 +684,7 @@ def cmd_freeze(args) -> int:
     failed = _record(root, "freeze", digest=manifest["root"],
                      label=manifest["label"],
                      reason=_ledger_reason(contract_note or committed_status,
-                                           _satisfied_reason(args)))
+                                           satisfied))
     if failed:
         # The freeze IS active by the time this can fire, so reporting a plain
         # failure is false of the state twice over. It tells the operator to
@@ -622,7 +696,8 @@ def cmd_freeze(args) -> int:
         print(f"canopus: the freeze IS ACTIVE over {manifest['root']}; the "
               f"`freeze` ledger entry failed: {failed}. The manifest was "
               f"written, so `verify` and the test gate enforce this contract "
-              f"now, and `release --reason \"<why>\"` is how you clear it. With "
+              f"now, and `release --window --reason \"<why>\"` is how you clear "
+              f"it. With "
               f"no `freeze` entry in the ledger, `canopus pack` opens no window "
               f"here and will report every commit made under this lock as made "
               f"outside it.",
@@ -1027,7 +1102,10 @@ def build_parser() -> argparse.ArgumentParser:
     release = sub.add_parser("release", help="clear the active freeze")
     release.add_argument("--reason", default="", help="why the freeze is being released")
     release.add_argument("--force", action="store_true",
-                         help="clear a damaged manifest without parsing it")
+                         help="clear a damaged manifest without parsing it; the "
+                              "forced release is LOGGED to the ledger, which is "
+                              "what tells it apart from deleting freeze.json by "
+                              "hand")
     # Required, and mutually exclusive. Two releases that look identical in the
     # ledger are two different events: one you will close, and the end of a
     # slice. The tool used to record the difference only in free-form prose, so

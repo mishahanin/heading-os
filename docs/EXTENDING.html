@@ -337,28 +337,33 @@ report names no absent module at all, <code>probe</code>, <code>approve</code>, 
 and finding none. It is not a refusal, because tests failing on assertions
 against code that already exists produce the same reading and are a perfectly
 ordinary contract.</p>
-<p><strong>One environment variable defeats the lock, and it costs the builder nothing.</strong>
-<code>resolve_anchor</code> falls back to the artifact&rsquo;s WORKING copy whenever git reports
-<code>no_repo</code> or <code>no_git</code>, and both of those answers come from a child <code>git</code> process
-whose environment the builder controls. So <code>GIT_DIR=/tmp/nothing.git</code> in front of
-any command that reaches the gate makes the anchor&rsquo;s repository invisible, the
-fallback reads the working copy, and a genuine <code>LOSS OF LOCK</code> becomes <code>LOCK HELD</code>
-with gate exit 0. Measured on a re-baselined freeze, at both surfaces: <code>verify</code>
-went from <code>LOSS OF LOCK</code> exit 1 to <code>LOCK HELD</code> exit 0, and <code>freeze_gate</code> went
-from exit 1 to exit 0, with one environment variable and nothing else changed.
-The approval axis prints <code>APPROVAL UNVERIFIED</code> in both runs and only its reason
-string differs, so the amber line does not distinguish the defeat from an
-ordinary unverifiable approval. It writes nothing, touches no file, dirties no
-repository, and leaves no trace in the anchor&rsquo;s repository or in <code>canopus pack</code>,
-so nothing an operator reads afterwards records that it happened. This is not a hardening backlog item dressed up as a note: while it
-stands, the lock is a control against a careless builder and not against a
-deliberate one. The fix is its own slice with its own contract and its own
-approvals, because it needs the fallback narrowed and the child environment
-scrubbed, and the deeper form of it needs a manifest field recording which
-repository the anchor belonged to, which changes the recipe every existing freeze
-was taken with. Until then the operator&rsquo;s countermeasure is the obvious one and
-it works: run <code>canopus verify</code> YOURSELF, in your own shell, at the approval gate,
-rather than reading a status the builder printed.</p>
+<p><strong>Blinding the gate no longer pays, and what that does and does not cover.</strong>
+One environment variable used to defeat the lock at no cost: <code>resolve_anchor</code>
+fell back to the artifact&rsquo;s WORKING copy whenever git answered <code>no_repo</code> or
+<code>no_git</code>, and both answers came from a child <code>git</code> process whose environment the
+builder controls, so <code>GIT_DIR=/tmp/nothing.git</code> in front of any command that
+reached the gate turned a genuine <code>LOSS OF LOCK</code> into <code>LOCK HELD</code> with gate exit
+0. Wire 2.2 closed it. The freeze now RECORDS which repository the anchor
+belonged to, as a digest over that repository&rsquo;s root commits, and a manifest that
+recorded a repository resolves RED whenever git answers anything else — a
+different repository, no repository, or no git at all. The child environment is
+scrubbed of every <code>GIT_*</code> variable by prefix rather than by a denylist, which
+also fixed a real bug: git exports <code>GIT_DIR</code> and <code>GIT_INDEX_FILE</code> to its own
+hooks, so the gate running inside a pre-commit hook was asking the wrong
+repository about the anchor. Blinding is now strictly worse for a builder than
+doing nothing at all.</p>
+<p>Say what remains, because the flattering reading is that this makes the lock
+adversary-proof. It does not defend against a builder who replaces the <code>git</code>
+binary on PATH: every answer the gate binds to comes from a child process. The
+identity binds a repository&rsquo;s LINEAGE, not an instance, so a <code>git clone</code> of the
+anchor&rsquo;s repository carries the same root commits and reads as the same
+repository; that is deliberate, because a relocated or cloned repository IS the
+same repository, but it means the binding proves which history the anchor belongs
+to and never which copy of it was read. And the PreToolUse deny is still only a
+convenience: a shell <code>sed -i</code> walks past it, and <code>verify</code> plus the test gate are
+the guarantee. The operator&rsquo;s countermeasure has not changed and is still worth
+the ten seconds: run <code>canopus verify</code> YOURSELF, in your own shell, at the
+approval gate, rather than reading a status the builder printed.</p>
 <p><strong>The instrument has no committed human artifact behind it.</strong>
 <code>scripts/utils/canopus_contract.py</code> and <code>scripts/utils/canopus_nullstub.py</code> sit
 OUTSIDE the frozen enforcer set, deliberately: they do their work BEFORE any
@@ -531,7 +536,8 @@ filtering inside <code>pytest_collection_modifyitems</code> fires no deselection
 deliberate: a slice that legitimately edits a <code>conftest.py</code> mid-build gets <code>LOSS OF LOCK</code>,
 which under this standard is the correct answer.</p>
 <p>If the manifest is ever damaged, every write is denied fail-closed. Clear it with
-<code>release --force</code>, which is logged. Deleting <code>freeze.json</code> by hand also works and
+<code>release --force --window --reason "&lt;why&gt;"</code>, which is logged. A release names its
+kind, so <code>--force</code> alone exits 2. Deleting <code>freeze.json</code> by hand also works and
 deliberately leaves a gap in an append-only ledger.</p>
 <h3 id="did-the-frozen-tests-actually-run">Did the frozen tests actually run?</h3>
 <p>The lock states answer &ldquo;did the contract move&rdquo;. They cannot answer &ldquo;did the contract run&rdquo;:

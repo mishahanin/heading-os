@@ -204,3 +204,27 @@ def test_the_corrupt_manifest_escape_names_a_command_that_parses(dispatch):
 
     assert "--force --window" in reason
     build_parser().parse_args(["release", "--force", "--window", "--reason", "x"])
+
+
+def test_the_frozen_path_deny_names_the_release_window(dispatch, anchor):
+    """"Fix the code instead" names no action when the frozen file IS the code.
+
+    That is the ordinary case whenever this tool is under its own maintenance —
+    six of the seven tasks in wire 2.2 changed a frozen enforcer — and an
+    operator told to fix the code instead is being told to do the thing that was
+    just denied. The real move is a release window, so the deny names it, and it
+    has to parse: a release names its kind.
+    """
+    from scripts.canopus import build_parser
+
+    module, tree = dispatch
+    _freeze(tree, anchor)
+
+    reason = module.check_canopus_freeze(_write(tree / "tests" / "test_alpha.py"))["reason"]
+
+    assert "release --window --reason" in reason
+    # The test half is not dropped: a frozen TEST is still fixed by changing the
+    # code, and a deny that named only the window would teach an operator to open
+    # one for every contract they disagree with.
+    assert "approval gate" in reason
+    build_parser().parse_args(["release", "--window", "--reason", "x"])

@@ -1906,3 +1906,162 @@ def test_freeze_refuses_an_anchor_in_a_repository_with_no_commits(tree, anchor, 
     assert _freeze(tree, anchor) == 1
     assert "has no commits" in capsys.readouterr().err
     assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+# ============================================================
+# `--contract-satisfied`: the named waiver for a RETAKE
+# ============================================================
+# A retake taken after the slice turned its last contract row green is refused
+# by the redness rule, which is right about a first freeze and wrong about this
+# one. The workaround it produced was passing the contract directory
+# POSITIONALLY, which drops the baseline and with it the attestation's per-file
+# subset check, the collected-nothing refusal, the vacuity re-proof, the ledger
+# note and the pack's contract section. The flag keeps every one of those and
+# waives exactly one reason.
+
+
+def test_contract_satisfied_waives_the_green_refusal(tree, anchor, capsys):
+    """The one reason it waives, and the baseline it keeps by waiving it there.
+
+    The baseline assertion is the point of the flag rather than a bonus: the
+    positional workaround it replaces froze the identical set with `baseline:
+    {}`.
+    """
+    _write_contract(tree, red=False)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+
+    manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
+    assert manifest["baseline"] == {"tests/contract/slice/test_contract.py": 2}
+    assert "the slice implemented it" in capsys.readouterr().out
+
+
+def test_contract_satisfied_waives_the_green_refusal_for_approve_too(tree, anchor):
+    """Both commands, because a waiver on one of them is a waiver on neither.
+
+    `approve` computes the candidate hash and `freeze` takes it; a flag that
+    changes what one of them accepts, and not the other, produces a candidate
+    that the freeze refuses or the reverse.
+    """
+    _write_contract(tree, red=False)
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+    assert len(_recorded(anchor)) == 64
+
+
+def test_contract_satisfied_does_not_waive_a_collected_nothing_refusal(
+    tree, anchor, capsys
+):
+    """The per-file zero-item rule is untouched, by construction not by wording.
+
+    This is what a string filter over the returned list would have got wrong:
+    the two reasons are produced by one function, and the only safe way to
+    suppress one of them is at the site that produces it.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True, exist_ok=True)
+    # Collects nothing: the import is at module scope, so the module never
+    # imports and pytest reports a collection error rather than any item.
+    (directory / "test_contract.py").write_text(
+        "from absent_thing import answer\n\n\ndef test_a():\n    assert answer()\n"
+    )
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 1
+    err = capsys.readouterr().err
+    assert "collected nothing" in err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_contract_satisfied_on_a_red_contract_is_a_no_op_that_says_so(
+    tree, anchor, capsys
+):
+    """A flag whose no-op runs look identical to its live ones becomes a habit.
+
+    So the red case is stated out loud. The freeze still succeeds, because the
+    contract earned that on its own redness rather than on the waiver.
+    """
+    _write_contract(tree)   # test_a asserts False, test_b passes
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+    out = capsys.readouterr().out
+    assert "--contract-satisfied changed nothing" in out
+    assert "this contract is RED" in out
+
+
+def test_contract_satisfied_reaches_the_ledger(tree, anchor):
+    """The waiver is a durable record, not a line that scrolls off the terminal.
+
+    `reason` already carries the contract note, so both halves are asserted: a
+    reader of `.canopus/history.jsonl` learns what the contract measured AND why
+    a green one was accepted.
+    """
+    _write_contract(tree, red=False)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+
+    entry = _ledger(tree)[-1]
+    assert entry["event"] == "freeze"
+    assert "2 of 2 already green" in entry["reason"]
+    assert "the slice implemented it" in entry["reason"]
+
+
+def test_contract_satisfied_cannot_be_passed_without_a_reason(tree, anchor, capsys):
+    """The reason is the VALUE, so argparse refuses a bare flag for us.
+
+    Pinned because the alternative shape, `--contract-satisfied` as a store_true
+    beside an optional `--reason`, is the one that ships a waiver nobody has to
+    explain.
+    """
+    _write_contract(tree, red=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+              "--contract", "tests/contract/slice", "--contract-satisfied"], tree)
+
+    assert excinfo.value.code != 0
+    assert "expected one argument" in capsys.readouterr().err
+
+
+def test_status_prints_the_contract_baseline(tree, anchor, capsys):
+    """`status` is where an operator confirms a retake restored the baseline.
+
+    It reported every other manifest axis and dropped this one, so a freeze
+    taken positionally (`baseline: {}`) and one taken with `--contract` printed
+    byte-identical status. The renderer is shared with `pack` rather than
+    copied, because two copies of it is how the two commands come to disagree
+    about the same manifest.
+    """
+    _write_contract(tree)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+    capsys.readouterr()
+    assert _run(["status"], tree) == 0
+
+    out = capsys.readouterr().out
+    assert "contract" in out
+    assert "of 2" in out
+    assert "tests/contract/slice/test_contract.py" in out
+
+
+def test_status_prints_no_contract_section_without_a_baseline(tree, anchor, capsys):
+    """Silence is the honest reading for a freeze taken without `--contract`.
+
+    There is no per-file item count behind such a freeze, so a row here would
+    be invented rather than measured.
+    """
+    assert _freeze(tree, anchor) == 0
+    capsys.readouterr()
+    assert _run(["status"], tree) == 0
+
+    assert "\ncontract\n" not in capsys.readouterr().out

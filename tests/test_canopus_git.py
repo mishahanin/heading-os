@@ -438,6 +438,51 @@ def test_an_empty_toplevel_never_walks_the_ambient_repository(tmp_path, monkeypa
     assert ("rev-list", "--max-parents=0", "HEAD") not in seen
 
 
+def test_an_empty_toplevel_never_reads_the_ambient_repository(tmp_path, monkeypatch):
+    """The sibling of the guard above, which wire 2.2 gave only to repo_identity.
+
+    Same mechanism, different function: an empty `--show-toplevel` on exit 0
+    makes `Path("")` into `Path(".")`, so `git show HEAD:<rel>` would run against
+    whatever repository the PROCESS sits in and hand back a hash labelled
+    COMMITTED. The call site is live rather than theoretical: `cmd_approve` calls
+    `read_committed_anchor` directly, so `resolve_anchor`'s binding check never
+    runs in front of it.
+
+    Only `--show-toplevel` is stubbed, for the reason its sibling gives: a test
+    that can only run on a git that misbehaves is a test that never runs. Every
+    other command runs for real, and that is what makes this bite rather than
+    merely execute the branch. The process sits INSIDE a repository holding a
+    committed artifact, so without the guard `git show HEAD:gate.md` succeeds
+    against it and the function returns a hash labelled COMMITTED that no
+    caller asked for. Measured: it returned (COMMITTED, "bbbb...") before the
+    guard, and an earlier draft of this test placed the artifact outside the
+    ambient repository, where `relative_to` refused first and the test passed
+    on the unfixed code.
+    """
+    import scripts.utils.canopus_git as canopus_git
+    from scripts.utils.canopus_git import NO_REPO
+
+    root = _repo(tmp_path)
+    artifact = root / "gate.md"
+    artifact.write_text(f"canopus-anchor: {'b' * 64}\n", encoding="utf-8")
+    _commit(root, "approve")
+    monkeypatch.chdir(root)
+
+    real_git_output = canopus_git.git_output
+    seen = []
+
+    def fake_git_output(directory, *arguments):
+        seen.append(arguments)
+        if arguments[:2] == ("rev-parse", "--show-toplevel"):
+            return "\n"
+        return real_git_output(directory, *arguments)
+
+    monkeypatch.setattr(canopus_git, "git_output", fake_git_output)
+
+    assert canopus_git.read_committed_anchor(artifact) == (NO_REPO, None)
+    assert not any(arguments[:1] == ("show",) for arguments in seen)
+
+
 def test_head_sha_answers_rather_than_raising_outside_a_repository(tmp_path):
     from scripts.utils.canopus_git import head_sha
 

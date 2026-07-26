@@ -168,6 +168,26 @@ def _unlogged_release(failed: str) -> int:
     return 1
 
 
+def _satisfied_reason(args) -> str:
+    """The `--contract-satisfied` reason, whitespace-collapsed, or "".
+
+    Collapsed for the same reason `cmd_approve` collapses its approval reason:
+    the value reaches a single-line ledger record, and a newline inside it would
+    start a line the writer did not write.
+    """
+    return " ".join((getattr(args, "contract_satisfied", "") or "").split())
+
+
+def _ledger_reason(*parts: str) -> str:
+    """Join the reasons one ledger entry carries, dropping the empty ones.
+
+    This ledger's `reason` is already a free-form "why this entry looks like
+    this" string rather than a typed cause, so a retake carries both halves:
+    what the contract measured, and why a green contract was accepted.
+    """
+    return "; ".join(part for part in parts if part)
+
+
 def _print_root(digest: str, manifest: dict) -> None:
     count = len(manifest["files"])
     noun = "file" if count == 1 else "files"
@@ -257,6 +277,31 @@ def _print_approval(resolution: AnchorResolution) -> None:
     print(f"{colour}{BOLD}{resolution.approval}{RESET}{detail}")
 
 
+def _print_contract(manifest: dict, record: dict) -> None:
+    """The freeze-time baseline against what the last run actually collected.
+
+    Silent when the manifest carries no baseline, which is every freeze taken
+    without `--contract`. That silence is the reading an operator needs: a
+    contract frozen positionally has no per-file item count behind it, so the
+    attestation's subset check has nothing to compare against and this section
+    would be inventing a row it cannot fill.
+
+    Shared by `pack` and `status` rather than written twice. `status` is the
+    command an operator types after a retake to confirm the baseline came back,
+    and it printed every other manifest axis while silently dropping this one.
+    """
+    baseline = manifest.get("baseline") or {}
+    if not baseline:
+        return
+    print(f"\n{BOLD}contract{RESET}")
+    counts = (record or {}).get("frozen_tests") or {}
+    for rel, expected in sorted(baseline.items()):
+        entry = counts.get(rel) if isinstance(counts, dict) else None
+        got = entry.get("collected", 0) if isinstance(entry, dict) else 0
+        mark = GREEN if got == expected else YELLOW
+        print(f"  {mark}{got} of {expected}{RESET}  {rel}")
+
+
 def _candidate_manifest(args, root: Path, anchor_path: Path):
     """(manifest, contract_note) for approve and freeze, or (None, "") on refusal.
 
@@ -291,7 +336,20 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
         xml_text = run_pytest_report(contracts, root)
         counts, outcomes = parse_junit(xml_text)
         modules = missing_modules(xml_text)
-        reasons = refusal_reasons(counts, outcomes, expected)
+        satisfied = _satisfied_reason(args)
+        red = any(outcome in RED_OUTCOMES for _rel, _name, outcome in outcomes)
+        if satisfied and red:
+            # Said out loud rather than passed over in silence. The waiver is a
+            # no-op here, because the redness condition it suppresses never
+            # fires on a red contract; an operator who is never told that learns
+            # to paste the flag into every command, and the one run where it
+            # DOES change the answer looks identical to the ones where it did
+            # not.
+            print(f"{YELLOW}contract{RESET}  --contract-satisfied changed "
+                  f"nothing: this contract is RED, so the redness it waives was "
+                  f"never in question")
+        reasons = refusal_reasons(counts, outcomes, expected,
+                                  green_ok=bool(satisfied))
         # The null stub is a WHOLE second pytest session, and it can only ever
         # add to a refusal this contract has already earned. Running it anyway
         # made a contract that collected nothing pay for a run whose answer was
@@ -311,6 +369,12 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
         unmeasured = vacuity_unmeasured(outcomes, modules)
         if unmeasured:
             print(f"{YELLOW}vacuity{RESET}  {unmeasured}")
+        if satisfied and not red:
+            # The waiver actually fired here, so the reason is on the surface as
+            # well as in the ledger. A refusal that was overridden silently is
+            # the same defect as a refusal that never fired.
+            print(f"{YELLOW}contract{RESET}  the contract is wholly GREEN and was "
+                  f"accepted by --contract-satisfied: {satisfied}")
         baseline = {rel: counts[rel] for rel in expected}
         already_green = sum(
             1 for _rel, _name, outcome in outcomes if outcome == "passed"
@@ -396,6 +460,7 @@ def cmd_approve(args) -> int:
     manifest, contract_note = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
         return 1
+    satisfied = _satisfied_reason(args)
     # The artifact write comes before the ledger, and the order is the same one
     # cmd_freeze reasons about: an OSError on THIS line leaves no approval
     # anywhere, while the reverse would leave a ledger claiming an approval the
@@ -428,7 +493,8 @@ def cmd_approve(args) -> int:
     logged = ""
     try:
         append_history(root, "approve", digest=manifest["root"],
-                       label=args.label, reason=args.reason or "")
+                       label=args.label,
+                       reason=_ledger_reason(args.reason or "", satisfied))
         logged = "approve"
         if already:
             append_history(root, "anchor_replaced", digest=manifest["root"],
@@ -515,7 +581,8 @@ def cmd_freeze(args) -> int:
     # which lives in the module the PreToolUse dispatcher loads on every write.
     failed = _record(root, "freeze", digest=manifest["root"],
                      label=manifest["label"],
-                     reason=contract_note or committed_status)
+                     reason=_ledger_reason(contract_note or committed_status,
+                                           _satisfied_reason(args)))
     if failed:
         # The freeze IS active by the time this can fire, so reporting a plain
         # failure is false of the state twice over. It tells the operator to
@@ -653,15 +720,7 @@ def cmd_pack(args) -> int:
     _print_attestation(root, report["recomputed_root"])
     _print_approval(resolution)
 
-    baseline = manifest.get("baseline") or {}
-    if baseline:
-        print(f"\n{BOLD}contract{RESET}")
-        counts = (record or {}).get("frozen_tests") or {}
-        for rel, expected in sorted(baseline.items()):
-            entry = counts.get(rel) if isinstance(counts, dict) else None
-            got = entry.get("collected", 0) if isinstance(entry, dict) else 0
-            mark = GREEN if got == expected else YELLOW
-            print(f"  {mark}{got} of {expected}{RESET}  {rel}")
+    _print_contract(manifest, record)
 
     base = args.base or merge_base(root, "main") or "HEAD"
     commits = git_commits(root, base)
@@ -838,6 +897,7 @@ def cmd_status(args) -> int:
         # under tests/ is watched, which is the opposite of true.
         watching = " ".join(entry["names"])
         print(f"  dir   {rel or '.'}/  ({entry['mode']}, watching {watching})")
+    _print_contract(manifest, read_attestation(root))
     return 0
 
 
@@ -863,6 +923,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="freeze this contract directory recursively, record a "
                              "per-file collected-item baseline, and refuse the "
                              "freeze unless the contract is red")
+    freeze.add_argument("--contract-satisfied", default="", metavar="REASON",
+                        dest="contract_satisfied",
+                        help="accept a contract that is wholly green, for the "
+                             "stated REASON. Waives ONLY the redness refusal; a "
+                             "file that collected nothing and a vacuous contract "
+                             "are still refused. Use on a RETAKE whose contract "
+                             "the slice has already implemented.")
     freeze.add_argument("--label", required=True, help="short name for this build")
     # Required, because an anchorless freeze can only ever report LOCK
     # UNCONFIRMED. It still catches a later edit, but it is the one route to a
@@ -886,6 +953,12 @@ def build_parser() -> argparse.ArgumentParser:
                          help="freeze this file's bytes only")
     approve.add_argument("--contract", action="append", default=[],
                          help="a contract directory: recursive, with a baseline")
+    approve.add_argument("--contract-satisfied", default="", metavar="REASON",
+                         dest="contract_satisfied",
+                         help="accept a contract that is wholly green, for the "
+                              "stated REASON. Waives ONLY the redness refusal; "
+                              "a file that collected nothing and a vacuous "
+                              "contract are still refused.")
     approve.add_argument("--replace", action="store_true",
                          help="append a new approval over a recorded one")
     approve.add_argument("--reason", default="",

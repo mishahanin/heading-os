@@ -1,5 +1,7 @@
 """Tests for the Canopus CLI (wire 1)."""
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -750,3 +752,186 @@ def test_freeze_contract_reports_how_much_is_already_green(tree, anchor, capsys)
                in (tree / ".canopus" / "history.jsonl").read_text().splitlines()]
     frozen = [e for e in entries if e["event"] == "freeze"]
     assert frozen and "1 of 2 already green" in frozen[-1]["reason"]
+
+
+# ============================================================
+# `approve`: the candidate hash a human commits
+# ============================================================
+
+def _git(repo: Path, *argv: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *argv], check=True,
+                   capture_output=True, text=True)
+
+
+def _init_gate_repo(anchor: Path) -> Path:
+    """Turn the anchor's directory into a repository with a synthetic identity.
+
+    The identity is invented: this file ships in a public repository and carries
+    no real person or host.
+    """
+    gate = anchor.parent
+    for argv in (["init", "-q", "-b", "main"],
+                 ["config", "user.email", "builder@example.invalid"],
+                 ["config", "user.name", "Builder"]):
+        _git(gate, *argv)
+    return gate
+
+
+def _ledger(tree: Path) -> list:
+    return [json.loads(line) for line
+            in (tree / ".canopus" / "history.jsonl").read_text().splitlines()]
+
+
+def _recorded(anchor: Path) -> str:
+    """The last hash the artifact records, read whole and never by prefix."""
+    return anchor.read_text().strip().rsplit(" ", 1)[-1]
+
+
+def test_approve_writes_the_candidate_hash_and_no_freeze_state(tree: Path, anchor: Path):
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "tests/test_alpha.py"], tree) == 0
+
+    assert "canopus-anchor:" in anchor.read_text()
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_the_approved_hash_is_the_hash_freeze_then_computes(tree: Path, anchor: Path):
+    """If these two ever disagree, every freeze is refused and the tool is dead.
+
+    The working copy is scrubbed between the two calls, and the scrub is NOT part
+    of the invariant: it only steps around the refusal `cmd_freeze` still carries
+    on a recorded working line, which moves to the committed copy in the next
+    slice. The anchor PATH is inside the root hash and its CONTENTS are not, so
+    scrubbing cannot change the digest either side computes.
+    """
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "tests/test_alpha.py"], tree) == 0
+    approved = _recorded(anchor)
+    assert len(approved) == 64, "a truncated digest is not an approval"
+
+    anchor.write_text("# gate artifact\n")
+
+    assert _run(["freeze", "--label", "l", "--anchor", str(anchor),
+                 "tests/test_alpha.py"], tree) == 0
+    assert _root_of(tree) == approved
+
+
+def test_approve_refuses_an_artifact_that_already_records_a_hash(tree: Path, anchor: Path,
+                                                                capsys):
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "tests/test_alpha.py"], tree) == 0
+    first = _recorded(anchor)
+    capsys.readouterr()
+
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "tests/test_alpha.py"], tree) == 1
+    assert first in capsys.readouterr().err
+    assert anchor.read_text().count("canopus-anchor:") == 1
+
+
+def test_approve_replace_requires_a_reason(tree: Path, anchor: Path, capsys):
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "tests/test_alpha.py"], tree) == 0
+
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "--replace", "tests/test_alpha.py"], tree) == 1
+    assert "--reason" in capsys.readouterr().err
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "--replace", "--reason", "the set changed",
+                 "tests/test_alpha.py"], tree) == 0
+
+
+def test_approve_replace_appends_and_keeps_the_earlier_approval(tree: Path, anchor: Path):
+    """A replacement appends. Overwriting would erase the trail the artifact is
+    for, and leave `read_committed_anchor`'s last-line-wins rule nothing to be
+    last among."""
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+    first = _recorded(anchor)
+
+    (tree / "tests" / "test_beta.py").write_text("def test_b():\n    assert True\n")
+    assert _run(["approve", "tests/test_alpha.py", "tests/test_beta.py",
+                 "--label", "l", "--anchor", str(anchor),
+                 "--replace", "--reason", "widened the approved set"], tree) == 0
+
+    text = anchor.read_text()
+    second = _recorded(anchor)
+    assert second != first
+    assert f"canopus-anchor: {first}" in text
+    assert f"canopus-anchor: {second}" in text
+
+    assert [entry["event"] for entry in _ledger(tree)] == [
+        "approve", "approve", "anchor_replaced"
+    ]
+    replaced = _ledger(tree)[-1]
+    assert replaced["reason"] == "widened the approved set"
+    assert replaced["root"] == second
+
+
+def test_approve_refuses_a_line_it_wrote_that_nobody_committed(tree: Path, anchor: Path,
+                                                              capsys):
+    """The union of both readers, in the direction the committed half alone misses.
+
+    Inside a repository, the line this command wrote a minute ago is absent from
+    HEAD, so `read_committed_anchor` answers UNCOMMITTED. A guard built on the
+    committed copy alone would let a second approve over a different set append
+    silently, with no --replace and no reason anywhere on the record.
+    """
+    _init_gate_repo(anchor)
+    _git(anchor.parent, "add", "-A")
+    _git(anchor.parent, "commit", "-q", "-m", "a gate with no approval in it")
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+    capsys.readouterr()
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 1
+    assert "already records" in capsys.readouterr().err
+
+
+def test_the_approved_hash_matches_over_a_contract_baseline_too(tree: Path, anchor: Path,
+                                                                capsys):
+    """The baseline is inside the root hash, so it is where two constructions of
+    the candidate would drift apart without one shared builder."""
+    _write_contract(tree)   # one failing, one passing
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+    assert "1 of 2 already green before this approval" in capsys.readouterr().out
+    approved = _recorded(anchor)
+
+    anchor.write_text("# gate artifact\n")   # see the note two tests above
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+    assert _root_of(tree) == approved
+    manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
+    assert manifest["baseline"] == {"tests/contract/slice/test_contract.py": 2}
+
+
+def test_approve_requires_at_least_one_path(tree: Path, anchor: Path, capsys):
+    """The same refusal `freeze` gives, because the check now lives in the builder
+    they share and a sibling that lost it would approve an empty set."""
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor)], tree) == 1
+    assert "at least one path" in capsys.readouterr().err
+    assert "canopus-anchor:" not in anchor.read_text()
+
+
+def test_approve_fails_closed_when_the_anchor_cannot_be_written(tree: Path, anchor: Path,
+                                                                capsys):
+    """No traceback, and no ledger line claiming an approval that never landed.
+
+    The artifact write comes BEFORE append_history deliberately: a ledger that
+    records an approval the artifact never received is worse than no ledger.
+    """
+    os.chmod(anchor, 0o444)
+    try:
+        assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                     "--anchor", str(anchor)], tree) == 1
+    finally:
+        os.chmod(anchor, 0o644)
+
+    assert "Traceback" not in capsys.readouterr().err
+    assert "canopus-anchor:" not in anchor.read_text()
+    assert not (tree / ".canopus" / "history.jsonl").exists()

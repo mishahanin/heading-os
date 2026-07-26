@@ -581,6 +581,32 @@ def test_pack_reports_all_three_axes_and_the_uncovered_list(tree, anchor, capsys
     assert "staleness" in out
 
 
+def test_pack_never_raises_on_damaged_state(tree, anchor, capsys):
+    """The pack is read at the one moment the operator decides to keep the work.
+    A traceback there is worse than a missing section.
+
+    Ported from the wire 2 contract when that contract was retired. The suite
+    already pinned `verify` and `status` over a damaged attestation, and pack was
+    assumed to inherit the same tolerance from the shared reader. It does not
+    inherit anything a test checks: a pack that read the attestation file
+    directly instead of through `read_attestation` passed every other test here.
+    """
+    from scripts.utils import canopus_freeze as cf
+
+    assert _freeze(tree, anchor) == 0
+    cf.attest_state_path(tree).write_text("{ not json", encoding="utf-8")
+    capsys.readouterr()
+
+    assert _run(["pack"], tree) == 0
+
+    # Degraded to a missing record rather than a crash: damage reads as absence,
+    # so the axis still prints and the sections below it still render.
+    out = capsys.readouterr().out
+    assert "NOT ATTESTED" in out
+    assert "continuity" in out
+    assert "staleness" in out
+
+
 # ============================================================
 # The third indicator axis: approval
 # ============================================================

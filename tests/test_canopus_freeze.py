@@ -1110,6 +1110,32 @@ def test_the_documented_enforcer_set_covers_its_import_closure():
     )
 
 
+def test_the_pre_impl_skill_writes_real_contract_files_and_freezes_them():
+    """The gap wire 2 closed, ported here when the wire 2 contract was retired.
+
+    Before wire 2 the /pre-impl skill DESCRIBED the contract in prose and
+    labelled the description a draft, so what the operator approved at the gate
+    was an account of tests rather than the tests themselves. A description
+    cannot be frozen, and an approval over one is an approval of nothing.
+
+    The skill therefore has to name the directory the tests are WRITTEN to and
+    the command that freezes them. The dated per-slice directory is asserted
+    rather than the bare prefix: `tests/contract/` alone survives a skill that
+    merely mentions the path in passing, which is the state this test exists to
+    refuse.
+    """
+    from scripts.utils.workspace import get_workspace_root
+
+    skill = get_workspace_root() / ".claude" / "skills" / "pre-impl" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert "tests/contract/{YYYY-MM-DD}-{slug}/" in text
+    assert "scripts/canopus.py freeze" in text
+    # The label the prose draft carried. Its return would mean the gate is being
+    # asked to approve an unapproved description again.
+    assert "CEO-UNAPPROVED DRAFT" not in text
+
+
 def test_approval_is_verified_only_by_a_matching_committed_hash():
     from scripts.utils.canopus_freeze import APPROVED, approval_state
 

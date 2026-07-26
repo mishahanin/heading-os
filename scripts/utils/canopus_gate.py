@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.utils.canopus_freeze import (
+    ANCHOR_MISSING,
+    ANCHOR_RECORDED,
     ANCHOR_UNBOUND,
     APPROVED,
     LOCK_HELD,
@@ -36,8 +38,51 @@ from scripts.utils.canopus_freeze import (
     verify_manifest,
     write_attestation,
 )
-from scripts.utils.canopus_git import resolve_anchor
+from scripts.utils.canopus_git import AnchorResolution, resolve_anchor
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW
+
+
+def loss_of_lock_sentences(report: dict, resolution: AnchorResolution) -> list[str]:
+    """One sentence per CAUSE of LOSS OF LOCK, said together when several hold.
+
+    `lock_state` reaches this state from FOUR independent causes, and three of
+    them arrive with `report["held"]` TRUE: the contract has not moved, so a
+    blanket "the frozen contract moved" is simply false, and it sends the
+    operator to `verify` for a per-file report that lists nothing.
+
+    Fixed as a SHAPE rather than as the instance that was reported. This is the
+    tenth time on this project that a guard was repaired for the case in front of
+    its author and left open for its siblings, so every cause gets its own
+    sentence here and the enumeration is the thing a reader checks against
+    `lock_state`.
+
+    Pure string work, and it never raises: the gate that calls it fails OPEN if
+    it does. The closing fallback covers a `lock_state` that reddens for a cause
+    this function does not know, which is exactly the drift the enumeration is
+    otherwise vulnerable to.
+    """
+    sentences: list[str] = []
+    if not report["held"]:
+        sentences.append("The frozen contract moved; run "
+                         "`python scripts/canopus.py verify` for the per-file "
+                         "report.")
+    if resolution.status == ANCHOR_UNBOUND:
+        sentences.append(resolution.approval_reason
+                         or "the anchor is not in the repository this freeze "
+                            "recorded, so the approval cannot be attributed")
+    if resolution.status == ANCHOR_MISSING:
+        sentences.append(f"The anchor artifact {resolution.anchor} is gone, so "
+                         f"the approved hash cannot be read from it.")
+    if (resolution.status == ANCHOR_RECORDED
+            and resolution.value != report["recomputed_root"]):
+        sentences.append(f"The anchor records {resolution.value} and this tree "
+                         f"computes {report['recomputed_root']}, so this freeze "
+                         f"is not the one that was approved.")
+    if not sentences:
+        sentences.append(f"The lock is red with anchor status "
+                         f"{resolution.status!r}, which this gate cannot name; "
+                         f"run `python scripts/canopus.py verify`.")
+    return sentences
 
 
 def freeze_gate(root: Path) -> int:
@@ -77,26 +122,12 @@ def freeze_gate(root: Path) -> int:
     state = lock_state(report, status, value)
 
     if state == LOSS_OF_LOCK:
-        if resolution.status == ANCHOR_UNBOUND and report["held"]:
-            # The per-file report is EMPTY on this branch, and `report["held"]`
-            # is what makes that claim true rather than nearly true. LOSS OF
-            # LOCK is reached by an unbound anchor AND by a moved contract,
-            # independently, and the two co-occur: edit a frozen file and hide
-            # the anchor's repository in the same run. Without the second
-            # condition this branch swallowed the movement, told the operator
-            # only about the binding, and the remedy it implies re-freezes a
-            # moved contract without the per-file diff ever being read.
-            print(f"{RED}canopus: {LOSS_OF_LOCK}. {resolution.approval_reason}"
-                  f"{RESET}")
-            return 1
-        # When both are wrong, say both. The binding sentence is appended rather
-        # than substituted, because an operator who fixes only the half they
-        # were told about is back here on the next run.
-        binding = (f" {resolution.approval_reason}"
-                   if resolution.status == ANCHOR_UNBOUND else "")
-        print(f"{RED}canopus: {LOSS_OF_LOCK}. The frozen contract moved; run "
-              f"`python scripts/canopus.py verify` for the per-file report."
-              f"{binding}{RESET}")
+        # Every cause, never the first one thought of. An operator who fixes
+        # only the half they were told about is back here on the next run, and
+        # an operator told the contract moved when it did not goes looking
+        # through a per-file report that lists nothing.
+        detail = " ".join(loss_of_lock_sentences(report, resolution))
+        print(f"{RED}canopus: {LOSS_OF_LOCK}. {detail}{RESET}")
         return 1
     colour = GREEN if state == LOCK_HELD else YELLOW
     print(f"{colour}canopus: {state}{RESET} (label: {manifest['label']})")

@@ -245,6 +245,82 @@ def test_a_moved_contract_and_a_hidden_repository_are_both_named(tree, anchor, c
     assert "the approval cannot be attributed" in out
 
 
+def test_a_deleted_anchor_does_not_claim_the_contract_moved(tree, anchor, capsys):
+    """The commonest red the anchor exists to produce, and the message was false.
+
+    Freeze against an anchor, commit it, then delete the artifact: `git show
+    HEAD:<rel>` still answers, so `report["held"]` is TRUE and nothing in the
+    contract has moved. The gate said "The frozen contract moved" anyway and sent
+    the operator to `verify`, which then reports every frozen file intact.
+    """
+    _git_init(anchor.parent)
+    _git_commit(anchor.parent, "the gate artifact, with no approval in it")
+    manifest = _bound_manifest(tree, anchor)
+    write_freeze(tree, manifest)
+    anchor.write_text(f"canopus-anchor: {manifest['root']}\n", encoding="utf-8")
+    _git_commit(anchor.parent, "the approval")
+    anchor.unlink()
+
+    assert freeze_gate(tree) == 1
+    out = capsys.readouterr().out
+    assert "LOSS OF LOCK" in out
+    assert "is gone" in out
+    assert "The frozen contract moved" not in out
+    assert "for the per-file report" not in out
+
+
+def test_a_disagreeing_anchor_does_not_claim_the_contract_moved(tree, anchor, capsys):
+    """The second cause that arrives with the contract intact: a hash mismatch.
+
+    A legitimate contract edit re-frozen without a new approval lands here, and
+    the committed anchor still records the previous root. Nothing on the tree has
+    moved since the freeze, so naming movement is false and the remedy it implies
+    is the wrong one: what this needs is `approve --replace --reason`, not a diff.
+    """
+    _git_init(anchor.parent)
+    _git_commit(anchor.parent, "the gate artifact, with no approval in it")
+    manifest = _bound_manifest(tree, anchor)
+    write_freeze(tree, manifest)
+    # A full 64-character digest of another tree, never a truncation of this one:
+    # the comparison is whole-value, and a short expected value would be a
+    # comparison a builder with a shell could satisfy by hand.
+    stale = "b" * 64
+    anchor.write_text(f"canopus-anchor: {stale}\n", encoding="utf-8")
+    _git_commit(anchor.parent, "an approval of a different freeze")
+
+    assert freeze_gate(tree) == 1
+    out = capsys.readouterr().out
+    assert "LOSS OF LOCK" in out
+    assert stale in out
+    assert manifest["root"] in out
+    assert "The frozen contract moved" not in out
+
+
+def test_a_moved_contract_and_a_deleted_anchor_are_both_named(tree, anchor, capsys):
+    """Two true causes, two sentences. Either alone leaves half the work undone.
+
+    The pair the previous shape could not produce: it printed the movement
+    sentence and nothing about the anchor, so an operator who re-froze the moved
+    contract met the same red again with no idea why.
+    """
+    _git_init(anchor.parent)
+    _git_commit(anchor.parent, "the gate artifact, with no approval in it")
+    manifest = _bound_manifest(tree, anchor)
+    write_freeze(tree, manifest)
+    anchor.write_text(f"canopus-anchor: {manifest['root']}\n", encoding="utf-8")
+    _git_commit(anchor.parent, "the approval")
+
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+    anchor.unlink()
+
+    assert freeze_gate(tree) == 1
+    out = capsys.readouterr().out
+    assert "LOSS OF LOCK" in out
+    assert "The frozen contract moved" in out
+    assert "for the per-file report" in out
+    assert "is gone" in out
+
+
 def test_a_substituted_repository_reddens_the_gate(tree, anchor, capsys):
     """Identity, not presence, at the surface that fires.
 

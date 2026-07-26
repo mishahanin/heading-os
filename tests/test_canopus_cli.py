@@ -2032,6 +2032,131 @@ def test_contract_satisfied_cannot_be_passed_without_a_reason(tree, anchor, caps
     assert "expected one argument" in capsys.readouterr().err
 
 
+def test_contract_satisfied_rides_onto_the_anchor_artifact(tree, anchor):
+    """The waiver needs a DURABLE record, and the ledger is not one.
+
+    `.canopus/history.jsonl` is gitignored and `rm -rf .canopus` removes it, so a
+    waiver recorded only there is a courtesy rather than a guarantee. It goes
+    onto the artifact a human commits, beside the approval it belongs to.
+
+    The second assertion is the one that keeps the first safe: the waiver sits on
+    its own line under its own prefix, so `read_anchor` still reads a whole
+    64-character digest off the anchor line and nothing of the prose above it.
+    """
+    from scripts.utils.canopus_freeze import SATISFIED_PREFIX, read_anchor_waiver
+
+    _write_contract(tree, red=False)
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+
+    text = anchor.read_text()
+    assert f"{SATISFIED_PREFIX} the slice implemented it" in text
+    assert len(_recorded(anchor)) == 64
+    assert read_anchor_waiver(anchor, _recorded(anchor)) == "the slice implemented it"
+
+
+def test_pack_renders_the_waiver_marker(tree, anchor, capsys):
+    """Say it where the operator reads the evidence, not only where it was typed.
+
+    `pack` is the page the second human decision is taken on. A freeze that
+    passed the redness rule on a stated reason rather than on its own redness is
+    a weaker claim than one that earned it, and a page that omits the difference
+    is reporting the stronger claim.
+    """
+    _write_contract(tree, red=False)
+    satisfied = ["--contract-satisfied", "the slice implemented it"]
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice", *satisfied], tree) == 0
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice", *satisfied], tree) == 0
+    capsys.readouterr()
+
+    assert _run(["pack"], tree) == 0
+    out = capsys.readouterr().out
+    assert "CONTRACT WAIVED" in out
+    assert "the slice implemented it" in out
+
+
+def test_pack_binds_the_waiver_marker_to_this_freezes_root(tree, anchor, capsys):
+    """A waiver two retakes old must not be reported against today's freeze.
+
+    So the marker is read by HASH rather than as "the last waiver in the file".
+    Here the artifact carries a waiver beside a digest this freeze never took,
+    which is what an anchor looks like after one waived retake and one honest
+    one.
+    """
+    from scripts.utils.canopus_freeze import SATISFIED_PREFIX
+
+    assert _freeze(tree, anchor) == 0
+    with anchor.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n{SATISFIED_PREFIX} a waiver for another freeze\n"
+                     f"canopus-anchor: {'c' * 64}\n")
+    capsys.readouterr()
+
+    assert _run(["pack"], tree) == 0
+    out = capsys.readouterr().out
+    assert "CONTRACT WAIVED" not in out
+    assert "a waiver for another freeze" not in out
+
+
+def test_contract_satisfied_skips_the_null_stub_session(tree, anchor, monkeypatch):
+    """A pytest session whose answer cannot matter is not run.
+
+    `vacuity_refusal` weighs RED tests only, so on the wholly green contract this
+    flag exists for its `cases` set is empty and it returns [] by construction.
+    The stub run was still spent, in full, to be discarded a line later.
+
+    The red control is half the test: asserting only the absence of a call would
+    pass just as well if the stub were skipped everywhere, which would silently
+    retire the vacuity proof.
+    """
+    calls: list[tuple] = []
+
+    def _spy(paths, root, modules, **kwargs):
+        calls.append((tuple(paths), root))
+        return set()
+
+    monkeypatch.setattr(canopus, "run_null_stub", _spy)
+
+    _write_contract(tree, red=False)
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+    assert calls == []
+
+    assert _run(["release", "--reason", "next case"], tree) == 0
+    _write_contract(tree)   # test_a asserts False, test_b passes
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+    assert len(calls) == 1
+
+
+def test_contract_satisfied_with_a_blank_reason_says_it_took_no_waiver(
+    tree, anchor, capsys
+):
+    """Fail-closed is right; failing closed in silence is not.
+
+    A reason of pure whitespace collapses to "", so no waiver is taken and the
+    green contract is refused. Told only "no contract test failed", an operator
+    who passed the flag concludes the flag is broken rather than that the reason
+    was blank.
+    """
+    _write_contract(tree, red=False)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "   "], tree) == 1
+
+    captured = capsys.readouterr()
+    assert "blank reason" in captured.out
+    assert "NO waiver was taken" in captured.out
+    assert "no contract test failed" in captured.err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
 def test_status_prints_the_contract_baseline(tree, anchor, capsys):
     """`status` is where an operator confirms a retake restored the baseline.
 

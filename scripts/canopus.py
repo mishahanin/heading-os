@@ -78,6 +78,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     LOSS_OF_LOCK,
     NOT_ATTESTED,
     REPO_PRESENT,
+    SATISFIED_PREFIX,
     FreezeCorrupt,
     FreezeError,
     append_history,
@@ -86,6 +87,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     clear_freeze,
     lock_state,
     read_anchor,
+    read_anchor_waiver,
     read_attestation,
     read_freeze,
     validate_anchor_path,
@@ -338,6 +340,16 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
         modules = missing_modules(xml_text)
         satisfied = _satisfied_reason(args)
         red = any(outcome in RED_OUTCOMES for _rel, _name, outcome in outcomes)
+        if getattr(args, "contract_satisfied", "") and not satisfied:
+            # A reason of pure whitespace collapses to "", no waiver is taken,
+            # and the refusal below then says only "no contract test failed".
+            # Fail-closed is the right direction and silence about WHY is not:
+            # an operator who passed the flag and reads a refusal that never
+            # mentions it concludes the flag does not work.
+            print(f"{YELLOW}contract{RESET}  --contract-satisfied was passed "
+                  f"with a blank reason, so NO waiver was taken. The reason is "
+                  f"the flag's value, and a waiver with nothing behind it is "
+                  f"not a waiver.")
         if satisfied and red:
             # Said out loud rather than passed over in silence. The waiver is a
             # no-op here, because the redness condition it suppresses never
@@ -350,11 +362,15 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
                   f"never in question")
         reasons = refusal_reasons(counts, outcomes, expected,
                                   green_ok=bool(satisfied))
-        # The null stub is a WHOLE second pytest session, and it can only ever
-        # add to a refusal this contract has already earned. Running it anyway
-        # made a contract that collected nothing pay for a run whose answer was
-        # discarded a line later.
-        if not reasons:
+        # The null stub is a WHOLE second pytest session, and it is skipped
+        # whenever its answer cannot change this one. Two states qualify, and
+        # the second is the state `--contract-satisfied` exists for. With a
+        # refusal already earned, a vacuity verdict can only add to it. With no
+        # RED test in the set, `vacuity_refusal` weighs an empty `cases` and
+        # returns [] by construction, so the session is spent to be discarded a
+        # line later. `probe` still runs it unconditionally: there the verdict
+        # is the output rather than an input to a refusal.
+        if not reasons and red:
             reasons.extend(
                 vacuity_refusal(outcomes, run_null_stub(contracts, root, modules))
             )
@@ -483,13 +499,23 @@ def cmd_approve(args) -> int:
     # appended there would be parsed as part of the digest. The reason's own
     # whitespace is collapsed for the same reason in reverse: a newline inside it
     # would start a line this file did not write.
+    #
+    # The `--contract-satisfied` reason rides in on the same mechanism, and for
+    # the same reason: a waiver of the redness rule is precisely the kind of act
+    # that must survive in the record a human commits. The ledger alone put it
+    # in `.canopus/`, which is gitignored and which `rm -rf .canopus` removes,
+    # so the claim "this retake was accepted for a stated reason" had no durable
+    # artifact behind it. Its own line and its own prefix, never the anchor
+    # line, and `canopus pack` reads it back beside the freeze it belongs to.
     reason_line = " ".join((args.reason or "").split())
+    lines = [""]
+    if reason_line:
+        lines.append(f"{REASON_PREFIX} {reason_line}")
+    if satisfied:
+        lines.append(f"{SATISFIED_PREFIX} {satisfied}")
+    lines.append(f"{ANCHOR_PREFIX} {manifest['root']}")
     with anchor_path.open("a", encoding="utf-8") as handle:
-        if reason_line:
-            handle.write(f"\n{REASON_PREFIX} {reason_line}\n"
-                         f"{ANCHOR_PREFIX} {manifest['root']}\n")
-        else:
-            handle.write(f"\n{ANCHOR_PREFIX} {manifest['root']}\n")
+        handle.write("\n".join(lines) + "\n")
     logged = ""
     try:
         append_history(root, "approve", digest=manifest["root"],
@@ -721,6 +747,20 @@ def cmd_pack(args) -> int:
     _print_approval(resolution)
 
     _print_contract(manifest, record)
+
+    # The waiver, said out loud on the page the operator approves from. A freeze
+    # whose contract was wholly green passed the redness rule on a stated reason
+    # rather than on the contract's own redness, and an evidence page that omits
+    # that is reporting a stronger claim than the freeze earned. Read from the
+    # ANCHOR artifact, bound to this freeze's root, so it is the committed record
+    # speaking rather than the gitignored ledger. A freeze taken with the flag
+    # whose `approve` did not carry it therefore renders nothing here: the
+    # artifact is the record, and there is nothing on it.
+    waiver = read_anchor_waiver(Path(anchor), manifest["root"]) if anchor else ""
+    if waiver:
+        print(f"\n{YELLOW}{BOLD}CONTRACT WAIVED{RESET}  the approved freeze was "
+              f"accepted with a wholly green contract, under "
+              f"--contract-satisfied: {waiver}")
 
     base = args.base or merge_base(root, "main") or "HEAD"
     commits = git_commits(root, base)

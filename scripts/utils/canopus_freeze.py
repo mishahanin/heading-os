@@ -26,12 +26,13 @@ this catches is tampering by helpfulness: the model hits a red assertion,
 concludes in good faith that the assertion is wrong, and edits it. A verification
 that merely runs catches that completely.
 
-Recipe `canopus-freeze-v3`, named in every manifest so a future algorithm change
+Recipe `canopus-freeze-v4`, named in every manifest so a future algorithm change
 breaks loudly instead of silently:
 
     file digest = sha256(LF-normalized bytes)
     dir digest  = sha256("".join(f"{relpath}\\n" for relpath in sorted members))
-    root hash   = sha256(canonical JSON of {recipe, anchor, files, dirs, baseline})
+    root hash   = sha256(canonical JSON of
+                         {recipe, anchor, anchor_repo, files, dirs, baseline})
 
 where a directory's members are those whose BASENAME matches one of the entry's
 recorded `names` patterns.
@@ -60,7 +61,7 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 from scripts.utils.atomic import atomic_write_text
 
-RECIPE = "canopus-freeze-v3"
+RECIPE = "canopus-freeze-v4"
 FREEZE_DIRNAME = ".canopus"
 FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
@@ -75,6 +76,11 @@ ANCHOR_PREFIX = "canopus-anchor:"
 REPO_PRESENT = "in_repo"
 REPO_ABSENT = "no_repo"
 REPO_UNKNOWN = "no_git"
+
+# What a manifest records when the anchor was NOT inside a repository at freeze
+# time, and what an anchorless manifest carries. Never consulted in the second
+# case: resolve_anchor returns before the binding when there is no anchor.
+ANCHOR_REPO_UNBOUND = {"in_repo": False, "identity": ""}
 
 # Tool-generated caches that live INSIDE a source tree. A recursive freeze that
 # captured these would bind the lock to artifacts no version control tracks: the
@@ -218,10 +224,16 @@ def root_hash(manifest: dict) -> str:
     down to 1 with no indicator moving, and a per-file expected item count that
     can be silently lowered is worse than none: it reports rigour it is not
     delivering.
+
+    The binding is in here for the same reason the baseline is: outside the hash
+    a builder edits `anchor_repo` to `in_repo: false`, wins the working-copy
+    fallback permanently, and the committed approval still matches. Inside it,
+    the edit changes the root and the approval stops matching.
     """
     payload = {
         "recipe": manifest["recipe"],
         "anchor": manifest.get("anchor") or "",
+        "anchor_repo": dict(manifest.get("anchor_repo") or ANCHOR_REPO_UNBOUND),
         "files": dict(sorted(manifest["files"].items())),
         "dirs": dict(sorted(manifest["dirs"].items())),
         "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
@@ -361,6 +373,7 @@ def build_manifest(
     anchor: Optional[Path] = None,
     content_only: Iterable[Path] = (),
     baseline: Optional[dict] = None,
+    anchor_repo: Optional[dict] = None,
 ) -> dict:
     """Build a freeze manifest over *paths*, all relative to *root*.
 
@@ -436,6 +449,7 @@ def build_manifest(
         "label": label,
         "frozen_at": frozen_at,
         "anchor": str(validate_anchor_path(anchor, resolved_root)) if anchor else "",
+        "anchor_repo": dict(anchor_repo or ANCHOR_REPO_UNBOUND),
         "git_sha": "",
         "baseline": dict(sorted((baseline or {}).items())),
         "files": dict(sorted(files.items())),
@@ -490,10 +504,14 @@ def recompute(manifest: dict, root: Path) -> dict:
     return {
         "recipe": manifest["recipe"],
         "anchor": manifest.get("anchor") or "",
+        "anchor_repo": dict(manifest.get("anchor_repo") or ANCHOR_REPO_UNBOUND),
         "files": dict(sorted(files.items())),
         "dirs": dict(sorted(dirs.items())),
-        # Carried through verbatim: the baseline is a recorded expectation, not
-        # something disk can be re-measured for.
+        # Carried through verbatim, both of them: the baseline is a recorded
+        # expectation and the binding is a recorded measurement, and neither is
+        # something disk can be re-measured for. Any key root_hash reads and
+        # recompute omits makes the recomputed root differ from the stored one
+        # forever, which reads as LOSS OF LOCK over a tree where nothing moved.
         "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
     }
 
@@ -762,7 +780,7 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
     exactly those two and denies fail-closed; anything else falls through its
     outer catch-all, logs an advisory, and continues -- fail OPEN).
     """
-    for key in (*_STR_SCALAR_KEYS, "files", "dirs", "baseline"):
+    for key in (*_STR_SCALAR_KEYS, "files", "dirs", "baseline", "anchor_repo"):
         _require(key in manifest, f"freeze manifest at {path} is missing {key!r}")
 
     for key in _STR_SCALAR_KEYS:
@@ -878,6 +896,23 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
             f"freeze manifest at {path} has a non-integer 'baseline' value for "
             f"{rel!r} ({type(count).__name__}), expected an integer",
         )
+
+    binding = manifest["anchor_repo"]
+    _require(
+        isinstance(binding, dict),
+        f"freeze manifest at {path} has a non-dict 'anchor_repo' value "
+        f"({type(binding).__name__}), expected a dict",
+    )
+    _require(
+        "in_repo" in binding and isinstance(binding["in_repo"], bool),
+        f"freeze manifest at {path} has a missing or non-boolean "
+        f"anchor_repo['in_repo']",
+    )
+    _require(
+        "identity" in binding and isinstance(binding["identity"], str),
+        f"freeze manifest at {path} has a missing or non-string "
+        f"anchor_repo['identity']",
+    )
 
 
 def read_freeze(root: Path) -> Optional[dict]:

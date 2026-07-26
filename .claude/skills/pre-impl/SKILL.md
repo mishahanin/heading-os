@@ -186,8 +186,11 @@ Then show the operator what the contract looks like before any code exists:
     python scripts/canopus.py probe tests/contract/{YYYY-MM-DD}-{slug}/
 
 Paste the table into the gate output. Every test it reports as `passed` is
-already green with no implementation, so it asserts nothing yet. Name those
-explicitly and either strengthen them or justify them.
+already green with no implementation, so it asserts nothing yet. Every test it
+reports as `vacuous` is red only because the code is absent and passes the moment
+a mock stands in for it, so it asserts nothing either. Name both groups
+explicitly and either strengthen them or justify them; a contract whose every red
+test is vacuous is refused outright at approve and freeze time.
 
 Close with: "Implementation is DONE when the frozen contract is green and
 `canopus status` reports both LOCK HELD and ATTESTED, AND /scrutinize reports no
@@ -235,10 +238,10 @@ HANDOFF TO /implement:
 
 ### On approval: lock on Canopus
 
-The moment the operator approves, run the freeze. There is no separate command
+The moment the operator approves, run `approve`. There is no separate command
 to remember:
 
-    python scripts/canopus.py freeze \
+    python scripts/canopus.py approve \
       --label "{slug}" \
       --anchor {this gate artifact's absolute path in the data overlay} \
       --contract tests/contract/{YYYY-MM-DD}-{slug}/ \
@@ -251,6 +254,12 @@ to remember:
       --content scripts/run-tests.py \
       --content tests/conftest.py
 
+Read the table it prints, then COMMIT the gate artifact. That commit is Fix 1:
+it carries an author and a timestamp, and it is the only thing that makes the
+approval durable. Then re-run the identical command with `freeze` in place of
+`approve` (`python scripts/canopus.py freeze --label ... --contract ...`, same
+flags), which is what takes the lock.
+
 Eight files, not four. The last three are the enforcers' transitive import tail:
 `atomic.py` writes the manifest, `venv.py` re-execs the interpreter and so chooses
 which Python runs the gate, and `colors.py` is imported by both. Leaving them out
@@ -260,11 +269,21 @@ freeze is the same hole C4 closed for the write path. The set is pinned by
 `tests/test_canopus_freeze.py::test_the_documented_enforcer_set_covers_its_import_closure`,
 which recomputes the closure and fails when a new import escapes it.
 
-`freeze` refuses unless the contract is red, records the per-file item count, and
-writes the `canopus-anchor:` line into the gate artifact itself. Commit the data
-overlay so the approved hash is durable.
+`freeze` refuses unless the contract is red for a reason that means something,
+records the per-file item count, and refuses to take a root the gate artifact
+records nowhere. It writes nothing to that artifact: an instrument that writes
+the hash and then checks the hash it wrote has verified nothing. A freeze taken
+before the commit lands is permitted, says so, and reads amber until you commit.
 
-Then confirm: `python scripts/canopus.py verify` must print LOCK HELD.
+Then confirm: `python scripts/canopus.py verify` must print LOCK HELD and
+APPROVED.
+
+**When the slice ships, retire the contract.** A contract is a point in time. Its
+job ends at the Fix 2 evidence pack, so promote whatever coverage is still valid
+into the ordinary test suite and remove `tests/contract/{YYYY-MM-DD}-{slug}/`.
+Left in place it keeps running as an ordinary test set and silently binds every
+later slice to preserve this one's behaviour verbatim, which is a rule nobody
+adopted.
 
 ---
 

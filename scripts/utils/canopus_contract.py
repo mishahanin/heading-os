@@ -361,3 +361,78 @@ def run_null_stub(
     return {
         (rel, name) for rel, name, outcome in outcomes if outcome == "passed"
     }
+
+
+_IMPORT_MARKERS = ("ModuleNotFoundError", "ImportError")
+
+
+def parse_failure_modes(xml_text: str) -> dict[tuple[str, str], str]:
+    """How each failing test failed: "import", "assertion", or "other".
+
+    A heuristic over the failure message, and labelled as one wherever it is
+    printed. It never feeds a refusal; it answers the question an operator asks
+    first, which is whether anything failed for a reason other than the code
+    being absent.
+
+    The report is read through the shared `_parse_report` entry point, like every
+    other reader here. A second `ElementTree.fromstring` in this function would
+    parse the same text without the DOCTYPE refusal, which is precisely the
+    silent way the class that guard removes comes back.
+    """
+    root = _parse_report(xml_text)
+    modes: dict[tuple[str, str], str] = {}
+    for case in root.iter("testcase"):
+        rel = case.get("file")
+        name = case.get("name")
+        if not rel or not name:
+            continue
+        for child in case:
+            if child.tag not in ("failure", "error"):
+                continue
+            blob = f"{child.get('message') or ''}\n{child.text or ''}"
+            if any(marker in blob for marker in _IMPORT_MARKERS):
+                modes[(Path(rel).as_posix(), name)] = "import"
+            elif "AssertionError" in blob or "assert" in blob:
+                modes[(Path(rel).as_posix(), name)] = "assertion"
+            else:
+                modes[(Path(rel).as_posix(), name)] = "other"
+    return modes
+
+
+def vacuity_refusal(
+    outcomes: Sequence[tuple[str, str, str]],
+    vacuous: set[tuple[str, str]],
+) -> list[str]:
+    """The one refusal the null-stub probe raises: every RED test is vacuous.
+
+    Partial vacuity is printed by name and not refused, because "these three
+    tests assert nothing" is a decision for a human. A test that legitimately
+    asserts absence lands on that list, and striking it off by eye is cheap;
+    teaching the probe to tell the two apart is not.
+
+    Only tests that were RED in the real run are weighed, and the filter is about
+    EVIDENCE rather than leniency. The stub proves a test vacuous by making its
+    absent import succeed; a test that PASSED for real never had a failing import
+    to fix, so its pass under the stub has another explanation and the probe
+    learned nothing from it. It is worth being exact about the direction: a green
+    test almost always passes under the stub too, so dropping it out of `cases`
+    usually changes no answer at all. It changes one, and that one is why the
+    filter is here. A test that asserts the code is still ABSENT passes for real
+    and FAILS under the stub, and counting it would leave `cases` outside
+    `vacuous` and wave through a contract whose every red test asserts nothing.
+    Redness is what the freeze gate demands of the SET, so redness is what this
+    refusal audits.
+
+    The emptiness guard is load-bearing for the neighbouring reason: with no red
+    test at all the subset holds vacuously, and an all-green contract would be
+    refused here with a sentence about mocks that never ran, instead of by
+    `refusal_reasons`, which owns that case and says why.
+    """
+    cases = {(rel, name) for rel, name, outcome in outcomes if outcome != "passed"}
+    if cases and cases <= vacuous:
+        return [
+            "every contract test that is red passes with the code under test "
+            "mocked away, so the contract's redness asserts nothing: it measures "
+            "that the code is absent, not that the tests check anything"
+        ]
+    return []

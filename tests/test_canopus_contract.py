@@ -277,3 +277,88 @@ def test_the_stub_run_leaves_no_file_behind_in_the_tree(tmp_path):
     run_null_stub([tmp_path / "c"], tmp_path, {"absent_thing"})
 
     assert sorted(p.name for p in (tmp_path / "c").iterdir()) == before
+
+
+def test_a_wholly_vacuous_contract_is_refused():
+    from scripts.utils.canopus_contract import vacuity_refusal
+
+    outcomes = [("c/test_one.py", "test_a", "failed"),
+                ("c/test_one.py", "test_b", "failed")]
+    vacuous = {("c/test_one.py", "test_a"), ("c/test_one.py", "test_b")}
+
+    reasons = vacuity_refusal(outcomes, vacuous)
+
+    assert len(reasons) == 1
+    assert "asserts nothing" in reasons[0]
+
+
+def test_partial_vacuity_is_reported_and_not_refused():
+    """One red test that still asserts something is a contract worth freezing."""
+    from scripts.utils.canopus_contract import vacuity_refusal
+
+    outcomes = [("c/test_one.py", "test_a", "failed"),
+                ("c/test_one.py", "test_b", "failed")]
+
+    assert vacuity_refusal(outcomes, {("c/test_one.py", "test_a")}) == []
+
+
+def test_only_the_red_tests_are_weighed_as_evidence_of_vacuity():
+    """The filter, pinned by the one case where it changes the answer.
+
+    A test that asserts the code is still ABSENT passes for real and FAILS under
+    the stub, which makes the absent import succeed. Counting that green test as
+    a case would leave `cases` outside `vacuous` and let a contract whose every
+    red test asserts nothing walk through the refusal on the strength of a test
+    that was never evidence either way.
+    """
+    from scripts.utils.canopus_contract import vacuity_refusal
+
+    outcomes = [("c/test_one.py", "test_absence", "passed"),
+                ("c/test_one.py", "test_red", "failed")]
+    vacuous = {("c/test_one.py", "test_red")}
+
+    assert vacuity_refusal(outcomes, vacuous)
+
+
+def test_an_all_green_contract_is_not_this_refusals_business():
+    """`refusal_reasons` owns that case, and owning it twice worsens the message.
+
+    Without the emptiness guard an all-green contract has no red cases at all,
+    the empty set is a subset of everything, and this refusal fires with a reason
+    about mocks over a contract that never ran one.
+    """
+    from scripts.utils.canopus_contract import vacuity_refusal
+
+    outcomes = [("c/test_one.py", "test_a", "passed")]
+
+    assert vacuity_refusal(outcomes, {("c/test_one.py", "test_a")}) == []
+
+
+def test_failure_modes_tell_an_import_from_an_assertion(tmp_path):
+    from scripts.utils.canopus_contract import parse_failure_modes, run_pytest_report
+
+    _write(tmp_path, "c/test_one.py",
+           "def test_import():\n    import absent_thing\n    assert absent_thing\n"
+           "\n\n"
+           "def test_assertion():\n    assert 1 == 2\n")
+
+    modes = parse_failure_modes(run_pytest_report([tmp_path / "c"], tmp_path))
+
+    assert modes[("c/test_one.py", "test_import")] == "import"
+    assert modes[("c/test_one.py", "test_assertion")] == "assertion"
+
+
+def test_parse_failure_modes_refuses_a_doctype():
+    """The third reader of a report goes through the one guarded entry point.
+
+    A second unguarded `ElementTree.fromstring` here would reintroduce the entity
+    class that `_parse_report` exists to remove, and it would do it silently,
+    because every other test in this file would still pass.
+    """
+    from scripts.utils.canopus_contract import ContractError, parse_failure_modes
+
+    with pytest.raises(ContractError, match="DOCTYPE"):
+        parse_failure_modes(
+            '<!DOCTYPE testsuite [<!ENTITY a "aaa">]>\n'
+            '<testsuite><testcase file="c/test_one.py" name="test_a"/></testsuite>'
+        )

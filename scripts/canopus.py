@@ -52,8 +52,13 @@ sys.path.insert(0, str(ENGINE_ROOT))
 from scripts.utils.canopus_contract import (  # noqa: E402
     ContractError,
     contract_files,
+    missing_modules,
+    parse_failure_modes,
+    parse_junit,
     refusal_reasons,
-    run_contract,
+    run_null_stub,
+    run_pytest_report,
+    vacuity_refusal,
 )
 from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_MISSING,
@@ -233,8 +238,17 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             print("canopus: --contract names no test modules; a contract with no "
                   "tests can never be attested", file=sys.stderr)
             return (None, "")
-        counts, outcomes = run_contract(contracts, root)
+        # One real run, read twice. Running the contract for the outcomes and
+        # again for the report would double the wall time and compare outcomes
+        # from one run against failure modes from another.
+        xml_text = run_pytest_report(contracts, root)
+        counts, outcomes = parse_junit(xml_text)
         reasons = refusal_reasons(counts, outcomes, expected)
+        reasons.extend(
+            vacuity_refusal(
+                outcomes, run_null_stub(contracts, root, missing_modules(xml_text))
+            )
+        )
         if reasons:
             print("canopus: the contract was refused:", file=sys.stderr)
             for reason in reasons:
@@ -441,7 +455,14 @@ def cmd_probe(args) -> int:
     The freeze gate catches an entirely vacuous contract. It cannot catch a
     partly vacuous one, and that is what this table is for: the operator reading
     the Fix 1 gate sees which contract tests are ALREADY GREEN before a line of
-    implementation exists. Those are the ones to question.
+    implementation exists, and which are red for no better reason than the code
+    being absent. Those are the ones to question.
+
+    Each command here runs pytest over the contract TWICE, once for real and
+    once with every absent module mocked, and the second run is what buys the
+    vacuity proof. Nothing can be shared across the two processes. The contract
+    is a handful of files, so the cost is seconds, but an operator wondering why
+    this takes longer than it used to should find the answer written down.
     """
     root = _resolve_root(args)
     paths = [_under_root(p, root) for p in args.paths]
@@ -449,15 +470,36 @@ def cmd_probe(args) -> int:
     if not expected:
         print("canopus: no test modules found under those paths", file=sys.stderr)
         return 1
-    counts, outcomes = run_contract(paths, root)
+    xml_text = run_pytest_report(paths, root)
+    counts, outcomes = parse_junit(xml_text)
+    vacuous = run_null_stub(paths, root, missing_modules(xml_text))
+    modes = parse_failure_modes(xml_text)
     for rel in expected:
         print(f"{BOLD}{rel}{RESET}  {counts.get(rel, 0)} collected")
         for case_rel, name, outcome in outcomes:
             if case_rel != rel:
                 continue
+            # One line per test, widened rather than a second table beneath the
+            # first. A second loop reprints every case under another label, and
+            # the operator has to work out that the two rows are one test.
+            #
+            # The red filter is the same one `vacuity_refusal` applies, and for
+            # the same reason: `vacuous` holds everything that passed under the
+            # stub, which includes every test that passed for REAL. Labelling
+            # those "asserts nothing" is a false claim about a test that may
+            # assert a great deal against code that already exists, and it would
+            # also hide the "already green" reading the operator is told to
+            # question. Measured: a contract of `assert True` plus a real green
+            # case printed both as vacuous.
+            if outcome != "passed" and (case_rel, name) in vacuous:
+                print(f"  {YELLOW}{'vacuous':8}{RESET} {name}  asserts nothing")
+                continue
             colour = GREEN if outcome == "passed" else RED
-            print(f"  {colour}{outcome:8}{RESET} {name}")
+            mode = ("" if outcome == "passed"
+                    else f"  {modes.get((case_rel, name), 'other')}")
+            print(f"  {colour}{outcome:8}{RESET} {name}{mode}")
     reasons = refusal_reasons(counts, outcomes, expected)
+    reasons.extend(vacuity_refusal(outcomes, vacuous))
     for reason in reasons:
         print(f"{YELLOW}would be refused:{RESET} {reason}")
     return 1 if reasons else 0

@@ -180,7 +180,12 @@ pythonpath = ["."]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
-addopts = "--strict-markers"
+# --import-mode=importlib: every Canopus slice writes its contract to
+# tests/contract/{date}-{slug}/test_contract.py, so the SECOND slice collides with
+# the first on module basename under the default prepend mode and pytest aborts the
+# whole run with "import file mismatch". The convention guarantees the collision;
+# importlib removes the class rather than renaming one file per slice forever.
+addopts = "--strict-markers --import-mode=importlib"
 markers = [
     "integration: integration tests (mocked external services)",
     "slow: tests that take >5 seconds",

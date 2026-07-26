@@ -282,8 +282,8 @@ def test_the_stub_run_leaves_no_file_behind_in_the_tree(tmp_path):
 def test_a_wholly_vacuous_contract_is_refused():
     from scripts.utils.canopus_contract import vacuity_refusal
 
-    outcomes = [("c/test_one.py", "test_a", "failed"),
-                ("c/test_one.py", "test_b", "failed")]
+    outcomes = [("c/test_one.py", "test_a", "failure"),
+                ("c/test_one.py", "test_b", "failure")]
     vacuous = {("c/test_one.py", "test_a"), ("c/test_one.py", "test_b")}
 
     reasons = vacuity_refusal(outcomes, vacuous)
@@ -296,8 +296,8 @@ def test_partial_vacuity_is_reported_and_not_refused():
     """One red test that still asserts something is a contract worth freezing."""
     from scripts.utils.canopus_contract import vacuity_refusal
 
-    outcomes = [("c/test_one.py", "test_a", "failed"),
-                ("c/test_one.py", "test_b", "failed")]
+    outcomes = [("c/test_one.py", "test_a", "failure"),
+                ("c/test_one.py", "test_b", "failure")]
 
     assert vacuity_refusal(outcomes, {("c/test_one.py", "test_a")}) == []
 
@@ -314,7 +314,7 @@ def test_only_the_red_tests_are_weighed_as_evidence_of_vacuity():
     from scripts.utils.canopus_contract import vacuity_refusal
 
     outcomes = [("c/test_one.py", "test_absence", "passed"),
-                ("c/test_one.py", "test_red", "failed")]
+                ("c/test_one.py", "test_red", "failure")]
     vacuous = {("c/test_one.py", "test_red")}
 
     assert vacuity_refusal(outcomes, vacuous)
@@ -332,6 +332,73 @@ def test_an_all_green_contract_is_not_this_refusals_business():
     outcomes = [("c/test_one.py", "test_a", "passed")]
 
     assert vacuity_refusal(outcomes, {("c/test_one.py", "test_a")}) == []
+
+
+def test_one_skipped_test_does_not_defeat_the_refusal():
+    """The fail-open the filter shipped with: `outcome != "passed"`.
+
+    `_outcome` emits four tokens, and a skipped test is never in `vacuous`,
+    which is built from what PASSED under the stub. Under the old filter one
+    skip put a member in `cases` that could not be in `vacuous`, the subset
+    failed, and a wholly vacuous contract froze.
+    """
+    from scripts.utils.canopus_contract import vacuity_refusal
+
+    outcomes = [("c/test_one.py", "test_a", "failure"),
+                ("c/test_one.py", "test_b", "failure"),
+                ("c/test_one.py", "test_skipped", "skipped")]
+    vacuous = {("c/test_one.py", "test_a"), ("c/test_one.py", "test_b")}
+
+    assert vacuity_refusal(outcomes, vacuous)
+
+
+def test_an_xfail_reaches_the_filter_as_skipped_and_not_as_red(tmp_path):
+    """Why the skip bypass has a second door with a different name.
+
+    xunit1 records an expected failure as a `skipped` child, so `xfail` is the
+    same escape hatch spelled differently. Pinned against real pytest rather
+    than asserted about it, because the whole finding turns on which token the
+    reporter actually writes.
+    """
+    from scripts.utils.canopus_contract import run_contract
+
+    _write(tmp_path, "c/test_one.py",
+           "import pytest\n\n\n"
+           "@pytest.mark.xfail(reason='not implemented')\n"
+           "def test_x():\n    assert False\n")
+
+    _counts, outcomes = run_contract([tmp_path / "c"], tmp_path)
+
+    assert [outcome for _rel, _name, outcome in outcomes] == ["skipped"]
+
+
+def test_vacuity_is_reported_as_unmeasured_when_no_module_was_absent():
+    """A red contract that names no absent module measured NOTHING.
+
+    Silence there is indistinguishable from "measured, nothing vacuous", and
+    the two are not the same claim.
+    """
+    from scripts.utils.canopus_contract import vacuity_unmeasured
+
+    outcomes = [("c/test_one.py", "test_a", "failure")]
+
+    assert "NOT measured" in vacuity_unmeasured(outcomes, set())
+
+
+def test_vacuity_is_not_reported_as_unmeasured_when_a_module_was_stubbed():
+    from scripts.utils.canopus_contract import vacuity_unmeasured
+
+    outcomes = [("c/test_one.py", "test_a", "failure")]
+
+    assert vacuity_unmeasured(outcomes, {"absent_thing"}) == ""
+
+
+def test_an_all_green_contract_is_not_reported_as_unmeasured():
+    """`refusal_reasons` refuses it for being green; this line would only add
+    noise to a run that is already being refused for a better reason."""
+    from scripts.utils.canopus_contract import vacuity_unmeasured
+
+    assert vacuity_unmeasured([("c/test_one.py", "test_a", "passed")], set()) == ""
 
 
 def test_failure_modes_tell_an_import_from_an_assertion(tmp_path):

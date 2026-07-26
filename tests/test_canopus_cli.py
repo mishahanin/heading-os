@@ -1441,3 +1441,127 @@ def test_probe_does_not_call_an_already_green_test_vacuous(tree, capsys):
     assert "asserts nothing" in next(
         line for line in out.splitlines() if "test_vacuous" in line
     )
+
+
+def _write_vacuous_contract_plus(tree: Path, tail: str) -> Path:
+    """A wholly vacuous contract with one extra test appended verbatim.
+
+    Every test that is RED here dies on the same absent import and passes the
+    moment a mock stands in for it, so the refusal is owed. What *tail* adds is
+    a test that is neither red nor green, which is the shape the refusal's old
+    `outcome != "passed"` filter could not survive.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "test_contract.py").write_text(
+        "import pytest\n"
+        "\n\n"
+        "def test_vacuous():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() is not None\n"
+        "\n\n"
+        "def test_other():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() is not None\n"
+        "\n\n"
+        f"{tail}"
+    )
+    return directory
+
+
+def test_one_skipped_test_does_not_buy_a_vacuous_contract_a_freeze(
+    tree, anchor, capsys,
+):
+    """Fail-open, measured: this contract froze at exit 0 before the fix.
+
+    A skipped test is never in `vacuous`, so under `outcome != "passed"` it
+    joined `cases` as a member that could not be matched, the subset failed, and
+    the refusal went silent over a contract that asserts nothing at all.
+    """
+    _write_vacuous_contract_plus(
+        tree,
+        "@pytest.mark.skip(reason='parked until the module lands')\n"
+        "def test_parked():\n    assert False\n",
+    )
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "asserts nothing" in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_one_xfail_test_does_not_buy_a_vacuous_contract_a_freeze(
+    tree, anchor, capsys,
+):
+    """The same escape hatch under its other name.
+
+    xunit1 writes an expected failure as a `skipped` child, so `xfail` reached
+    the old filter exactly as `skip` did, and bought the same exit 0.
+    """
+    _write_vacuous_contract_plus(
+        tree,
+        "@pytest.mark.xfail(reason='not implemented yet')\n"
+        "def test_expected(): \n    assert False\n",
+    )
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "asserts nothing" in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_freeze_says_so_when_vacuity_could_not_be_measured(tree, anchor, capsys):
+    """The narrowing bypass, reported rather than refused.
+
+    `from None` suppresses the chained ModuleNotFoundError, so the report names
+    no absent module, nothing is stubbed, and the refusal cannot fire over a
+    contract every test of which asserts nothing. This freeze is TAKEN, because
+    a red contract naming no absent module is also the ordinary shape of tests
+    failing on assertions against code that already exists. What it must not do
+    is stay silent about having measured nothing.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True)
+    (directory / "test_contract.py").write_text(
+        "def test_vacuous():\n"
+        "    try:\n"
+        "        from absent_thing import answer\n"
+        "    except ImportError:\n"
+        "        raise AssertionError('not implemented yet') from None\n"
+        "    assert answer() is not None\n"
+    )
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+    assert "NOT measured" in capsys.readouterr().out
+    assert (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_the_null_stub_does_not_run_once_the_contract_is_already_refused(
+    tree, anchor, monkeypatch, capsys,
+):
+    """A whole second pytest session, paid for an answer thrown away.
+
+    `run_null_stub` can only ADD to a refusal, so a contract that collected
+    nothing has already earned its exit 1 from the first run.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True)
+    # Module-scope import: the file collects nothing, caught by the first run.
+    (directory / "test_contract.py").write_text(
+        "from absent_thing import answer\n\n\n"
+        "def test_a():\n    assert answer() == 42\n"
+    )
+    calls = []
+
+    def _record(*args, **kwargs):
+        calls.append(args)
+        return set()
+
+    monkeypatch.setattr(canopus, "run_null_stub", _record)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+
+    assert calls == []
+    assert "collected nothing" in capsys.readouterr().err

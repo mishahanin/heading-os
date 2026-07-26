@@ -157,15 +157,22 @@ python scripts/canopus.py status
 python scripts/canopus.py release --reason "slice shipped"
 ```
 
-`approve` measures the contract, prints which of its tests are already green and
-which assert nothing, computes the **root hash**, and writes it into the gate
-artifact. It freezes nothing. You then read the artifact and COMMIT it: that
-commit is the approval, carrying an author and a timestamp.
+`approve` measures the contract, prints a COUNT of how many of its tests are
+already green before any code exists (`contract  1 of 3 already green before this
+approval`), computes the **root hash**, and writes it into the gate artifact. It
+freezes nothing. The per-test table, naming which tests are green and which
+assert nothing, is `probe`'s output, not `approve`'s; run `probe` when you want
+to read it. You then read the artifact and COMMIT it: that commit is the
+approval, carrying an author and a timestamp.
 
-`freeze` recomputes the same hash and refuses to take a root the artifact records
-nowhere. Either copy satisfies it, the committed one or a freshly approved
-working copy, and the committed copy is what governs the lock and the approval
-axis afterwards. A freeze taken over an approval nobody has committed yet is
+`freeze` recomputes the same hash and refuses a root that the artifact's
+COMMITTED copy CONTRADICTS. Be exact about the scope of that refusal, because
+the loose reading flatters it: where the committed copy records no hash at all,
+which is the state of a first freeze, an untracked artifact, or a folder outside
+any repository, there is no approval to disagree with, so the freeze is TAKEN
+and reads amber. Either copy satisfies the check, the committed one or a freshly
+approved working copy, and the committed copy is what governs the lock and the
+approval axis afterwards. A freeze taken over an approval nobody has committed yet is
 permitted, says on the way out that it is uncommitted, and reads amber; `verify`
 reports `LOSS OF LOCK` until the commit lands. Refusing there instead would leave
 the operator with no manifest at all and a silently green suite, which is the one
@@ -196,16 +203,33 @@ whether the attestation has gone stale, and what is not covered.
 
 **Red is not the same as meaningful.** A contract can be red only because the
 module it imports does not exist yet, which says nothing about whether its tests
-assert anything. So `probe`, `approve`, and `freeze` each run the contract a
-second time with every absent module resolved to a mock. A test that passes that
-run is proved to assert nothing: a mock satisfies any shape it was asked for.
-Those tests print as `vacuous  <name>  asserts nothing`, each red test is
-labelled `import`, `assertion`, or `other` beside its outcome, and a contract
-whose every red test is vacuous is REFUSED. Partial vacuity is printed and not
-refused, because "these three assert nothing" is a judgement for a human, and a
-test that legitimately asserts absence lands on that list. The cost is stated
-rather than hidden: every one of those commands runs pytest over the contract
-twice, and the second run is what buys the proof.
+assert anything. So `probe` always, and `approve` and `freeze` whenever
+`--contract` names the set, run the contract a second time with every absent
+module resolved to a mock. A test that was RED for real and PASSES that run is
+proved to assert nothing: its only failure was the absent import, and a mock
+satisfies any shape it was asked for. Only the red ones are weighed, because a
+test that was already green passes the mocked run too and proves nothing by it.
+Those tests print as `vacuous  <name>  asserts nothing`; every OTHER red test is
+labelled `import`, `assertion`, or `other` beside its outcome, and a vacuous one
+carries no mode label. A contract whose every red test is vacuous is REFUSED,
+and a skipped or `xfail` test in the set does not buy it a freeze. Partial
+vacuity is printed and not refused, because "these three assert nothing" is a
+judgement for a human, and a test that legitimately asserts absence lands on
+that list. The cost is stated rather than hidden: those runs are two pytest
+sessions over the contract, and the second is what buys the proof (`approve` and
+`freeze` skip it once the first run has already earned a refusal).
+
+Say what the instrument cannot do. It learns which modules were absent by
+reading the failure text the contract's own tests produced, so a test that
+suppresses its exception chain (`raise AssertionError(...) from None` around the
+import) hides the absent module, nothing is stubbed, and no test can be proved
+vacuous. That direction is fail-open and the contract author controls it. What
+the commands do about it is refuse to stay quiet: when a contract is red but its
+report names no absent module at all, `probe`, `approve`, and `freeze` print
+`vacuity was NOT measured`, which is a different claim from measuring vacuity
+and finding none. It is not a refusal, because tests failing on assertions
+against code that already exists produce the same reading and are a perfectly
+ordinary contract.
 
 An anchor artifact that already records a hash is refused, because an approved
 contract's anchor is never silently overwritten. When the frozen SET legitimately
@@ -275,7 +299,7 @@ attestation, answering whether this exact freeze is the one a human approved:
 | State | Meaning |
 |---|---|
 | `APPROVED` | the frozen root hash is recorded in a COMMIT of the gate artifact |
-| `APPROVAL UNVERIFIED` | the artifact is uncommitted, outside a repository, or git is unavailable; the reason is printed beside it |
+| `APPROVAL UNVERIFIED` | the committed artifact records a DIFFERENT hash (the re-baseline case, and the commonest of the four), or the artifact is uncommitted or untracked, or it is outside a repository, or git is unavailable; the reason is printed beside it |
 
 Amber rather than red on the second row, deliberately: an operator whose gate
 artifact is a file in a folder has no repository to attribute an approval to, and

@@ -190,7 +190,10 @@ already green with no implementation, so it asserts nothing yet. Every test it
 reports as `vacuous` is red only because the code is absent and passes the moment
 a mock stands in for it, so it asserts nothing either. Name both groups
 explicitly and either strengthen them or justify them; a contract whose every red
-test is vacuous is refused outright at approve and freeze time.
+test is vacuous is refused outright at approve and freeze time, and a skipped or
+`xfail` test does not buy it a pass. If `probe` prints `vacuity was NOT
+measured`, no module was absent to mock and nothing was proved either way; say
+so, it is not a clean bill.
 
 Close with: "Implementation is DONE when the frozen contract is green and
 `canopus status` reports both LOCK HELD and ATTESTED, AND /scrutinize reports no
@@ -254,7 +257,8 @@ to remember:
       --content scripts/run-tests.py \
       --content tests/conftest.py
 
-Read the table it prints, then COMMIT the gate artifact. That commit is Fix 1:
+Read the already-green COUNT it prints (the per-test table belongs to `probe`),
+then COMMIT the gate artifact. That commit is Fix 1:
 it carries an author and a timestamp, and it is the only thing that makes the
 approval durable. Then re-run the identical command with `freeze` in place of
 `approve` (`python scripts/canopus.py freeze --label ... --contract ...`, same
@@ -270,10 +274,11 @@ freeze is the same hole C4 closed for the write path. The set is pinned by
 which recomputes the closure and fails when a new import escapes it.
 
 `freeze` refuses unless the contract is red for a reason that means something,
-records the per-file item count, and refuses to take a root the gate artifact
-records nowhere. It writes nothing to that artifact: an instrument that writes
-the hash and then checks the hash it wrote has verified nothing. A freeze taken
-before the commit lands is permitted, says so, and reads amber until you commit.
+records the per-file item count, and refuses any root the COMMITTED gate artifact
+contradicts. Where the commit records no hash at all, a first freeze included,
+nothing disagrees, so the freeze is taken, says so, and reads amber until you
+commit. It writes nothing to that artifact: an instrument that
+writes the hash and then checks the hash it wrote has verified nothing.
 
 Then confirm: `python scripts/canopus.py verify` must print LOCK HELD and
 APPROVED.

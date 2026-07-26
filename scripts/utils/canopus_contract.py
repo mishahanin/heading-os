@@ -311,12 +311,40 @@ def missing_modules(xml_text: str) -> set[str]:
     package, so modules that exist are mocked away, every test passes, and a good
     contract is refused as vacuous.
 
-    The text read here is text the contract's own test code can shape, so a test
-    that merely asserts on the literal string `No module named 'scripts'` gets
-    that package stubbed for the probe run; the direction is fail-closed, since a
-    wider stub can only turn a passing probe test into a vacuity label rather
-    than hide one, and the names reach the child through an environment variable
-    only, never through argv.
+    The text read here is text the contract's own test code can shape, and the
+    two directions are NOT symmetrical. Be exact about both, because an earlier
+    revision of this docstring claimed "the direction is fail-closed" without
+    qualification and that was true of only one of them.
+
+    WIDENING is the safe one. A test that merely mentions the literal string
+    `No module named 'scripts'` gets that package stubbed for the probe run; a
+    wider stub can only turn a passing probe test into a vacuity label, never
+    hide one. The names reach the child through an environment variable only,
+    never through argv.
+
+    NARROWING is author-controlled and FAIL-OPEN, and it costs one keyword:
+
+        def test_vacuous():
+            try:
+                from absent_thing import answer
+            except ImportError:
+                raise AssertionError('not implemented yet') from None
+            assert answer() is not None
+
+    `from None` suppresses the chained traceback, so the child's failure text
+    never carries `No module named 'absent_thing'`, this function returns an
+    empty set, `run_null_stub` returns immediately with nothing stubbed, and
+    `vacuity_refusal` cannot fire over a contract every test of which asserts
+    nothing. Measured: freeze exits 0 and writes a manifest. Without `from None`
+    the chained ModuleNotFoundError leaks into the report and the refusal fires
+    correctly.
+
+    Nothing here closes that, and pretending otherwise is worse than naming it:
+    the instrument reads the child's own words, and the contract author writes
+    the child. What the callers DO about it is refuse to stay silent: see
+    `vacuity_unmeasured` below, which the operator-facing commands print when a
+    red contract names no absent module at all, so a probe that measured
+    nothing never reads like a probe that measured vacuity and found none.
     """
     root = _parse_report(xml_text)
     found: set[str] = set()
@@ -363,6 +391,39 @@ def run_null_stub(
     }
 
 
+def vacuity_unmeasured(
+    outcomes: Sequence[tuple[str, str, str]], modules: Iterable[str]
+) -> str:
+    """One sentence when the vacuity instrument did not run, or "" when it did.
+
+    A red contract that names NO absent module leaves `run_null_stub` with
+    nothing to stub, so it returns an empty set, `vacuity_refusal` finds no
+    vacuous test, and the freeze proceeds. Two very different worlds reach that
+    same silence: a contract genuinely failing on assertions against code that
+    already exists, and a contract that hid its absent module from the report
+    (see `missing_modules` above, `from None`). This function does not tell them
+    apart, and it does not try.
+
+    It is deliberately NOT a refusal. Tests failing on assertions against
+    existing code are a legitimate, ordinary contract, and refusing there would
+    make the tool something builders route around. What it removes is the
+    silence: a measurement that did not happen is reported as one, rather than
+    read as a measurement that came back clean.
+    """
+    if not any(outcome in RED_OUTCOMES for _rel, _name, outcome in outcomes):
+        return ""
+    if sorted(set(modules)):
+        return ""
+    return (
+        "vacuity was NOT measured: the contract is red but its report names no "
+        "absent module, so no mock could stand in for one and no test could be "
+        "proved to assert nothing. That is not the same as measuring vacuity "
+        "and finding none. Ordinary when the contract fails on assertions "
+        "against code that already exists; also what a suppressed exception "
+        "chain (`raise ... from None` around the import) looks like."
+    )
+
+
 _IMPORT_MARKERS = ("ModuleNotFoundError", "ImportError")
 
 
@@ -378,6 +439,17 @@ def parse_failure_modes(xml_text: str) -> dict[tuple[str, str], str]:
     other reader here. A second `ElementTree.fromstring` in this function would
     parse the same text without the DOCTYPE refusal, which is precisely the
     silent way the class that guard removes comes back.
+
+    LAST CHILD WINS, and that is documented rather than fixed. A testcase can
+    carry both a `failure` and an `error` child (a call that failed inside a
+    fixture that then errored on teardown), and the loop below overwrites, so
+    the label describes whichever child pytest wrote last. Fixing it means
+    picking a precedence, and there is no principled one: the call failure and
+    the teardown error are both true of that test. Since this value feeds no
+    refusal and no manifest, and is printed beside the word "heuristic", an
+    arbitrary precedence would buy the appearance of precision and nothing else.
+    Anyone who later makes this label decide something must resolve the tie
+    first.
     """
     root = _parse_report(xml_text)
     modes: dict[tuple[str, str], str] = {}
@@ -427,8 +499,22 @@ def vacuity_refusal(
     test at all the subset holds vacuously, and an all-green contract would be
     refused here with a sentence about mocks that never ran, instead of by
     `refusal_reasons`, which owns that case and says why.
+
+    The membership test is `outcome in RED_OUTCOMES`, and the near-miss
+    `outcome != "passed"` is a fail-open the tool shipped with. `_outcome`
+    emits four tokens, not two: failure, error, skipped, passed. A skipped test
+    is never in `vacuous`, because `vacuous` is built from what PASSED under the
+    stub, so one `pytest.skip` anywhere in a wholly vacuous contract put a
+    member in `cases` that could never be in `vacuous`, the subset failed, and
+    the refusal went silent. Measured before the fix: the same contract froze at
+    exit 0 with a manifest written once one skipped test was added, and an
+    `xfail` did it too, because xunit1 records an expected failure as skipped.
+    The contract author is the adversary here, so a one-line escape hatch is the
+    whole finding.
     """
-    cases = {(rel, name) for rel, name, outcome in outcomes if outcome != "passed"}
+    cases = {
+        (rel, name) for rel, name, outcome in outcomes if outcome in RED_OUTCOMES
+    }
     if cases and cases <= vacuous:
         return [
             "every contract test that is red passes with the code under test "

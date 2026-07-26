@@ -31,11 +31,15 @@ WORKING COPY, so a line appended there is only an uncommitted diff in the other
 repository: visible in its `git status`, and erasable with `git checkout --`.
 That is evidence for a human who looks, not containment and not a permanent
 record. The durable artifact is the `canopus-anchor:` line once someone COMMITS
-it, which is why `approve` writes the candidate and `freeze` refuses to take a
-root the artifact does not record. The COMMITTED copy governs both the lock and
-the approval axis, so an approval reachable only through git still holds the
-lock. A freshly approved candidate that is on the artifact and not yet committed
-is permitted, and every surface reads amber until someone commits it.
+it, which is why `approve` writes the candidate and `freeze` refuses a root the
+COMMITTED copy CONTRADICTS. Be exact about the scope of that refusal, because
+the loose reading is the flattering one: where the commit records no hash at all
+(a first freeze, an untracked artifact, a folder outside any repository) there is
+no approval to disagree with, so the freeze is TAKEN and reads amber rather than
+being refused. The COMMITTED copy governs both the lock and the approval axis,
+so an approval reachable only through git still holds the lock. A freshly
+approved candidate that is on the artifact and not yet committed is permitted,
+and every surface reads amber until someone commits it.
 `freeze` writes nothing to the anchor: an instrument that writes the hash and
 then checks the hash it wrote has verified nothing.
 """
@@ -59,6 +63,7 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     run_null_stub,
     run_pytest_report,
     vacuity_refusal,
+    vacuity_unmeasured,
 )
 from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_MISSING,
@@ -243,17 +248,27 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
         # from one run against failure modes from another.
         xml_text = run_pytest_report(contracts, root)
         counts, outcomes = parse_junit(xml_text)
+        modules = missing_modules(xml_text)
         reasons = refusal_reasons(counts, outcomes, expected)
-        reasons.extend(
-            vacuity_refusal(
-                outcomes, run_null_stub(contracts, root, missing_modules(xml_text))
+        # The null stub is a WHOLE second pytest session, and it can only ever
+        # add to a refusal this contract has already earned. Running it anyway
+        # made a contract that collected nothing pay for a run whose answer was
+        # discarded a line later.
+        if not reasons:
+            reasons.extend(
+                vacuity_refusal(outcomes, run_null_stub(contracts, root, modules))
             )
-        )
         if reasons:
             print("canopus: the contract was refused:", file=sys.stderr)
             for reason in reasons:
                 print(f"  {reason}", file=sys.stderr)
             return (None, "")
+        # Said out loud, on the way to a successful approve or freeze. The
+        # refusal above cannot fire when nothing was stubbed, and an operator
+        # who is not told so reads that silence as "measured, nothing vacuous".
+        unmeasured = vacuity_unmeasured(outcomes, modules)
+        if unmeasured:
+            print(f"{YELLOW}vacuity{RESET}  {unmeasured}")
         baseline = {rel: counts[rel] for rel in expected}
         already_green = sum(
             1 for _rel, _name, outcome in outcomes if outcome == "passed"
@@ -458,11 +473,16 @@ def cmd_probe(args) -> int:
     implementation exists, and which are red for no better reason than the code
     being absent. Those are the ones to question.
 
-    Each command here runs pytest over the contract TWICE, once for real and
-    once with every absent module mocked, and the second run is what buys the
-    vacuity proof. Nothing can be shared across the two processes. The contract
-    is a handful of files, so the cost is seconds, but an operator wondering why
-    this takes longer than it used to should find the answer written down.
+    This command runs pytest over the contract TWICE, once for real and once
+    with every absent module mocked, and the second run is what buys the vacuity
+    proof. Nothing can be shared across the two processes. The contract is a
+    handful of files, so the cost is seconds, but an operator wondering why this
+    takes longer than it used to should find the answer written down.
+
+    `approve` and `freeze` run the same pair when `--contract` names the set,
+    with one difference: they skip the second run once the first has already
+    earned a refusal, because a contract that collected nothing cannot be saved
+    by a vacuity verdict and should not pay for one.
     """
     root = _resolve_root(args)
     paths = [_under_root(p, root) for p in args.paths]
@@ -472,7 +492,8 @@ def cmd_probe(args) -> int:
         return 1
     xml_text = run_pytest_report(paths, root)
     counts, outcomes = parse_junit(xml_text)
-    vacuous = run_null_stub(paths, root, missing_modules(xml_text))
+    modules = missing_modules(xml_text)
+    vacuous = run_null_stub(paths, root, modules)
     modes = parse_failure_modes(xml_text)
     for rel in expected:
         print(f"{BOLD}{rel}{RESET}  {counts.get(rel, 0)} collected")
@@ -498,6 +519,9 @@ def cmd_probe(args) -> int:
             mode = ("" if outcome == "passed"
                     else f"  {modes.get((case_rel, name), 'other')}")
             print(f"  {colour}{outcome:8}{RESET} {name}{mode}")
+    unmeasured = vacuity_unmeasured(outcomes, modules)
+    if unmeasured:
+        print(f"{YELLOW}vacuity{RESET}  {unmeasured}")
     reasons = refusal_reasons(counts, outcomes, expected)
     reasons.extend(vacuity_refusal(outcomes, vacuous))
     for reason in reasons:

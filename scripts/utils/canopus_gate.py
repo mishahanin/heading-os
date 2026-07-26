@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from scripts.utils.canopus_freeze import (
     ANCHOR_MISSING,
@@ -33,7 +34,9 @@ from scripts.utils.canopus_freeze import (
     build_attestation,
     frozen_test_files,
     lock_state,
+    open_release_window,
     read_freeze,
+    read_ledger,
     tally_collection,
     verify_manifest,
     write_attestation,
@@ -85,19 +88,44 @@ def loss_of_lock_sentences(report: dict, resolution: AnchorResolution) -> list[s
     return sentences
 
 
+def _open_window(root: Path) -> Optional[dict]:
+    """The open release window, or None. Answers rather than raising.
+
+    read_ledger swallows OSError and UnicodeDecodeError and skips damaged lines
+    from wire 2.2 onward, so this guard is a second wall rather than the first
+    one. Both walls are wanted here and the reason is not symmetry: freeze_gate
+    runs at every pytest session start, and a raise here fails OPEN, crashing
+    the harness that was supposed to report the state. A guard whose only cost
+    is four lines is cheaper than the next input nobody predicted.
+    """
+    try:
+        return open_release_window(read_ledger(root))
+    except (OSError, ValueError):
+        return None
+
+
 def freeze_gate(root: Path) -> int:
     """Canopus wire 1: a build cannot reach green while its contract is moved.
 
-    Silent when no freeze is active, which is the ordinary day.
+    Silent when no freeze is active AND no release window is open, which is the
+    ordinary day. An open window is the state where the lock was deliberately
+    taken off mid-slice, and before wire 2.2 that was indistinguishable here
+    from never having frozen at all.
     """
     try:
         manifest = read_freeze(root)
     except FreezeCorrupt as exc:
         print(f"{RED}canopus: {exc}{RESET}")
         print(f"{RED}canopus: clear it with `python scripts/canopus.py release "
-              f"--force --reason \"<why>\"`{RESET}")
+              f"--force --window --reason \"<why>\"`{RESET}")
         return 1
     if manifest is None:
+        window = _open_window(root)
+        if window is not None:
+            print(f"{YELLOW}canopus: a release window is open{RESET}  opened "
+                  f"{window.get('ts') or 'at an unrecorded time'}: "
+                  f"{window.get('reason') or 'no reason recorded'}. No lock is "
+                  f"held, so a green suite proves nothing about the contract.")
         return 0
 
     # A freeze is active, so the contract cannot be checked and NOT be checked:

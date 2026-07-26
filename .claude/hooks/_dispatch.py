@@ -755,7 +755,7 @@ def check_canopus_freeze(payload: dict) -> Optional[dict]:
         return _canopus_deny(
             f"The freeze manifest is damaged, so every write is denied "
             f"fail-closed: {exc}. Clear it with: python scripts/canopus.py "
-            f"release --force --reason \"<why>\""
+            f"release --force --window --reason \"<why>\""
         )
     except OSError as exc:
         return _canopus_deny(f"The freeze state could not be read: {exc}")

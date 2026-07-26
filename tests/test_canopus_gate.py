@@ -101,7 +101,10 @@ def test_gate_fails_on_a_corrupt_manifest(tree, capsys):
     (tree / ".canopus").mkdir(parents=True)
     (tree / ".canopus" / "freeze.json").write_text("{ not json")
     assert freeze_gate(tree) == 1
-    assert "release --force" in capsys.readouterr().out
+    # The kind, not just the flag. This sentence is the operator's only exit
+    # while every write is denied, and `release --force --reason` stopped
+    # parsing the moment the kind became required.
+    assert "release --force --window --reason" in capsys.readouterr().out
 
 
 def test_gate_answers_rather_than_raising_on_an_unusable_anchor_path(tree, anchor):
@@ -418,3 +421,36 @@ def test_conftest_hook_aborts_on_a_corrupt_manifest(conftest_module, tree, monke
     monkeypatch.setattr(conftest_module, "_ENGINE_ROOT", tree)
     with pytest.raises(pytest.UsageError):
         conftest_module.pytest_sessionstart(session=None)
+
+
+def test_the_gate_names_an_open_release_window(tree, capsys):
+    from scripts.utils.canopus_freeze import append_history
+
+    append_history(tree, "release", digest="", label="demo",
+                   reason="mid-build recipe change", kind="window")
+
+    assert freeze_gate(tree) == 0
+    out = capsys.readouterr().out
+    assert "release window is open" in out
+    assert "mid-build recipe change" in out
+
+
+def test_the_gate_is_silent_after_a_shipped_slice(tree, capsys):
+    from scripts.utils.canopus_freeze import append_history
+
+    append_history(tree, "release", digest="", label="demo",
+                   reason="wire 2.2 shipped", kind="ship")
+
+    assert freeze_gate(tree) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_the_gate_survives_an_unreadable_ledger(tree, capsys):
+    """A raise in the gate fails OPEN, so an unparseable ledger must not raise."""
+    from scripts.utils.canopus_freeze import history_state_path
+
+    path = history_state_path(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xe9 not utf-8 and not json\n")
+
+    assert freeze_gate(tree) == 0

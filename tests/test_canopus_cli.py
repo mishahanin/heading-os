@@ -664,6 +664,71 @@ def test_verify_names_the_copy_the_hash_came_from(tree: Path, anchor: Path, caps
     out = capsys.readouterr().out
     assert canopus.LOSS_OF_LOCK in out
     assert f"records {approved} (APPROVED)" in out
+    # The approval axis on the LOSS OF LOCK path, which is a separate print from
+    # the parenthetical above. Two occurrences: the origin label on the anchor
+    # detail line, and the axis line _print_approval writes.
+    assert out.count("APPROVED") == 2
+
+
+def test_verify_keeps_the_origin_parenthetical_off_a_bare_anchor(tree: Path, anchor: Path,
+                                                                capsys):
+    """The parenthetical says WHICH COPY the hash came from, so it earns its keep
+    only where the answer is not obvious.
+
+    Under no_repo and no_git the hash came from the working file the detail line
+    already names, so labelling it adds a word and no information. Printing it
+    unconditionally passes every other test in this file, which is why the BARE
+    form is pinned here rather than left to the reader of the guard.
+    """
+    assert _freeze(tree, anchor) == 0
+    approved = _root_of(tree)
+    capsys.readouterr()
+
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+
+    assert _run(["verify"], tree) == 1
+    out = capsys.readouterr().out
+    assert canopus.LOSS_OF_LOCK in out
+    detail = next(line for line in out.splitlines()
+                  if line.startswith("  anchor ") and "records" in line)
+    assert detail.rstrip() == f"  anchor   {anchor.resolve()} records {approved}"
+
+
+def test_verify_explains_an_uncommitted_approval_rather_than_denying_the_line(
+    tree: Path, anchor: Path, capsys
+):
+    """LOCK UNCONFIRMED has to say the true reason, and print the approval axis.
+
+    An earlier revision re-derived its own sentence here, "<anchor> carries no
+    canopus-anchor: line yet", which is plainly false in this scenario: the
+    working copy carries one, the tool wrote it, and the reason it does not count
+    is that nobody committed it. The reason now comes from the single producer of
+    the precedence decision.
+    """
+    import subprocess
+
+    gate = anchor.parent
+    for argv in (["init", "-q", "-b", "main"],
+                 ["config", "user.email", "builder@example.invalid"],
+                 ["config", "user.name", "Builder"]):
+        subprocess.run(["git", "-C", str(gate), *argv], check=True,
+                       capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(gate), "add", "-A"], check=True,
+                   capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(gate), "commit", "-q", "-m", "no approval yet"],
+                   check=True, capture_output=True, text=True)
+
+    assert _freeze(tree, anchor) == 0
+    assert f"canopus-anchor: {_root_of(tree)}" in anchor.read_text()
+    capsys.readouterr()
+
+    assert _run(["verify"], tree) == 0
+    out = capsys.readouterr().out
+    lock_line = next(line for line in out.splitlines()
+                     if canopus.LOCK_UNCONFIRMED in line)
+    assert "no approval is recorded in the committed state" in lock_line
+    assert "carries no" not in lock_line
+    assert "APPROVAL UNVERIFIED" in out
 
 
 def test_freeze_contract_reports_how_much_is_already_green(tree, anchor, capsys):

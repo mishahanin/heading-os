@@ -62,10 +62,14 @@ def freeze_gate(root: Path) -> int:
         resolution = resolve_anchor(manifest)
         status, value = resolution.status, resolution.value
     except OSError as exc:
-        # resolve_anchor adds no new exception type here: git_output converts
-        # every subprocess failure, including a timeout, into None, so the only
-        # exceptions reaching this handler remain the filesystem ones
-        # verify_manifest raises.
+        # The handler stays the filesystem one, and git_output is what keeps
+        # that true: it converts OSError, SubprocessError AND ValueError into
+        # None. ValueError is not decoration. subprocess.run raises it for an
+        # argument holding an embedded NUL byte, and text=True decoding raises
+        # UnicodeDecodeError, a ValueError subclass, on a non-UTF-8 gate
+        # artifact. Both escaped before wire 2.1, and either one raising here
+        # fails OPEN: this gate crashes the pytest session instead of reporting
+        # a state, which is worse than any state it could report.
         print(f"{RED}canopus: the frozen contract could not be read, so it cannot "
               f"be verified: {exc}{RESET}")
         return 1

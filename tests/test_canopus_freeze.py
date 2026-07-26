@@ -372,6 +372,34 @@ def test_lock_state_unconfirmed_without_an_anchor():
     assert lock_state(_report(True), ANCHOR_NONE, None) == LOCK_UNCONFIRMED
 
 
+def test_lock_state_compares_the_whole_digest_not_a_shared_prefix():
+    """No prefix comparison, pinned on the function that decides LOCK HELD.
+
+    The other lock_state tests pair 'a'*64 against 'b'*64, which differ at
+    character 0 and so cannot tell a full comparison from a prefix one. These two
+    share their first twelve characters, so an implementation comparing any
+    prefix reports LOCK HELD over a tree that has moved. Measured: mutating the
+    comparison to a 12-character startswith passed the whole suite.
+
+    The sibling axis, approval_state, was pinned this way already. This is the
+    function an operator actually reads for green.
+    """
+    approved = "a" * 64
+    recomputed = "a" * 12 + "b" * 52
+
+    assert lock_state(_report(True, recomputed), ANCHOR_RECORDED, approved) == LOSS_OF_LOCK
+
+
+def test_lock_state_refuses_a_truncated_anchor_hash():
+    """A strict prefix of the recomputed digest is not the recomputed digest.
+
+    A builder with a shell can brute-force a short prefix by appending whitespace
+    to a frozen file, so a truncated digest that looks rigorous is worse than a
+    full one.
+    """
+    assert lock_state(_report(True, "a" * 64), ANCHOR_RECORDED, "a" * 12) == LOSS_OF_LOCK
+
+
 def test_frozen_reason_names_a_frozen_file(tree: Path):
     manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
     assert "frozen contract file" in frozen_reason("tests/test_alpha.py", manifest)

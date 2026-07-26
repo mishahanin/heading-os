@@ -277,9 +277,9 @@ itself. Nobody types a digest and nobody compares one by eye.</p>
 would guard <code>scripts/</code> and <code>scripts/utils/</code>, and a build that cannot create a
 file there cannot build anything.</p>
 <p><code>canopus probe DIR</code> runs a contract set and prints its per-test outcomes without
-freezing anything. <code>canopus pack</code> prints the Fix 2 evidence page: both
-indicators, collected against baseline, commits made while no freeze was held,
-whether the attestation has gone stale, and what is not covered.</p>
+freezing anything. <code>canopus pack</code> prints the Fix 2 evidence page: all three axes
+(lock, attestation, approval), collected against baseline, commits made while no
+freeze was held, whether the attestation has gone stale, and what is not covered.</p>
 <p><strong>Red is not the same as meaningful.</strong> A contract can be red only because the
 module it imports does not exist yet, which says nothing about whether its tests
 assert anything. So <code>probe</code> always, and <code>approve</code> and <code>freeze</code> whenever
@@ -535,10 +535,13 @@ shallow clone, whose grafted boundary commit reads as a root until
 A docstring in <code>tests/contract/2026-07-26-canopus-repository-binding/test_contract.py</code>
 says a wrong definition of repository identity would be caught, and lists &ldquo;a
 toplevel path, an unsorted join, a different separator, a trailing newline&rdquo;.
-Measured by mutation, the toplevel-path and trailing-newline variants ARE killed
-and the other two are NOT: removing <code>sorted(...)</code> from <code>repo_identity</code>, and
-changing the newline separator to a comma, each leave all eleven contract cases
-and all 387 tests of the whole canopus set passing. The cause is the fixtures
+Measured by mutation on 2026-07-27, the toplevel-path and trailing-newline
+variants ARE killed — the trailing newline fails 7 cases and the toplevel path
+fails 14 — and the other two are NOT: removing <code>sorted(...)</code> from
+<code>repo_identity</code>, and changing the newline separator to a comma, each leave all
+448 passing (the 437 in <code>tests/test_canopus_*.py</code> plus the eleven contract
+cases). Re-run those two mutations against those two counts to check whether this
+still holds. The cause is the fixtures
 rather than the argument. No fixture builds a repository with more than one root
 commit, so sorted, unsorted, and any separator collapse to the same one-element
 digest. The consequence is fail-closed rather than a reopened bypass: an anchor
@@ -546,6 +549,15 @@ repository carrying a merged second root could take a spurious broken binding
 after an ordinary commit reorders <code>rev-list</code> output, and nothing in the set would
 fail. The contract is frozen, so the multi-root fixture belongs in the next
 slice&rsquo;s contract.</p>
+<p>Two more of that file&rsquo;s own sentences are wrong, found by the same reading and
+frozen with the rest, so they carry to the next slice&rsquo;s contract too. Its module
+docstring says &ldquo;Six tests&rdquo; where the file collects eleven cases after
+parametrisation. And <code>test_hiding_the_repository_reddens_the_lock</code> says &ldquo;the
+lock is otherwise genuinely held here&rdquo;, where the test writes the anchor line to
+the WORKING copy and never commits it: without the <code>.git</code> rename that fixture
+reports <code>LOCK UNCONFIRMED</code> at exit 0, so the test proves amber becomes red, not
+held becomes red. The sentence describes the pre-fix world it was written
+against; what it asserts about the rename still holds.</p>
 <p><code>.canopus/</code> is gitignored, so the ledger recording release windows and forced
 escapes can be deleted by the builder in one command, and git never saw it.</p>
 <p>And the PreToolUse deny is still only a convenience: a shell <code>sed -i</code> walks past
@@ -743,7 +755,9 @@ of basenames rather than everything:</p>
 </table>
 <p>The narrowing is what makes the guard usable. A first version watched the full membership
 of every ancestor; that put 201 of this repository&rsquo;s 296 test files under a write deny and
-made the builder&rsquo;s next ordinary unit test report <code>LOSS OF LOCK</code>. A guard that fires on the
+made the builder&rsquo;s next ordinary unit test report <code>LOSS OF LOCK</code>. Those two figures are the
+count on the day the narrowing was measured, not a running total: on 2026-07-27 the tree
+carries 288 <code>test_*.py</code> files and 298 <code>.py</code> files under <code>tests/</code>. A guard that fires on the
 builder doing its job gets routed around, and a routed-around guard protects nothing. After
 the narrowing the same freeze denies 2 files, both of them frozen for a stated reason.</p>
 <p><code>status</code> prints each guard&rsquo;s filter beside it, because a line reading <code>dir tests/</code> on its own

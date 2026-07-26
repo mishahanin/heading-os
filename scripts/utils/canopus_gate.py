@@ -152,9 +152,19 @@ def freeze_gate(root: Path) -> int:
     claimed only the first half and was falsified by the second: exporting
     GIT_DIR turned a genuine LOSS OF LOCK into LOCK HELD with exit 0, because
     resolution fell back to the anchor's WORKING copy the moment git answered
-    no_repo or no_git. Every route to "I cannot see the anchor's repository" now
-    resolves RED, so blinding the gate is strictly worse for a builder than doing
-    nothing at all.
+    no_repo or no_git.
+
+    The claim scoped to what was measured, because the earlier headline here read
+    wider than its evidence. Three routes to "I cannot see the anchor's
+    repository" were measured red after this slice where they were green before
+    it: exporting GIT_DIR at a decoy directory, renaming the anchor repository's
+    `.git`, and removing `git` from PATH. For BLINDING, and only for blinding,
+    the bypass now costs a builder more than doing nothing. It does not follow
+    that the gate cannot be defeated. Three routes stay open at zero cost and
+    exit 0: `rm -rf .canopus/`, which is gitignored so git never saw it;
+    `pytest --noconftest`; and `pytest --confcutdir` pointed past this conftest.
+    All three are in the "what this does not buy" material in docs/EXTENDING.md,
+    so nothing is hidden — what was wrong was a headline broader than its proof.
 
     What it still does NOT claim, said here rather than left to be discovered.
     Nothing in this file defends against a builder who replaces the `git` binary

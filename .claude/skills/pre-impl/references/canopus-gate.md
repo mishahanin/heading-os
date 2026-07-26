@@ -51,7 +51,7 @@ committed anchor artifact on a `canopus-contract-satisfied:` line and renders as
 
 ## Release kinds, and the open-window line
 
-`release` requires `--window` or `--ship`; neither one exits 2. `--window` says
+`release` requires `--window` or `--ship`; passing neither exits 2. `--window` says
 the lock will be taken again and the slice is still in progress. `--ship` says
 the slice is over.
 

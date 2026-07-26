@@ -402,18 +402,51 @@ def test_conftest_hook_passes_while_the_lock_is_held(conftest_module, tree, anch
 
 
 def test_conftest_hook_aborts_the_session_when_the_contract_moved(
-    conftest_module, tree, anchor, monkeypatch
+    conftest_module, tree, anchor, monkeypatch, capsys
 ):
     """A moved contract stops the run before collection, so bare pytest cannot
-    reach green on a target the builder moved."""
+    reach green on a target the builder moved.
+
+    Split in two on purpose. The RAISE is asserted for the abort it performs,
+    not for a cause, because freeze_gate reddens from four causes and only this
+    one is a moved contract; an abort message naming the cause was false in the
+    other three. The CAUSE is asserted against the gate's own printed sentence,
+    which is the single place it is derived.
+    """
     manifest = build_manifest([tree / "tests"], tree, label="demo",
                               frozen_at=STAMP, anchor=anchor)
     write_freeze(tree, manifest)
     anchor.write_text(f"canopus-anchor: {manifest['root']}\n")
     (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
     monkeypatch.setattr(conftest_module, "_ENGINE_ROOT", tree)
-    with pytest.raises(pytest.UsageError, match="frozen test contract moved"):
+    with pytest.raises(pytest.UsageError, match="the freeze gate is red"):
         conftest_module.pytest_sessionstart(session=None)
+    assert "The frozen contract moved" in capsys.readouterr().out
+
+
+def test_the_abort_does_not_claim_a_move_when_nothing_moved(
+    conftest_module, tree, anchor, monkeypatch, capsys
+):
+    """The regression for the blanket the gate's own fix left behind.
+
+    A vanished anchor reddens with every frozen byte intact. The abort said the
+    contract moved and sent the operator to a per-file report listing nothing.
+    """
+    manifest = build_manifest([tree / "tests"], tree, label="demo",
+                              frozen_at=STAMP, anchor=anchor)
+    write_freeze(tree, manifest)
+    anchor.unlink()
+    monkeypatch.setattr(conftest_module, "_ENGINE_ROOT", tree)
+
+    with pytest.raises(pytest.UsageError) as raised:
+        conftest_module.pytest_sessionstart(session=None)
+
+    out = capsys.readouterr().out
+    assert "is gone" in out
+    # Neither surface asserts a move, and the abort points at the gate's line
+    # rather than carrying a cause of its own.
+    assert "The frozen contract moved" not in out + str(raised.value)
+    assert "printed immediately above" in str(raised.value)
 
 
 def test_conftest_hook_aborts_on_a_corrupt_manifest(conftest_module, tree, monkeypatch):

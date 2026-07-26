@@ -46,7 +46,12 @@ _ENGINE_ROOT = _TESTS_ROOT.parent
 
 
 def pytest_sessionstart(session):
-    """Canopus wire 1: refuse to run the suite while the frozen contract has moved.
+    """Canopus wire 1: refuse to run the suite while the freeze gate reads red.
+
+    Red is WIDER than a moved contract, which is why the raise below no longer
+    says otherwise: freeze_gate also returns 1 for a manifest deleted under a
+    held lock, for a broken repository binding, for a vanished anchor, and for
+    an anchor recording a different hash. In three of those nothing moved.
 
     The gate has to fire from the CLASS of invocations, not from one command.
     scripts/run-tests.py also calls it, but that runs once at the end of a slice
@@ -64,10 +69,14 @@ def pytest_sessionstart(session):
 
     if freeze_gate(_ENGINE_ROOT) != 0:
         raise pytest.UsageError(
-            "canopus: the frozen test contract moved; the suite will not run. "
-            "Run `python scripts/canopus.py verify` for the per-file report. A "
-            "contract that is genuinely wrong reopens the approval gate; it is "
-            "never edited in place."
+            "canopus: the freeze gate is red, so the suite will not run. The "
+            "canopus line printed immediately above says WHICH cause fired; it "
+            "is the gate's own sentence, computed from the state it just read, "
+            "and a moved contract is only one of the causes that reach here. "
+            "This message does not restate that sentence, because a second copy "
+            "of the derivation is how the two come to disagree. A contract that "
+            "is genuinely wrong reopens the approval gate; it is never edited "
+            "in place."
         )
 
 

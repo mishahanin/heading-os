@@ -1591,3 +1591,206 @@ def test_the_null_stub_does_not_run_once_the_contract_is_already_refused(
 
     assert calls == []
     assert "collected nothing" in capsys.readouterr().err
+
+
+# ============================================================
+# The ledger guard, as a class rather than one function at a time
+# ============================================================
+
+def _ledger_raises(monkeypatch, message: str = "ledger is full"):
+    """Make every append_history call in the CLI raise OSError.
+
+    An injected error rather than a read-only directory, because `cmd_freeze`
+    writes the manifest into the same `.canopus/` a chmod would close, so the
+    chmod route never reaches the ledger line this guard is about.
+    """
+    def failing(root, event, **kwargs):
+        raise OSError(message)
+
+    monkeypatch.setattr(canopus, "append_history", failing)
+
+
+def test_freeze_reports_the_active_lock_when_only_the_ledger_fails(
+    tree, anchor, capsys, monkeypatch
+):
+    """The freeze IS taken by the time the ledger can fail, so a total-failure
+    message is false of the state.
+
+    Unguarded, the OSError fell through to `main`, which printed "the frozen
+    contract could not be read, so it cannot be verified" over a live freeze and
+    sent the operator into a re-run that now refuses with "a freeze is already
+    active". The second consequence is quieter and worse: `freeze_windows` opens
+    a window on this ledger entry, so with the entry missing `canopus pack`
+    reports every commit made under this lock as made outside it.
+    """
+    _ledger_raises(monkeypatch)
+
+    assert _freeze(tree, anchor) == 1
+
+    err = capsys.readouterr().err
+    assert "could not be read" not in err
+    assert "IS ACTIVE" in err
+    assert "`freeze` ledger entry failed" in err
+    assert "pack" in err
+
+    # The claim the message makes, checked against disk and against the tool.
+    assert (tree / ".canopus" / "freeze.json").exists()
+    assert not (tree / ".canopus" / "history.jsonl").exists()
+    assert _run(["status"], tree) == 0
+    assert canopus.LOCK_UNCONFIRMED in capsys.readouterr().out
+
+
+def test_a_release_the_ledger_could_not_record_is_refused(
+    tree, anchor, capsys, monkeypatch
+):
+    """The sibling of the freeze guard, and the reason this is a class.
+
+    Both release paths log BEFORE clearing, so a failed ledger write leaves the
+    freeze standing. Clearing anyway would end a freeze with no line saying it
+    ended, which is exactly the gap deleting the manifest by hand leaves.
+    """
+    assert _freeze(tree, anchor) == 0
+    capsys.readouterr()
+    _ledger_raises(monkeypatch)
+
+    for argv in (["release", "--reason", "done"],
+                 ["release", "--force", "--reason", "damaged"]):
+        assert _run(argv, tree) == 1, argv
+        err = capsys.readouterr().err
+        assert "could not be read" not in err, argv
+        assert "NOTHING was released" in err, argv
+        assert (tree / ".canopus" / "freeze.json").exists(), argv
+
+
+def test_a_failed_verify_ledger_entry_does_not_contradict_the_lock_report(
+    tree, anchor, capsys, monkeypatch
+):
+    """`verify` already printed the per-file report and already failed closed.
+
+    Unguarded, the last sentence an operator read on a genuinely broken lock was
+    "the frozen contract could not be read", which reads as though the state
+    above it had never been established.
+    """
+    assert _freeze(tree, anchor) == 0
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+    capsys.readouterr()
+    _ledger_raises(monkeypatch)
+
+    assert _run(["verify"], tree) == 1
+
+    captured = capsys.readouterr()
+    assert canopus.LOSS_OF_LOCK in captured.out
+    assert "could not be read" not in captured.err
+    assert "`verify_fail` ledger entry failed" in captured.err
+
+
+# ============================================================
+# A skipped contract test is visible, and is not called vacuous
+# ============================================================
+
+def test_probe_shows_a_skipped_test_as_skipped_rather_than_vacuous(tree, capsys):
+    """`pytest.importorskip` is an ordinary idiom, and nothing refuses a skipped
+    contract test.
+
+    The display filter was `outcome != "passed"` while `vacuity_refusal` filters
+    on `outcome in RED_OUTCOMES`, so a skipped test landed in the vacuous branch:
+    it is in `vacuous` because the stub supplies the module it skipped on, and
+    the `continue` swallowed the only line that would have said it never ran. The
+    one surface the operator is told to read reclassified it into the bucket they
+    are invited to strike off by eye.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True)
+    (directory / "test_contract.py").write_text(
+        "import pytest\n\n\n"
+        "def test_parked():\n"
+        "    answer = pytest.importorskip('absent_thing').answer\n"
+        "    assert answer() is not None\n"
+        "\n\n"
+        "def test_red():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() == 42\n"
+    )
+
+    _run(["probe", "tests/contract/slice"], tree)
+    out = capsys.readouterr().out
+
+    parked = next(line for line in out.splitlines() if "test_parked" in line)
+    assert "skipped" in parked
+    assert "vacuous" not in parked
+    assert "asserts nothing" not in parked
+    # No invented failure mode either: a skipped test carries no failure child,
+    # so the heuristic would have defaulted it to `other`.
+    assert "other" not in parked
+
+
+# ============================================================
+# The --replace reason reaches the artifact, not only the ledger
+# ============================================================
+
+def test_the_replace_reason_is_written_to_the_artifact(tree: Path, anchor: Path):
+    """`.canopus/history.jsonl` is gitignored and one command removes it.
+
+    Without the reason on the artifact, an operator reading the diff a human
+    commits sees two indistinguishable hash lines and no account of either.
+    """
+    from scripts.utils.canopus_freeze import ANCHOR_RECORDED, read_anchor
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+    (tree / "tests" / "test_beta.py").write_text("def test_b():\n    assert True\n")
+    assert _run(["approve", "tests/test_alpha.py", "tests/test_beta.py",
+                 "--label", "l", "--anchor", str(anchor),
+                 "--replace", "--reason", "the beta case joined the set"], tree) == 0
+
+    text = anchor.read_text()
+    assert "the beta case joined the set" in text
+    assert _ledger(tree)[-1]["reason"] == "the beta case joined the set"
+
+    # The reason is on its OWN line, and the parser is untouched by it. Both
+    # halves matter: read_anchor takes everything after the prefix as the hash,
+    # so a reason on that line would corrupt the value every later comparison
+    # rests on.
+    status, value = read_anchor(anchor)
+    assert status == ANCHOR_RECORDED
+    assert value == _recorded(anchor)
+    assert len(value) == 64
+    assert int(value, 16) >= 0
+    assert not any(
+        line.strip().startswith(canopus.ANCHOR_PREFIX)
+        and "the beta case joined the set" in line
+        for line in text.splitlines()
+    )
+
+
+def test_a_multi_line_reason_cannot_forge_a_second_anchor_line(
+    tree: Path, anchor: Path
+):
+    """The reason is operator text written into the durable record, so it is
+    collapsed to one line before it lands. A newline inside it would otherwise
+    write a `canopus-anchor:` line this tool never computed, into the one file a
+    human reads to see what was approved."""
+    from scripts.utils.canopus_freeze import read_anchor
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+    approved = _recorded(anchor)
+    forged = f"{canopus.ANCHOR_PREFIX} {'e' * 64}"
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor), "--replace", "--reason",
+                 f"widened\n{forged}"], tree) == 0
+
+    # No line the operator could read as an approval except the ones approve
+    # computed. `read_anchor` takes the LAST such line, so an injected one that
+    # landed below the real one would BE the answer.
+    lines = [line.strip() for line in anchor.read_text().splitlines()]
+    assert forged not in lines
+    assert [line for line in lines
+            if line.startswith(canopus.ANCHOR_PREFIX)] == [
+        f"{canopus.ANCHOR_PREFIX} {approved}"] * 2
+
+    # The set did not change, so the honest answer is the same digest as before.
+    _status, value = read_anchor(anchor)
+    assert value == approved
+    assert len(value) == 64

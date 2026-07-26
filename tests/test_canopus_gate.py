@@ -217,6 +217,34 @@ def test_a_hidden_repository_reddens_the_gate_and_says_so(tree, anchor, capsys):
     assert "for the per-file report" not in out
 
 
+def test_a_moved_contract_and_a_hidden_repository_are_both_named(tree, anchor, capsys):
+    """When both are wrong, the gate says both. It used to say only the binding.
+
+    LOSS OF LOCK is reached independently by an unbound anchor and by a moved
+    contract, and the two co-occur: this test edits a frozen file AND renames
+    the anchor repository's `.git` in the same run. The branch above keyed on
+    the binding alone, so the operator was told about the repository and never
+    about the movement, its own comment ("nothing in the contract moved") was
+    false, and the remedy it implies re-freezes the moved contract with the
+    per-file diff never once read.
+    """
+    _git_init(anchor.parent)
+    _git_commit(anchor.parent, "the gate artifact")
+    manifest = _bound_manifest(tree, anchor)
+    write_freeze(tree, manifest)
+    anchor.write_text(f"canopus-anchor: {manifest['root']}\n", encoding="utf-8")
+
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+    (anchor.parent / ".git").rename(anchor.parent / ".git-hidden")
+
+    assert freeze_gate(tree) == 1
+    out = capsys.readouterr().out
+    assert "LOSS OF LOCK" in out
+    assert "The frozen contract moved" in out
+    assert "for the per-file report" in out
+    assert "the approval cannot be attributed" in out
+
+
 def test_a_substituted_repository_reddens_the_gate(tree, anchor, capsys):
     """Identity, not presence, at the surface that fires.
 

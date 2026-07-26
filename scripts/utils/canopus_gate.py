@@ -77,15 +77,26 @@ def freeze_gate(root: Path) -> int:
     state = lock_state(report, status, value)
 
     if state == LOSS_OF_LOCK:
-        if resolution.status == ANCHOR_UNBOUND:
-            # The per-file report would be EMPTY here: nothing in the contract
-            # moved, the anchor's repository did. Sending the operator to a
-            # report with nothing in it is how a true red reads like a bug.
+        if resolution.status == ANCHOR_UNBOUND and report["held"]:
+            # The per-file report is EMPTY on this branch, and `report["held"]`
+            # is what makes that claim true rather than nearly true. LOSS OF
+            # LOCK is reached by an unbound anchor AND by a moved contract,
+            # independently, and the two co-occur: edit a frozen file and hide
+            # the anchor's repository in the same run. Without the second
+            # condition this branch swallowed the movement, told the operator
+            # only about the binding, and the remedy it implies re-freezes a
+            # moved contract without the per-file diff ever being read.
             print(f"{RED}canopus: {LOSS_OF_LOCK}. {resolution.approval_reason}"
                   f"{RESET}")
             return 1
+        # When both are wrong, say both. The binding sentence is appended rather
+        # than substituted, because an operator who fixes only the half they
+        # were told about is back here on the next run.
+        binding = (f" {resolution.approval_reason}"
+                   if resolution.status == ANCHOR_UNBOUND else "")
         print(f"{RED}canopus: {LOSS_OF_LOCK}. The frozen contract moved; run "
-              f"`python scripts/canopus.py verify` for the per-file report.{RESET}")
+              f"`python scripts/canopus.py verify` for the per-file report."
+              f"{binding}{RESET}")
         return 1
     colour = GREEN if state == LOCK_HELD else YELLOW
     print(f"{colour}canopus: {state}{RESET} (label: {manifest['label']})")

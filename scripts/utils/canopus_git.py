@@ -195,7 +195,18 @@ def read_committed_anchor(artifact: Path) -> Tuple[str, Optional[str]]:
     artifact = Path(artifact)
     directory = artifact.parent
     top = git_output(directory, "rev-parse", "--show-toplevel")
-    if top is None:
+    if top is None or not top.strip():
+        # `not top.strip()` is the same guard `repo_identity` carries, and it is
+        # here because wire 2.2 added it there and not to its sibling. That is
+        # the NINTH time on this project that a guard has been applied to one
+        # function and not the one beside it, which is why the class matters
+        # more than the case: empty output on exit 0 makes `Path("")` into
+        # `Path(".")`, so `git show HEAD:<rel>` below would read the AMBIENT
+        # repository and hand back a hash labelled COMMITTED. The call site is
+        # live rather than theoretical: `cmd_approve` calls this function
+        # directly, so it is not covered by the binding check `resolve_anchor`
+        # runs first.
+        #
         # Distinguishing "no git binary" from "not a repository" needs a second
         # call, and the caller reports both as APPROVAL UNVERIFIED. One extra
         # subprocess buys a truer message, and this path runs once per command.

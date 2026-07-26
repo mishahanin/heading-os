@@ -259,6 +259,8 @@ def refusal_reasons(
     counts: dict[str, int],
     outcomes: Sequence[tuple[str, str, str]],
     expected: Sequence[str],
+    *,
+    green_ok: bool = False,
 ) -> list[str]:
     """Why this contract cannot be frozen. Empty means it can.
 
@@ -269,6 +271,23 @@ def refusal_reasons(
     ("returns an empty list for empty input") can legitimately pass against a
     stub, and demanding redness everywhere is an incentive to write contorted
     tests for the indicator's sake.
+
+    `green_ok` waives the redness condition and NOTHING else. It exists for the
+    one state the rule is wrong about: a RETAKE of a freeze whose contract has
+    already been implemented and is now green by the slice's own work. Refusing
+    there is what pushed the previous retake into passing the contract directory
+    POSITIONALLY, which silently gave up the baseline, and with it the
+    attestation's per-file subset check, the collected-nothing refusal, the
+    vacuity re-proof, and the ledger's already-green note. A named waiver that
+    keeps every other protection is strictly better than a workaround that
+    drops them all.
+
+    It is a PARAMETER rather than a filter applied to the returned list. The
+    caller that filtered by string would silently start waiving any future
+    reason whose wording happened to match, and it could not tell a waived
+    reason from a reason that never fired. Here the suppression is at the one
+    site that produces it, and the per-file zero-item refusals below are
+    untouched by construction rather than by careful matching.
     """
     reasons: list[str] = []
     for rel in expected:
@@ -278,7 +297,9 @@ def refusal_reasons(
                 f"test inside the test body, not at module scope, so the file "
                 f"collects before its implementation exists."
             )
-    if not any(outcome in RED_OUTCOMES for _rel, _name, outcome in outcomes):
+    if not green_ok and not any(
+        outcome in RED_OUTCOMES for _rel, _name, outcome in outcomes
+    ):
         reasons.append(
             "no contract test failed: a contract that is green before the code "
             "exists asserts nothing"

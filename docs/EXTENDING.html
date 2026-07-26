@@ -298,6 +298,19 @@ judgement for a human, and a test that legitimately asserts absence lands on
 that list. The cost is stated rather than hidden: those runs are two pytest
 sessions over the contract, and the second is what buys the proof (<code>approve</code> and
 <code>freeze</code> skip it once the first run has already earned a refusal).</p>
+<p><strong>A retake needs a named waiver, not a workaround.</strong> The redness rule is right
+about a first freeze and wrong about the last one: once a slice has implemented
+its contract, every row is green and the same rule refuses the retake. Passing
+the contract directory positionally gets past it and silently gives up
+everything <code>--contract</code> buys, so <code>approve</code> and <code>freeze</code> take
+<code>--contract-satisfied REASON</code> instead. The reason is the flag&rsquo;s VALUE, so it
+cannot be passed without one. It waives EXACTLY the redness refusal: a contract
+file that collected nothing is still refused, the null-stub vacuity proof still
+runs, and the baseline, the ledger note, and the pack&rsquo;s contract section all
+survive. On a contract that is actually red the flag changes nothing and says so
+out loud, so it cannot quietly become a habit that hides redness. The reason
+prints at the surface and is recorded in the <code>.canopus/history.jsonl</code> entry for
+that <code>approve</code> or <code>freeze</code>.</p>
 <p>Say what the instrument cannot do. It learns which modules were absent by
 reading the failure text the contract&rsquo;s own tests produced, so a test that
 suppresses its exception chain (<code>raise AssertionError(...) from None</code> around the

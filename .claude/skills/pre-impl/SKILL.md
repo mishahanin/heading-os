@@ -268,13 +268,15 @@ their exceptions, are in `references/canopus-gate.md` — read it before the fir
 retake. Three rules there bite mid-slice:
 
 - **A release names its kind:** `--window` while the slice runs, `--ship` when it
-  is over. Neither flag exits 2. An open window makes every pytest session start
+  is over. Passing neither exits 2. An open window makes every pytest session start
   print an amber line saying no lock is held, so a green suite proves nothing.
 - **A retake of a contract the slice has legitimately turned green needs
   `--contract-satisfied "<why>"`** on BOTH `approve` and `freeze`. It waives only
   the redness refusal, the reason is mandatory, and it lands in the committed
-  artifact as `CONTRACT WAIVED`. Never pass the contract directory positionally
-  to get past the refusal: that drops the baseline and the subset check.
+  artifact on a `canopus-contract-satisfied:` line — grep for THAT, not for
+  `CONTRACT WAIVED`, which is only the label `pack`, `verify` and `status`
+  render. Never pass the contract directory positionally to get past the
+  refusal: that drops the baseline and the subset check.
 - **Coming back from a window is six commands, not one.** The enforcer bytes
   moved, so the root moved with them, and the committed approval still records
   the previous root — precisely what `freeze` refuses. `approve --replace

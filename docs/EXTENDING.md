@@ -201,9 +201,9 @@ would guard `scripts/` and `scripts/utils/`, and a build that cannot create a
 file there cannot build anything.
 
 `canopus probe DIR` runs a contract set and prints its per-test outcomes without
-freezing anything. `canopus pack` prints the Fix 2 evidence page: both
-indicators, collected against baseline, commits made while no freeze was held,
-whether the attestation has gone stale, and what is not covered.
+freezing anything. `canopus pack` prints the Fix 2 evidence page: all three axes
+(lock, attestation, approval), collected against baseline, commits made while no
+freeze was held, whether the attestation has gone stale, and what is not covered.
 
 **Red is not the same as meaningful.** A contract can be red only because the
 module it imports does not exist yet, which says nothing about whether its tests
@@ -404,10 +404,13 @@ shallow clone, whose grafted boundary commit reads as a root until
 A docstring in `tests/contract/2026-07-26-canopus-repository-binding/test_contract.py`
 says a wrong definition of repository identity would be caught, and lists "a
 toplevel path, an unsorted join, a different separator, a trailing newline".
-Measured by mutation, the toplevel-path and trailing-newline variants ARE killed
-and the other two are NOT: removing `sorted(...)` from `repo_identity`, and
-changing the newline separator to a comma, each leave all eleven contract cases
-and all 387 tests of the whole canopus set passing. The cause is the fixtures
+Measured by mutation on 2026-07-27, the toplevel-path and trailing-newline
+variants ARE killed — the trailing newline fails 7 cases and the toplevel path
+fails 14 — and the other two are NOT: removing `sorted(...)` from
+`repo_identity`, and changing the newline separator to a comma, each leave all
+448 passing (the 437 in `tests/test_canopus_*.py` plus the eleven contract
+cases). Re-run those two mutations against those two counts to check whether this
+still holds. The cause is the fixtures
 rather than the argument. No fixture builds a repository with more than one root
 commit, so sorted, unsorted, and any separator collapse to the same one-element
 digest. The consequence is fail-closed rather than a reopened bypass: an anchor
@@ -415,6 +418,16 @@ repository carrying a merged second root could take a spurious broken binding
 after an ordinary commit reorders `rev-list` output, and nothing in the set would
 fail. The contract is frozen, so the multi-root fixture belongs in the next
 slice's contract.
+
+Two more of that file's own sentences are wrong, found by the same reading and
+frozen with the rest, so they carry to the next slice's contract too. Its module
+docstring says "Six tests" where the file collects eleven cases after
+parametrisation. And `test_hiding_the_repository_reddens_the_lock` says "the
+lock is otherwise genuinely held here", where the test writes the anchor line to
+the WORKING copy and never commits it: without the `.git` rename that fixture
+reports `LOCK UNCONFIRMED` at exit 0, so the test proves amber becomes red, not
+held becomes red. The sentence describes the pre-fix world it was written
+against; what it asserts about the rename still holds.
 
 `.canopus/` is gitignored, so the ledger recording release windows and forced
 escapes can be deleted by the builder in one command, and git never saw it.
@@ -558,7 +571,9 @@ of basenames rather than everything:
 
 The narrowing is what makes the guard usable. A first version watched the full membership
 of every ancestor; that put 201 of this repository's 296 test files under a write deny and
-made the builder's next ordinary unit test report `LOSS OF LOCK`. A guard that fires on the
+made the builder's next ordinary unit test report `LOSS OF LOCK`. Those two figures are the
+count on the day the narrowing was measured, not a running total: on 2026-07-27 the tree
+carries 288 `test_*.py` files and 298 `.py` files under `tests/`. A guard that fires on the
 builder doing its job gets routed around, and a routed-around guard protects nothing. After
 the narrowing the same freeze denies 2 files, both of them frozen for a stated reason.
 

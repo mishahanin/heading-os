@@ -211,6 +211,33 @@ def test_an_uncommitted_approval_never_reaches_lock_held(tmp_path):
     assert lock_state(report, resolution.status, resolution.value) == LOCK_UNCONFIRMED
 
 
+def test_a_deleted_artifact_still_reddens_the_lock(tmp_path):
+    """`git show HEAD:<rel>` is existence-blind, so the committed value alone
+    would report a held lock over an anchor that is GONE.
+
+    The committed hash survives the file being deleted, so without the
+    ANCHOR_MISSING branch in resolve_anchor the committed value governs, the lock
+    reads held over nothing, and `cmd_verify`'s "anchor is gone" line becomes
+    unreachable inside a repository. The sibling CLI test that deletes an anchor
+    sits OUTSIDE any repository, where the committed reader never answers, so it
+    cannot reach this branch.
+    """
+    from scripts.utils.canopus_freeze import LOSS_OF_LOCK, lock_state
+    from scripts.utils.canopus_git import resolve_anchor
+
+    root = _repo(tmp_path)
+    artifact = root / "gate.md"
+    artifact.write_text(f"canopus-anchor: {'d' * 64}\n", encoding="utf-8")
+    _commit(root, "approve")
+    artifact.unlink()
+
+    resolution = resolve_anchor({"anchor": str(artifact), "root": "d" * 64})
+    report = {"recomputed_root": "d" * 64, "changed": [], "added": [],
+              "removed": [], "held": True}
+
+    assert lock_state(report, resolution.status, resolution.value) == LOSS_OF_LOCK
+
+
 def test_a_committed_hash_differing_only_in_its_last_character_is_not_approved(tmp_path):
     """No prefix comparison anywhere, pinned where a prefix compare would pass.
 

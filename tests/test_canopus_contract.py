@@ -197,6 +197,30 @@ def test_missing_modules_names_what_the_contract_could_not_import(tmp_path):
     assert "absent_thing" in missing_modules(run_pytest_report([tmp_path / "c"], tmp_path))
 
 
+def test_missing_modules_sees_a_missing_name_not_just_a_missing_module(tmp_path):
+    """A module file that EXISTS without the name the contract imports is the
+    ordinary mid-build state, and the probe is blind to it without this.
+
+    Nothing here raises `No module named`: present_module imports cleanly and the
+    child reports `ImportError: cannot import name 'not_written_yet' from
+    'present_module'`. Matching only the first pattern returns an empty set, so
+    run_null_stub stubs nothing, returns nothing, and vacuity_refusal can never
+    fire in exactly the state where a retake is taken. The sibling above uses a
+    wholly absent module and so cannot reach this half.
+    """
+    from scripts.utils.canopus_contract import missing_modules, run_pytest_report
+
+    _write(tmp_path, "present_module.py", "existing = 1\n")
+    _write(tmp_path, "c/test_one.py",
+           "def test_a():\n"
+           "    from present_module import not_written_yet\n"
+           "    assert not_written_yet\n")
+
+    found = missing_modules(run_pytest_report([tmp_path / "c"], tmp_path))
+
+    assert "present_module" in found
+
+
 def test_a_test_that_passes_against_a_mock_asserts_nothing(tmp_path):
     """The construction proves it: a MagicMock satisfies any shape."""
     from scripts.utils.canopus_contract import run_null_stub

@@ -1089,14 +1089,38 @@ def test_approval_is_verified_only_by_a_matching_committed_hash():
 
 
 def test_a_committed_hash_that_disagrees_is_not_an_approval():
+    """The two hashes differ in their LAST character, deliberately.
+
+    Two digests differing at character 0 leave a prefix comparison green, so a
+    test built that way pins nothing on the one axis where a prefix collision
+    would produce a false APPROVED.
+    """
     from scripts.utils.canopus_freeze import APPROVAL_UNVERIFIED, approval_state
 
-    axis, reason = approval_state("a" * 64, "committed", "b" * 64)
+    disagreeing = "a" * 63 + "b"
+    axis, reason = approval_state("a" * 64, "committed", disagreeing)
     assert axis == APPROVAL_UNVERIFIED
-    assert "b" * 64 in reason
+    assert disagreeing in reason
 
 
-def test_each_unverifiable_status_keeps_its_own_reason():
+def test_an_unrecognised_approval_status_is_answered_rather_than_raised():
+    """This runs inside the test gate, and a raise there fails OPEN."""
+    from scripts.utils.canopus_freeze import APPROVAL_UNVERIFIED, approval_state
+
+    axis, reason = approval_state("a" * 64, "a status no module defines", None)
+    assert axis == APPROVAL_UNVERIFIED
+    assert "a status no module defines" in reason
+
+
+def test_an_empty_hash_on_both_sides_is_not_an_approval():
+    """Otherwise the axis reads APPROVED over nothing at all."""
+    from scripts.utils.canopus_freeze import APPROVAL_UNVERIFIED, approval_state
+
+    assert approval_state("", "committed", "")[0] == APPROVAL_UNVERIFIED
+    assert approval_state("", "committed", None)[0] == APPROVAL_UNVERIFIED
+
+
+def test_each_unverifiable_approval_status_keeps_its_own_reason():
     """A generic "could not check" hides which of three worlds you are in."""
     from scripts.utils.canopus_freeze import APPROVAL_UNVERIFIED, approval_state
 

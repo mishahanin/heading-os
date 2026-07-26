@@ -645,8 +645,15 @@ def approval_state(
 
     An unrecognised status resolves UNVERIFIED with the status named, rather than
     raising: this is called from the test gate, which must never raise.
+
+    The truthiness guard on committed_hash is deliberate. Without it, two empty
+    or two None values compare equal and the axis reads APPROVED over nothing at
+    all. read_committed_anchor never returns that pair today, so the guard is
+    insurance rather than a fix, and it is here because this is the function that
+    decides whether a human approved something: it should not depend on a
+    distant module's invariant to avoid a false green.
     """
-    if committed_status == "committed" and committed_hash == manifest_root:
+    if committed_status == "committed" and committed_hash and committed_hash == manifest_root:
         return (APPROVED, "")
     reason = _UNVERIFIED_REASONS.get(
         committed_status, f"unrecognised approval status {committed_status!r}"

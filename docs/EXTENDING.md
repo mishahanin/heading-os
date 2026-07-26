@@ -1,4 +1,4 @@
-<!-- version: 1.1.0 | last-updated: 2026-07-26 -->
+<!-- version: 1.2.0 | last-updated: 2026-07-27 -->
 # Extending the engine
 
 How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
@@ -173,8 +173,12 @@ any repository, there is no approval to disagree with, so the freeze is TAKEN
 and reads amber. Either copy satisfies the check, the committed one or a freshly
 approved working copy, and the committed copy is what governs the lock and the
 approval axis afterwards. A freeze taken over an approval nobody has committed yet is
-permitted, says on the way out that it is uncommitted, and reads amber; `verify`
-reports `LOSS OF LOCK` until the commit lands. Refusing there instead would leave
+permitted, and it says on the way out WHICH of the two uncommitted states it is
+in, because they end differently. Where the commit records no hash at all it
+prints `approval unverified`, and `verify` reads amber, `LOCK UNCONFIRMED`, until
+someone commits. Where the commit records an older hash while the candidate this
+freeze took sits on the working copy alone, it prints `approval uncommitted`, and
+`verify` reports `LOSS OF LOCK` until the commit lands. Refusing there instead would leave
 the operator with no manifest at all and a silently green suite, which is the one
 outcome worse than a red lock.
 
@@ -255,6 +259,21 @@ repository. `canopus pack` reads it back, bound to this freeze's root hash, and
 prints `CONTRACT WAIVED` on the evidence page, so a freeze that passed the
 redness rule on a stated reason never reads like one that earned it.
 
+The two halves are held together rather than trusted to arrive together.
+`freeze --contract-satisfied` over an approval that records no matching waiver is
+REFUSED, because `pack` reads its `CONTRACT WAIVED` marker off the artifact and
+only `approve` writes it there: without the refusal, the surface an operator
+approves from would report a stronger claim than the freeze earned. The refusal
+is bound to the waiver having FIRED, never to the flag being present, so a run
+where the flag changed nothing is not refused for making no claim.
+
+Be honest about what the reason is worth. It is EVIDENCE, not a tamper-proof
+record. It rides on the anchor artifact beside the approval, exactly like
+`canopus-approval-reason:`, and neither line is inside the root hash: a human who
+reads the artifact sees the waiver and its stated reason, and nothing recomputes
+it or fails when it is edited. What the hash protects is the SET that was frozen,
+not the prose explaining why it was accepted.
+
 Say what the instrument cannot do. It learns which modules were absent by
 reading the failure text the contract's own tests produced, so a test that
 suppresses its exception chain (`raise AssertionError(...) from None` around the
@@ -267,34 +286,109 @@ and finding none. It is not a refusal, because tests failing on assertions
 against code that already exists produce the same reading and are a perfectly
 ordinary contract.
 
-**Blinding the gate no longer pays, and what that does and does not cover.**
-One environment variable used to defeat the lock at no cost: `resolve_anchor`
-fell back to the artifact's WORKING copy whenever git answered `no_repo` or
-`no_git`, and both answers came from a child `git` process whose environment the
-builder controls, so `GIT_DIR=/tmp/nothing.git` in front of any command that
-reached the gate turned a genuine `LOSS OF LOCK` into `LOCK HELD` with gate exit
-0. Wire 2.2 closed it. The freeze now RECORDS which repository the anchor
-belonged to, as a digest over that repository's root commits, and a manifest that
-recorded a repository resolves RED whenever git answers anything else — a
-different repository, no repository, or no git at all. The child environment is
-scrubbed of every `GIT_*` variable by prefix rather than by a denylist, which
-also fixed a real bug: git exports `GIT_DIR` and `GIT_INDEX_FILE` to its own
-hooks, so the gate running inside a pre-commit hook was asking the wrong
-repository about the anchor. Blinding is now strictly worse for a builder than
-doing nothing at all.
+**Blinding the gate, measured before and after.**
+Wire 2.1 shipped one Critical open, and the account below is what a fixture
+measured rather than what the repair intended. `resolve_anchor` fell back to the
+artifact's WORKING copy whenever git answered `no_repo` or `no_git`, and both
+answers came out of a child `git` process whose environment the builder controls.
 
-Say what remains, because the flattering reading is that this makes the lock
-adversary-proof. It does not defend against a builder who replaces the `git`
-binary on PATH: every answer the gate binds to comes from a child process. The
-identity binds a repository's LINEAGE, not an instance, so a `git clone` of the
+Measured at commit `7bd1744`, the last state before any of this landed, over a
+freeze whose approval line sat on the working copy and in no commit:
+
+| Run | Reported | Exit |
+|---|---|---|
+| control | `LOCK UNCONFIRMED` | 0 |
+| `GIT_DIR=/tmp/nothing.git` | `LOCK HELD` | 0 |
+| the anchor repository's `.git` renamed | `LOCK HELD` | 0 |
+| `git` removed from `PATH` | `LOCK HELD` | 0 |
+
+Three ways to spend nothing and buy a green gate over an approval no human had
+committed, and none of them leaves a trace on the tree.
+
+Measured again on the same fixture with wire 2.2 in place:
+
+| Run | Reported | Exit |
+|---|---|---|
+| control | `LOCK UNCONFIRMED` | 0 |
+| `GIT_DIR=/tmp/nothing.git` | `LOCK UNCONFIRMED` | 0 |
+| the anchor repository's `.git` renamed | `LOSS OF LOCK`, `git now answers no_repo` | 1 |
+| `git` removed from `PATH` | `LOSS OF LOCK`, `git now answers no_git` | 1 |
+
+The second row is the shape of the environment fix: the variable no longer
+CHANGES the answer, because the child environment is stripped of every variable
+whose name begins `GIT_`, by prefix rather than by a denylist naming the ones
+somebody thought of. That prefix also repairs a plain correctness bug rather than
+only a security one. Git exports `GIT_DIR` and `GIT_INDEX_FILE` to its own hooks,
+the engine's pre-commit and pre-push hooks run the suite, the suite starts the
+gate — so the gate was asking the HOOK's repository about an anchor that lives in
+another one.
+
+**The anchor's repository, recorded and re-checked.**
+The manifest now carries `anchor_repo`: whether the anchor was inside a
+repository at freeze time, and if it was, which one. The identity is a sha256
+over that repository's sorted ROOT COMMITS, newline-joined. A toplevel path would
+have been cheaper and is wrong, because a relocated repository is the same
+repository and this workspace has been relocated once already; a merged history
+can carry more than one root commit, so the whole sorted set is hashed rather
+than one line of output.
+
+`anchor_repo` is inside the root hash, beside the recipe, the anchor path, the
+file and directory maps, and the baseline. That placement is the load-bearing
+half: outside the hash, a builder edits the binding to `in_repo: false`, wins the
+working-copy fallback permanently, and the committed approval still matches.
+Inside it, the same edit moves the root and the human's committed approval stops
+agreeing.
+
+Five outcomes, judged on every `verify`, `status`, `pack`, and test-gate run:
+
+| Recorded at freeze time | What git answers now | Result |
+|---|---|---|
+| a repository, identity X | the same identity X | intact; the approval is read from the COMMITTED copy |
+| a repository, identity X | a different identity | RED, `unbound`: the anchor is inside a different repository than the freeze recorded |
+| a repository | no repository, or no git at all | RED, `unbound`: this is the blinding case |
+| no repository (a file in a folder) | still no repository | intact; the working copy governs, and the approval axis stays amber |
+| no repository | a repository | RED, `unbound`: the freeze was taken blind, so release and re-freeze |
+
+Two states are refused at freeze time rather than recorded. When git cannot be
+consulted at all, `approve` and `freeze` refuse: writing `in_repo: false` there
+would record the positive claim that the anchor is outside any repository, which
+the tool has no evidence for and which is probably untrue, and every later
+`verify` would then blame the blinding rather than name the real cause. When the
+anchor's repository has no commits, they refuse too: the first commit into it is
+the approval act itself, so an identity recorded now would change at the exact
+moment a human approved. Both refusals are checked BEFORE the contract runs, so a
+`freeze --contract` does not spend two pytest sessions on its way to being told
+to go and commit something.
+
+A broken binding is RED with exit 1, never amber. Amber exits 0, and a builder
+who blinded the gate would keep the entire payoff of the bypass while paying only
+a colour change. The bypass has to cost more than doing nothing, and red with
+exit 1 is what makes it cost more.
+
+**What the binding does not buy.**
+Nothing here defends against a builder who replaces the `git` binary on PATH, or
+who forges commits in a repository they control. Every answer the gate binds to
+comes from a child process, and a process the builder owns cannot prove itself.
+The operator's countermeasure is unchanged and still worth the ten seconds: run
+`canopus verify` YOURSELF, in your own shell, at the approval gate, rather than
+reading a status the builder printed.
+
+The identity binds a repository's LINEAGE, not an instance. A `git clone` of the
 anchor's repository carries the same root commits and reads as the same
-repository; that is deliberate, because a relocated or cloned repository IS the
-same repository, but it means the binding proves which history the anchor belongs
-to and never which copy of it was read. And the PreToolUse deny is still only a
-convenience: a shell `sed -i` walks past it, and `verify` plus the test gate are
-the guarantee. The operator's countermeasure has not changed and is still worth
-the ten seconds: run `canopus verify` YOURSELF, in your own shell, at the
-approval gate, rather than reading a status the builder printed.
+repository, so an anchor repointed at a clone that carries a forged approval
+passes the binding check. That is deliberate — a relocated or cloned repository
+IS the same repository — and it means the binding proves which HISTORY the anchor
+belongs to and never which copy of it was read. Three legitimate events move the
+identity and cost one release-and-re-freeze each: checking out an orphan branch
+with its own root, merging in a history carrying another root commit, and a
+shallow clone, whose grafted boundary commit reads as a root until
+`git fetch --unshallow`.
+
+`.canopus/` is gitignored, so the ledger recording release windows and forced
+escapes can be deleted by the builder in one command, and git never saw it.
+
+And the PreToolUse deny is still only a convenience: a shell `sed -i` walks past
+it, and `verify` plus the test gate are the guarantee.
 
 **The instrument has no committed human artifact behind it.**
 `scripts/utils/canopus_contract.py` and `scripts/utils/canopus_nullstub.py` sit
@@ -374,8 +468,20 @@ Three layers, and the differences matter:
 | State | Meaning |
 |---|---|
 | `LOCK HELD` | the manifest is intact and matches the hash recorded in the anchor artifact |
-| `LOSS OF LOCK` | something changed, or the anchor disagrees or vanished. Exit code 1. |
+| `LOSS OF LOCK` | something changed, or the anchor disagrees, or it vanished, or its repository binding broke. Exit code 1. |
 | `LOCK UNCONFIRMED` | no anchor hash is recorded yet: nothing changed since the last check, which is not the same as "this is the approved contract" |
+
+`verify` and `status` also print the anchor's own status in brackets beside its
+path, and `pack` prints it beside the lock line. It is the finer reading behind
+the three states above:
+
+| Anchor status | Meaning |
+|---|---|
+| `recorded` | the artifact carries a `canopus-anchor:` hash; whether the lock is held then turns on whether it matches |
+| `unrecorded` | the artifact exists and no approval is written in it yet. Amber. |
+| `missing` | the artifact is gone. Red, even when a commit still records the hash: a vanished anchor is evidence. |
+| `unbound` | the anchor's repository binding broke, so no copy of the artifact is consulted at all. Red, and the reason prints on the approval axis. |
+| `none` | the manifest carries no anchor. The CLI refuses an anchorless freeze, so this reaches you only from a manifest an older CLI or the library wrote. |
 
 `verify`, `status`, and `pack` print a third axis beneath the lock and the
 attestation, answering whether this exact freeze is the one a human approved:
@@ -383,11 +489,14 @@ attestation, answering whether this exact freeze is the one a human approved:
 | State | Meaning |
 |---|---|
 | `APPROVED` | the frozen root hash is recorded in a COMMIT of the gate artifact |
-| `APPROVAL UNVERIFIED` | the committed artifact records a DIFFERENT hash (the re-baseline case, and the commonest of the four), or the artifact is uncommitted or untracked, or it is outside a repository, or git is unavailable; the reason is printed beside it |
+| `APPROVAL UNVERIFIED` | the committed artifact records a DIFFERENT hash (the re-baseline case, and the commonest of them), or the artifact is uncommitted or untracked, or it is outside a repository, or git is unavailable, or the repository binding broke; the reason is printed beside it |
 
 Amber rather than red on the second row, deliberately: an operator whose gate
 artifact is a file in a folder has no repository to attribute an approval to, and
-that is a supported way to use the tool rather than a failure of it.
+that is a supported way to use the tool rather than a failure of it. One entry in
+that row is the exception and it is amber only on this axis: a BROKEN binding
+sets `APPROVAL UNVERIFIED` here while the lock axis beside it goes red with exit
+1, so nothing about a blinded gate ends in a 0.
 
 The anchor must live outside the working tree. An anchor the build can write to is not an
 anchor. Point it at a sibling repository with its own history, so a build reaching for the
@@ -395,8 +504,11 @@ anchor dirties a repository it had no reason to touch.
 
 Be precise about what that trace is worth. `verify` reads the **committed copy**, through
 `git show HEAD:<rel>`, whenever the artifact sits in a repository, and falls back to the
-working copy only where there is nothing to consult: outside a repository, or with no git
-available. `approve` writes the line and a human's COMMIT of it is the approval. So an
+working copy in one case only: the freeze recorded NO repository, and git still answers
+`no_repo` or `no_git`, so there is nothing to consult. A freeze that recorded a repository
+and now cannot see it does not fall back at all —
+it reddens, which is the whole of the wire 2.2 repair above.
+`approve` writes the line and a human's COMMIT of it is the approval. So an
 approval reachable only through git still holds the lock, and a line appended to the working
 copy alone is an uncommitted diff in the sibling repository: visible in its `git status`,
 erasable with `git checkout --`, and never enough on its own to read `APPROVED`. It is
@@ -436,9 +548,31 @@ deliberate: a slice that legitimately edits a `conftest.py` mid-build gets `LOSS
 which under this standard is the correct answer.
 
 If the manifest is ever damaged, every write is denied fail-closed. Clear it with
-`release --force --window --reason "<why>"`, which is logged. A release names its
-kind, so `--force` alone exits 2. Deleting `freeze.json` by hand also works and
-deliberately leaves a gap in an append-only ledger.
+`release --force --window --reason "<why>"`, which is logged. Deleting
+`freeze.json` by hand also works and deliberately leaves a gap in an append-only
+ledger.
+
+**A release names its kind, and an open window is no longer silent.** `release`
+requires `--window` or `--ship`, and passing neither exits 2 with argparse's own
+usage line. `--force` obeys the same rule: a forced release that names no kind is
+refused like any other. The two kinds are different events. A `--window` release says the
+lock will be taken again and the slice is still in progress, which is the state
+you are in whenever a frozen enforcer is the thing being fixed. A `--ship`
+release says the slice is over.
+
+The distinction exists because something reads it. While a window stands open and
+no freeze is active, the test gate prints an amber line at every pytest session
+start — `a release window is open`, with the timestamp and the reason recorded in
+the ledger, and the sentence "No lock is held, so a green suite proves nothing
+about the contract." It reports and never blocks, so the run still exits 0. A
+later `freeze` closes the window, which is what keeps the line self-clearing
+rather than something an operator learns to dismiss. Before this, "no freeze is
+active" and "the lock was taken off mid-slice and never put back" were the same
+silence.
+
+A ledger entry with no kind reads as a `ship`. Every entry written before wire
+2.2 has none, and reading those as windows would have turned a quiet past amber
+retroactively on the first pytest run after the update.
 
 ### Did the frozen tests actually run?
 
@@ -522,18 +656,6 @@ repository.
 
 A contract that turns out to be wrong is not edited in place. Release it, fix it,
 re-freeze it, and get the new root hash re-approved.
-
-### Known defects, in files the active freeze holds
-
-Named here rather than fixed, because each lives in a file the current freeze
-covers and a frozen file is not edited in place:
-
-- `canopus_gate.py:43` claims "a build cannot reach green while its contract is
-  moved". The environment defeat above falsifies that sentence as written.
-- The PreToolUse deny message in `canopus_freeze.py` reads "The contract is not
-  editable in place. Fix the code instead", which is wrong in the one case where
-  the frozen file IS the code being fixed, and that case is this tool's own
-  maintenance.
 
 ---
 

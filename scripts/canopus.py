@@ -32,9 +32,12 @@ repository: visible in its `git status`, and erasable with `git checkout --`.
 That is evidence for a human who looks, not containment and not a permanent
 record. The durable artifact is the `canopus-anchor:` line once someone COMMITS
 it, which is why `approve` writes the candidate and `freeze` refuses to take a
-lock the committed state disagrees with. `freeze` writes nothing to the anchor:
-an instrument that writes the hash and then checks the hash it wrote has
-verified nothing.
+root the artifact does not record. The COMMITTED copy governs both the lock and
+the approval axis, so an approval reachable only through git still holds the
+lock. A freshly approved candidate that is on the artifact and not yet committed
+is permitted, and every surface reads amber until someone commits it.
+`freeze` writes nothing to the anchor: an instrument that writes the hash and
+then checks the hash it wrote has verified nothing.
 """
 from __future__ import annotations
 
@@ -407,6 +410,12 @@ def cmd_freeze(args) -> int:
         return 1
     manifest["git_sha"] = _git_sha(root)
     write_freeze(root, manifest)
+    # `reason` carries the git status when no contract note exists, and that
+    # conflation is deliberate rather than overlooked. This ledger's `reason` is
+    # a free-form "why this entry looks like this" string, not a typed cause:
+    # `verify_fail` a few lines down already writes a lock-state token into the
+    # same field. Splitting status out would need a new key in `append_history`,
+    # which lives in the module the PreToolUse dispatcher loads on every write.
     append_history(root, "freeze", digest=manifest["root"], label=manifest["label"],
                    reason=contract_note or committed_status)
     _print_root(manifest["root"], manifest)

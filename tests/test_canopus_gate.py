@@ -510,3 +510,100 @@ def test_the_gate_fails_closed_on_an_unexpected_exception(tree, monkeypatch, cap
     out = capsys.readouterr().out
     assert "RuntimeError" in out
     assert "something no handler here names" in out
+
+
+# ============================================================
+# A vanished manifest is never quieter than a released one
+# ============================================================
+
+
+def test_a_deleted_manifest_is_at_least_as_loud_as_a_released_one(tmp_path, capsys):
+    """The two dormant states, measured side by side in one test.
+
+    Before wire 2.2 the ordering was inverted, and inverted precisely against the
+    incentive the ledger exists to create. With an active freeze whose ledger held
+    `approve` then `freeze` and no release, `rm .canopus/freeze.json` (leaving the
+    directory and the ledger) made every pytest session start print NOTHING and
+    exit 0, while the sanctioned `release --window` on identical state printed the
+    amber "no lock is held, so a green suite proves nothing". Deleting the
+    manifest was strictly cheaper than releasing it.
+
+    The evidence was there the whole time: the last lock event in the ledger is a
+    `freeze`, no release closed it, and no manifest exists on disk. Nothing read
+    it that way, although `append_history`'s docstring calls the ledger evidence
+    against an EDIT to freeze.json.
+
+    Asserted as an ORDERING rather than as two exact strings, because the claim
+    is comparative: whatever the gate says about a released lock, it must say at
+    least as much about a lock whose manifest was deleted.
+    """
+    from scripts.utils.canopus_freeze import append_history
+
+    released = tmp_path / "released"
+    deleted = tmp_path / "deleted"
+    for root in (released, deleted):
+        root.mkdir()
+        append_history(root, "approve", digest="a" * 64, label="demo")
+        append_history(root, "freeze", digest="a" * 64, label="demo")
+    # The sanctioned exit: the release is logged, and it names its kind.
+    append_history(released, "release", digest="a" * 64, label="demo",
+                   reason="mid-build recipe change", kind="window")
+    # The unsanctioned one: nothing is logged, and the manifest simply is not
+    # there. Neither tree has a freeze.json, which is the whole point: the two
+    # states are identical on disk apart from that one ledger line.
+
+    released_code = freeze_gate(released)
+    released_out = capsys.readouterr().out
+    deleted_code = freeze_gate(deleted)
+    deleted_out = capsys.readouterr().out
+
+    assert released_code == 0
+    assert "release window is open" in released_out
+    assert deleted_out.strip(), "the deleted manifest said nothing at all"
+    assert deleted_code >= released_code
+    assert len(deleted_out) >= len(released_out)
+    assert "GONE" in deleted_out or "gone" in deleted_out
+
+
+def test_a_deleted_manifest_after_a_shipped_slice_stays_silent(tmp_path, capsys):
+    """The negative control, so the new red cannot fire on an ordinary tree.
+
+    A slice that ended with `release --ship` holds no lock, so there is nothing
+    for a missing manifest to contradict. A gate that reddened here would fail
+    every run on every clone after every finished slice, which is how a discipline
+    tool gets routed around.
+    """
+    from scripts.utils.canopus_freeze import append_history
+
+    root = tmp_path / "shipped"
+    root.mkdir()
+    append_history(root, "freeze", digest="a" * 64, label="demo")
+    append_history(root, "release", digest="a" * 64, label="demo",
+                   reason="wire 2.2 shipped", kind="ship")
+
+    assert freeze_gate(root) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_a_forced_release_clears_the_vanished_manifest_alarm(tmp_path, capsys):
+    """The escape the alarm names, exercised rather than merely printed.
+
+    `release --force` writes a `force_release` line without parsing anything, so
+    it is the one way to end a lock whose manifest is already gone AND leave the
+    ledger able to say so. If it did not quiet the gate, the alarm would have no
+    exit and an operator would learn to delete `.canopus/` entirely.
+    """
+    from scripts.utils.canopus_freeze import append_history
+
+    root = tmp_path / "forced"
+    root.mkdir()
+    append_history(root, "freeze", digest="a" * 64, label="demo")
+
+    assert freeze_gate(root) == 1
+    capsys.readouterr()
+
+    append_history(root, "force_release", digest="", label="",
+                   reason="the manifest was deleted by hand", kind="window")
+
+    assert freeze_gate(root) == 0
+    assert "release window is open" in capsys.readouterr().out

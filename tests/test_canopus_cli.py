@@ -973,10 +973,15 @@ def test_approve_requires_at_least_one_path(tree: Path, anchor: Path, capsys):
 
 def test_approve_fails_closed_when_the_anchor_cannot_be_written(tree: Path, anchor: Path,
                                                                 capsys):
-    """No traceback, and no ledger line claiming an approval that never landed.
+    """No traceback, no ledger line, and a message about the right subsystem.
 
     The artifact write comes BEFORE append_history deliberately: a ledger that
     records an approval the artifact never received is worse than no ledger.
+
+    The message half is the wire 2.2 repair. This fell through to `main`'s
+    generic OSError handler and printed "the frozen contract could not be read,
+    so it cannot be verified", which is false in both halves. The contract was
+    read, and it was the artifact that could not be WRITTEN.
     """
     os.chmod(anchor, 0o444)
     try:
@@ -985,7 +990,11 @@ def test_approve_fails_closed_when_the_anchor_cannot_be_written(tree: Path, anch
     finally:
         os.chmod(anchor, 0o644)
 
-    assert "Traceback" not in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "could not be read" not in err
+    assert "could NOT be written to" in err
+    assert str(anchor) in err
     assert "canopus-anchor:" not in anchor.read_text()
     assert not (tree / ".canopus" / "history.jsonl").exists()
 
@@ -2407,3 +2416,180 @@ def test_release_records_the_kind_it_was_given(tree, anchor):
     last = read_ledger(tree)[-1]
     assert last["event"] == "release"
     assert last["kind"] == "window"
+
+
+# ============================================================
+# The waiver is written by the ACT, not by the flag
+# ============================================================
+# `cmd_freeze` bound its refusal to the waiver having FIRED and `cmd_approve`
+# bound its ARTIFACT WRITE to `args.contract_satisfied` being non-empty, which is
+# the eleventh appearance on this project of a guard applied to one sibling and
+# not the other. The consequence is worse than an inconsistency: `approve` said
+# "--contract-satisfied changed nothing" and then wrote the waiver into the
+# artifact a human commits, so `canopus pack` printed CONTRACT WAIVED over a
+# contract that was red, or over no contract at all.
+
+
+def test_approve_writes_no_waiver_for_a_red_contract(tree, anchor, capsys):
+    """Measured end to end before the fix, on the artifact and in the ledger.
+
+    The approval itself is legitimate here and still lands; it is the waiver
+    line, and the claim it makes about how the freeze was earned, that has no
+    basis. The command already tells the operator the flag changed nothing, and
+    the record has to say the same thing.
+    """
+    from scripts.utils.canopus_freeze import SATISFIED_PREFIX
+
+    _write_contract(tree)   # test_a asserts False: the contract is RED
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "habitually pasted"], tree) == 0
+
+    assert "--contract-satisfied changed nothing" in capsys.readouterr().out
+    text = anchor.read_text()
+    assert SATISFIED_PREFIX not in text
+    assert len(_recorded(anchor)) == 64
+    assert "habitually pasted" not in _ledger(tree)[-1]["reason"]
+
+
+def test_approve_writes_no_waiver_when_no_contract_ran(tree, anchor):
+    """The quieter half of the same defect: the flag with no `--contract` at all.
+
+    Nothing measured anything, so there is no refusal to waive and nothing said
+    so out loud either. A waiver line for a contract that never ran is a claim
+    with no run behind it.
+    """
+    from scripts.utils.canopus_freeze import SATISFIED_PREFIX
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "demo",
+                 "--anchor", str(anchor),
+                 "--contract-satisfied", "habitually pasted"], tree) == 0
+
+    assert SATISFIED_PREFIX not in anchor.read_text()
+    assert "habitually pasted" not in _ledger(tree)[-1]["reason"]
+
+
+def test_pack_reads_the_waiver_from_the_committed_copy(tree, anchor, capsys):
+    """The waiver survives an edit to the working copy, like the approval does.
+
+    Measured before the fix: `sed -i '/canopus-contract-satisfied:/d'` on the
+    artifact took CONTRACT WAIVED off `canopus pack` from one occurrence to zero,
+    while LOCK HELD and APPROVED were unchanged and HEAD still carried the waiver
+    line. The lock and the approval are read from the repository; the waiver was
+    read from the file beside it, and a page whose three claims come from two
+    copies can be made to say something no committed record supports.
+    """
+    _init_gate_repo(anchor)
+    _write_contract(tree, red=False)
+    satisfied = ["--contract-satisfied", "the slice implemented it"]
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice", *satisfied], tree) == 0
+    _git(anchor.parent, "add", str(anchor))
+    _git(anchor.parent, "commit", "-q", "-m", "the approval, with its waiver")
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice", *satisfied], tree) == 0
+
+    scrubbed = "\n".join(
+        line for line in anchor.read_text().splitlines()
+        if not line.strip().startswith(canopus.SATISFIED_PREFIX)
+    )
+    anchor.write_text(scrubbed + "\n")
+    capsys.readouterr()
+
+    assert _run(["pack"], tree) == 0
+    out = capsys.readouterr().out
+    assert "CONTRACT WAIVED" in out
+    assert "the slice implemented it" in out
+    assert "LOCK HELD" in out
+
+
+def test_status_and_verify_report_the_waiver_too(tree, anchor, capsys):
+    """The command an operator is told to run themselves said the least.
+
+    Every documented countermeasure to this tool's limits is "run `canopus
+    verify` yourself", and `verify` and `status` were the two surfaces that never
+    mentioned a waived contract at all. `pack` alone is not enough: it is the
+    page for the second decision, not the one typed during the build.
+    """
+    _write_contract(tree, red=False)
+    satisfied = ["--contract-satisfied", "the slice implemented it"]
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice", *satisfied], tree) == 0
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice", *satisfied], tree) == 0
+    capsys.readouterr()
+
+    assert _run(["verify"], tree) == 0
+    verified = capsys.readouterr().out
+    assert "CONTRACT WAIVED" in verified
+    assert "the slice implemented it" in verified
+
+    assert _run(["status"], tree) == 0
+    reported = capsys.readouterr().out
+    assert "CONTRACT WAIVED" in reported
+    assert "the slice implemented it" in reported
+
+
+# ============================================================
+# `status` says what the gate says
+# ============================================================
+
+
+def test_status_names_the_cause_of_a_red_lock_instead_of_the_wrong_one(
+    tree, anchor, capsys
+):
+    """With the anchor's repository hidden, nothing on the tree has moved.
+
+    `status` printed "run `canopus verify` for the per-file report" anyway, and
+    that report lists nothing: the contract is intact and the binding is what
+    broke. `loss_of_lock_sentences` was written to enumerate the four causes and
+    was wired into the gate alone.
+    """
+    _init_gate_repo(anchor)
+    assert _run(["approve", "tests/test_alpha.py", "--label", "demo",
+                 "--anchor", str(anchor)], tree) == 0
+    _git(anchor.parent, "add", str(anchor))
+    _git(anchor.parent, "commit", "-q", "-m", "the approval")
+    assert _run(["freeze", "tests/test_alpha.py", "--label", "demo",
+                 "--anchor", str(anchor)], tree) == 0
+    (anchor.parent / ".git").rename(anchor.parent / ".git-hidden")
+    capsys.readouterr()
+
+    assert _run(["status"], tree) == 0
+    out = capsys.readouterr().out
+    assert "LOSS OF LOCK" in out
+    assert "The frozen contract moved" not in out
+    assert "cannot be attributed" in out
+    # The discriminator: the per-file report is offered only when a file really
+    # moved. Nothing did, so an invitation to go and read it is the wrong
+    # instruction, and it is what this command printed unconditionally.
+    assert "per-file report" not in out
+
+
+def test_status_names_an_open_release_window(tree, anchor, capsys):
+    """The gate reports it at every session start; `status` said "no active
+    freeze" and stopped there, which is true and is not the whole state."""
+    assert _freeze(tree, anchor) == 0
+    assert _run(["release", "--window", "--reason", "mid-build recipe change"],
+                tree) == 0
+    capsys.readouterr()
+
+    assert _run(["status"], tree) == 0
+    out = capsys.readouterr().out
+    assert "release window open" in out
+    assert "mid-build recipe change" in out
+
+
+def test_status_names_a_vanished_manifest(tree, anchor, capsys):
+    """The state that was quieter than the sanctioned one, on this surface too."""
+    assert _freeze(tree, anchor) == 0
+    (tree / ".canopus" / "freeze.json").unlink()
+    capsys.readouterr()
+
+    assert _run(["status"], tree) == 0
+    out = capsys.readouterr().out
+    assert "MANIFEST GONE" in out
+    assert "--force" in out

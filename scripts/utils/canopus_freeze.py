@@ -660,8 +660,8 @@ def read_anchor(anchor_path: Path) -> Tuple[str, Optional[str]]:
     return (ANCHOR_RECORDED, found) if found else (ANCHOR_UNRECORDED, None)
 
 
-def read_anchor_waiver(anchor_path: Path, root_digest: str) -> str:
-    """The waiver reason recorded beside *root_digest* in the artifact, or "".
+def parse_anchor_waiver(text: str, root_digest: str) -> str:
+    """The waiver reason recorded beside *root_digest* in *text*, or "".
 
     `--contract-satisfied` accepts a wholly green contract, which is the right
     answer for a retake and the wrong one for a first freeze. Recording it only
@@ -675,17 +675,14 @@ def read_anchor_waiver(anchor_path: Path, root_digest: str) -> str:
     reported against a freeze that earned its redness honestly. Full digests,
     compared whole: a prefix comparison here would look rigorous and is not.
 
-    Answers rather than raising, matching read_anchor: an unreadable or non-UTF-8
-    artifact reads as "no waiver recorded", and the reader that decides the LOCK
-    has already called that artifact missing.
+    Takes TEXT rather than a path, because the artifact has two copies and the
+    committed one governs. Reading the blob is git's half of the job and lives in
+    canopus_git, which this module may never import; the parsing is the same
+    either way, and one parser is what keeps the two copies from being read by
+    two subtly different rules.
     """
-    path = Path(anchor_path)
     wanted = (root_digest or "").strip().lower()
-    if not wanted or not path.is_file():
-        return ""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, ValueError):
+    if not wanted:
         return ""
     found = ""
     pending = ""
@@ -700,6 +697,32 @@ def read_anchor_waiver(anchor_path: Path, root_digest: str) -> str:
                 found = pending
             pending = ""
     return found
+
+
+def read_anchor_waiver(anchor_path: Path, root_digest: str) -> str:
+    """The waiver in the artifact's WORKING copy, or "".
+
+    The FALLBACK reader, and named as one. A waiver on the working file is an
+    uncommitted diff in another repository: visible to a human who looks, and
+    erasable with one `sed -i` or `git checkout --`. Measured, not reasoned:
+    deleting the `canopus-contract-satisfied:` line from the working artifact
+    dropped CONTRACT WAIVED off `canopus pack` while HEAD still carried it and
+    the lock and approval lines did not move. The reader that prefers the
+    COMMITTED copy is `resolve_anchor_waiver` in canopus_git; this one answers
+    where there is no committed copy to consult, and it is what `approve` wrote.
+
+    Answers rather than raising, matching read_anchor: an unreadable or non-UTF-8
+    artifact reads as "no waiver recorded", and the reader that decides the LOCK
+    has already called that artifact missing.
+    """
+    path = Path(anchor_path)
+    if not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+    return parse_anchor_waiver(text, root_digest)
 
 
 def anchor_state(
@@ -1207,6 +1230,26 @@ def read_ledger(root: Path) -> list[dict]:
 
 
 RELEASE_EVENTS = ("release", "force_release")
+# The events that take the lock or give it back. Everything else the ledger
+# carries (`approve`, `anchor_replaced`, `verify_fail`) describes a state without
+# changing who holds it, so it is stepped over rather than read as an answer.
+LOCK_EVENTS = ("freeze", *RELEASE_EVENTS)
+
+
+def last_lock_event(entries: Sequence[dict]) -> Optional[dict]:
+    """The most recent entry that took the lock or gave it back, or None.
+
+    One walk, read by both questions below. They are two readings of the SAME
+    fact and were one function's early return before wire 2.2: `open_release_window`
+    answered None the moment it saw a `freeze`, which is correct for its own
+    question and threw away the other answer entirely. That is how deleting
+    `.canopus/freeze.json` became QUIETER than releasing it, inverting the
+    incentive the ledger exists to create.
+    """
+    for entry in reversed(list(entries)):
+        if entry.get("event") in LOCK_EVENTS:
+            return entry
+    return None
 
 
 def open_release_window(entries: Sequence[dict]) -> Optional[dict]:
@@ -1221,13 +1264,28 @@ def open_release_window(entries: Sequence[dict]) -> Optional[dict]:
     has none, and reading those as windows would turn a quiet past amber
     retroactively on the first pytest run after the update.
     """
-    for entry in reversed(list(entries)):
-        event = entry.get("event")
-        if event == "freeze":
-            return None
-        if event in RELEASE_EVENTS:
-            return entry if entry.get("kind") == "window" else None
-    return None
+    entry = last_lock_event(entries)
+    if entry is None or entry.get("event") == "freeze":
+        return None
+    return entry if entry.get("kind") == "window" else None
+
+
+def unreleased_freeze(entries: Sequence[dict]) -> Optional[dict]:
+    """The freeze the ledger says is still held, or None.
+
+    Read beside a MISSING manifest and nowhere else, where the pair is the whole
+    signal: the ledger records a freeze that no release closed, and the manifest
+    that freeze wrote is not on disk. `rm .canopus/freeze.json` produces exactly
+    that pair, and before wire 2.2 nothing read it, so the sanctioned
+    `release --window` printed an amber line at every later pytest session start
+    while the deletion printed nothing at all.
+
+    `rm -rf .canopus` still says nothing, and that is a property of the
+    directory rather than a gap here: the ledger goes with it. This reader closes
+    the cheaper half, where the evidence survives.
+    """
+    entry = last_lock_event(entries)
+    return entry if entry is not None and entry.get("event") == "freeze" else None
 
 
 # ============================================================

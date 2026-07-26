@@ -38,22 +38,12 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.utils import content_denylist  # noqa: E402
 from scripts.utils import paths  # noqa: E402
-from scripts.utils import venv as _venv  # noqa: E402
 from scripts.utils.engine_guard import scan_engine_repo  # noqa: E402
 
-# push-all.py calls ensure_venv() at MODULE scope, and ensure_venv os.execv's the
-# whole process when the running interpreter is not .venv/bin/python. Under
-# pytest that replaces the collecting process while file descriptor 1 is
-# pytest's capture file, so every byte of the relaunched run lands in a temp file
-# nobody reads. Measured on this repository, 2026-07-26: `pytest tests/` printed
-# ZERO bytes, exiting 0 on a passing set and 1 on a failing one, and the same
-# happened for `--collect-only`. A run that prints nothing is indistinguishable
-# from one that never happened.
-#
-# Setting ensure_venv's own sentinel is what tells it the relaunch already
-# happened. The constant is referenced rather than spelled out, because a
-# duplicated literal here drifts silently the day venv.py renames it.
-os.environ.setdefault(_venv._SENTINEL, "1")
+# push-all.py calls ensure_venv() at MODULE scope, and this module loads it at
+# COLLECTION time, so without a guard the whole pytest process is replaced before
+# a single test runs and the session prints zero bytes. The guard is set once in
+# tests/conftest.py, which is collected first; see the comment there.
 
 
 def _load(mod_name: str, rel: str):
@@ -403,13 +393,3 @@ def test_coverage_acceptance():
     # The data-path-redirect hook is documented-manual, never an executable cell.
     assert LAYER_REDIRECT not in LAYER_CELL_COUNTS
     assert any(d["layer"] == LAYER_REDIRECT for d in MANUAL_DRILLS)
-
-
-def test_this_module_does_not_relaunch_the_interpreter():
-    """The sentinel set at import time is what keeps this suite visible.
-
-    push-all.py calls ensure_venv() at module scope and this module loads it at
-    COLLECTION time, so without the sentinel the whole session is replaced before
-    a single test runs and `pytest tests/` prints zero bytes.
-    """
-    assert os.environ.get(_venv._SENTINEL) == "1"

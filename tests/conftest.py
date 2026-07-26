@@ -5,6 +5,8 @@ local-time behaviour (calendar, scheduling, daemon heartbeats) validate the
 real Etc/GMT-4 logic rather than the engine's UTC default. The production
 value lives in the gitignored .env; here we set it deterministically.
 See scripts.utils.workspace.get_default_tz().
+
+This file also holds the re-exec guard for the whole suite; see below.
 """
 import os
 import sys
@@ -12,7 +14,32 @@ from pathlib import Path
 
 import pytest
 
+from scripts.utils import venv as _venv
+
 os.environ.setdefault("HEADING_OS_TZ", "Etc/GMT-4")
+
+# The suite's re-exec guard, set ONCE, here, because this file is collected
+# before any test module.
+#
+# About twenty scripts call `ensure_venv()` at module scope and about twenty test
+# modules load a script by path. When the running interpreter is not
+# .venv/bin/python, that call `os.execv`s the WHOLE pytest process, which inherits
+# pytest's capture as file descriptor 1: the relaunched run writes every byte
+# into a temp file nobody reads, so `pytest tests/` prints ZERO bytes while
+# exiting 0 on a passing set and 1 on a failing one. Measured on this repository,
+# 2026-07-26. A run that prints nothing is indistinguishable from one that never
+# happened.
+#
+# It lived as three per-module copies until wire 2.2, and that shape could not
+# hold. The variable is process-global, so each copy satisfied the other two
+# modules' guard tests: deleting the line from one module left its own test
+# passing. Worse, the defect was self-erasing, because a NEW unguarded module
+# re-execs at collection, `ensure_venv` sets this same sentinel before
+# `os.execv`, and in the relaunched silent run every guard test passes.
+#
+# The constant is referenced rather than spelled out: a duplicated literal drifts
+# silently the day venv.py renames it.
+os.environ.setdefault(_venv._SENTINEL, "1")
 
 _TESTS_ROOT = Path(__file__).resolve().parent
 _ENGINE_ROOT = _TESTS_ROOT.parent

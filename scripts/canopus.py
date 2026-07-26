@@ -88,11 +88,13 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     build_manifest,
     clear_freeze,
     lock_state,
+    open_release_window,
     read_anchor,
     read_anchor_waiver,
     read_attestation,
     read_freeze,
     read_ledger,
+    unreleased_freeze,
     validate_anchor_path,
     verify_manifest,
     write_freeze,
@@ -104,6 +106,7 @@ from scripts.utils.canopus_git import (  # noqa: E402
     read_committed_anchor,
     repo_identity,
     resolve_anchor,
+    resolve_anchor_waiver,
 )
 from scripts.utils.canopus_pack import (  # noqa: E402
     commits_outside,
@@ -114,6 +117,7 @@ from scripts.utils.canopus_pack import (  # noqa: E402
     merge_base,
     parse_ts,
 )
+from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
 
 # The gate script every root must carry. A tree without it has no place where the
@@ -305,6 +309,59 @@ def _print_contract(manifest: dict, record: dict) -> None:
         got = entry.get("collected", 0) if isinstance(entry, dict) else 0
         mark = GREEN if got == expected else YELLOW
         print(f"  {mark}{got} of {expected}{RESET}  {rel}")
+
+
+def _print_waiver(anchor: str, root_digest: str) -> None:
+    """Say, on every reporting surface, that this freeze's contract was waived.
+
+    A freeze whose contract was wholly green passed the redness rule on a stated
+    reason rather than on the contract's own redness, and a surface that omits
+    that is reporting a stronger claim than the freeze earned. `pack` said it and
+    `verify` and `status` did not, which is the wrong way round: the documented
+    countermeasure to every limit in this tool is "run `canopus verify`
+    yourself", and that command was the one hiding the weaker claim.
+
+    Read COMMITTED-copy-first, through `resolve_anchor_waiver`. The lock and the
+    approval are read from HEAD, so a waiver read only from the working file was
+    erasable from the evidence page by one `sed -i` while both of those stood.
+    Measured: deleting the line took CONTRACT WAIVED from one occurrence to zero
+    with LOCK HELD and APPROVED unchanged and HEAD still carrying the waiver.
+    """
+    waiver = resolve_anchor_waiver(Path(anchor), root_digest) if anchor else ""
+    if waiver:
+        print(f"\n{YELLOW}{BOLD}CONTRACT WAIVED{RESET}  the approved freeze was "
+              f"accepted with a wholly green contract, under "
+              f"--contract-satisfied: {waiver}")
+
+
+def _print_dormant_lock(root: Path) -> None:
+    """What `status` says when no manifest is on disk, which is THREE states.
+
+    The gate speaks for all three at every pytest session start; `status` is the
+    command an operator actually types, and it said "no active freeze" over an
+    open release window and over a freeze whose manifest had been deleted alike.
+    A reporting surface that is quieter than the automatic one teaches an
+    operator to read the automatic one instead.
+
+    Reporting only, so the exit code stays 0 here as it does everywhere else in
+    `status`: this command describes state and `verify` is the one that fails.
+    """
+    entries = read_ledger(root)
+    vanished = unreleased_freeze(entries)
+    if vanished is not None:
+        print(f"{RED}{BOLD}MANIFEST GONE{RESET}  the ledger records a freeze "
+              f"taken {vanished.get('ts') or 'at an unrecorded time'} "
+              f"(label: {vanished.get('label') or 'unrecorded'}) that no release "
+              f"closed, and .canopus/freeze.json is not there. Re-freeze it, or "
+              f"end the lock the way the ledger can see: `release --force "
+              f"--window --reason \"<why>\"`.")
+        return
+    window = open_release_window(entries)
+    if window is not None:
+        print(f"{YELLOW}release window open{RESET}  since "
+              f"{window.get('ts') or 'an unrecorded time'}: "
+              f"{window.get('reason') or 'no reason recorded'}. No lock is held, "
+              f"so a green suite proves nothing about the contract.")
 
 
 def _candidate_manifest(args, root: Path, anchor_path: Path):
@@ -509,10 +566,23 @@ def cmd_approve(args) -> int:
         print("canopus: --replace requires --reason; an unexplained replacement "
               "is indistinguishable from a re-baseline", file=sys.stderr)
         return 1
-    manifest, contract_note, _waived = _candidate_manifest(args, root, anchor_path)
+    manifest, contract_note, waived = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
         return 1
-    satisfied = _satisfied_reason(args)
+    # Bound to the ACT, never to the flag's presence, exactly as `cmd_freeze`
+    # binds its refusal. This command discarded the third return value and wrote
+    # the waiver line on `args.contract_satisfied` alone, so `approve --contract
+    # <a wholly RED contract> --contract-satisfied "<why>"` printed
+    # "--contract-satisfied changed nothing: this contract is RED" and then wrote
+    # `canopus-contract-satisfied: <why>` into the artifact a human commits.
+    # `canopus pack` afterwards printed CONTRACT WAIVED under a red-earned
+    # contract row. The same happened with no `--contract` at all: a waiver line
+    # for a contract that never ran. A falsehood in the committed record, on the
+    # surface an operator approves from.
+    #
+    # The ledger takes the same value for the same reason. A waiver recorded
+    # there that never fired is the identical claim, made more quietly.
+    satisfied = _satisfied_reason(args) if waived else ""
     # The artifact write comes before the ledger, and the order is the same one
     # cmd_freeze reasons about: an OSError on THIS line leaves no approval
     # anywhere, while the reverse would leave a ledger claiming an approval the
@@ -550,8 +620,21 @@ def cmd_approve(args) -> int:
     if satisfied:
         lines.append(f"{SATISFIED_PREFIX} {satisfied}")
     lines.append(f"{ANCHOR_PREFIX} {manifest['root']}")
-    with anchor_path.open("a", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
+    try:
+        with anchor_path.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as exc:
+        # Named here rather than left to `main`'s handler, which says "the frozen
+        # contract could not be read, so it cannot be verified" — a sentence about
+        # a different subsystem in both halves. Measured on a `chmod 444` gate
+        # artifact: the contract read fine and ran fine, and the only thing that
+        # failed was this write. `_record`'s docstring names that class for the
+        # ledger and the artifact write beside it was left generic.
+        print(f"canopus: the candidate {manifest['root']} could NOT be written to "
+              f"{anchor_path}: {exc}. Nothing was approved and nothing was "
+              f"logged, so make the artifact writable and run the same command "
+              f"again.", file=sys.stderr)
+        return 1
     logged = ""
     try:
         append_history(root, "approve", digest=manifest["root"],
@@ -639,8 +722,14 @@ def cmd_freeze(args) -> int:
               f"`approve --replace --reason \"<why>\"` and commit it.",
               file=sys.stderr)
         return 1
-    satisfied = _satisfied_reason(args)
-    if waived and not read_anchor_waiver(anchor_path, manifest["root"]):
+    # Bound to the act, like the refusal below and like `cmd_approve`'s write: a
+    # ledger line saying a green contract was accepted for a reason, written on a
+    # run where the contract was red and the flag changed nothing, is a claim the
+    # freeze did not make.
+    satisfied = _satisfied_reason(args) if waived else ""
+    recorded_waiver = (read_anchor_waiver(anchor_path, manifest["root"])
+                       or resolve_anchor_waiver(anchor_path, manifest["root"]))
+    if waived and not recorded_waiver:
         # The pairing nothing refused before: `approve` WITHOUT the flag, then
         # `freeze --contract-satisfied`. The freeze is waived, and the evidence
         # page renders no waiver at all — `canopus pack` reads its CONTRACT
@@ -655,20 +744,20 @@ def cmd_freeze(args) -> int:
         # the failure mode of every guard written against a flag rather than
         # against the act the flag performs.
         #
-        # Read from the ARTIFACT rather than from HEAD, deliberately, and the
-        # reason is not laziness. `approve` writes the waiver line and the
-        # approval line in ONE append, so they are committed together or not at
-        # all: for any artifact a human has not hand-edited, HEAD's answer and
-        # the working copy's are the same answer. The artifact is also exactly
-        # what `pack` reads, so this refusal guarantees the marker renders, which
-        # a HEAD-scoped read would not. Whether that approval is COMMITTED is a
-        # separate axis and is already reported, loudly, a few lines below.
-        print(f"canopus: --contract-satisfied was passed, and the approval on "
-              f"{anchor_path} records no waiver for {manifest['root']}. A waiver "
-              f"the committed approval does not carry is one `canopus pack` "
+        # BOTH copies are consulted, and the union is the same shape the hash
+        # comparison above takes. The working copy alone would refuse a waiver
+        # that is COMMITTED and has since been scrubbed from the working file,
+        # which is the direction a builder edits in. The committed copy alone
+        # would refuse the ordinary sequence of `approve`, then `freeze`, then
+        # commit, which the docstring above deliberately permits amber. Whether
+        # the approval is COMMITTED is a separate axis and is already reported,
+        # loudly, a few lines below.
+        print(f"canopus: --contract-satisfied was passed, and {anchor_path} "
+              f"records no waiver for {manifest['root']} in its working copy or "
+              f"in HEAD. A waiver no approval carries is one `canopus pack` "
               f"cannot show: the evidence page reads the "
-              f"`{SATISFIED_PREFIX}` line off the artifact, and there is none "
-              f"here. Re-run `approve --contract-satisfied \"<why>\"` (with "
+              f"`{SATISFIED_PREFIX}` line off that artifact, and there is none "
+              f"on it. Re-run `approve --contract-satisfied \"<why>\"` (with "
               f"--replace --reason if an approval is already recorded), commit "
               f"the artifact, then freeze.",
               file=sys.stderr)
@@ -825,19 +914,11 @@ def cmd_pack(args) -> int:
 
     _print_contract(manifest, record)
 
-    # The waiver, said out loud on the page the operator approves from. A freeze
-    # whose contract was wholly green passed the redness rule on a stated reason
-    # rather than on the contract's own redness, and an evidence page that omits
-    # that is reporting a stronger claim than the freeze earned. Read from the
-    # ANCHOR artifact, bound to this freeze's root, so it is the committed record
-    # speaking rather than the gitignored ledger. A freeze taken with the flag
-    # whose `approve` did not carry it therefore renders nothing here: the
-    # artifact is the record, and there is nothing on it.
-    waiver = read_anchor_waiver(Path(anchor), manifest["root"]) if anchor else ""
-    if waiver:
-        print(f"\n{YELLOW}{BOLD}CONTRACT WAIVED{RESET}  the approved freeze was "
-              f"accepted with a wholly green contract, under "
-              f"--contract-satisfied: {waiver}")
+    # The waiver, said out loud on the page the operator approves from, bound to
+    # this freeze's root and read from the COMMITTED artifact where there is one.
+    # A freeze taken with the flag whose `approve` did not carry it renders
+    # nothing here: the artifact is the record, and there is nothing on it.
+    _print_waiver(anchor, manifest["root"])
 
     base = args.base or merge_base(root, "main") or "HEAD"
     commits = git_commits(root, base)
@@ -900,6 +981,11 @@ def cmd_verify(args) -> int:
         print(f"{GREEN}{BOLD}{LOCK_HELD}{RESET}  matches the hash recorded in {anchor}")
         _print_attestation(root, report["recomputed_root"])
         _print_approval(resolution)
+        # On every branch, including the green one, and especially the green one:
+        # LOCK HELD plus APPROVED over a waived contract is the strongest-looking
+        # output this tool produces, and it is the one reading that most needs the
+        # qualifier.
+        _print_waiver(anchor, manifest["root"])
         return 0
     if state == LOCK_UNCONFIRMED:
         # The reason comes from the one producer of the precedence decision. An
@@ -913,6 +999,7 @@ def cmd_verify(args) -> int:
               f"approved contract'.")
         _print_attestation(root, report["recomputed_root"])
         _print_approval(resolution)
+        _print_waiver(anchor, manifest["root"])
         return 0
 
     print(f"{RED}{BOLD}{LOSS_OF_LOCK}{RESET}")
@@ -938,6 +1025,7 @@ def cmd_verify(args) -> int:
         print(f"  anchor   {anchor} records {value}{origin}")
     _print_attestation(root, report["recomputed_root"])
     _print_approval(resolution)
+    _print_waiver(anchor, manifest["root"])
     print("A contract that is genuinely wrong reopens the approval gate. "
           "It is never edited in place.")
     failed = _record(root, "verify_fail", digest=report["recomputed_root"],
@@ -985,6 +1073,7 @@ def cmd_status(args) -> int:
     manifest = read_freeze(root)
     if manifest is None:
         print("canopus: no active freeze")
+        _print_dormant_lock(root)
         return 0
     report = verify_manifest(manifest, root)
     resolution = resolve_anchor(manifest)
@@ -999,11 +1088,20 @@ def cmd_status(args) -> int:
     # exit code stays 0 so `status` remains a description of state, and `verify`
     # remains the command that fails.
     colour = {LOCK_HELD: GREEN, LOCK_UNCONFIRMED: YELLOW}.get(state, RED)
-    tail = ("  run `canopus verify` for the per-file report"
+    # The CAUSES, from the one function that enumerates them, not a fixed
+    # sentence. `lock_state` reaches red from four causes and three of them leave
+    # the contract exactly where it was, so "run `canopus verify` for the
+    # per-file report" sent an operator whose anchor repository had gone missing
+    # to a report that lists nothing. Measured: with the anchor's `.git` renamed,
+    # `status` printed that line while nothing on the tree had moved.
+    # `loss_of_lock_sentences` was written for this and was applied to the gate
+    # alone, which is the twelfth appearance of a guard fixed on one sibling.
+    tail = ("  " + " ".join(loss_of_lock_sentences(report, resolution))
             if state == LOSS_OF_LOCK else "")
     print(f"{colour}{BOLD}{state}{RESET}{tail}")
     _print_attestation(root, report["recomputed_root"])
     _print_approval(resolution)
+    _print_waiver(anchor, manifest["root"])
     print(f"frozen at {manifest['frozen_at']}")
     print(f"git sha   {manifest.get('git_sha') or '(not a git working tree)'}")
     print(f"anchor    {anchor or '(none)'}  [{status}]")

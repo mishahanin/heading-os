@@ -9,25 +9,18 @@ plus engine_clean_scan() -- the pure-code routing wall that no `--no-verify` can
 get past.
 """
 import importlib.util
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from scripts.utils import venv as _venv
-
 ROOT = Path(__file__).resolve().parent.parent
 
-# push-all.py calls ensure_venv() at MODULE scope, and ensure_venv os.execv's the
-# whole process when the running interpreter is not .venv/bin/python. Under
-# pytest that replaces the collecting process while file descriptor 1 is
-# pytest's capture file, so the relaunched run's entire output lands in a temp
-# file nobody reads and `pytest tests/` prints ZERO bytes. Measured on this
-# repository, 2026-07-26, exit 0 on a passing set and exit 1 on a failing one.
-# Setting ensure_venv's own sentinel tells it the relaunch already happened.
-os.environ.setdefault(_venv._SENTINEL, "1")
-
+# push-all.py calls ensure_venv() at MODULE scope, so loading it here would
+# os.execv the whole pytest process under any interpreter that is not
+# .venv/bin/python. The guard against that is set once in tests/conftest.py,
+# which is collected before this module; see the comment there, and
+# tests/test_venv_relaunch_guard.py for the test that measures it.
 _spec = importlib.util.spec_from_file_location("push_all", ROOT / "scripts" / "push-all.py")
 push_all = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(push_all)
@@ -101,13 +94,3 @@ def test_gate_not_armed_when_hook_missing(tmp_path):
 def test_gate_not_armed_when_hook_does_not_run_tests(tmp_path):
     repo = _make_hook(tmp_path, "#!/usr/bin/env bash\necho noop\n")
     assert push_all._pre_push_gate_armed(repo) is False
-
-
-def test_this_module_does_not_relaunch_the_interpreter():
-    """The one-line guard above is load-bearing, so it gets a test.
-
-    Without it, loading push-all.py re-execs the whole pytest process, which
-    inherits pytest's capture as file descriptor 1 and prints nothing at all for
-    the rest of the run. Measured on this repository, 2026-07-26.
-    """
-    assert os.environ.get(_venv._SENTINEL) == "1"

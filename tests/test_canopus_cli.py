@@ -8,6 +8,7 @@ import pytest
 
 import scripts.canopus as canopus
 from scripts.canopus import main
+from scripts.utils.canopus_git import NO_REPO
 
 
 def _make_tree(root: Path) -> Path:
@@ -1163,8 +1164,8 @@ def test_freeze_no_longer_writes_the_anchor(tree: Path, anchor: Path):
     assert anchor.read_text() == before
 
 
-def test_freeze_refuses_a_committed_hash_that_disagrees(tree: Path, tmp_path: Path,
-                                                        monkeypatch, capsys):
+def test_freeze_refuses_a_committed_hash_that_disagrees(tree: Path, anchor: Path,
+                                                        capsys):
     """The binding: what was approved is what may be frozen.
 
     The approval lives ONLY in the commit, and the working copy is scrubbed of it
@@ -1173,25 +1174,13 @@ def test_freeze_refuses_a_committed_hash_that_disagrees(tree: Path, tmp_path: Pa
     whose WORKING copy already recorded a hash, so it would have been green
     before a line of this slice existed and asserted nothing about the binding.
     """
-    import subprocess
+    gate = _init_gate_repo(anchor)
+    anchor.write_text(f"canopus-anchor: {'e' * 64}\n", encoding="utf-8")
+    _git(gate, "add", anchor.name)
+    _git(gate, "commit", "-q", "-m", "approve")
+    anchor.write_text("# gate\n", encoding="utf-8")
 
-    repo = tmp_path / "gate-repo"
-    repo.mkdir()
-    for argv in (["init", "-q", "-b", "main"],
-                 ["config", "user.email", "b@example.invalid"],
-                 ["config", "user.name", "B"]):
-        subprocess.run(["git", "-C", str(repo), *argv], check=True,
-                       capture_output=True, text=True)
-    artifact = repo / "gate.md"
-    artifact.write_text(f"canopus-anchor: {'e' * 64}\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True,
-                   capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "approve"],
-                   check=True, capture_output=True, text=True)
-    artifact.write_text("# gate\n", encoding="utf-8")
-
-    assert _run(["freeze", "--label", "l", "--anchor", str(artifact),
-                 "tests/test_alpha.py"], tree) == 1
+    assert _freeze(tree, anchor) == 1
     err = capsys.readouterr().err
     assert "e" * 64 in err
     assert not (tree / ".canopus" / "freeze.json").exists()
@@ -1233,10 +1222,84 @@ def test_freeze_refuses_a_committed_hash_that_is_a_prefix_of_the_computed_root(
     assert not (tree / ".canopus" / "freeze.json").exists()
 
 
-def test_freeze_proceeds_when_the_approval_cannot_be_verified(tree: Path, anchor: Path):
-    """An operator whose gate artifact is a file in a folder still gets a lock."""
+def test_freeze_takes_a_committed_approval_the_working_copy_no_longer_carries(
+    tree: Path, anchor: Path, capsys
+):
+    """The positive guarantee of the whole split: the COMMIT alone is enough.
+
+    Every other refusal test here binds the negative case. Narrowing the permit
+    rule to the working copy alone, `manifest["root"] == working_hash`, passes
+    this file and the frozen contract with it, which measured that the guarantee
+    the repository governs had no test at all. Under that narrowing this scenario
+    exits 1 with "the committed approval does not match what this freeze would
+    take".
+
+    So the approval is scrubbed from the working file after the commit and is
+    reachable only through git: the freeze proceeds, takes exactly the approved
+    root, prints neither amber line, and `verify` reads LOCK HELD off HEAD.
+    """
+    gate = _init_gate_repo(anchor)
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "demo",
+                 "--anchor", str(anchor)], tree) == 0
+    approved = _recorded(anchor)
+    assert len(approved) == 64, "a truncated digest is not an approval"
+    _git(gate, "add", anchor.name)
+    _git(gate, "commit", "-q", "-m", "the approval")
+
+    anchor.write_text("# gate artifact\n")   # the approval now lives only in HEAD
+    assert "canopus-anchor:" not in anchor.read_text()
+    capsys.readouterr()
+
+    assert _freeze(tree, anchor) == 0
+    out = capsys.readouterr().out
+    assert _root_of(tree) == approved
+    assert "approval unverified" not in out
+    assert "approval uncommitted" not in out
+
+    assert _run(["verify"], tree) == 0
+    verified = capsys.readouterr().out
+    assert canopus.LOCK_HELD in verified
+    assert canopus.APPROVED in verified
+
+
+def test_freeze_proceeds_without_a_verifiable_approval_and_says_so(
+    tree: Path, anchor: Path, capsys
+):
+    """An operator whose gate artifact is a file in a folder still gets a lock,
+    and the amber line is what stops that lock reading like an approved one.
+
+    The line is pinned here because the branch that prints it can be wrapped in
+    `if False and ...` without failing anything else: the exit code, the
+    manifest, and every sibling assertion survive it, and the operator silently
+    loses the one sentence that separates a lock a human approved from one
+    nobody did.
+    """
     assert _run(["freeze", "--label", "l", "--anchor", str(anchor),
                  "tests/test_alpha.py"], tree) == 0
+    out = capsys.readouterr().out
+    assert "approval unverified" in out
+    assert f"{NO_REPO}: this freeze was taken without a committed approval" in out
+    assert "approval uncommitted" not in out
+
+
+def test_the_freeze_ledger_entry_records_the_approval_posture(tree: Path, anchor: Path):
+    """With no contract note, `reason` carries the git status token.
+
+    The conflation of "reason" with "status" is deliberate and stays: this
+    ledger's `reason` is a free-form "why this entry looks like this" string
+    rather than a typed cause, and `verify_fail` already writes a lock-state
+    token into the same field. Separating them needs a new key in
+    `append_history`, which lives in the module the PreToolUse dispatcher loads
+    on every write. Unpinned it was free to drift, so it is pinned.
+
+    The other half, where a contract note wins the field, is pinned by
+    `test_freeze_contract_reports_how_much_is_already_green`.
+    """
+    assert _freeze(tree, anchor) == 0
+    entry = _ledger(tree)[-1]
+    assert entry["event"] == "freeze"
+    assert entry["reason"] == NO_REPO
 
 
 def test_freeze_takes_a_red_lock_rather_than_none_when_only_the_commit_is_missing(

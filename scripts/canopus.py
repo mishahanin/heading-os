@@ -262,6 +262,12 @@ def cmd_approve(args) -> int:
     has verified nothing.
     """
     root = _resolve_root(args)
+    # read_freeze also raises FreezeCorrupt on a damaged manifest, so approve
+    # inherits the corrupt-manifest refusal along with the active-freeze one.
+    # That is deliberate and matches cmd_freeze: the artifact is left untouched
+    # and `release --force --reason` is the logged escape. Named here because a
+    # behaviour that arrives as a side effect of one guard is the kind nobody
+    # remembers is there.
     if read_freeze(root) is not None:
         # Measured, not imagined: approve set A, commit, freeze set A, verify
         # reads LOCK HELD; then approve set B while that freeze is still active
@@ -314,17 +320,26 @@ def cmd_approve(args) -> int:
     # were told had not happened, so that path says which half landed.
     with anchor_path.open("a", encoding="utf-8") as handle:
         handle.write(f"\n{ANCHOR_PREFIX} {manifest['root']}\n")
+    logged = ""
     try:
         append_history(root, "approve", digest=manifest["root"],
                        label=args.label, reason=args.reason or "")
+        logged = "approve"
         if already:
             append_history(root, "anchor_replaced", digest=manifest["root"],
                            label=args.label, reason=args.reason)
     except OSError as exc:
+        # Which ledger entry failed is the whole point of this message, so it
+        # names the state rather than the call: saying "the ledger entry failed"
+        # when the approve entry landed and only anchor_replaced did not is the
+        # same imprecision this branch exists to remove one layer up.
+        missing = "anchor_replaced" if logged else "approve"
+        landed = f" The `{logged}` entry did land." if logged else ""
         print(f"canopus: the candidate {manifest['root']} WAS written to "
-              f"{anchor_path}; only the ledger entry failed: {exc}. The approval "
-              f"is on the artifact, so read it and commit it if it is the set "
-              f"you meant, and expect a re-run to ask for --replace --reason.",
+              f"{anchor_path}; the `{missing}` ledger entry failed: {exc}."
+              f"{landed} The approval is on the artifact, so read it and commit "
+              f"it if it is the set you meant, and expect a re-run to ask for "
+              f"--replace --reason.",
               file=sys.stderr)
         return 1
     _print_root(manifest["root"], manifest)

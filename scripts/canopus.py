@@ -4,6 +4,9 @@
 The Canopus standard freezes the definition of done before any code exists, so
 the builder cannot move the target it is measured against.
 
+    python scripts/canopus.py approve tests/test_thing.py --label my-slice \\
+        --anchor ../my-notes-repo/plans/2026-07-25-pre-impl-my-slice.md
+    # read the candidate, then COMMIT that artifact: the commit is the approval
     python scripts/canopus.py freeze tests/test_thing.py --label my-slice \\
         --anchor ../my-notes-repo/plans/2026-07-25-pre-impl-my-slice.md
     python scripts/canopus.py verify
@@ -24,12 +27,14 @@ Point --anchor at a sibling repository with its own history, so a build reaching
 for the anchor dirties a repository it had no reason to touch.
 
 Say exactly what that buys, and no more. `read_anchor` reads the artifact's
-WORKING COPY and never consults git, so the trace a tamper leaves is an
-uncommitted diff in the other repository: visible in its `git status`, and
-erasable with `git checkout --`. That is evidence for a human who looks, not
-containment and not a permanent record. The durable artifact is the
-`canopus-anchor:` line once someone COMMITS it there, which is why freeze says so
-in its closing line rather than leaving it to be inferred.
+WORKING COPY, so a line appended there is only an uncommitted diff in the other
+repository: visible in its `git status`, and erasable with `git checkout --`.
+That is evidence for a human who looks, not containment and not a permanent
+record. The durable artifact is the `canopus-anchor:` line once someone COMMITS
+it, which is why `approve` writes the candidate and `freeze` refuses to take a
+lock the committed state disagrees with. `freeze` writes nothing to the anchor:
+an instrument that writes the hash and then checks the hash it wrote has
+verified nothing.
 """
 from __future__ import annotations
 
@@ -352,94 +357,72 @@ def cmd_approve(args) -> int:
 
 
 def cmd_freeze(args) -> int:
+    """Take the freeze, but only over what a human committed an approval for.
+
+    This command no longer writes the anchor line. That is the point of the
+    split: an instrument that writes the hash and then checks the hash it wrote
+    has verified nothing, and every wire before this one shipped exactly that.
+    `approve` writes the candidate, a human COMMITS it, and this command refuses
+    anything the commit disagrees with.
+
+    The refusal is scoped to COMMITTED, deliberately. Under uncommitted, no_repo
+    and no_git there is no approval to bind to, and an operator whose gate
+    artifact is a file in a folder is a supported way to use the tool rather
+    than a failure of it. Those freezes are taken and say so in amber, which is
+    the same posture the approval axis already takes on every reporting surface.
+
+    One exception, and it is the SAFER branch rather than a softening. When the
+    artifact already records exactly what this freeze would take, and only the
+    COMMIT is outstanding, the freeze proceeds amber. Refusing there leaves NO
+    manifest, and `freeze_gate` returns 0 in silence when no freeze is active:
+    the operator who edited a contract and was refused walks away with no lock
+    at all and a green suite. Taking the freeze instead leaves an ACTIVE lock
+    whose committed approval disagrees, so `verify` reports LOSS OF LOCK and
+    every pytest session fails until a human commits the new approval. A
+    re-baseline that ends red is worth more than one that ends unlocked.
+    """
     root = _resolve_root(args)
     if read_freeze(root) is not None:
         print("canopus: a freeze is already active; run `release` first "
               "(changing a contract reopens the approval gate)", file=sys.stderr)
         return 1
     anchor_path = validate_anchor_path(_under_root(args.anchor, root), root)
-    status, recorded = read_anchor(anchor_path)
-    if status == ANCHOR_RECORDED and not args.replace_anchor:
-        print(f"canopus: {anchor_path} already records {recorded}. An approved "
-              f"contract's anchor is never silently overwritten. If the frozen "
-              f"SET is legitimately changing, re-run with --replace-anchor and "
-              f"--reason.", file=sys.stderr)
+    manifest, contract_note = _candidate_manifest(args, root, anchor_path)
+    if manifest is None:
         return 1
-    if args.replace_anchor and not args.reason:
-        print("canopus: --replace-anchor requires --reason; an unexplained "
-              "replacement is indistinguishable from a re-baseline",
+    committed_status, committed_hash = read_committed_anchor(anchor_path)
+    _working_status, working_hash = read_anchor(anchor_path)
+    # Full digests, compared whole, against both copies. A prefix or truncation
+    # comparison here would look rigorous and hand a builder with a shell a
+    # short value to brute-force by appending whitespace to a frozen file.
+    recorded_anywhere = manifest["root"] in (committed_hash, working_hash)
+    if committed_status == COMMITTED and not recorded_anywhere:
+        print(f"canopus: the committed approval does not match what this freeze "
+              f"would take, and no freeze was taken.\n"
+              f"  approved  {committed_hash}\n"
+              f"  computed  {manifest['root']}\n"
+              f"A contract edited after approval reopens the gate: re-run "
+              f"`approve --replace --reason \"<why>\"` and commit it.",
               file=sys.stderr)
         return 1
-    if not args.paths and not args.content and not args.contract:
-        print("canopus: at least one path is required, positionally or via "
-              "--content or --contract", file=sys.stderr)
-        return 1
-    contracts = [_under_root(p, root) for p in args.contract]
-    baseline: dict[str, int] = {}
-    contract_note = ""
-    if contracts:
-        expected = contract_files(contracts, root)
-        if not expected:
-            print("canopus: --contract names no test modules; a contract with no "
-                  "tests can never be attested", file=sys.stderr)
-            return 1
-        counts, outcomes = run_contract(contracts, root)
-        reasons = refusal_reasons(counts, outcomes, expected)
-        if reasons:
-            print("canopus: the contract was refused, and no freeze was taken:",
-                  file=sys.stderr)
-            for reason in reasons:
-                print(f"  {reason}", file=sys.stderr)
-            return 1
-        baseline = {rel: counts[rel] for rel in expected}
-        # The redness gate needs ONE red in the SET, so it does not scale to the
-        # moment: a mid-build retake of an 11-of-14-green contract passes the
-        # same check a fully red contract passes at the start. Measured during
-        # the wire 2 build. The gate is not tightened here -- a legitimate
-        # retake must stay possible -- but the number is said out loud and
-        # written to the ledger, so an operator can judge a retake differently
-        # from a first freeze instead of reading one word for both.
-        already_green = sum(
-            1 for _rel, _name, outcome in outcomes if outcome == "passed"
-        )
-        contract_note = f"{already_green} of {sum(counts.values())} already green"
-    manifest = build_manifest(
-        [_under_root(p, root) for p in args.paths] + contracts,
-        root,
-        label=args.label,
-        frozen_at=datetime.now(timezone.utc).isoformat(),
-        anchor=anchor_path,
-        content_only=[_under_root(p, root) for p in args.content],
-        baseline=baseline,
-    )
     manifest["git_sha"] = _git_sha(root)
     write_freeze(root, manifest)
     append_history(root, "freeze", digest=manifest["root"], label=manifest["label"],
-                   reason=contract_note)
-    # The append runs AFTER write_freeze, and the window that opens is named
-    # rather than discovered: an OSError here (a read-only overlay, a vanished
-    # mount) leaves an ACTIVE freeze whose anchor carries no line, main returns
-    # 1, and a re-run hits "a freeze is already active". Recovery is `release
-    # --force --reason "anchor write failed"` then a fresh freeze, and the state
-    # is loud meanwhile, because verify reports LOCK UNCONFIRMED until the line
-    # lands. Ordering the append first would trade that for the worse failure:
-    # an approved-looking hash in a committed artifact with no freeze behind it.
-    #
-    # An append rather than atomic_write_text, because the anchor is a
-    # human-authored document the tool adds one line to, exactly like
-    # append_history. A full-file replace would rewrite prose the tool does not
-    # own.
-    with anchor_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n{ANCHOR_PREFIX} {manifest['root']}\n")
-    if status == ANCHOR_RECORDED:
-        append_history(root, "anchor_replaced", digest=manifest["root"],
-                       label=manifest["label"], reason=args.reason)
+                   reason=contract_note or committed_status)
     _print_root(manifest["root"], manifest)
     if contract_note:
         print(f"{YELLOW}contract{RESET}  {contract_note} before this freeze")
-    print(f"\nRecorded in {anchor_path}. Commit that repository so the approved "
-          f"hash is durable; reaching it from a build leaves a commit where one "
-          f"has no business being.")
+    if committed_status != COMMITTED:
+        print(f"{YELLOW}approval unverified{RESET}  {committed_status}: this "
+              f"freeze was taken without a committed approval behind it")
+    elif committed_hash != manifest["root"]:
+        # The uncommitted-candidate branch above. Loud, because the committed
+        # status alone would print nothing here and the operator would be given
+        # a lock that `verify` is about to call red with no warning attached.
+        print(f"{YELLOW}approval uncommitted{RESET}  the committed approval "
+              f"records {committed_hash}; this freeze takes {manifest['root']}, "
+              f"which is on the artifact and not committed. `verify` reports "
+              f"{LOSS_OF_LOCK} until you commit it.")
     return 0
 
 
@@ -694,11 +677,6 @@ def build_parser() -> argparse.ArgumentParser:
     # Re-baselining is exactly what the anchor exists to make visible.
     freeze.add_argument("--anchor", required=True,
                         help="committed artifact OUTSIDE this tree that records the root hash")
-    freeze.add_argument("--replace-anchor", action="store_true",
-                        help="append a new hash to an anchor that already records "
-                             "one; requires --reason and is written to the ledger")
-    freeze.add_argument("--reason", default="",
-                        help="why the anchor is being replaced")
     freeze.set_defaults(func=cmd_freeze)
 
     approve = sub.add_parser(

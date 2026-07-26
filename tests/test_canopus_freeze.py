@@ -1080,3 +1080,29 @@ def test_the_documented_enforcer_set_covers_its_import_closure():
         f"the documented freeze command does not freeze {missing}; an enforcer's "
         f"import tail is outside the guarantee it enforces"
     )
+
+
+def test_approval_is_verified_only_by_a_matching_committed_hash():
+    from scripts.utils.canopus_freeze import APPROVED, approval_state
+
+    assert approval_state("a" * 64, "committed", "a" * 64) == (APPROVED, "")
+
+
+def test_a_committed_hash_that_disagrees_is_not_an_approval():
+    from scripts.utils.canopus_freeze import APPROVAL_UNVERIFIED, approval_state
+
+    axis, reason = approval_state("a" * 64, "committed", "b" * 64)
+    assert axis == APPROVAL_UNVERIFIED
+    assert "b" * 64 in reason
+
+
+def test_each_unverifiable_status_keeps_its_own_reason():
+    """A generic "could not check" hides which of three worlds you are in."""
+    from scripts.utils.canopus_freeze import APPROVAL_UNVERIFIED, approval_state
+
+    seen = {}
+    for status in ("uncommitted", "no_repo", "no_git"):
+        axis, reason = approval_state("a" * 64, status, None)
+        assert axis == APPROVAL_UNVERIFIED
+        seen[status] = reason
+    assert len(set(seen.values())) == 3

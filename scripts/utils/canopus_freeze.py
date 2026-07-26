@@ -611,6 +611,52 @@ def lock_state(report: dict, anchor_status: str, anchor_value: Optional[str]) ->
 
 
 # ============================================================
+# The approval axis
+# ============================================================
+
+APPROVED = "APPROVED"
+APPROVAL_UNVERIFIED = "APPROVAL UNVERIFIED"
+
+_UNVERIFIED_REASONS = {
+    "committed": "the committed artifact records a different hash",
+    # Covers both worlds this status spans: an untracked artifact, and a tracked
+    # one whose HEAD copy carries no line. Naming only the first would be false
+    # for the second, which is the commoner case during a build.
+    "uncommitted": "no approval is recorded in the committed state of the gate artifact",
+    "no_repo": "the gate artifact is not in a repository, so the approval cannot be attributed",
+    "no_git": "git is unavailable, so the approval cannot be read",
+}
+
+
+def approval_state(
+    manifest_root: str, committed_status: str, committed_hash: Optional[str]
+) -> Tuple[str, str]:
+    """Was the frozen artifact the one a human approved?
+
+    A third axis beside the lock and the attestation, and it answers a question
+    neither of them can. The lock says the contract has not moved since the
+    freeze. The attestation says it ran. Neither says the freeze was ever
+    approved, and before this axis existed the tool wrote the anchor line itself
+    and then verified the line it had written.
+
+    Pure string work, and the git status arrives from the caller, because this
+    module is imported by the PreToolUse dispatcher on every write and may never
+    reach for subprocess.
+
+    An unrecognised status resolves UNVERIFIED with the status named, rather than
+    raising: this is called from the test gate, which must never raise.
+    """
+    if committed_status == "committed" and committed_hash == manifest_root:
+        return (APPROVED, "")
+    reason = _UNVERIFIED_REASONS.get(
+        committed_status, f"unrecognised approval status {committed_status!r}"
+    )
+    if committed_status == "committed" and committed_hash:
+        reason = f"{reason}: {committed_hash}"
+    return (APPROVAL_UNVERIFIED, reason)
+
+
+# ============================================================
 # Membership (consumed by the PreToolUse dispatcher)
 # ============================================================
 

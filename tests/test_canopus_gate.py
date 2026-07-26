@@ -1,5 +1,6 @@
 """Tests for the Canopus freeze check inside the test gate."""
 import importlib.util
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,24 @@ def _git_commit(directory: Path, message: str) -> None:
                    capture_output=True, text=True)
     subprocess.run(["git", "-C", str(directory), "commit", "-q", "-m", message],
                    check=True, capture_output=True, text=True)
+
+
+def _bound_manifest(tree: Path, anchor: Path) -> dict:
+    """A manifest frozen against the repository the anchor really lives in.
+
+    Since wire 2.2 the gate judges that binding before it reads anything else, so
+    a manifest built without `anchor_repo` over an anchor inside a repository
+    resolves ANCHOR_UNBOUND and reddens. The two tests below are about which COPY
+    of the anchor governs; without this they would be about the binding instead.
+    """
+    from scripts.utils.canopus_freeze import REPO_PRESENT
+    from scripts.utils.canopus_git import repo_identity
+
+    status, identity = repo_identity(anchor.parent)
+    return build_manifest([tree / "tests"], tree, label="demo", frozen_at=STAMP,
+                          anchor=anchor,
+                          anchor_repo={"in_repo": status == REPO_PRESENT,
+                                       "identity": identity})
 
 
 @pytest.fixture
@@ -144,8 +163,7 @@ def test_gate_reads_the_committed_anchor_and_not_the_working_file(tree, anchor, 
     """
     _git_init(anchor.parent)
     _git_commit(anchor.parent, "the gate artifact, with no approval in it")
-    manifest = build_manifest([tree / "tests"], tree, label="demo",
-                              frozen_at=STAMP, anchor=anchor)
+    manifest = _bound_manifest(tree, anchor)
     write_freeze(tree, manifest)
     with anchor.open("a", encoding="utf-8") as handle:
         handle.write(f"\ncanopus-anchor: {manifest['root']}\n")
@@ -166,8 +184,7 @@ def test_gate_says_why_the_approval_is_unverified(tree, anchor, capsys):
     """
     _git_init(anchor.parent)
     _git_commit(anchor.parent, "the gate artifact, with no approval in it")
-    manifest = build_manifest([tree / "tests"], tree, label="demo",
-                              frozen_at=STAMP, anchor=anchor)
+    manifest = _bound_manifest(tree, anchor)
     write_freeze(tree, manifest)
     with anchor.open("a", encoding="utf-8") as handle:
         handle.write(f"\ncanopus-anchor: {manifest['root']}\n")
@@ -176,6 +193,51 @@ def test_gate_says_why_the_approval_is_unverified(tree, anchor, capsys):
     out = capsys.readouterr().out
     assert "APPROVAL UNVERIFIED" in out
     assert "no approval is recorded in the committed state" in out
+
+
+def test_a_hidden_repository_reddens_the_gate_and_says_so(tree, anchor, capsys):
+    """Wire 2.2, in the ordinary suite: the blinded gate reddens, and names why.
+
+    The regression trail for the frozen contract's SC-2, plus the half the
+    contract does not assert: the message. The per-file report is EMPTY on this
+    branch, because nothing in the contract moved, so pointing the operator at
+    `verify` for a report with nothing in it is how a true red reads like a bug.
+    """
+    _git_init(anchor.parent)
+    _git_commit(anchor.parent, "the gate artifact")
+    manifest = _bound_manifest(tree, anchor)
+    write_freeze(tree, manifest)
+    anchor.write_text(f"canopus-anchor: {manifest['root']}\n", encoding="utf-8")
+    (anchor.parent / ".git").rename(anchor.parent / ".git-hidden")
+
+    assert freeze_gate(tree) == 1
+    out = capsys.readouterr().out
+    assert "LOSS OF LOCK" in out
+    assert "the approval cannot be attributed" in out
+    assert "for the per-file report" not in out
+
+
+def test_a_substituted_repository_reddens_the_gate(tree, anchor, capsys):
+    """Identity, not presence, at the surface that fires.
+
+    The substitute is a real repository carrying a COMMITTED anchor line holding
+    exactly the hash the gate wants, so a binding recording only "the anchor was
+    inside SOME repository" calls this green.
+    """
+    _git_init(anchor.parent)
+    _git_commit(anchor.parent, "the gate artifact")
+    manifest = _bound_manifest(tree, anchor)
+    write_freeze(tree, manifest)
+
+    shutil.rmtree(anchor.parent / ".git")
+    _git_init(anchor.parent)
+    anchor.write_text(f"canopus-anchor: {manifest['root']}\n", encoding="utf-8")
+    _git_commit(anchor.parent, "a fresh repository carrying a forged approval")
+
+    assert freeze_gate(tree) == 1
+    out = capsys.readouterr().out
+    assert "LOSS OF LOCK" in out
+    assert "a different repository than the freeze recorded" in out
 
 
 def test_run_tests_calls_the_gate_before_pytest():

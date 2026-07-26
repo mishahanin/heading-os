@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.utils.canopus_freeze import (
+    ANCHOR_UNBOUND,
     APPROVED,
     LOCK_HELD,
     LOSS_OF_LOCK,
@@ -76,6 +77,13 @@ def freeze_gate(root: Path) -> int:
     state = lock_state(report, status, value)
 
     if state == LOSS_OF_LOCK:
+        if resolution.status == ANCHOR_UNBOUND:
+            # The per-file report would be EMPTY here: nothing in the contract
+            # moved, the anchor's repository did. Sending the operator to a
+            # report with nothing in it is how a true red reads like a bug.
+            print(f"{RED}canopus: {LOSS_OF_LOCK}. {resolution.approval_reason}"
+                  f"{RESET}")
+            return 1
         print(f"{RED}canopus: {LOSS_OF_LOCK}. The frozen contract moved; run "
               f"`python scripts/canopus.py verify` for the per-file report.{RESET}")
         return 1

@@ -731,6 +731,33 @@ def test_verify_explains_an_uncommitted_approval_rather_than_denying_the_line(
     assert "APPROVAL UNVERIFIED" in out
 
 
+def test_verify_names_the_unbound_anchor_and_gives_the_reason_once(
+    tree: Path, anchor: Path, capsys
+):
+    """The `verify` half of wire 2.2, and the reason is printed exactly once.
+
+    The per-file report above this line is EMPTY: nothing in the contract moved,
+    the anchor's repository did. So the detail line carries the path and the
+    STATE, while the approval axis a few lines below carries the sentence. The
+    same sentence twice in one report is how an operator learns to skim the
+    second one.
+    """
+    gate = _init_gate_repo(anchor)
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "demo",
+                 "--anchor", str(anchor)], tree) == 0
+    assert _freeze(tree, anchor) == 0
+    capsys.readouterr()
+
+    (gate / ".git").rename(gate / ".git-hidden")
+
+    assert _run(["verify"], tree) == 1
+    out = capsys.readouterr().out
+    assert canopus.LOSS_OF_LOCK in out
+    assert f"  anchor   {anchor.resolve()} [{canopus.ANCHOR_UNBOUND}]" in out
+    assert out.count("the approval cannot be attributed") == 1
+
+
 def test_freeze_contract_reports_how_much_is_already_green(tree, anchor, capsys):
     """The redness gate needs one red in the SET, so it does not scale to the moment.
 

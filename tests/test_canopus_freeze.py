@@ -1184,3 +1184,141 @@ def test_each_unverifiable_approval_status_keeps_its_own_reason():
         assert axis == APPROVAL_UNVERIFIED
         seen[status] = reason
     assert len(set(seen.values())) == 3
+
+
+def test_the_manifest_records_the_anchors_repository(tmp_path):
+    from scripts.utils.canopus_freeze import build_manifest
+
+    tree = tmp_path / "tree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    anchor = tmp_path / "outside" / "gate.md"
+    anchor.parent.mkdir(parents=True)
+    anchor.write_text("# gate\n")
+
+    manifest = build_manifest(
+        [tree / "tests"], tree, label="demo",
+        frozen_at="2026-01-01T00:00:00+00:00", anchor=anchor,
+        anchor_repo={"in_repo": True, "identity": "c" * 64},
+    )
+
+    assert manifest["anchor_repo"] == {"in_repo": True, "identity": "c" * 64}
+
+
+def test_the_binding_is_covered_by_the_root_hash(tmp_path):
+    """Otherwise a builder edits the field and the approved hash still matches.
+
+    The two identities below share a 63-character prefix, so a comparison that
+    truncated would pass this test while proving nothing.
+    """
+    from scripts.utils.canopus_freeze import build_manifest
+
+    tree = tmp_path / "tree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    anchor = tmp_path / "outside" / "gate.md"
+    anchor.parent.mkdir(parents=True)
+    anchor.write_text("# gate\n")
+
+    def build(identity):
+        return build_manifest(
+            [tree / "tests"], tree, label="demo",
+            frozen_at="2026-01-01T00:00:00+00:00", anchor=anchor,
+            anchor_repo={"in_repo": True, "identity": identity},
+        )["root"]
+
+    assert build("d" * 63 + "0") != build("d" * 63 + "1")
+    assert build("d" * 64) != build_manifest(
+        [tree / "tests"], tree, label="demo",
+        frozen_at="2026-01-01T00:00:00+00:00", anchor=anchor,
+    )["root"]
+
+
+def test_a_bound_freeze_still_verifies_as_held(tmp_path):
+    """The RECOMPUTED root must cover the binding the STORED root covered.
+
+    recompute() rebuilds the hashed payload from disk, and the binding is not on
+    disk: it is a recorded fact, like the baseline, which recompute already
+    carries through verbatim for exactly this reason. Leave anchor_repo out of
+    recompute's result and root_hash falls back to ANCHOR_REPO_UNBOUND while the
+    stored root hashed the real binding. The two can then never match, so every
+    bound freeze reports LOSS OF LOCK forever with nothing having moved.
+
+    This is the only test that can see that defect. Three of the four
+    behavioural cases in Task 5 assert a RED and would pass on the wrong cause,
+    and the fourth is the unbound plain-folder case, where the fallback value
+    happens to be correct.
+    """
+    from scripts.utils.canopus_freeze import build_manifest, verify_manifest
+
+    tree = tmp_path / "tree"
+    (tree / "tests").mkdir(parents=True)
+    (tree / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    anchor = tmp_path / "outside" / "gate.md"
+    anchor.parent.mkdir(parents=True)
+    anchor.write_text("# gate\n")
+
+    manifest = build_manifest(
+        [tree / "tests"], tree, label="demo",
+        frozen_at="2026-01-01T00:00:00+00:00", anchor=anchor,
+        anchor_repo={"in_repo": True, "identity": "c" * 64},
+    )
+
+    assert verify_manifest(manifest, tree)["held"]
+
+
+def test_a_manifest_from_the_previous_recipe_is_refused(tmp_path):
+    from scripts.utils.canopus_freeze import FreezeCorrupt, freeze_state_path, read_freeze
+
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "recipe": "canopus-freeze-v3", "label": "old",
+        "frozen_at": "2026-01-01T00:00:00+00:00", "anchor": "", "git_sha": "",
+        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {},
+    }))
+
+    with pytest.raises(FreezeCorrupt, match="canopus-freeze-v3"):
+        read_freeze(tree)
+
+
+def test_a_manifest_missing_the_binding_is_refused(tmp_path):
+    """A v4 recipe string with no binding field is a hand-edited manifest."""
+    from scripts.utils.canopus_freeze import (
+        RECIPE, FreezeCorrupt, freeze_state_path, read_freeze,
+    )
+
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "recipe": RECIPE, "label": "x",
+        "frozen_at": "2026-01-01T00:00:00+00:00", "anchor": "", "git_sha": "",
+        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {},
+    }))
+
+    with pytest.raises(FreezeCorrupt, match="anchor_repo"):
+        read_freeze(tree)
+
+
+def test_a_binding_with_a_wrong_typed_field_is_refused(tmp_path):
+    from scripts.utils.canopus_freeze import (
+        RECIPE, FreezeCorrupt, freeze_state_path, read_freeze,
+    )
+
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    path = freeze_state_path(tree)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "recipe": RECIPE, "label": "x",
+        "frozen_at": "2026-01-01T00:00:00+00:00", "anchor": "", "git_sha": "",
+        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {},
+        "anchor_repo": {"in_repo": "yes", "identity": ""},
+    }))
+
+    with pytest.raises(FreezeCorrupt, match="in_repo"):
+        read_freeze(tree)

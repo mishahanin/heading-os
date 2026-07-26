@@ -258,37 +258,32 @@ COMMIT the gate artifact. That commit is Fix 1: it carries an author and a
 timestamp and is the only thing making the approval durable. Then re-run the
 identical command with `freeze` in place of `approve` (`python
 scripts/canopus.py freeze --label ... --contract ...`, same flags), which takes
-the lock.
+the lock. Confirm with `python scripts/canopus.py verify`: LOCK HELD and
+APPROVED.
 
-Eight files, not four: three enforcers (`canopus_freeze.py`, `canopus_gate.py`,
-`canopus_git.py`), two places the gate fires (`run-tests.py`,
-`tests/conftest.py`), and their three-file import tail (`atomic.py`, `venv.py`,
-`colors.py`). `docs/EXTENDING.md` carries the table saying why each is in, and a
-closure test in `tests/test_canopus_freeze.py` fails when a new import escapes
-the set.
+Eight files, not four, because the gate's own import tail is inside the
+guarantee. `freeze` refuses a contract that is not red for a reason that means
+something, and a root the COMMITTED artifact contradicts. Both refusals, with
+their exceptions, are in `references/canopus-gate.md` — read it before the first
+retake. Three rules there bite mid-slice:
 
-`freeze` refuses unless the contract is red for a reason that means something,
-records the per-file item count, and refuses a root the COMMITTED gate artifact
-contradicts. Be exact: that refusal fires only when the commit records a hash AND
-neither the committed nor the working copy carries the root being frozen. Two
-states therefore pass it: a commit recording no hash at all (a first freeze, an
-untracked artifact, a folder outside any repository), and a committed hash that
-DOES contradict while the working copy carries a freshly approved candidate. The
-second is the SAFER branch rather than a softening; `docs/EXTENDING.md` says why.
-Both are taken, both say so, and read amber. `freeze` writes nothing to that
-artifact: an instrument that writes the hash and then checks the hash it wrote
-has verified nothing.
-
-Then confirm with `python scripts/canopus.py verify`. Inside a repository the
-criterion is LOCK HELD and APPROVED. With the artifact outside any repository, a
-supported mode, no commit exists to attribute an approval to and APPROVED can
-never print: the criterion there is LOCK HELD with APPROVAL UNVERIFIED naming
-`no_repo`.
+- **A release names its kind:** `--window` while the slice runs, `--ship` when it
+  is over. Neither flag exits 2. An open window makes every pytest session start
+  print an amber line saying no lock is held, so a green suite proves nothing.
+- **A retake of a contract the slice has legitimately turned green needs
+  `--contract-satisfied "<why>"`** on BOTH `approve` and `freeze`. It waives only
+  the redness refusal, the reason is mandatory, and it lands in the committed
+  artifact as `CONTRACT WAIVED`. Never pass the contract directory positionally
+  to get past the refusal: that drops the baseline and the subset check.
+- **Coming back from a window is six commands, not one.** The enforcer bytes
+  moved, so the root moved with them, and the committed approval still records
+  the previous root — precisely what `freeze` refuses. `approve --replace
+  --reason "<why>"`, a fresh COMMIT of the artifact, and a re-run of the gate are
+  not optional; releasing a freeze clears the attestation with it.
 
 **When the slice ships, retire the contract**: promote still-valid coverage to
 the ordinary suite and remove `tests/contract/{YYYY-MM-DD}-{slug}/`; left in
-place it binds every later slice to this one's behaviour. `docs/EXTENDING.md`
-carries the case.
+place it binds every later slice to this one's behaviour.
 
 ---
 

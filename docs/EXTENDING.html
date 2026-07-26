@@ -511,6 +511,13 @@ exit 1 is what makes it cost more.</p>
 Nothing here defends against a builder who replaces the <code>git</code> binary on PATH, or
 who forges commits in a repository they control. Every answer the gate binds to
 comes from a child process, and a process the builder owns cannot prove itself.
+Name the PRICE of that, because the argument for this whole layer turns on it: it
+is one command. Measured, a five-line shell script named <code>git</code>, placed earlier on
+PATH, passing every invocation through except <code>git -C &lt;dir&gt; show HEAD:&lt;rel&gt;</code>,
+which it answers with the working file instead, converts a re-baselined contract
+whose approval was never committed from <code>LOSS OF LOCK</code> at exit 1 into <code>LOCK HELD</code>
+at exit 0. <code>verify</code> prints <code>LOCK HELD</code> and then <code>APPROVED</code>, and the anchor
+repository shows nothing but an unstaged modification.
 The operator&rsquo;s countermeasure is unchanged and still worth the ten seconds: run
 <code>canopus verify</code> YOURSELF, in your own shell, at the approval gate, rather than
 reading a status the builder printed.</p>
@@ -524,6 +531,21 @@ identity and cost one release-and-re-freeze each: checking out an orphan branch
 with its own root, merging in a history carrying another root commit, and a
 shallow clone, whose grafted boundary commit reads as a root until
 <code>git fetch --unshallow</code>.</p>
+<p><strong>The frozen contract pins that identity DEFINITION less tightly than it claims.</strong>
+A docstring in <code>tests/contract/2026-07-26-canopus-repository-binding/test_contract.py</code>
+says a wrong definition of repository identity would be caught, and lists &ldquo;a
+toplevel path, an unsorted join, a different separator, a trailing newline&rdquo;.
+Measured by mutation, the toplevel-path and trailing-newline variants ARE killed
+and the other two are NOT: removing <code>sorted(...)</code> from <code>repo_identity</code>, and
+changing the newline separator to a comma, each leave all eleven contract cases
+and all 387 tests of the whole canopus set passing. The cause is the fixtures
+rather than the argument. No fixture builds a repository with more than one root
+commit, so sorted, unsorted, and any separator collapse to the same one-element
+digest. The consequence is fail-closed rather than a reopened bypass: an anchor
+repository carrying a merged second root could take a spurious broken binding
+after an ordinary commit reorders <code>rev-list</code> output, and nothing in the set would
+fail. The contract is frozen, so the multi-root fixture belongs in the next
+slice&rsquo;s contract.</p>
 <p><code>.canopus/</code> is gitignored, so the ledger recording release windows and forced
 escapes can be deleted by the builder in one command, and git never saw it.</p>
 <p>And the PreToolUse deny is still only a convenience: a shell <code>sed -i</code> walks past
@@ -821,6 +843,30 @@ record, read by a human at sign-off, where an evidence pack without <code>ATTEST
 assembled. The record is bound to the recomputed root hash, so editing any frozen file
 after a green run makes it stop applying without anyone remembering to delete it. It is a
 true statement about <em>a</em> run of this exact contract, not necessarily the most recent one.</p>
+<p><strong>Nothing binds the INTERPRETER the way <code>anchor_repo</code> binds the repository.</strong> The
+lock refuses a repository the freeze did not record; the attestation answers
+whether the contract ran. Between the two sits the pytest process itself, and it
+is unbound. <code>PYTEST_ADDOPTS</code> is not scrubbed the way every <code>GIT_</code>-prefixed
+variable is, and the tree-root composition guard watches <code>*.py</code> FILES, so a
+package DIRECTORY dropped at the tree root is invisible to it. Measured on a
+scratch tree with a held and approved freeze over a two-test contract:</p>
+<div class="highlight"><pre><span></span><code>mkdir<span class="w"> </span>-p<span class="w"> </span>plug<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;def pytest_pyfunc_call(pyfuncitem):\n    return True\n&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>plug/skipper.py
+<span class="nv">PYTEST_ADDOPTS</span><span class="o">=</span><span class="s2">&quot;-p plug.skipper&quot;</span><span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q<span class="w">      </span><span class="c1"># 2 passed</span>
+python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>verify
+<span class="c1">#   LOCK HELD ... ATTESTED  2 frozen tests passed, none deselected ... APPROVED     exit 0</span>
+</code></pre></div>
+<p>The honest run of the same tree reports <code>NOT ATTESTED</code> with reported failures. No
+frozen byte moved and no guarded composition changed, and neither the environment
+variable nor the untracked directory appears anywhere an operator reads. A
+skip-injecting variant of the same plugin reads <code>0 frozen tests passed ... 2
+skipped</code>, which is the only visible tell.</p>
+<p>Two things about that, stated rather than implied. It is pre-existing and not a
+wire 2.2 regression: the attestation is a wire 2 mechanism, and the repository
+binding did not touch it. And the mitigation stated elsewhere on this page, that a
+skip injected from an unfrozen sibling <code>conftest.py</code> is the composition guard&rsquo;s
+job, does NOT cover it: a plugin loaded through the environment is neither a
+conftest nor a file any guard watches. Binding the interpreter is the next slice&rsquo;s
+work.</p>
 <p><strong>Freeze the enforcers, all eight of them.</strong> A freeze that omits them protects the
 contract while leaving the thing that checks the contract editable.</p>
 <table>
@@ -882,6 +928,18 @@ passing gate writes nothing, so the absence of a <code>verify_fail</code> line d
 contract was verified. The gate&rsquo;s evidence is its exit code in the test output; the durable
 evidence that a contract was approved is the anchor artifact, committed in the other
 repository.</p>
+<p>Three measurements say what that is worth in practice. <code>rm .canopus/history.jsonl</code>
+turns the gate&rsquo;s open-window amber line into total silence at exit 0, because that
+line is read out of the ledger and nothing else records the window. <code>release
+--ship</code> used mid-slice produces the same silence with no deletion at all, since a
+ship reads as a closed slice rather than an open window. And ONE line appended to
+the ledger flips <code>canopus pack</code>&rsquo;s continuity section from <code>outside the lock</code> in
+red to <code>every commit was made while a freeze was held</code> in green. So the ledger is
+a convenience beside the durable record and never the record itself: it shows a
+cooperating build&rsquo;s own account of what it did, and it cannot be used to prove
+that a freeze was ever taken, that a window was opened and closed, or that a given
+commit was made under the lock. Those three claims rest on the anchor artifact and
+on an operator who ran <code>verify</code> in their own shell.</p>
 <p>A contract that turns out to be wrong is not edited in place. Release it, fix it,
 re-freeze it, and get the new root hash re-approved.</p>
 <hr />

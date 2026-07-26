@@ -1405,6 +1405,55 @@ def test_a_manifest_with_no_binding_key_is_treated_as_unbound():
     assert repo_binding_state({}, REPO_ABSENT, "")[0] == BINDING_INTACT
 
 
+@pytest.mark.parametrize("binding", ["sneaky", ["sneaky"], 7])
+def test_a_non_dict_binding_is_treated_as_unbound(binding):
+    """It must ANSWER, never raise, whatever shape the key carries.
+
+    A manifest reaching this function without passing through read_freeze is
+    exactly the case the guard exists for, so "_validate_manifest_shape already
+    refuses that" is a guarantee about a DIFFERENT function. The raise matters
+    because the PreToolUse dispatcher catches only FreezeCorrupt and OSError: an
+    AttributeError falls to its catch-all, logs an advisory and CONTINUES, so
+    writes to frozen paths sail through while the hook reports healthy.
+    """
+    from scripts.utils.canopus_freeze import (
+        BINDING_BROKEN, BINDING_INTACT, REPO_ABSENT, REPO_PRESENT, repo_binding_state,
+    )
+
+    manifest = {"anchor_repo": binding}
+
+    assert repo_binding_state(manifest, REPO_ABSENT, "")[0] == BINDING_INTACT
+    # Read as unbound rather than as bound to nothing: an anchor now inside a
+    # repository is the freeze-taken-blind case, and it stays red.
+    assert repo_binding_state(manifest, REPO_PRESENT, "f" * 64)[0] == BINDING_BROKEN
+
+
+def test_the_unbound_fallback_cannot_be_mutated_in_place():
+    """One in-place edit would change the fallback for the whole process.
+
+    Every stored unbound root would then stop matching, and verify would report
+    LOSS OF LOCK over a tree where nothing moved.
+    """
+    from scripts.utils.canopus_freeze import ANCHOR_REPO_UNBOUND
+
+    with pytest.raises(TypeError):
+        ANCHOR_REPO_UNBOUND["in_repo"] = True
+
+    assert ANCHOR_REPO_UNBOUND["in_repo"] is False
+
+
+def test_a_manifest_taking_the_unbound_fallback_serializes_as_a_plain_dict(tree, anchor):
+    """The read-only fallback must never reach the JSON on disk."""
+    manifest = build_manifest(
+        [tree / "tests"], tree, label="unbound", frozen_at=STAMP, anchor=anchor
+    )
+
+    assert type(manifest["anchor_repo"]) is dict
+    assert json.loads(json.dumps(manifest))["anchor_repo"] == {
+        "in_repo": False, "identity": ""
+    }
+
+
 def test_an_unbound_anchor_status_reddens_the_lock():
     from scripts.utils.canopus_freeze import ANCHOR_UNBOUND, LOSS_OF_LOCK, lock_state
 

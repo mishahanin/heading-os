@@ -41,6 +41,12 @@ from pathlib import Path
 
 ENGINE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ENGINE_ROOT))
+from scripts.utils.canopus_contract import (  # noqa: E402
+    ContractError,
+    contract_files,
+    refusal_reasons,
+    run_contract,
+)
 from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_MISSING,
     ANCHOR_NONE,
@@ -66,12 +72,10 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     verify_manifest,
     write_freeze,
 )
-from scripts.utils.canopus_git import COMMITTED, resolve_anchor  # noqa: E402
-from scripts.utils.canopus_contract import (  # noqa: E402
-    ContractError,
-    contract_files,
-    refusal_reasons,
-    run_contract,
+from scripts.utils.canopus_git import (  # noqa: E402
+    COMMITTED,
+    AnchorResolution,
+    resolve_anchor,
 )
 from scripts.utils.canopus_pack import (  # noqa: E402
     commits_outside,
@@ -175,7 +179,7 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
             print(f"  reason   {line}")
 
 
-def _print_approval(resolution) -> None:
+def _print_approval(resolution: AnchorResolution) -> None:
     """The third axis: was this exact freeze the one a human approved?
 
     The lock says the contract has not moved since the freeze. The attestation

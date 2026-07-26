@@ -35,13 +35,27 @@ NO_GIT = "no_git"
 
 
 def git_output(root: Path, *arguments: str) -> Optional[str]:
-    """Run a git command in *root*, or None when git cannot answer."""
+    """Run a git command in *root*, or None when git cannot answer.
+
+    ValueError is in the handler because subprocess.run raises it, and it is
+    neither an OSError nor a SubprocessError. Two routes reach it, both measured
+    rather than imagined: an argument carrying an embedded NUL byte (a manifest
+    whose anchor directory holds one made freeze_gate raise
+    `ValueError: embedded null byte`), and `text=True` decoding, where a
+    non-UTF-8 gate artifact makes git's stdout raise UnicodeDecodeError, a
+    ValueError subclass. The second is currently masked by read_anchor failing
+    first on the same file, so it would surface the moment that one is fixed.
+
+    This module's contract is that every function ANSWERS, and freeze_gate runs
+    at every pytest session start. An exception escaping here does not report a
+    broken lock, it crashes the harness that was supposed to report it.
+    """
     try:
         proc = subprocess.run(
             ["git", "-C", str(root), *arguments],
             capture_output=True, text=True, timeout=30, check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
     return proc.stdout if proc.returncode == 0 else None
 
@@ -106,6 +120,13 @@ class AnchorResolution(NamedTuple):
     and both spell ANCHOR_RECORDED. `cmd_verify` labels its detail line with a
     working-tree path, so it has to say which copy it read or an operator who
     opens that file finds a different hash and no explanation.
+
+    SIX fields, and read them by NAME. `source` has a default so existing
+    construction sites did not have to change, but a default does not restore
+    tuple arity: whole-tuple unpacking into five names raises, and equality
+    against a five-tuple is False. No consumer does either today, and none
+    should start; the reason this is a NamedTuple rather than a dataclass is
+    that three call sites read `.anchor, .status, .value` and nothing more.
     """
     anchor: str
     status: str

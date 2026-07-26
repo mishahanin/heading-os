@@ -75,6 +75,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
 from scripts.utils.canopus_git import (  # noqa: E402
     COMMITTED,
     AnchorResolution,
+    read_committed_anchor,
     resolve_anchor,
 )
 from scripts.utils.canopus_pack import (  # noqa: E402
@@ -194,6 +195,114 @@ def _print_approval(resolution: AnchorResolution) -> None:
     colour = GREEN if resolution.approval == APPROVED else YELLOW
     detail = f"  {resolution.approval_reason}" if resolution.approval_reason else ""
     print(f"{colour}{BOLD}{resolution.approval}{RESET}{detail}")
+
+
+def _candidate_manifest(args, root: Path, anchor_path: Path):
+    """(manifest, contract_note) for approve and freeze, or (None, "") on refusal.
+
+    One builder for both commands. Two copies of this construction is how the
+    approved hash and the frozen hash come to differ over a default nobody
+    noticed, and every freeze after that is refused for a reason that looks like
+    tampering.
+
+    The note carries the already-green count forward. That measurement landed two
+    commits before this slice for a reason that has not changed: the redness gate
+    needs ONE red in the SET, so a mid-build retake of an 11-of-14-green contract
+    passes the same check a fully red contract passes at the start. resolve_anchor
+    does not supersede it; they answer different questions, one about approval and
+    one about how much the contract was still proving.
+    """
+    if not args.paths and not args.content and not args.contract:
+        print("canopus: at least one path is required, positionally or via "
+              "--content or --contract", file=sys.stderr)
+        return (None, "")
+    contracts = [_under_root(p, root) for p in args.contract]
+    baseline: dict[str, int] = {}
+    contract_note = ""
+    if contracts:
+        expected = contract_files(contracts, root)
+        if not expected:
+            print("canopus: --contract names no test modules; a contract with no "
+                  "tests can never be attested", file=sys.stderr)
+            return (None, "")
+        counts, outcomes = run_contract(contracts, root)
+        reasons = refusal_reasons(counts, outcomes, expected)
+        if reasons:
+            print("canopus: the contract was refused:", file=sys.stderr)
+            for reason in reasons:
+                print(f"  {reason}", file=sys.stderr)
+            return (None, "")
+        baseline = {rel: counts[rel] for rel in expected}
+        already_green = sum(
+            1 for _rel, _name, outcome in outcomes if outcome == "passed"
+        )
+        contract_note = f"{already_green} of {sum(counts.values())} already green"
+    manifest = build_manifest(
+        [_under_root(p, root) for p in args.paths] + contracts,
+        root,
+        label=args.label,
+        frozen_at=datetime.now(timezone.utc).isoformat(),
+        anchor=anchor_path,
+        content_only=[_under_root(p, root) for p in args.content],
+        baseline=baseline,
+    )
+    return (manifest, contract_note)
+
+
+def cmd_approve(args) -> int:
+    """Record the candidate root hash for a human to commit. Freezes nothing.
+
+    The approval act is the human's COMMIT of the artifact this writes into: it
+    carries an author, a timestamp, and a position in a history that cannot be
+    altered afterwards without rewriting it. `freeze` then refuses anything that
+    disagrees with the committed value.
+
+    freeze does not write the anchor any more, and that is forced rather than
+    chosen: an instrument that writes the hash and then checks the hash it wrote
+    has verified nothing.
+    """
+    root = _resolve_root(args)
+    anchor_path = validate_anchor_path(_under_root(args.anchor, root), root)
+    status, recorded = read_anchor(anchor_path)
+    committed_status, committed_recorded = read_committed_anchor(anchor_path)
+    # The union of both readers, deliberately. Refusing on the working file alone
+    # would let `git checkout --` erase an uncommitted approve line, so a second
+    # approve over a different set never trips --replace. Refusing on the
+    # committed one alone would miss the line this command wrote a minute ago.
+    # The committed half is the one the rule actually protects, and the one
+    # `git checkout --` cannot erase.
+    already = recorded if status == ANCHOR_RECORDED else committed_recorded
+    if already and not args.replace:
+        print(f"canopus: {anchor_path} already records {already}. An approval is "
+              f"never silently overwritten. If the SET being approved is "
+              f"legitimately changing, re-run with --replace and --reason.",
+              file=sys.stderr)
+        return 1
+    if args.replace and not args.reason:
+        print("canopus: --replace requires --reason; an unexplained replacement "
+              "is indistinguishable from a re-baseline", file=sys.stderr)
+        return 1
+    manifest, contract_note = _candidate_manifest(args, root, anchor_path)
+    if manifest is None:
+        return 1
+    # The artifact write comes before the ledger, and the order is the same one
+    # cmd_freeze reasons about: an OSError here leaves no approval anywhere,
+    # while the reverse would leave a ledger claiming an approval the artifact
+    # never received.
+    with anchor_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n{ANCHOR_PREFIX} {manifest['root']}\n")
+    append_history(root, "approve", digest=manifest["root"],
+                   label=args.label, reason=args.reason or "")
+    if already:
+        append_history(root, "anchor_replaced", digest=manifest["root"],
+                       label=args.label, reason=args.reason)
+    _print_root(manifest["root"], manifest)
+    if contract_note:
+        print(f"{YELLOW}contract{RESET}  {contract_note} before this approval")
+    print(f"\nCandidate recorded in {anchor_path}, uncommitted. Read it, then "
+          f"COMMIT that repository: the commit is the approval, and freeze "
+          f"refuses anything that disagrees with what you committed.")
+    return 0
 
 
 def cmd_freeze(args) -> int:
@@ -545,6 +654,23 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--reason", default="",
                         help="why the anchor is being replaced")
     freeze.set_defaults(func=cmd_freeze)
+
+    approve = sub.add_parser(
+        "approve",
+        help="record the candidate root hash for a human to commit; freezes nothing",
+    )
+    approve.add_argument("paths", nargs="*", help="paths to be frozen positionally")
+    approve.add_argument("--label", required=True, help="what this contract is for")
+    approve.add_argument("--anchor", required=True,
+                         help="the gate artifact, outside the working tree")
+    approve.add_argument("--content", action="append", default=[],
+                         help="freeze this file's bytes only")
+    approve.add_argument("--contract", action="append", default=[],
+                         help="a contract directory: recursive, with a baseline")
+    approve.add_argument("--replace", action="store_true",
+                         help="append a new approval over a recorded one")
+    approve.add_argument("--reason", help="why the approval is being replaced")
+    approve.set_defaults(func=cmd_approve)
 
     probe = sub.add_parser("probe", help="run a contract set and show what a "
                                          "freeze would record; writes nothing")

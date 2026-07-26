@@ -27,7 +27,14 @@ ENV_VAR = "CANOPUS_STUB_MODULES"
 
 
 class _MockLoader(Loader):
-    """Builds a module whose every attribute is a fresh MagicMock."""
+    """Builds a module whose every attribute is a fresh MagicMock.
+
+    Fresh per access, so `mod.f is mod.f` is False. That is safe for the same
+    reason the finder's docstring leans on: an identity assertion FAILS under the
+    stub, so the test keeps its red outcome and is never mislabelled vacuous. It
+    is named here because the property is easy to trip over when reading a
+    passing probe run.
+    """
 
     def create_module(self, spec):
         module = ModuleType(spec.name)
@@ -77,3 +84,17 @@ def pytest_configure(config):
     names = [name for name in os.environ.get(ENV_VAR, "").split(",") if name]
     if names:
         sys.meta_path.insert(0, _MockFinder(names))
+
+
+def pytest_unconfigure(config):
+    """Take the finder back out at session end.
+
+    The probe child exits straight after, so nothing observable depends on this
+    today. It is here so "the finder is removed cleanly" is a property of the
+    code rather than of the process boundary, which is what would be relied on
+    the first time this plugin is loaded into a session that keeps running.
+    Absent finders are tolerated: pytest_configure installs nothing when the
+    environment names no modules, and unconfigure still runs.
+    """
+    for finder in [f for f in sys.meta_path if isinstance(f, _MockFinder)]:
+        sys.meta_path.remove(finder)

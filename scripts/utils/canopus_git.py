@@ -24,13 +24,16 @@ from scripts.utils.canopus_freeze import (
     ANCHOR_MISSING,
     ANCHOR_PREFIX,
     ANCHOR_RECORDED,
+    ANCHOR_UNBOUND,
     ANCHOR_UNRECORDED,
     APPROVAL_UNVERIFIED,
+    BINDING_BROKEN,
     REPO_ABSENT,
     REPO_PRESENT,
     REPO_UNKNOWN,
     anchor_state,
     approval_state,
+    repo_binding_state,
 )
 
 COMMITTED = "committed"
@@ -144,7 +147,14 @@ def repo_identity(directory: Path) -> Tuple[str, str]:
     the alternative and is worse: every fetched branch would move the identity.
     """
     top = git_output(Path(directory), "rev-parse", "--show-toplevel")
-    if top is None:
+    if top is None or not top.strip():
+        # Empty output on exit 0 is answered as "not a repository" rather than
+        # passed on. `Path("")` is `Path(".")`, so the rev-list below would run
+        # against whatever repository the PROCESS happens to sit in and hand back
+        # an unrelated identity labelled REPO_PRESENT. No git release on this
+        # machine was found to produce it, which is the point: the guard costs one
+        # comparison and removes the whole class rather than the case in front of
+        # its author.
         return (REPO_ABSENT, "") if _git_available() else (REPO_UNKNOWN, "")
     roots = git_output(Path(top.strip()), "rev-list", "--max-parents=0", "HEAD")
     lines = sorted(line.strip() for line in (roots or "").splitlines() if line.strip())
@@ -229,6 +239,15 @@ class AnchorResolution(NamedTuple):
     working-tree path, so it has to say which copy it read or an operator who
     opens that file finds a different hash and no explanation.
 
+    ONE branch breaks that rule, and it is named here rather than left for the
+    next reader to discover. Under ANCHOR_UNBOUND, `source` carries the REPOSITORY
+    status from repo_identity, because read_committed_anchor is never reached on
+    that branch: the binding is judged first, deliberately. The two vocabularies
+    already share `no_repo` and `no_git`; `in_repo` is the one value that has no
+    counterpart in the read_committed_anchor set. `cmd_verify`'s only reader of
+    this field sits inside an ANCHOR_RECORDED branch, so nothing misreads it
+    today, and a field whose documented meaning is false is how the next one does.
+
     SIX fields, and read them by NAME. `source` has a default so existing
     construction sites did not have to change, but a default does not restore
     tuple arity: whole-tuple unpacking into five names raises, and equality
@@ -264,12 +283,29 @@ def resolve_anchor(manifest: dict, override: Optional[str] = None) -> AnchorReso
     beside LOSS OF LOCK, and that pair reads "a human approved this freeze, and
     the contract has moved since". Binding both to the recomputed root would
     collapse the two into one undifferentiated red and lose which of them failed.
+
+    `verify --anchor <override>` is bound too, and that is the intended answer
+    rather than an oversight. The override travels through anchor_state, so an
+    override naming an artifact in a DIFFERENT repository than the freeze recorded
+    reads BINDING_BROKEN and reddens. The binding is a fact about the artifact the
+    freeze was TAKEN against, and an artifact in another repository is not that
+    one, however plausible its contents look.
     """
     anchor, working_status, working_value = anchor_state(manifest, override)
     if not anchor:
         return AnchorResolution(anchor, working_status, working_value,
                                 APPROVAL_UNVERIFIED,
                                 "the manifest carries no anchor", "")
+    repo_status, repo_id = repo_identity(Path(anchor).parent)
+    binding, binding_reason = repo_binding_state(manifest, repo_status, repo_id)
+    if binding == BINDING_BROKEN:
+        # Before any fallback, deliberately. The working-copy fallback is the
+        # thing being closed, and a fallback that runs first cannot be closed by
+        # a check that runs after it. The approval axis goes UNVERIFIED too: a
+        # committed hash read out of a repository the freeze was not taken
+        # against is not an approval of this freeze.
+        return AnchorResolution(anchor, ANCHOR_UNBOUND, None,
+                                APPROVAL_UNVERIFIED, binding_reason, repo_status)
     committed_status, committed_hash = read_committed_anchor(Path(anchor))
     approval, reason = approval_state(
         manifest.get("root") or "", committed_status, committed_hash

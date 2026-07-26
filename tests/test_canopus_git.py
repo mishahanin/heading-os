@@ -23,6 +23,25 @@ def _commit(root: Path, message: str) -> None:
                    check=True, capture_output=True, text=True)
 
 
+def _bound(artifact: Path, root: str) -> dict:
+    """A hand-built manifest carrying the binding `freeze` would have recorded.
+
+    Since wire 2.2, resolve_anchor judges the anchor's repository binding BEFORE
+    it reads the committed anchor. A manifest that omits `anchor_repo` while its
+    artifact sits inside a repository therefore resolves ANCHOR_UNBOUND, and
+    every precedence test below would then be answering a question about the
+    binding rather than the one it names. Three of them would still have PASSED
+    on that wrong cause, which is the worse half.
+    """
+    from scripts.utils.canopus_freeze import REPO_PRESENT
+    from scripts.utils.canopus_git import repo_identity
+
+    status, identity = repo_identity(artifact.parent)
+    return {"anchor": str(artifact), "root": root,
+            "anchor_repo": {"in_repo": status == REPO_PRESENT,
+                            "identity": identity}}
+
+
 def test_a_committed_anchor_line_is_read_from_head(tmp_path):
     from scripts.utils.canopus_git import COMMITTED, read_committed_anchor
 
@@ -134,7 +153,7 @@ def test_the_committed_hash_governs_the_lock_when_it_exists(tmp_path):
     with artifact.open("a", encoding="utf-8") as handle:
         handle.write(f"\ncanopus-anchor: {'b' * 64}\n")
 
-    resolution = resolve_anchor({"anchor": str(artifact), "root": "b" * 64})
+    resolution = resolve_anchor(_bound(artifact, "b" * 64))
 
     assert resolution.value == "a" * 64
     assert resolution.approval == APPROVAL_UNVERIFIED
@@ -165,7 +184,7 @@ def test_a_matching_committed_hash_reports_approved(tmp_path):
     artifact.write_text(f"canopus-anchor: {'d' * 64}\n", encoding="utf-8")
     _commit(root, "approve")
 
-    assert resolve_anchor({"anchor": str(artifact), "root": "d" * 64}).approval == APPROVED
+    assert resolve_anchor(_bound(artifact, "d" * 64)).approval == APPROVED
 
 
 def test_a_disagreeing_committed_hash_is_a_loss_of_lock(tmp_path):
@@ -180,7 +199,7 @@ def test_a_disagreeing_committed_hash_is_a_loss_of_lock(tmp_path):
     with artifact.open("a", encoding="utf-8") as handle:
         handle.write(f"\ncanopus-anchor: {'b' * 64}\n")
 
-    resolution = resolve_anchor({"anchor": str(artifact), "root": "b" * 64})
+    resolution = resolve_anchor(_bound(artifact, "b" * 64))
     report = {"recomputed_root": "b" * 64, "changed": [], "added": [],
               "removed": [], "held": True}
 
@@ -204,7 +223,7 @@ def test_an_uncommitted_approval_never_reaches_lock_held(tmp_path):
     with artifact.open("a", encoding="utf-8") as handle:
         handle.write(f"\ncanopus-anchor: {'b' * 64}\n")
 
-    resolution = resolve_anchor({"anchor": str(artifact), "root": "b" * 64})
+    resolution = resolve_anchor(_bound(artifact, "b" * 64))
     report = {"recomputed_root": "b" * 64, "changed": [], "added": [],
               "removed": [], "held": True}
 
@@ -231,7 +250,7 @@ def test_a_deleted_artifact_still_reddens_the_lock(tmp_path):
     _commit(root, "approve")
     artifact.unlink()
 
-    resolution = resolve_anchor({"anchor": str(artifact), "root": "d" * 64})
+    resolution = resolve_anchor(_bound(artifact, "d" * 64))
     report = {"recomputed_root": "d" * 64, "changed": [], "added": [],
               "removed": [], "held": True}
 
@@ -255,7 +274,7 @@ def test_a_committed_hash_differing_only_in_its_last_character_is_not_approved(t
     artifact.write_text(f"canopus-anchor: {approved}\n", encoding="utf-8")
     _commit(root, "approve")
 
-    resolution = resolve_anchor({"anchor": str(artifact), "root": computed})
+    resolution = resolve_anchor(_bound(artifact, computed))
 
     assert resolution.approval == APPROVAL_UNVERIFIED
     assert resolution.value == approved
@@ -276,7 +295,7 @@ def test_a_truncated_committed_hash_is_not_approved(tmp_path):
     artifact.write_text(f"canopus-anchor: {'a' * 32}\n", encoding="utf-8")
     _commit(root, "approve")
 
-    resolution = resolve_anchor({"anchor": str(artifact), "root": "a" * 64})
+    resolution = resolve_anchor(_bound(artifact, "a" * 64))
 
     assert resolution.approval == APPROVAL_UNVERIFIED
 
@@ -388,6 +407,35 @@ def test_a_plain_directory_is_reported_absent_not_unknown(tmp_path):
     plain.mkdir()
 
     assert repo_identity(plain) == (REPO_ABSENT, "")
+
+
+def test_an_empty_toplevel_never_walks_the_ambient_repository(tmp_path, monkeypatch):
+    """An empty `--show-toplevel` on exit 0 is answered absent, not passed on.
+
+    `Path("")` is `Path(".")`, so the rev-list below would run against whatever
+    repository the PROCESS happens to sit in and hand an unrelated identity back
+    as REPO_PRESENT. No git on this machine was found to produce that output,
+    which is exactly why the seam is stubbed rather than provoked: a test that
+    can only run on a git that misbehaves is a test that never runs, and the
+    guard is there to remove the class rather than one reproducible case.
+    """
+    import scripts.utils.canopus_git as canopus_git
+    from scripts.utils.canopus_freeze import REPO_ABSENT
+
+    seen = []
+
+    def fake_git_output(root, *arguments):
+        seen.append(arguments)
+        if arguments[:1] == ("rev-parse",):
+            return "\n"
+        if arguments[:1] == ("--version",):
+            return "git version 0.0.0\n"
+        return None
+
+    monkeypatch.setattr(canopus_git, "git_output", fake_git_output)
+
+    assert canopus_git.repo_identity(tmp_path) == (REPO_ABSENT, "")
+    assert ("rev-list", "--max-parents=0", "HEAD") not in seen
 
 
 def test_head_sha_answers_rather_than_raising_outside_a_repository(tmp_path):

@@ -70,6 +70,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_NONE,
     ANCHOR_PREFIX,
     ANCHOR_RECORDED,
+    ANCHOR_UNBOUND,
     APPROVED,
     ATTESTED,
     LOCK_HELD,
@@ -745,6 +746,12 @@ def cmd_verify(args) -> int:
         print(f"  added    {rel}")
     for rel in report["removed"]:
         print(f"  removed  {rel}")
+    if status == ANCHOR_UNBOUND:
+        # The path and the STATE, not the reason. `_print_approval` a few lines
+        # below already prints the reason on the approval axis, because the
+        # binding sets approval_reason as well, and the same sentence twice in
+        # one report teaches an operator to skim the second one.
+        print(f"  anchor   {anchor} [{ANCHOR_UNBOUND}]")
     if status == ANCHOR_MISSING:
         print(f"  anchor   {anchor} is gone")
     elif status == ANCHOR_RECORDED and value != report["recomputed_root"]:

@@ -439,6 +439,27 @@ def test_failure_modes_tell_an_import_from_an_assertion(tmp_path):
     assert modes[("c/test_one.py", "test_assertion")] == "assertion"
 
 
+def test_a_docstring_saying_assert_does_not_make_a_failure_an_assertion(tmp_path):
+    """The label describes the failure, never the test's own prose.
+
+    Measured on wire 2.2's contract at its Fix 1 probe: eleven tests failing on
+    one identical TypeError printed as seven assertions and four others, decided
+    entirely by which docstrings happened to use the word "assert". A label that
+    reads the operator's prose back to them is worse than no label, because it
+    is read as a measurement.
+    """
+    from scripts.utils.canopus_contract import parse_failure_modes, run_pytest_report
+
+    _write(tmp_path, "c/test_one.py",
+           'def test_type_error():\n'
+           '    """This one asserts a green through the gate."""\n'
+           '    dict(**{1: 2})\n')
+
+    modes = parse_failure_modes(run_pytest_report([tmp_path / "c"], tmp_path))
+
+    assert modes[("c/test_one.py", "test_type_error")] == "other"
+
+
 def test_parse_failure_modes_refuses_a_doctype():
     """The third reader of a report goes through the one guarded entry point.
 

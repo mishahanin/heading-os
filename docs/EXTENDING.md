@@ -230,13 +230,30 @@ its contract, every row is green and the same rule refuses the retake. Passing
 the contract directory positionally gets past it and silently gives up
 everything `--contract` buys, so `approve` and `freeze` take
 `--contract-satisfied REASON` instead. The reason is the flag's VALUE, so it
-cannot be passed without one. It waives EXACTLY the redness refusal: a contract
-file that collected nothing is still refused, the null-stub vacuity proof still
-runs, and the baseline, the ledger note, and the pack's contract section all
-survive. On a contract that is actually red the flag changes nothing and says so
-out loud, so it cannot quietly become a habit that hides redness. The reason
-prints at the surface and is recorded in the `.canopus/history.jsonl` entry for
-that `approve` or `freeze`.
+cannot be passed without one, and a reason of pure whitespace takes NO waiver and
+says so rather than degrading in silence. It waives EXACTLY the redness refusal:
+a contract file that collected nothing is still refused, and the baseline, the
+ledger note, and the pack's contract section all survive. On a contract that is
+actually red the flag changes nothing and says so out loud, so it cannot quietly
+become a habit that hides redness.
+
+Be exact about the vacuity proof on that path, because the loose reading is the
+flattering one. The null stub weighs RED tests only, so on the wholly green
+contract the waiver exists for it has nothing to weigh and returns no verdict:
+`approve` and `freeze` therefore SKIP that second pytest session instead of
+spending a minute on an answer that cannot matter. A retake is not re-proved
+non-vacuous; it inherits the proof the first freeze earned while the contract was
+red. `probe` still runs the stub unconditionally, because there the verdict is
+the output rather than an input to a refusal.
+
+The reason prints at the surface, is recorded in the `.canopus/history.jsonl`
+entry for that `approve` or `freeze`, AND is written onto the anchor artifact by
+`approve` as a `canopus-contract-satisfied:` line above the approval it belongs
+to. That last one is the durable half: `.canopus/` is gitignored and one
+`rm -rf` removes it, while the anchor is the artifact a human commits in another
+repository. `canopus pack` reads it back, bound to this freeze's root hash, and
+prints `CONTRACT WAIVED` on the evidence page, so a freeze that passed the
+redness rule on a stated reason never reads like one that earned it.
 
 Say what the instrument cannot do. It learns which modules were absent by
 reading the failure text the contract's own tests produced, so a test that

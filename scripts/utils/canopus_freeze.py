@@ -67,6 +67,12 @@ FREEZE_DIRNAME = ".canopus"
 FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
 ANCHOR_PREFIX = "canopus-anchor:"
+# The line `approve` writes above an anchor line when the freeze it is approving
+# was accepted under `--contract-satisfied`. Deliberately NOT a prefix of, and
+# not prefixed by, ANCHOR_PREFIX: read_anchor matches with
+# `startswith(ANCHOR_PREFIX)` and takes everything after it as the digest, so a
+# waiver written on the anchor line would be parsed as part of the hash.
+SATISFIED_PREFIX = "canopus-contract-satisfied:"
 
 # Where the anchor's repository stands RIGHT NOW, as measured by canopus_git and
 # judged by repo_binding_state below. Defined here rather than in canopus_git
@@ -613,6 +619,48 @@ def read_anchor(anchor_path: Path) -> Tuple[str, Optional[str]]:
                 # disagreement forever.
                 found = value
     return (ANCHOR_RECORDED, found) if found else (ANCHOR_UNRECORDED, None)
+
+
+def read_anchor_waiver(anchor_path: Path, root_digest: str) -> str:
+    """The waiver reason recorded beside *root_digest* in the artifact, or "".
+
+    `--contract-satisfied` accepts a wholly green contract, which is the right
+    answer for a retake and the wrong one for a first freeze. Recording it only
+    in `.canopus/history.jsonl` left it in a gitignored directory one `rm -rf`
+    removes, so a claim about a waived refusal had no durable artifact behind
+    it. `approve` therefore writes it onto the anchor beside the approval it
+    belongs to, and this reads it back.
+
+    BOUND to a hash, never "the last waiver in the file". An anchor accumulates
+    one approval per retake, so a waiver taken three retakes ago must not be
+    reported against a freeze that earned its redness honestly. Full digests,
+    compared whole: a prefix comparison here would look rigorous and is not.
+
+    Answers rather than raising, matching read_anchor: an unreadable or non-UTF-8
+    artifact reads as "no waiver recorded", and the reader that decides the LOCK
+    has already called that artifact missing.
+    """
+    path = Path(anchor_path)
+    wanted = (root_digest or "").strip().lower()
+    if not wanted or not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+    found = ""
+    pending = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(SATISFIED_PREFIX):
+            pending = stripped[len(SATISFIED_PREFIX):].strip()
+        elif stripped.startswith(ANCHOR_PREFIX):
+            # The pending waiver belongs to THIS approval and to no later one,
+            # so it is consumed here whether or not the hash matched.
+            if stripped[len(ANCHOR_PREFIX):].strip().lower() == wanted:
+                found = pending
+            pending = ""
+    return found
 
 
 def anchor_state(

@@ -565,6 +565,7 @@ ANCHOR_NONE = "none"
 ANCHOR_MISSING = "missing"
 ANCHOR_UNRECORDED = "unrecorded"
 ANCHOR_RECORDED = "recorded"
+ANCHOR_UNBOUND = "unbound"
 
 
 def read_anchor(anchor_path: Path) -> Tuple[str, Optional[str]]:
@@ -628,16 +629,72 @@ def anchor_state(
     return (anchor, status, value)
 
 
+BINDING_INTACT = "intact"
+BINDING_BROKEN = "broken"
+
+
+def repo_binding_state(
+    manifest: dict, current_status: str, current_identity: str
+) -> Tuple[str, str]:
+    """Is the anchor still in the repository the freeze was taken against?
+
+    Pure string work. The measurement arrives from the caller for the same
+    reason approval_state's git status does: this module is imported by the
+    PreToolUse dispatcher on every write and may never reach for subprocess.
+
+    Five outcomes, and the third and fifth are the whole point of wire 2.2:
+
+      bound, same repository        intact
+      unbound, still no repository  intact (the plain-folder operator)
+      bound, a DIFFERENT repository broken
+      bound, no repository or no git broken, and this is the blinding case
+      unbound, now IN a repository  broken, because the freeze was taken blind
+
+    The fourth line is why RED and not amber. Amber exits 0, so a builder who
+    blinds the gate would still convert a red exit 1 into an amber exit 0 and
+    keep the entire payoff. The bypass has to cost more than doing nothing.
+
+    A manifest with no binding key at all reads as unbound rather than raising:
+    this is called from the gate, and a raise in the gate fails OPEN.
+    """
+    binding = manifest.get("anchor_repo") or ANCHOR_REPO_UNBOUND
+    was_bound = bool(binding.get("in_repo"))
+    recorded = str(binding.get("identity") or "")
+
+    if not was_bound:
+        if current_status == REPO_PRESENT:
+            return (BINDING_BROKEN,
+                    "the freeze recorded the anchor OUTSIDE any repository and it "
+                    "is inside one now, so the freeze was taken blind: release "
+                    "and re-freeze")
+        return (BINDING_INTACT, "")
+
+    if current_status != REPO_PRESENT:
+        return (BINDING_BROKEN,
+                f"the freeze recorded the anchor inside a repository and git now "
+                f"answers {current_status}, so the approval cannot be attributed")
+    if current_identity != recorded:
+        return (BINDING_BROKEN,
+                "the anchor is inside a different repository than the freeze "
+                "recorded")
+    return (BINDING_INTACT, "")
+
+
 def lock_state(report: dict, anchor_status: str, anchor_value: Optional[str]) -> str:
     """Resolve the three-state indicator from a verify report plus the anchor.
 
     No prefix comparison anywhere: a truncated digest that looks rigorous and is
     not is worse than a full one, because a builder with a shell can brute-force
     a short prefix by appending whitespace to a frozen file.
+
+    ANCHOR_UNBOUND is listed explicitly rather than left to the final line's
+    `anchor_value == recomputed_root` comparison. It would fall red there today,
+    by arithmetic on a None, and an invariant that holds by accident is one
+    refactor away from not holding.
     """
     if not report["held"]:
         return LOSS_OF_LOCK
-    if anchor_status == ANCHOR_MISSING:
+    if anchor_status in (ANCHOR_MISSING, ANCHOR_UNBOUND):
         return LOSS_OF_LOCK
     if anchor_status in (ANCHOR_NONE, ANCHOR_UNRECORDED):
         return LOCK_UNCONFIRMED

@@ -1322,3 +1322,92 @@ def test_a_binding_with_a_wrong_typed_field_is_refused(tmp_path):
 
     with pytest.raises(FreezeCorrupt, match="in_repo"):
         read_freeze(tree)
+
+
+def _bound(identity):
+    return {"anchor_repo": {"in_repo": True, "identity": identity}}
+
+
+def test_a_matching_repository_leaves_the_binding_intact():
+    from scripts.utils.canopus_freeze import (
+        BINDING_INTACT, REPO_PRESENT, repo_binding_state,
+    )
+
+    verdict, reason = repo_binding_state(_bound("f" * 64), REPO_PRESENT, "f" * 64)
+
+    assert verdict == BINDING_INTACT
+    assert reason == ""
+
+
+def test_a_different_repository_breaks_the_binding():
+    """The identities differ at the LAST character on purpose.
+
+    A prefix comparison would call these equal, and a prefix comparison is what
+    hands a builder with a shell a short value to brute-force.
+    """
+    from scripts.utils.canopus_freeze import (
+        BINDING_BROKEN, REPO_PRESENT, repo_binding_state,
+    )
+
+    verdict, reason = repo_binding_state(
+        _bound("f" * 63 + "0"), REPO_PRESENT, "f" * 63 + "1")
+
+    assert verdict == BINDING_BROKEN
+    assert "different repository" in reason
+
+
+def test_an_invisible_repository_breaks_the_binding():
+    """The Critical. Blinding must cost the builder a red, not buy a green."""
+    from scripts.utils.canopus_freeze import (
+        BINDING_BROKEN, REPO_ABSENT, REPO_UNKNOWN, repo_binding_state,
+    )
+
+    for status in (REPO_ABSENT, REPO_UNKNOWN):
+        verdict, reason = repo_binding_state(_bound("f" * 64), status, "")
+        assert verdict == BINDING_BROKEN
+        assert status in reason
+
+
+def test_an_unbound_freeze_in_a_plain_folder_stays_intact():
+    """The supported case: an operator whose gate artifact is a file in a folder."""
+    from scripts.utils.canopus_freeze import (
+        BINDING_INTACT, REPO_ABSENT, repo_binding_state,
+    )
+
+    manifest = {"anchor_repo": {"in_repo": False, "identity": ""}}
+
+    assert repo_binding_state(manifest, REPO_ABSENT, "")[0] == BINDING_INTACT
+
+
+def test_an_unbound_freeze_whose_anchor_is_now_in_a_repository_breaks():
+    """Closes blinding at FREEZE time.
+
+    Without this row a builder freezes under a poisoned environment, records
+    in_repo false, and wins the working-copy fallback for the rest of the slice.
+    """
+    from scripts.utils.canopus_freeze import (
+        BINDING_BROKEN, REPO_PRESENT, repo_binding_state,
+    )
+
+    manifest = {"anchor_repo": {"in_repo": False, "identity": ""}}
+    verdict, reason = repo_binding_state(manifest, REPO_PRESENT, "f" * 64)
+
+    assert verdict == BINDING_BROKEN
+    assert "release and re-freeze" in reason
+
+
+def test_a_manifest_with_no_binding_key_is_treated_as_unbound():
+    """repo_binding_state is called from the gate, which must never raise."""
+    from scripts.utils.canopus_freeze import (
+        BINDING_INTACT, REPO_ABSENT, repo_binding_state,
+    )
+
+    assert repo_binding_state({}, REPO_ABSENT, "")[0] == BINDING_INTACT
+
+
+def test_an_unbound_anchor_status_reddens_the_lock():
+    from scripts.utils.canopus_freeze import ANCHOR_UNBOUND, LOSS_OF_LOCK, lock_state
+
+    report = {"held": True, "recomputed_root": "f" * 64}
+
+    assert lock_state(report, ANCHOR_UNBOUND, None) == LOSS_OF_LOCK

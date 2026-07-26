@@ -186,3 +186,68 @@ def test_recorder_writes_nothing_when_attestation_is_disabled(tmp_path, monkeypa
         config = _Config()
 
     assert recorder.finish(_Session(), 0) is False
+
+
+def test_missing_modules_names_what_the_contract_could_not_import(tmp_path):
+    from scripts.utils.canopus_contract import missing_modules, run_pytest_report
+
+    _write(tmp_path, "c/test_one.py",
+           "def test_a():\n    from absent_thing import answer\n    assert answer() == 42\n")
+
+    assert "absent_thing" in missing_modules(run_pytest_report([tmp_path / "c"], tmp_path))
+
+
+def test_a_test_that_passes_against_a_mock_asserts_nothing(tmp_path):
+    """The construction proves it: a MagicMock satisfies any shape."""
+    from scripts.utils.canopus_contract import run_null_stub
+
+    _write(tmp_path, "c/test_one.py",
+           "def test_vacuous():\n"
+           "    from absent_thing import answer\n"
+           "    assert answer() is not None\n"
+           "\n\n"
+           "def test_real():\n"
+           "    from absent_thing import answer\n"
+           "    assert answer() == 42\n")
+
+    passed = run_null_stub([tmp_path / "c"], tmp_path, {"absent_thing"})
+
+    assert ("c/test_one.py", "test_vacuous") in passed
+    assert ("c/test_one.py", "test_real") not in passed
+
+
+def test_the_stub_does_not_shadow_a_sibling_module_that_exists(tmp_path):
+    """The blocker a plan review caught before any code was written.
+
+    Matching on the first dotted segment made one absent `scripts.utils.X` mock
+    the whole `scripts` package, so modules that exist came back as MagicMock,
+    every test passed, and the wholly-vacuous refusal fired on a good contract.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    _write(tmp_path, "c/test_one.py",
+           "def test_real_module_survives():\n"
+           "    from scripts.utils.canopus_freeze import ANCHOR_PREFIX\n"
+           "    assert ANCHOR_PREFIX == 'canopus-anchor:'\n")
+
+    passed = run_null_stub(
+        [tmp_path / "c"], tmp_path, {"scripts.utils.canopus_absent_thing"}
+    )
+
+    assert ("c/test_one.py", "test_real_module_survives") in passed
+    # It passes because the REAL constant was imported, not because a mock
+    # satisfied the comparison: a MagicMock never equals that string.
+
+
+def test_the_stub_run_leaves_no_file_behind_in_the_tree(tmp_path):
+    """The contract directory is frozen recursively; a written conftest would
+    read as tampering."""
+    from scripts.utils.canopus_contract import run_null_stub
+
+    _write(tmp_path, "c/test_one.py",
+           "def test_a():\n    from absent_thing import x\n    assert x\n")
+    before = sorted(p.name for p in (tmp_path / "c").iterdir())
+
+    run_null_stub([tmp_path / "c"], tmp_path, {"absent_thing"})
+
+    assert sorted(p.name for p in (tmp_path / "c").iterdir()) == before

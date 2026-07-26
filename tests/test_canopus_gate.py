@@ -96,13 +96,30 @@ def test_gate_answers_rather_than_raising_on_an_unusable_anchor_path(tree, ancho
     guarantee crashed the harness instead of reporting a state, and the
     pre-wire-2.1 path returned cleanly on the identical input.
 
-    The same seam has a second, likelier route: `text=True` decoding raises
-    UnicodeDecodeError, a ValueError subclass, on a gate artifact that is not
-    UTF-8. It is masked today only because read_anchor fails first on that file.
+    The same seam has a second route, pinned by the test below rather than left
+    to a sentence: a gate artifact that is not UTF-8.
     """
     manifest = build_manifest([tree / "tests"], tree, label="demo",
                               frozen_at=STAMP, anchor=anchor)
     manifest["anchor"] = str(anchor.parent.parent / "out\x00side" / "gate-artifact.md")
+    write_freeze(tree, manifest)
+
+    assert freeze_gate(tree) == 1
+
+
+def test_gate_answers_rather_than_raising_on_a_non_utf8_anchor(tree, anchor):
+    """The second door on the same seam, and it was open, not masked.
+
+    A gate artifact holding one non-UTF-8 byte raised UnicodeDecodeError out of
+    read_anchor, which caught OSError only. That is a ValueError subclass, so it
+    walked through anchor_state, resolve_anchor and freeze_gate and out of
+    pytest_sessionstart. Widening git_output alone did not reach it: read_anchor
+    runs first on the same file, so the crash simply arrived by the other door.
+    Measured on this tree before the fix, both routes, not reasoned from types.
+    """
+    anchor.write_bytes(b"# gate artifact\n\xe9 not utf-8\n")
+    manifest = build_manifest([tree / "tests"], tree, label="demo",
+                              frozen_at=STAMP, anchor=anchor)
     write_freeze(tree, manifest)
 
     assert freeze_gate(tree) == 1

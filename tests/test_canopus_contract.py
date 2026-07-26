@@ -239,6 +239,32 @@ def test_the_stub_does_not_shadow_a_sibling_module_that_exists(tmp_path):
     # satisfied the comparison: a MagicMock never equals that string.
 
 
+def test_the_stub_does_not_shadow_a_module_that_merely_starts_with_a_stubbed_name(
+    tmp_path,
+):
+    """Pins the DOT in the matcher's separator, not just the first-segment case.
+
+    The sibling test above pins `startswith(name.split('.')[0])`. This one pins
+    the other way of dropping the dot: a bare `fullname.startswith(name)`. With
+    `absent` stubbed, that mutation answers for `absent_extra`, a module that
+    EXISTS and whose compute() returns None, so `assert compute() is not None`
+    passes against the mock and a contract test that asserts something real is
+    labelled vacuous.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    _write(tmp_path, "absent_extra.py", "def compute():\n    return None\n")
+    _write(tmp_path, "c/test_one.py",
+           "def test_prefix_sibling_survives():\n"
+           "    from absent_extra import compute\n"
+           "    assert compute() is not None\n")
+
+    passed = run_null_stub([tmp_path / "c"], tmp_path, {"absent"})
+
+    # It fails under the stub because the REAL compute() ran and returned None.
+    assert ("c/test_one.py", "test_prefix_sibling_survives") not in passed
+
+
 def test_the_stub_run_leaves_no_file_behind_in_the_tree(tmp_path):
     """The contract directory is frozen recursively; a written conftest would
     read as tampering."""

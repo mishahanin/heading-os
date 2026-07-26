@@ -94,7 +94,7 @@ def _parse_report(xml_text: str) -> ElementTree.Element:
     """The one XML entry point: refuse a DOCTYPE, wrap a parse failure.
 
     Every reader of a contract report parses it through here, and separate copies
-    of this guard is how one of them ends up without it. A DOCTYPE is refused
+    of this guard are how one of them ends up without it. A DOCTYPE is refused
     before parsing because ElementTree expands internal entities, which is the
     whole billion-laughs mechanism; pytest never writes one, so refusing costs
     nothing and removes the class without adding defusedxml as a dependency.
@@ -124,9 +124,9 @@ def parse_junit(xml_text: str) -> tuple[dict[str, int], list[tuple[str, str, str
     """Turn a JUnit report into per-file counts and per-test outcomes.
 
     Only testcases carrying a `file` attribute are counted, and only when they
-    represent a real collected item. run_contract asks for `junit_family=xunit1`
-    precisely so the attribute is there; see its docstring for why the default
-    family makes this function match nothing.
+    represent a real collected item. run_pytest_report asks for
+    `junit_family=xunit1` precisely so the attribute is there; see its docstring
+    below for why the default family makes this function match nothing.
 
     A module that failed to import is skipped rather than counted, so it lands at
     zero and refusal_reasons names it with the authoring rule. That is the
@@ -176,7 +176,7 @@ def run_pytest_report(
     assertions and status on a testcase, so `file` and `line` are filtered out.
     Measured on pytest 9.1.1: the default emits
     `<testcase classname="c.test_one" name="test_a" time="0.001">` with no `file`,
-    so parse_junit below matches nothing, every count is zero, and `freeze
+    so parse_junit above matches nothing, every count is zero, and `freeze
     --contract` refuses a contract that is perfectly well formed. xunit1 restores
     `file="c/test_one.py"`. Deriving the path from the dotted `classname` instead
     was rejected: it cannot round-trip a directory containing a dot, and it is
@@ -310,6 +310,13 @@ def missing_modules(xml_text: str) -> set[str]:
     one absent `scripts.utils.canopus_git` into a stub over the entire `scripts`
     package, so modules that exist are mocked away, every test passes, and a good
     contract is refused as vacuous.
+
+    The text read here is text the contract's own test code can shape, so a test
+    that merely asserts on the literal string `No module named 'scripts'` gets
+    that package stubbed for the probe run; the direction is fail-closed, since a
+    wider stub can only turn a passing probe test into a vacuity label rather
+    than hide one, and the names reach the child through an environment variable
+    only, never through argv.
     """
     root = _parse_report(xml_text)
     found: set[str] = set()

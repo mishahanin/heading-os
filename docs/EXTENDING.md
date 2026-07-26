@@ -267,28 +267,34 @@ and finding none. It is not a refusal, because tests failing on assertions
 against code that already exists produce the same reading and are a perfectly
 ordinary contract.
 
-**One environment variable defeats the lock, and it costs the builder nothing.**
-`resolve_anchor` falls back to the artifact's WORKING copy whenever git reports
-`no_repo` or `no_git`, and both of those answers come from a child `git` process
-whose environment the builder controls. So `GIT_DIR=/tmp/nothing.git` in front of
-any command that reaches the gate makes the anchor's repository invisible, the
-fallback reads the working copy, and a genuine `LOSS OF LOCK` becomes `LOCK HELD`
-with gate exit 0. Measured on a re-baselined freeze, at both surfaces: `verify`
-went from `LOSS OF LOCK` exit 1 to `LOCK HELD` exit 0, and `freeze_gate` went
-from exit 1 to exit 0, with one environment variable and nothing else changed.
-The approval axis prints `APPROVAL UNVERIFIED` in both runs and only its reason
-string differs, so the amber line does not distinguish the defeat from an
-ordinary unverifiable approval. It writes nothing, touches no file, dirties no
-repository, and leaves no trace in the anchor's repository or in `canopus pack`,
-so nothing an operator reads afterwards records that it happened. This is not a hardening backlog item dressed up as a note: while it
-stands, the lock is a control against a careless builder and not against a
-deliberate one. The fix is its own slice with its own contract and its own
-approvals, because it needs the fallback narrowed and the child environment
-scrubbed, and the deeper form of it needs a manifest field recording which
-repository the anchor belonged to, which changes the recipe every existing freeze
-was taken with. Until then the operator's countermeasure is the obvious one and
-it works: run `canopus verify` YOURSELF, in your own shell, at the approval gate,
-rather than reading a status the builder printed.
+**Blinding the gate no longer pays, and what that does and does not cover.**
+One environment variable used to defeat the lock at no cost: `resolve_anchor`
+fell back to the artifact's WORKING copy whenever git answered `no_repo` or
+`no_git`, and both answers came from a child `git` process whose environment the
+builder controls, so `GIT_DIR=/tmp/nothing.git` in front of any command that
+reached the gate turned a genuine `LOSS OF LOCK` into `LOCK HELD` with gate exit
+0. Wire 2.2 closed it. The freeze now RECORDS which repository the anchor
+belonged to, as a digest over that repository's root commits, and a manifest that
+recorded a repository resolves RED whenever git answers anything else — a
+different repository, no repository, or no git at all. The child environment is
+scrubbed of every `GIT_*` variable by prefix rather than by a denylist, which
+also fixed a real bug: git exports `GIT_DIR` and `GIT_INDEX_FILE` to its own
+hooks, so the gate running inside a pre-commit hook was asking the wrong
+repository about the anchor. Blinding is now strictly worse for a builder than
+doing nothing at all.
+
+Say what remains, because the flattering reading is that this makes the lock
+adversary-proof. It does not defend against a builder who replaces the `git`
+binary on PATH: every answer the gate binds to comes from a child process. The
+identity binds a repository's LINEAGE, not an instance, so a `git clone` of the
+anchor's repository carries the same root commits and reads as the same
+repository; that is deliberate, because a relocated or cloned repository IS the
+same repository, but it means the binding proves which history the anchor belongs
+to and never which copy of it was read. And the PreToolUse deny is still only a
+convenience: a shell `sed -i` walks past it, and `verify` plus the test gate are
+the guarantee. The operator's countermeasure has not changed and is still worth
+the ten seconds: run `canopus verify` YOURSELF, in your own shell, at the
+approval gate, rather than reading a status the builder printed.
 
 **The instrument has no committed human artifact behind it.**
 `scripts/utils/canopus_contract.py` and `scripts/utils/canopus_nullstub.py` sit
@@ -430,7 +436,8 @@ deliberate: a slice that legitimately edits a `conftest.py` mid-build gets `LOSS
 which under this standard is the correct answer.
 
 If the manifest is ever damaged, every write is denied fail-closed. Clear it with
-`release --force`, which is logged. Deleting `freeze.json` by hand also works and
+`release --force --window --reason "<why>"`, which is logged. A release names its
+kind, so `--force` alone exits 2. Deleting `freeze.json` by hand also works and
 deliberately leaves a gap in an append-only ledger.
 
 ### Did the frozen tests actually run?

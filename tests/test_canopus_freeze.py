@@ -1428,6 +1428,62 @@ def test_a_non_dict_binding_is_treated_as_unbound(binding):
     assert repo_binding_state(manifest, REPO_PRESENT, "f" * 64)[0] == BINDING_BROKEN
 
 
+def _skeleton(binding) -> dict:
+    """The smallest manifest root_hash and recompute both read."""
+    return {
+        "recipe": RECIPE, "label": "x", "frozen_at": STAMP, "anchor": "",
+        "git_sha": "", "root": "", "files": {}, "dirs": {}, "baseline": {},
+        "anchor_repo": binding,
+    }
+
+
+@pytest.mark.parametrize("binding", ["sneaky", ["sneaky"], 7])
+def test_root_hash_answers_on_a_malformed_binding(binding):
+    """The eighth appearance of this project's signature defect, closed.
+
+    `repo_binding_state` got an isinstance guard in wire 2.2 and its two siblings
+    did not: both spelled `dict(manifest.get("anchor_repo") or ...)`, and `dict`
+    raises on all three of these — ValueError for a string and a list, TypeError
+    for an int. `root_hash` is reached from `verify_manifest`, which the gate and
+    the PreToolUse dispatcher both call, where a raise fails OPEN.
+
+    The assertion is equality with the unbound default, not merely "did not
+    raise": answering with some OTHER payload would give a malformed binding its
+    own root hash, which is a second defect wearing the first one's clothes.
+    """
+    from scripts.utils.canopus_freeze import ANCHOR_REPO_UNBOUND
+
+    assert root_hash(_skeleton(binding)) == root_hash(
+        _skeleton(dict(ANCHOR_REPO_UNBOUND)))
+
+
+@pytest.mark.parametrize("binding", ["sneaky", ["sneaky"], 7])
+def test_recompute_answers_on_a_malformed_binding(binding, tmp_path):
+    from scripts.utils.canopus_freeze import ANCHOR_REPO_UNBOUND, recompute
+
+    rebuilt = recompute(_skeleton(binding), tmp_path)
+
+    assert rebuilt["anchor_repo"] == dict(ANCHOR_REPO_UNBOUND)
+
+
+@pytest.mark.parametrize("binding", ["sneaky", ["sneaky"], 7, None, {}])
+def test_the_shared_accessor_answers_for_every_reader(binding):
+    """One accessor, so the next reader inherits the guard instead of the defect.
+
+    The empty dict is in the set deliberately: all three call sites spelled
+    `... or ANCHOR_REPO_UNBOUND`, so `{}` already read as unbound, and dropping
+    that arm would change the payload root_hash covers for such a manifest —
+    LOSS OF LOCK over a tree where nothing moved.
+    """
+    from scripts.utils.canopus_freeze import ANCHOR_REPO_UNBOUND, anchor_binding
+
+    assert anchor_binding({"anchor_repo": binding}) == dict(ANCHOR_REPO_UNBOUND)
+    assert anchor_binding({}) == dict(ANCHOR_REPO_UNBOUND)
+    # A copy, never the shared proxy: callers store this into manifests they
+    # serialize, and one in-place edit would change the fallback process-wide.
+    assert anchor_binding({}) is not ANCHOR_REPO_UNBOUND
+
+
 def test_the_unbound_fallback_cannot_be_mutated_in_place():
     """One in-place edit would change the fallback for the whole process.
 

@@ -1,5 +1,6 @@
 """Tests for the Canopus freeze check inside the test gate."""
 import importlib.util
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -454,3 +455,58 @@ def test_the_gate_survives_an_unreadable_ledger(tree, capsys):
     path.write_bytes(b"\xe9 not utf-8 and not json\n")
 
     assert freeze_gate(tree) == 0
+
+
+# ============================================================
+# The never-raise SHAPE
+# ============================================================
+# Three separate repairs in one slice pinned three separate inputs, and the
+# fourth input walked past all three. These two tests are about the shape rather
+# than about an input: whatever the state directory looks like, and whatever
+# raises inside, freeze_gate returns an int and fails closed.
+
+
+@pytest.mark.skipif(getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="mode 000 denies nothing to root")
+def test_the_gate_survives_an_unreadable_state_directory(tree, capsys):
+    """`.canopus/` at mode 000, measured before the fix, not reasoned about.
+
+    `read_freeze` calls `Path.exists()`, which re-raises PermissionError rather
+    than answering False, and the gate's handler named FreezeCorrupt only. So the
+    gate raised straight out: the pytest session start crashed instead of
+    reporting a state, and the PreToolUse dispatcher's catch-all logged an
+    advisory and CONTINUED while writes to frozen paths sailed through.
+    """
+    state = tree / ".canopus"
+    state.mkdir(parents=True)
+    (state / "freeze.json").write_text("{}")
+    # The mode is captured and restored rather than reset to a literal, so the
+    # tmp tree is left exactly as pytest made it and no permissive mask is
+    # written down here for a linter to argue about.
+    original = state.stat().st_mode
+    os.chmod(state, 0o000)
+    try:
+        assert freeze_gate(tree) == 1
+    finally:
+        os.chmod(state, original)
+    assert "could not be established" in capsys.readouterr().out
+
+
+def test_the_gate_fails_closed_on_an_unexpected_exception(tree, monkeypatch, capsys):
+    """The shape, stated as a test: an exception of ANY type exits 1, not up.
+
+    Deliberately a type no handler in this file names, because naming one more
+    handler per measured input is exactly the pattern that left the mode-000 case
+    open after three repairs of the same invariant.
+    """
+    import scripts.utils.canopus_gate as gate
+
+    def explode(_root):
+        raise RuntimeError("something no handler here names")
+
+    monkeypatch.setattr(gate, "read_freeze", explode)
+
+    assert gate.freeze_gate(tree) == 1
+    out = capsys.readouterr().out
+    assert "RuntimeError" in out
+    assert "something no handler here names" in out

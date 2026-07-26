@@ -230,6 +230,45 @@ def dir_member_rels(
     )
 
 
+def anchor_binding(manifest: dict) -> dict:
+    """The manifest's anchor_repo binding, as a plain dict, never raising.
+
+    ONE accessor for every reader of that key, because the alternative has now
+    been measured eight times on this project: a guard applied to the function in
+    front of its author and not to the one beside it. `repo_binding_state` grew an
+    isinstance check in wire 2.2 while `root_hash` and `recompute` kept
+    `dict(manifest.get("anchor_repo") or ANCHOR_REPO_UNBOUND)`, and `dict` raises
+    on a string, a list and an integer alike (ValueError for the first two, a
+    TypeError for the third).
+
+    "read_freeze validates the shape first" is not an answer, and it is the same
+    answer that was rejected at `repo_binding_state`: a validator is a guarantee
+    about a DIFFERENT function. These three are called with manifests that never
+    passed through read_freeze — a dict built in a test, one handed in by a
+    caller, one carried across a version — and two of them sit under `freeze_gate`
+    and under the PreToolUse dispatcher, where a raise fails OPEN.
+
+    A malformed binding reads as UNBOUND rather than raising, which is the same
+    direction `repo_binding_state` already took: an unbound reading is judged
+    BROKEN the moment the anchor is found inside a repository, so nothing is
+    softened by answering instead of raising.
+
+    Returns a copy, always. The fallback is a MappingProxyType shared by the whole
+    process, and callers store what they get here into manifests they then
+    serialize.
+
+    An EMPTY dict reads as unbound too, and that is preservation rather than
+    taste: the three call sites all spelled `manifest.get("anchor_repo") or
+    ANCHOR_REPO_UNBOUND`, so `{}` already fell back to the default. Dropping the
+    falsy arm here would change the payload `root_hash` covers for such a
+    manifest, which is LOSS OF LOCK over a tree where nothing moved.
+    """
+    binding = manifest.get("anchor_repo")
+    if not isinstance(binding, dict) or not binding:
+        return dict(ANCHOR_REPO_UNBOUND)
+    return dict(binding)
+
+
 def root_hash(manifest: dict) -> str:
     """sha256 over recipe, anchor path, anchor_repo binding, sorted files, dirs, baseline.
 
@@ -246,7 +285,7 @@ def root_hash(manifest: dict) -> str:
     payload = {
         "recipe": manifest["recipe"],
         "anchor": manifest.get("anchor") or "",
-        "anchor_repo": dict(manifest.get("anchor_repo") or ANCHOR_REPO_UNBOUND),
+        "anchor_repo": anchor_binding(manifest),
         "files": dict(sorted(manifest["files"].items())),
         "dirs": dict(sorted(manifest["dirs"].items())),
         "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
@@ -517,7 +556,7 @@ def recompute(manifest: dict, root: Path) -> dict:
     return {
         "recipe": manifest["recipe"],
         "anchor": manifest.get("anchor") or "",
-        "anchor_repo": dict(manifest.get("anchor_repo") or ANCHOR_REPO_UNBOUND),
+        "anchor_repo": anchor_binding(manifest),
         "files": dict(sorted(files.items())),
         "dirs": dict(sorted(dirs.items())),
         # Carried through verbatim, both of them: the baseline is a recorded
@@ -712,7 +751,6 @@ def repo_binding_state(
     A manifest with no binding key at all reads as unbound rather than raising:
     this is called from the gate, and a raise in the gate fails OPEN.
     """
-    binding = manifest.get("anchor_repo")
     # Anything that is not a mapping reads as unbound, for the same reason the
     # missing key does. A manifest that reached this function WITHOUT passing
     # through read_freeze is exactly the case the guard exists for, and
@@ -720,9 +758,10 @@ def repo_binding_state(
     # DIFFERENT function. Measured: a bare truthiness test let a string, a list
     # and an int through to `.get` and raised AttributeError, which the
     # PreToolUse dispatcher does not catch, so the hook logged an advisory and
-    # CONTINUED while writes to frozen paths sailed past.
-    if not isinstance(binding, dict):
-        binding = ANCHOR_REPO_UNBOUND
+    # CONTINUED while writes to frozen paths sailed past. The guard now lives in
+    # `anchor_binding`, shared with root_hash and recompute, because it was
+    # written here alone and its two siblings raised on the same input.
+    binding = anchor_binding(manifest)
     was_bound = bool(binding.get("in_repo"))
     recorded = str(binding.get("identity") or "")
 

@@ -1,6 +1,8 @@
 """Tests for the Canopus CLI (wire 1)."""
 import json
 import os
+import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -1696,6 +1698,16 @@ def test_freeze_reports_the_active_lock_when_only_the_ledger_fails(
     assert "IS ACTIVE" in err
     assert "`freeze` ledger entry failed" in err
     assert "pack" in err
+    # The escape has to PARSE. This is the one branch whose entire point is that
+    # the printed sentence is true of the state — an active, enforcing freeze
+    # plus the command that clears it — and `release --reason` stopped parsing
+    # the moment the kind became required, so the sentence sent the operator to
+    # an exit 2.
+    assert "release --window --reason" in err
+    # Parsed, not merely matched: the string an operator would copy is fed to
+    # the real parser, which exits 2 on a release that names no kind.
+    printed = re.search(r"`release ([^`]*)`", err).group(1)
+    canopus.build_parser().parse_args(["release", *shlex.split(printed)])
 
     # The claim the message makes, checked against disk and against the tool.
     assert (tree / ".canopus" / "freeze.json").exists()
@@ -1910,6 +1922,173 @@ def test_freeze_refuses_an_anchor_in_a_repository_with_no_commits(tree, anchor, 
     assert not (tree / ".canopus" / "freeze.json").exists()
 
 
+def test_the_repository_refusals_come_before_the_contract_runs(
+    tree, anchor, capsys, monkeypatch
+):
+    """Fail fast, because both refusals are knowable before a single test runs.
+
+    Behind the contract block this refusal cost a full pytest session over the
+    contract, plus the null-stub session behind it, before telling the operator
+    to go and commit something in another repository. The spy is on the pytest
+    runner rather than on a clock: a timing assertion would be flaky, and what is
+    actually being asserted is that the expensive thing never happened.
+    """
+    calls: list = []
+
+    def _spy(paths, root, **kwargs):
+        calls.append((tuple(paths), root))
+        return ""
+
+    monkeypatch.setattr(canopus, "run_pytest_report", _spy)
+    _write_contract(tree)
+    _init_anchor_repo(anchor, commit=False)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+
+    assert calls == []
+    assert "has no commits" in capsys.readouterr().err
+
+
+def test_freeze_refuses_when_git_cannot_be_consulted(tree, anchor, capsys, monkeypatch):
+    """A freeze taken here would RECORD A LIE, so it is not taken.
+
+    `in_repo` was `repo_status == REPO_PRESENT`, so REPO_UNKNOWN — no git binary
+    reachable — wrote `in_repo: false`: the positive claim that the anchor was
+    OUTSIDE any repository, which the tool has no evidence for. Every later
+    `verify` then read BINDING_BROKEN, "the freeze was taken blind", and blamed
+    the blinding rather than naming the cause.
+    """
+    from scripts.utils.canopus_freeze import REPO_UNKNOWN
+
+    monkeypatch.setattr(canopus, "repo_identity", lambda _d: (REPO_UNKNOWN, ""))
+
+    assert _freeze(tree, anchor) == 1
+
+    err = capsys.readouterr().err
+    assert "git could not be consulted" in err
+    # The recovery, named. A refusal that does not say what to do next is a
+    # refusal an operator routes around.
+    assert "on PATH" in err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_approve_refuses_when_git_cannot_be_consulted(tree, anchor, capsys, monkeypatch):
+    """Both commands, because a refusal on one of them is a refusal on neither:
+    `approve` builds the candidate through the same builder, so an approval taken
+    blind records the same unbound claim the freeze would."""
+    from scripts.utils.canopus_freeze import REPO_UNKNOWN
+
+    monkeypatch.setattr(canopus, "repo_identity", lambda _d: (REPO_UNKNOWN, ""))
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "demo",
+                 "--anchor", str(anchor)], tree) == 1
+    assert "git could not be consulted" in capsys.readouterr().err
+    assert canopus.ANCHOR_PREFIX not in anchor.read_text()
+
+
+def test_freeze_refuses_a_waiver_the_approval_does_not_carry(tree, anchor, capsys):
+    """`canopus pack` renders CONTRACT WAIVED from the ANCHOR, which only
+    `approve` writes.
+
+    So `approve` without the flag followed by `freeze --contract-satisfied`
+    produced a waived freeze whose evidence page showed no waiver at all, and
+    nothing refused the pairing. The waiver survived only in `.canopus/`, which
+    is gitignored and which one `rm -rf` removes.
+    """
+    _write_contract(tree, red=False)
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+    # The approval is there; the WAIVER line is what is missing, so the artifact
+    # is rewritten with the anchor line alone. That is the exact state `approve`
+    # without the flag leaves, minus the hash mismatch that would refuse first
+    # for a different reason.
+    approved = _recorded(anchor)
+    anchor.write_text(f"# gate artifact\n\ncanopus-anchor: {approved}\n")
+    capsys.readouterr()
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 1
+
+    err = capsys.readouterr().err
+    assert "records no waiver" in err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_a_red_contract_is_not_refused_for_a_missing_waiver(tree, anchor, capsys):
+    """The refusal is bound to the waiver FIRING, never to the flag's presence.
+
+    On a red contract the flag changes nothing and the command says so, so there
+    is no waiver for the evidence page to omit. Refusing here would refuse a run
+    that made no claim at all, which is how a guard written against a flag rather
+    than against the act ends up denying honest work.
+    """
+    _write_contract(tree)   # test_a asserts False
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+    assert "changed nothing" in capsys.readouterr().out
+
+
+# ============================================================
+# Every printed or documented `release` invocation names a kind
+# ============================================================
+
+# Python implicit string concatenation, joined so a command that wraps across two
+# source lines is still one command to the scanner below. Without this the escape
+# printed by canopus_gate.py — which breaks after `release ` — reads as a bare
+# mention and the whole file passes vacuously.
+_WRAPPED = re.compile(r'"\s*\n\s*f?"')
+_INVOCATION = re.compile(r"release((?:\s+--[a-z-]+)+)")
+_ESCAPE_SOURCES = (
+    "scripts/canopus.py",
+    "scripts/utils/canopus_gate.py",
+    ".claude/hooks/_dispatch.py",
+    "docs/EXTENDING.md",
+)
+
+
+def test_every_printed_release_invocation_names_a_kind():
+    """A class test, because this defect arrived one printed sentence at a time.
+
+    `release` has required `--window` or `--ship` since wire 2.2 Task 6, so any
+    surface still printing `release --reason "<why>"` hands the operator a
+    command that exits 2. Four of the five escapes were fixed when the kind
+    became required and the fifth was not: the one `cmd_freeze` prints when the
+    manifest was written and the ledger append then failed, which is the branch
+    whose entire point is that the sentence is true of the state.
+
+    Scanning the source rather than asserting five strings, so the sixth surface
+    is covered before someone writes it.
+    """
+    found = 0
+    for rel in _ESCAPE_SOURCES:
+        text = _WRAPPED.sub("", (canopus.ENGINE_ROOT / rel).read_text(encoding="utf-8"))
+        for match in _INVOCATION.finditer(text):
+            flags = match.group(1).split()
+            found += 1
+            assert "--window" in flags or "--ship" in flags, f"{rel}: release {flags}"
+    # A floor, so a regex that stops matching cannot pass this test in silence.
+    assert found >= 6
+
+
+def test_the_force_flag_says_the_escape_is_logged(capsys):
+    """`release --help` is read while a damaged manifest denies every write.
+
+    An operator there cannot tell a recorded escape from an unrecorded one unless
+    the help says so, and that distinction is the entire reason `cmd_release`'s
+    success message exists: a forced release is a normal, recorded event, while
+    deleting freeze.json by hand leaves a gap in an append-only ledger.
+    """
+    with pytest.raises(SystemExit):
+        canopus.build_parser().parse_args(["release", "--help"])
+
+    assert "logged" in capsys.readouterr().out.lower()
+
+
 # ============================================================
 # `--contract-satisfied`: the named waiver for a RETAKE
 # ============================================================
@@ -1930,6 +2109,13 @@ def test_contract_satisfied_waives_the_green_refusal(tree, anchor, capsys):
     {}`.
     """
     _write_contract(tree, red=False)
+    # The approve half is not decoration: from wire 2.2 `freeze` refuses a
+    # waiver the approval on the artifact does not carry, because `canopus pack`
+    # renders CONTRACT WAIVED from that artifact and nowhere else.
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
+    capsys.readouterr()
 
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
                  "--contract", "tests/contract/slice",
@@ -2006,6 +2192,9 @@ def test_contract_satisfied_reaches_the_ledger(tree, anchor):
     a green one was accepted.
     """
     _write_contract(tree, red=False)
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
 
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
                  "--contract", "tests/contract/slice",
@@ -2124,6 +2313,9 @@ def test_contract_satisfied_skips_the_null_stub_session(tree, anchor, monkeypatc
     monkeypatch.setattr(canopus, "run_null_stub", _spy)
 
     _write_contract(tree, red=False)
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice",
+                 "--contract-satisfied", "the slice implemented it"], tree) == 0
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
                  "--contract", "tests/contract/slice",
                  "--contract-satisfied", "the slice implemented it"], tree) == 0

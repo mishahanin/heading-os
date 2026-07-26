@@ -57,6 +57,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Iterable, Optional, Sequence, Tuple
 
 from scripts.utils.atomic import atomic_write_text
@@ -80,7 +81,13 @@ REPO_UNKNOWN = "no_git"
 # What a manifest records when the anchor was NOT inside a repository at freeze
 # time, and what an anchorless manifest carries. Never consulted in the second
 # case: resolve_anchor returns before the binding when there is no anchor.
-ANCHOR_REPO_UNBOUND = {"in_repo": False, "identity": ""}
+#
+# Read-only on purpose. This is a module-level fallback every binding reader
+# reaches for, so one in-place mutation would change it for the whole process:
+# every stored unbound root would stop matching and verify would report LOSS OF
+# LOCK over a tree where nothing moved. Callers that put it in a manifest copy it
+# with dict(), so what gets stored and serialized is always a plain dict.
+ANCHOR_REPO_UNBOUND = MappingProxyType({"in_repo": False, "identity": ""})
 
 # Tool-generated caches that live INSIDE a source tree. A recursive freeze that
 # captured these would bind the lock to artifacts no version control tracks: the
@@ -218,7 +225,7 @@ def dir_member_rels(
 
 
 def root_hash(manifest: dict) -> str:
-    """sha256 over recipe, anchor path, sorted files, sorted dirs, sorted baseline.
+    """sha256 over recipe, anchor path, anchor_repo binding, sorted files, dirs, baseline.
 
     The baseline is in here deliberately. Outside the hash it could be edited
     down to 1 with no indicator moving, and a per-file expected item count that
@@ -657,7 +664,17 @@ def repo_binding_state(
     A manifest with no binding key at all reads as unbound rather than raising:
     this is called from the gate, and a raise in the gate fails OPEN.
     """
-    binding = manifest.get("anchor_repo") or ANCHOR_REPO_UNBOUND
+    binding = manifest.get("anchor_repo")
+    # Anything that is not a mapping reads as unbound, for the same reason the
+    # missing key does. A manifest that reached this function WITHOUT passing
+    # through read_freeze is exactly the case the guard exists for, and
+    # "_validate_manifest_shape already refuses that" is a guarantee about a
+    # DIFFERENT function. Measured: a bare truthiness test let a string, a list
+    # and an int through to `.get` and raised AttributeError, which the
+    # PreToolUse dispatcher does not catch, so the hook logged an advisory and
+    # CONTINUED while writes to frozen paths sailed past.
+    if not isinstance(binding, dict):
+        binding = ANCHOR_REPO_UNBOUND
     was_bound = bool(binding.get("in_repo"))
     recorded = str(binding.get("identity") or "")
 

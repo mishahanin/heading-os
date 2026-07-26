@@ -1070,6 +1070,43 @@ def test_approve_says_the_artifact_was_written_when_only_the_ledger_fails(
 
     # The claim the message makes, checked against disk rather than trusted.
     assert len(_recorded(anchor)) == 64
+    assert "`approve` ledger entry failed" in err
+
+
+def test_a_partly_written_ledger_names_the_entry_that_did_land(
+    tree: Path, anchor: Path, capsys, monkeypatch
+):
+    """Two ledger writes, so "the ledger entry failed" can be half true.
+
+    When the replacement path runs, `approve` appends two entries. If the first
+    lands and the second does not, a message reading "the ledger entry failed"
+    tells the operator less than the tool knows, which is the same imprecision
+    the surrounding branch exists to remove one layer up.
+    """
+    from scripts import canopus as canopus_cli
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+    capsys.readouterr()
+
+    real = canopus_cli.append_history
+    calls: list[str] = []
+
+    def failing(root, event, **kwargs):
+        calls.append(event)
+        if len(calls) == 1:
+            return real(root, event, **kwargs)
+        raise OSError("ledger is full")
+
+    monkeypatch.setattr(canopus_cli, "append_history", failing)
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor), "--replace", "--reason", "set changed"],
+                tree) == 1
+
+    err = capsys.readouterr().err
+    assert "`anchor_replaced` ledger entry failed" in err
+    assert "The `approve` entry did land." in err
+    assert calls == ["approve", "anchor_replaced"]
 
 
 def test_approve_refuses_an_all_green_contract(tree: Path, anchor: Path, capsys):

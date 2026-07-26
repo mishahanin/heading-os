@@ -11,8 +11,9 @@ the builder cannot move the target it is measured against.
         --anchor ../my-notes-repo/plans/2026-07-25-pre-impl-my-slice.md
     python scripts/canopus.py verify
     python scripts/canopus.py status
-    python scripts/canopus.py release --reason "slice shipped"
-    python scripts/canopus.py release --force --reason "manifest damaged"
+    python scripts/canopus.py release --ship --reason "slice shipped"
+    python scripts/canopus.py release --window --reason "mid-build recipe change"
+    python scripts/canopus.py release --force --window --reason "manifest damaged"
 
 Three layers. The PreToolUse deny is a CONVENIENCE: it sees Write, Edit,
 MultiEdit, and NotebookEdit tool calls only, so a shell `sed -i` walks past it.
@@ -90,6 +91,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     read_anchor_waiver,
     read_attestation,
     read_freeze,
+    read_ledger,
     validate_anchor_path,
     verify_manifest,
     write_freeze,
@@ -110,7 +112,6 @@ from scripts.utils.canopus_pack import (  # noqa: E402
     is_dirty,
     merge_base,
     parse_ts,
-    read_ledger,
 )
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
 
@@ -126,7 +127,7 @@ REASON_PREFIX = "canopus-approval-reason:"
 
 
 def _record(root: Path, event: str, *, digest: str, label: str,
-            reason: str = "") -> str:
+            reason: str = "", kind: str = "") -> str:
     """Append one ledger entry, and RETURN the OSError text instead of raising.
 
     Every ledger write in this file records an act that has already landed, or
@@ -147,7 +148,8 @@ def _record(root: Path, event: str, *, digest: str, label: str,
     mechanism.
     """
     try:
-        append_history(root, event, digest=digest, label=label, reason=reason)
+        append_history(root, event, digest=digest, label=label, reason=reason,
+                       kind=kind)
     except OSError as exc:
         return str(exc)
     return ""
@@ -434,7 +436,7 @@ def cmd_approve(args) -> int:
     # read_freeze also raises FreezeCorrupt on a damaged manifest, so approve
     # inherits the corrupt-manifest refusal along with the active-freeze one.
     # That is deliberate and matches cmd_freeze: the artifact is left untouched
-    # and `release --force --reason` is the logged escape. Named here because a
+    # and `release --force --window --reason` is the logged escape. Named here because a
     # behaviour that arrives as a side effect of one guard is the kind nobody
     # remembers is there.
     if read_freeze(root) is not None:
@@ -882,7 +884,7 @@ def cmd_release(args) -> int:
     if args.force:
         # Never parses the manifest: this is the escape FROM an unparseable one.
         failed = _record(root, "force_release", digest="", label="",
-                         reason=args.reason)
+                         reason=args.reason, kind=args.kind)
         if failed:
             return _unlogged_release(failed)
         clear_freeze(root)
@@ -894,7 +896,8 @@ def cmd_release(args) -> int:
         print("canopus: no active freeze to release", file=sys.stderr)
         return 1
     failed = _record(root, "release", digest=manifest["root"],
-                     label=manifest["label"], reason=args.reason)
+                     label=manifest["label"], reason=args.reason,
+                     kind=args.kind)
     if failed:
         return _unlogged_release(failed)
     clear_freeze(root)
@@ -1024,7 +1027,16 @@ def build_parser() -> argparse.ArgumentParser:
     release = sub.add_parser("release", help="clear the active freeze")
     release.add_argument("--reason", default="", help="why the freeze is being released")
     release.add_argument("--force", action="store_true",
-                         help="clear a damaged manifest without parsing it; logged")
+                         help="clear a damaged manifest without parsing it")
+    # Required, and mutually exclusive. Two releases that look identical in the
+    # ledger are two different events: one you will close, and the end of a
+    # slice. The tool used to record the difference only in free-form prose, so
+    # nothing could act on it.
+    kind = release.add_mutually_exclusive_group(required=True)
+    kind.add_argument("--window", dest="kind", action="store_const", const="window",
+                      help="the lock will be taken again; the slice is still in progress")
+    kind.add_argument("--ship", dest="kind", action="store_const", const="ship",
+                      help="the slice is over")
     release.set_defaults(func=cmd_release)
 
     status = sub.add_parser("status", help="show the active freeze")
@@ -1040,7 +1052,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"canopus: {exc}\n"
               f"         Every write is denied while the manifest is damaged. "
               f"Clear it with: python scripts/canopus.py release --force "
-              f"--reason \"<why>\"",
+              f"--window --reason \"<why>\"",
               file=sys.stderr)
         return 1
     except FreezeError as exc:

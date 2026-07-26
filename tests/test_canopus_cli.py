@@ -164,7 +164,7 @@ def test_re_baselining_a_contract_is_refused_at_freeze_time(tree, anchor, capsys
 
     assert _freeze(tree, anchor) == 0
     assert _root_of(tree) == approved
-    assert _run(["release", "--reason", "re-baseline"], tree) == 0
+    assert _run(["release", "--window", "--reason", "re-baseline"], tree) == 0
     capsys.readouterr()
 
     (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
@@ -207,7 +207,7 @@ def test_an_unreadable_member_fails_the_command_without_a_traceback(
 
 def test_release_records_the_event_and_clears_the_manifest(tree, anchor):
     _freeze(tree, anchor)
-    assert _run(["release", "--reason", "wire 1 shipped"], tree) == 0
+    assert _run(["release", "--ship", "--reason", "wire 1 shipped"], tree) == 0
     assert not (tree / ".canopus" / "freeze.json").exists()
     events = [
         json.loads(line)["event"]
@@ -217,14 +217,15 @@ def test_release_records_the_event_and_clears_the_manifest(tree, anchor):
 
 
 def test_release_without_an_active_freeze_fails(tree, capsys):
-    assert _run(["release"], tree) == 1
+    assert _run(["release", "--ship"], tree) == 1
     assert "no active freeze" in capsys.readouterr().err
 
 
 def test_force_release_clears_a_corrupt_manifest_and_logs_it(tree, anchor):
     _freeze(tree, anchor)
     (tree / ".canopus" / "freeze.json").write_text("{ not json")
-    assert _run(["release", "--force", "--reason", "encoding false alarm"], tree) == 0
+    assert _run(["release", "--force", "--window", "--reason",
+                 "encoding false alarm"], tree) == 0
     assert not (tree / ".canopus" / "freeze.json").exists()
     events = [
         json.loads(line)["event"]
@@ -326,7 +327,8 @@ def test_a_root_without_a_test_gate_is_refused(tmp_path, anchor, capsys):
 def test_a_root_without_a_test_gate_is_refused_for_every_subcommand(tmp_path, capsys):
     gateless = tmp_path / "gateless"
     gateless.mkdir()
-    for argv in (["status"], ["verify"], ["release", "--force", "--reason", "x"]):
+    for argv in (["status"], ["verify"],
+                 ["release", "--force", "--window", "--reason", "x"]):
         assert main(["--root", str(gateless), *argv]) == 1
     assert capsys.readouterr().err.count("no scripts/run-tests.py") == 3
 
@@ -1197,7 +1199,7 @@ def test_every_reason_flag_defaults_to_the_empty_string():
     """
     parser = canopus.build_parser()
     for argv in (["approve", "x", "--label", "l", "--anchor", "a"],
-                 ["release"]):
+                 ["release", "--ship"]):
         assert parser.parse_args(argv).reason == "", argv[0]
 
     frozen = parser.parse_args(["freeze", "x", "--label", "l", "--anchor", "a"])
@@ -1415,7 +1417,7 @@ def test_freeze_takes_a_red_lock_rather_than_none_when_only_the_commit_is_missin
     _git(gate, "commit", "-q", "-m", "the approval")
 
     assert _freeze(tree, anchor) == 0
-    assert _run(["release", "--reason", "re-baseline"], tree) == 0
+    assert _run(["release", "--window", "--reason", "re-baseline"], tree) == 0
 
     (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
     assert _run(["approve", "tests/test_alpha.py", "--label", "l",
@@ -1715,8 +1717,8 @@ def test_a_release_the_ledger_could_not_record_is_refused(
     capsys.readouterr()
     _ledger_raises(monkeypatch)
 
-    for argv in (["release", "--reason", "done"],
-                 ["release", "--force", "--reason", "damaged"]):
+    for argv in (["release", "--ship", "--reason", "done"],
+                 ["release", "--force", "--window", "--reason", "damaged"]):
         assert _run(argv, tree) == 1, argv
         err = capsys.readouterr().err
         assert "could not be read" not in err, argv
@@ -2127,7 +2129,7 @@ def test_contract_satisfied_skips_the_null_stub_session(tree, anchor, monkeypatc
                  "--contract-satisfied", "the slice implemented it"], tree) == 0
     assert calls == []
 
-    assert _run(["release", "--reason", "next case"], tree) == 0
+    assert _run(["release", "--window", "--reason", "next case"], tree) == 0
     _write_contract(tree)   # test_a asserts False, test_b passes
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
                  "--contract", "tests/contract/slice"], tree) == 0
@@ -2190,3 +2192,26 @@ def test_status_prints_no_contract_section_without_a_baseline(tree, anchor, caps
     assert _run(["status"], tree) == 0
 
     assert "\ncontract\n" not in capsys.readouterr().out
+
+
+def test_release_refuses_without_a_kind(tree, anchor):
+    """A release that does not name its kind is two different events wearing one
+    name, and the freeze must survive the refusal untouched."""
+    assert _freeze(tree, anchor) == 0
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run(["release", "--reason", "no kind given"], tree)
+
+    assert excinfo.value.code == 2
+    assert (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_release_records_the_kind_it_was_given(tree, anchor):
+    from scripts.utils.canopus_freeze import read_ledger
+
+    assert _freeze(tree, anchor) == 0
+    assert _run(["release", "--window", "--reason", "mid-build recipe change"], tree) == 0
+
+    last = read_ledger(tree)[-1]
+    assert last["event"] == "release"
+    assert last["kind"] == "window"

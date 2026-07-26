@@ -1460,3 +1460,62 @@ def test_an_unbound_anchor_status_reddens_the_lock():
     report = {"held": True, "recomputed_root": "f" * 64}
 
     assert lock_state(report, ANCHOR_UNBOUND, None) == LOSS_OF_LOCK
+
+
+def test_an_open_window_is_the_last_release_without_a_freeze_after_it():
+    from scripts.utils.canopus_freeze import open_release_window
+
+    entries = [
+        {"event": "freeze", "ts": "2026-01-01T00:00:00+00:00"},
+        {"event": "release", "ts": "2026-01-01T01:00:00+00:00", "kind": "window",
+         "reason": "recipe change"},
+    ]
+
+    window = open_release_window(entries)
+
+    assert window is not None
+    assert window["reason"] == "recipe change"
+
+
+def test_a_later_freeze_closes_the_window():
+    from scripts.utils.canopus_freeze import open_release_window
+
+    entries = [
+        {"event": "release", "ts": "2026-01-01T01:00:00+00:00", "kind": "window"},
+        {"event": "freeze", "ts": "2026-01-01T02:00:00+00:00"},
+    ]
+
+    assert open_release_window(entries) is None
+
+
+def test_a_ship_release_opens_no_window():
+    from scripts.utils.canopus_freeze import open_release_window
+
+    entries = [
+        {"event": "freeze", "ts": "2026-01-01T00:00:00+00:00"},
+        {"event": "release", "ts": "2026-01-01T01:00:00+00:00", "kind": "ship"},
+    ]
+
+    assert open_release_window(entries) is None
+
+
+def test_a_legacy_release_with_no_kind_opens_no_window():
+    """Every ledger entry written before this slice carries no kind.
+
+    Reading them as windows would turn a quiet past amber retroactively on every
+    workspace in the fleet, on the first pytest run after the update.
+    """
+    from scripts.utils.canopus_freeze import open_release_window
+
+    entries = [{"event": "release", "ts": "2026-01-01T01:00:00+00:00"}]
+
+    assert open_release_window(entries) is None
+
+
+def test_a_forced_release_can_open_a_window():
+    from scripts.utils.canopus_freeze import open_release_window
+
+    entries = [{"event": "force_release", "ts": "2026-01-01T01:00:00+00:00",
+                "kind": "window", "reason": "manifest damaged"}]
+
+    assert open_release_window(entries) is not None

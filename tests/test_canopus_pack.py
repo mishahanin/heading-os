@@ -33,8 +33,7 @@ def test_commits_outside_flags_a_commit_between_windows():
 
 
 def test_read_ledger_skips_damaged_lines(tmp_path):
-    from scripts.utils.canopus_freeze import history_state_path
-    from scripts.utils.canopus_pack import read_ledger
+    from scripts.utils.canopus_freeze import history_state_path, read_ledger
 
     path = history_state_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +48,20 @@ def test_read_ledger_skips_damaged_lines(tmp_path):
 
 
 def test_read_ledger_is_empty_when_there_is_no_ledger(tmp_path):
-    from scripts.utils.canopus_pack import read_ledger
+    from scripts.utils.canopus_freeze import read_ledger
+
+    assert read_ledger(tmp_path) == []
+
+
+def test_read_ledger_answers_on_a_non_utf8_ledger(tmp_path):
+    """The route that made `canopus pack` traceback, and that freeze_gate now
+    shares. Not a stub: one latin-1 byte, the same shape read_anchor was widened
+    for."""
+    from scripts.utils.canopus_freeze import history_state_path, read_ledger
+
+    path = history_state_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xe9 not utf-8\n")
 
     assert read_ledger(tmp_path) == []
 

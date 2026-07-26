@@ -1089,6 +1089,7 @@ def append_history(
     digest: str,
     label: str,
     reason: str = "",
+    kind: str = "",
 ) -> None:
     """Append one line to the ledger. Never rewrites, never truncates.
 
@@ -1116,6 +1117,11 @@ def append_history(
         "root": digest,
         "label": label,
         "reason": reason,
+        # Which KIND of release this was, for the two release events and empty
+        # for every other one. A release you will close and the end of a slice
+        # looked identical in this ledger before wire 2.2, so nothing could act
+        # on the difference and the gate stayed silent over an unlocked tree.
+        "kind": kind,
     }
     path = history_state_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1124,6 +1130,65 @@ def append_history(
     # append-only is the entire point of this ledger.
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+def read_ledger(root: Path) -> list[dict]:
+    """Every readable line of the append-only ledger, oldest first.
+
+    Damaged lines are skipped rather than raising: the ledger is evidence, and a
+    reader that refuses to show the other nine entries because one is corrupt is
+    less useful than one that shows nine.
+
+    Lives beside the writer from wire 2.2, because the gate reads it now and the
+    gate may never import the pack (the pack reaches for git through
+    canopus_git, and this module is loaded by the PreToolUse dispatcher on every
+    write). Stdlib only, like everything else here.
+    """
+    path = history_state_path(root)
+    if not path.is_file():
+        return []
+    entries: list[dict] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError, and OSError alone did not. A
+        # ledger holding one non-UTF-8 byte raised straight through this reader,
+        # so `canopus pack` tracebacked on a module whose docstring promises to
+        # answer rather than raise, and from wire 2.2 the same call is on
+        # freeze_gate's path, where a raise fails OPEN.
+        return []
+    for line in text.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
+RELEASE_EVENTS = ("release", "force_release")
+
+
+def open_release_window(entries: Sequence[dict]) -> Optional[dict]:
+    """The release window still standing open, or None.
+
+    A window is open when the LAST lock event in the ledger is a release that
+    named itself a window. A later freeze closes it, which is what makes the
+    gate's amber line self-clearing rather than something an operator learns to
+    dismiss.
+
+    An entry with no `kind` reads as a ship. Every entry written before wire 2.2
+    has none, and reading those as windows would turn a quiet past amber
+    retroactively on the first pytest run after the update.
+    """
+    for entry in reversed(list(entries)):
+        event = entry.get("event")
+        if event == "freeze":
+            return None
+        if event in RELEASE_EVENTS:
+            return entry if entry.get("kind") == "window" else None
+    return None
 
 
 # ============================================================

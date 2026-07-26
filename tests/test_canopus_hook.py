@@ -186,3 +186,21 @@ def test_degraded_state_is_permissive_by_design_the_manifest_not_the_deny_is_the
     _freeze(tree, anchor)
     monkeypatch.setattr(module, "_CANOPUS_AVAILABLE", False)
     assert module.check_canopus_freeze(_write(tree / "tests" / "test_alpha.py")) is None
+
+
+def test_the_corrupt_manifest_escape_names_a_command_that_parses(dispatch):
+    """The instruction printed when every write is denied has to be runnable.
+
+    Not a style point: FreezeCorrupt denies Write and Edit fail-closed, so this
+    sentence is the operator's only exit, and `release --force --reason` stopped
+    parsing the moment the kind became required."""
+    from scripts.canopus import build_parser
+
+    module, tree = dispatch
+    (tree / ".canopus").mkdir(parents=True, exist_ok=True)
+    (tree / ".canopus" / "freeze.json").write_text("{ not json", encoding="utf-8")
+
+    reason = module.check_canopus_freeze(_write(tree / "tests" / "test_alpha.py"))["reason"]
+
+    assert "--force --window" in reason
+    build_parser().parse_args(["release", "--force", "--window", "--reason", "x"])

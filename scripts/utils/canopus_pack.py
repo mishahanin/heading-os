@@ -25,12 +25,10 @@ dispatcher.
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 
-from scripts.utils.canopus_freeze import history_state_path
 from scripts.utils.canopus_git import git_output
 
 
@@ -53,31 +51,6 @@ def parse_ts(raw) -> Optional[datetime]:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def read_ledger(root: Path) -> list[dict]:
-    """Every readable line of the append-only ledger, oldest first.
-
-    Damaged lines are skipped rather than raising: the ledger is evidence, and a
-    reader that refuses to show the other nine entries because one is corrupt is
-    less useful than one that shows nine.
-    """
-    path = history_state_path(root)
-    if not path.is_file():
-        return []
-    entries: list[dict] = []
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    for line in text.splitlines():
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(entry, dict):
-            entries.append(entry)
-    return entries
 
 
 def freeze_windows(entries: Sequence[dict]) -> list[tuple[datetime, Optional[datetime]]]:

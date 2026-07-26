@@ -154,7 +154,7 @@ python scripts/canopus.py freeze tests/test_thing.py --label my-slice \
     --anchor ../my-notes-repo/plans/2026-07-25-pre-impl-my-slice.md
 python scripts/canopus.py verify
 python scripts/canopus.py status
-python scripts/canopus.py release --reason "slice shipped"
+python scripts/canopus.py release --ship --reason "slice shipped"
 ```
 
 `approve` measures the contract, prints a COUNT of how many of its tests are

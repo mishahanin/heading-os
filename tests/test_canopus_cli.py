@@ -1346,3 +1346,98 @@ def test_freeze_takes_a_red_lock_rather_than_none_when_only_the_commit_is_missin
     assert (tree / ".canopus" / "freeze.json").exists()
     assert _run(["verify"], tree) == 1
     assert canopus.LOSS_OF_LOCK in capsys.readouterr().out
+
+
+# ============================================================
+# The null-stub probe: redness that means something
+# ============================================================
+
+def _write_vacuous_contract(tree: Path, real: bool = False) -> Path:
+    """A contract whose tests all die on an absent import.
+
+    With real=True one of them asserts a value a MagicMock cannot satisfy, so it
+    stays red under the stub and the contract is not wholly vacuous.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True, exist_ok=True)
+    second = "assert answer() == 42" if real else "assert answer() is not None"
+    (directory / "test_contract.py").write_text(
+        "def test_vacuous():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() is not None\n"
+        "\n\n"
+        "def test_other():\n"
+        "    from absent_thing import answer\n"
+        f"    {second}\n"
+    )
+    return directory
+
+
+def test_probe_lists_the_tests_that_assert_nothing(tree, capsys):
+    _write_vacuous_contract(tree, real=True)
+
+    _run(["probe", "tests/contract/slice"], tree)
+    out = capsys.readouterr().out
+
+    assert "asserts nothing" in out
+    assert "test_vacuous" in out
+
+
+def test_probe_labels_how_a_red_test_failed(tree, capsys):
+    """The operator's first question is whether anything failed for a reason
+    other than the code being absent."""
+    _write_contract(tree)   # test_a asserts False, test_b passes
+
+    _run(["probe", "tests/contract/slice"], tree)
+    out = capsys.readouterr().out
+
+    line = next(part for part in out.splitlines() if "test_a" in part)
+    assert "assertion" in line
+
+
+def test_freeze_refuses_a_wholly_vacuous_contract(tree, anchor, capsys):
+    """The bite: wire 2 froze this contract, because every test was red."""
+    _write_vacuous_contract(tree)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "asserts nothing" in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_freeze_takes_a_contract_that_still_asserts_something(tree, anchor):
+    """The refusal must not swallow the ordinary mid-build contract."""
+    _write_vacuous_contract(tree, real=True)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+
+
+def test_probe_does_not_call_an_already_green_test_vacuous(tree, capsys):
+    """`vacuous` holds every test that passed under the stub, and a test that
+    passed for REAL is in it too. Labelling that one "asserts nothing" is a false
+    claim about a test asserting real behaviour, and it hides the already-green
+    reading the operator is told to question."""
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True)
+    # The green case asserts against the standard library, so it passes for a
+    # reason no environment can take away, and the stub never touches it.
+    (directory / "test_contract.py").write_text(
+        "def test_green_for_real():\n"
+        "    import json\n"
+        "    assert json.dumps({'a': 1}) == '{\"a\": 1}'\n"
+        "\n\n"
+        "def test_vacuous():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() is not None\n"
+    )
+
+    _run(["probe", "tests/contract/slice"], tree)
+    out = capsys.readouterr().out
+
+    green = next(line for line in out.splitlines() if "test_green_for_real" in line)
+    assert "passed" in green
+    assert "asserts nothing" not in green
+    assert "asserts nothing" in next(
+        line for line in out.splitlines() if "test_vacuous" in line
+    )

@@ -147,6 +147,9 @@ uv run python scripts/run-tests.py                      # the suite
 edited by whoever is making the change.
 
 ```bash
+python scripts/canopus.py approve tests/test_thing.py --label my-slice \
+    --anchor ../my-notes-repo/plans/2026-07-25-pre-impl-my-slice.md
+# read the candidate, then COMMIT that artifact: the commit is the approval
 python scripts/canopus.py freeze tests/test_thing.py --label my-slice \
     --anchor ../my-notes-repo/plans/2026-07-25-pre-impl-my-slice.md
 python scripts/canopus.py verify
@@ -154,18 +157,32 @@ python scripts/canopus.py status
 python scripts/canopus.py release --reason "slice shipped"
 ```
 
-`freeze` writes a per-file digest manifest to a gitignored `.canopus/`, records the event
-in an append-only ledger, prints a **root hash** and writes the `canopus-anchor:` line into
-the anchor artifact itself; commit that repository so the approved hash is durable. From
-then on `verify` reads the expected hash from that artifact by itself. Nobody types a
-digest and nobody compares one by eye.
+`approve` measures the contract, prints which of its tests are already green and
+which assert nothing, computes the **root hash**, and writes it into the gate
+artifact. It freezes nothing. You then read the artifact and COMMIT it: that
+commit is the approval, carrying an author and a timestamp.
+
+`freeze` recomputes the same hash and refuses to take a root the artifact records
+nowhere. Either copy satisfies it, the committed one or a freshly approved
+working copy, and the committed copy is what governs the lock and the approval
+axis afterwards. A freeze taken over an approval nobody has committed yet is
+permitted, says on the way out that it is uncommitted, and reads amber; `verify`
+reports `LOSS OF LOCK` until the commit lands. Refusing there instead would leave
+the operator with no manifest at all and a silently green suite, which is the one
+outcome worse than a red lock.
+
+`freeze` writes a per-file digest manifest to a gitignored `.canopus/` and records
+the event in an append-only ledger. It no longer writes the anchor line, because
+a tool that writes the hash and then verifies the hash it wrote has verified
+nothing. From then on `verify` reads the expected hash from that artifact by
+itself. Nobody types a digest and nobody compares one by eye.
 
 Three ways to name a path, and they mean different things:
 
 | Form | Effect |
 |---|---|
 | positional | a file freezes by content plus a composition guard on every ancestor; a directory freezes recursively |
-| `--contract DIR` | recursive, plus a per-file item count recorded at freeze time, and a refusal unless the contract is red |
+| `--contract DIR` | recursive, plus a per-file item count recorded at freeze time, and a refusal unless the contract is red for a reason that means something |
 | `--content FILE` | the bytes only, with no composition guard on any ancestor |
 
 `--content` is how the enforcer files are frozen. Frozen as ordinary files they
@@ -177,17 +194,39 @@ freezing anything. `canopus pack` prints the Fix 2 evidence page: both
 indicators, collected against baseline, commits made while no freeze was held,
 whether the attestation has gone stale, and what is not covered.
 
+**Red is not the same as meaningful.** A contract can be red only because the
+module it imports does not exist yet, which says nothing about whether its tests
+assert anything. So `probe`, `approve`, and `freeze` each run the contract a
+second time with every absent module resolved to a mock. A test that passes that
+run is proved to assert nothing: a mock satisfies any shape it was asked for.
+Those tests print as `vacuous  <name>  asserts nothing`, each red test is
+labelled `import`, `assertion`, or `other` beside its outcome, and a contract
+whose every red test is vacuous is REFUSED. Partial vacuity is printed and not
+refused, because "these three assert nothing" is a judgement for a human, and a
+test that legitimately asserts absence lands on that list. The cost is stated
+rather than hidden: every one of those commands runs pytest over the contract
+twice, and the second run is what buys the proof.
+
 An anchor artifact that already records a hash is refused, because an approved
 contract's anchor is never silently overwritten. When the frozen SET legitimately
-changes mid-build, `freeze --replace-anchor --reason "<why>"` appends a second
-line and writes an `anchor_replaced` entry to the ledger; the artifact keeps the
-whole trail.
+changes mid-build, `approve --replace --reason "<why>"` appends a second line and
+writes an `anchor_replaced` entry to the ledger; the artifact keeps the whole
+trail.
 
-**After the slice ships,** release the freeze and leave the contract tests where
-they are. They become permanent regression anchors. When intended behaviour later
-changes and one of them fails because of it, the anchor is NOT edited to match:
-that reopens the approval gate, where the contract is re-approved and the old
-anchor retired deliberately.
+**After the slice ships, the contract is retired.** A contract is a POINT IN
+TIME: it exists to pin what "done" means for one slice, and its job ends at the
+Fix 2 evidence pack. At ship time, promote its still-valid coverage into the
+ordinary test suite and REMOVE the contract directory. Regression coverage then
+lives in the ordinary tests, where a later slice may argue with it like any other
+test. Leaving the directory in place instead keeps it running as an ordinary test
+set, which quietly imposes a rule nobody adopted: that every later slice must
+preserve every earlier slice's behaviour verbatim. Measured on this very tool, a
+slice that deliberately reversed three pinned behaviours turned three earlier
+contract tests red for doing exactly what it was approved to do.
+
+While a contract is live it is never edited to match an implementation. A
+contract that turns out to be genuinely wrong reopens the approval gate, where it
+is re-approved deliberately and the superseded anchor is retired on the record.
 
 `--anchor` is required. An anchorless freeze still catches a later edit, but it is the one
 route to a *passing* gate that never leaves this clone: release, edit the contract,
@@ -230,16 +269,30 @@ Three layers, and the differences matter:
 | `LOSS OF LOCK` | something changed, or the anchor disagrees or vanished. Exit code 1. |
 | `LOCK UNCONFIRMED` | no anchor hash is recorded yet: nothing changed since the last check, which is not the same as "this is the approved contract" |
 
+`verify`, `status`, and `pack` print a third axis beneath the lock and the
+attestation, answering whether this exact freeze is the one a human approved:
+
+| State | Meaning |
+|---|---|
+| `APPROVED` | the frozen root hash is recorded in a COMMIT of the gate artifact |
+| `APPROVAL UNVERIFIED` | the artifact is uncommitted, outside a repository, or git is unavailable; the reason is printed beside it |
+
+Amber rather than red on the second row, deliberately: an operator whose gate
+artifact is a file in a folder has no repository to attribute an approval to, and
+that is a supported way to use the tool rather than a failure of it.
+
 The anchor must live outside the working tree. An anchor the build can write to is not an
 anchor. Point it at a sibling repository with its own history, so a build reaching for the
 anchor dirties a repository it had no reason to touch.
 
-Be precise about what that trace is worth. `verify` reads the anchor's **working copy** and
-never consults git, and `freeze` appends the `canopus-anchor:` line to that working copy, so
-a tamper leaves an uncommitted diff in the sibling repository: visible in its `git status`,
-and erasable with `git checkout --`. It is evidence for a human who looks, not containment.
-The line becomes durable only once it is committed there, which is what `freeze` tells you
-to do on the way out.
+Be precise about what that trace is worth. `verify` reads the **committed copy**, through
+`git show HEAD:<rel>`, whenever the artifact sits in a repository, and falls back to the
+working copy only where there is nothing to consult: outside a repository, or with no git
+available. `approve` writes the line and a human's COMMIT of it is the approval. So an
+approval reachable only through git still holds the lock, and a line appended to the working
+copy alone is an uncommitted diff in the sibling repository: visible in its `git status`,
+erasable with `git checkout --`, and never enough on its own to read `APPROVED`. It is
+evidence for a human who looks, not containment.
 
 Freezing a directory is recursive. Freezing a path also guards the membership of every
 ancestor directory up to and including the tree root, and each guard watches a stated set

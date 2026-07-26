@@ -46,6 +46,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_NONE,
     ANCHOR_PREFIX,
     ANCHOR_RECORDED,
+    APPROVED,
     ATTESTED,
     LOCK_HELD,
     LOCK_UNCONFIRMED,
@@ -53,7 +54,6 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     NOT_ATTESTED,
     FreezeCorrupt,
     FreezeError,
-    anchor_state,
     append_history,
     attestation_state,
     build_manifest,
@@ -66,6 +66,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     verify_manifest,
     write_freeze,
 )
+from scripts.utils.canopus_git import COMMITTED, resolve_anchor  # noqa: E402
 from scripts.utils.canopus_contract import (  # noqa: E402
     ContractError,
     contract_files,
@@ -172,6 +173,23 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
     if isinstance(listed, list):
         for line in listed[:5]:
             print(f"  reason   {line}")
+
+
+def _print_approval(resolution) -> None:
+    """The third axis: was this exact freeze the one a human approved?
+
+    The lock says the contract has not moved since the freeze. The attestation
+    says it ran. Neither says the freeze was ever approved, and every surface
+    that reports state prints this line. An operator who finds one command that
+    omits it learns to read that command instead.
+
+    Amber rather than red when unverified, deliberately: an operator whose gate
+    artifact is a file in a folder has no repository to attribute an approval
+    to, and that is a supported way to use the tool, not a failure of it.
+    """
+    colour = GREEN if resolution.approval == APPROVED else YELLOW
+    detail = f"  {resolution.approval_reason}" if resolution.approval_reason else ""
+    print(f"{colour}{BOLD}{resolution.approval}{RESET}{detail}")
 
 
 def cmd_freeze(args) -> int:
@@ -304,7 +322,8 @@ def cmd_pack(args) -> int:
         return 1
 
     report = verify_manifest(manifest, root)
-    anchor, status, value = anchor_state(manifest)
+    resolution = resolve_anchor(manifest)
+    anchor, status, value = resolution.anchor, resolution.status, resolution.value
     state = lock_state(report, status, value)
     record = read_attestation(root)
     # _print_attestation below already renders the state; only the reason string
@@ -315,6 +334,7 @@ def cmd_pack(args) -> int:
     colour = {LOCK_HELD: GREEN, LOCK_UNCONFIRMED: YELLOW}.get(state, RED)
     print(f"{colour}{BOLD}{state}{RESET}   anchor {anchor or '(none)'} [{status}]")
     _print_attestation(root, report["recomputed_root"])
+    _print_approval(resolution)
 
     baseline = manifest.get("baseline") or {}
     if baseline:
@@ -377,7 +397,8 @@ def cmd_verify(args) -> int:
         str(validate_anchor_path(_under_root(args.anchor, root), root))
         if args.anchor else None
     )
-    anchor, status, value = anchor_state(manifest, override)
+    resolution = resolve_anchor(manifest, override)
+    anchor, status, value = resolution.anchor, resolution.status, resolution.value
     state = lock_state(report, status, value)
 
     _print_root(report["recomputed_root"], manifest)
@@ -385,14 +406,20 @@ def cmd_verify(args) -> int:
     if state == LOCK_HELD:
         print(f"{GREEN}{BOLD}{LOCK_HELD}{RESET}  matches the hash recorded in {anchor}")
         _print_attestation(root, report["recomputed_root"])
+        _print_approval(resolution)
         return 0
     if state == LOCK_UNCONFIRMED:
+        # The reason comes from the one producer of the precedence decision. An
+        # earlier revision re-derived its own sentence here ("carries no
+        # canopus-anchor line yet"), which is plainly false under the committed
+        # mapping for an artifact whose working copy carries one.
         detail = ("no anchor was recorded at freeze time" if status == ANCHOR_NONE
-                  else f"{anchor} carries no {ANCHOR_PREFIX} line yet")
+                  else resolution.approval_reason)
         print(f"{YELLOW}{BOLD}{LOCK_UNCONFIRMED}{RESET}  {detail}. Nothing changed "
               f"since the last check, which is NOT the same as 'this is the "
               f"approved contract'.")
         _print_attestation(root, report["recomputed_root"])
+        _print_approval(resolution)
         return 0
 
     print(f"{RED}{BOLD}{LOSS_OF_LOCK}{RESET}")
@@ -405,8 +432,13 @@ def cmd_verify(args) -> int:
     if status == ANCHOR_MISSING:
         print(f"  anchor   {anchor} is gone")
     elif status == ANCHOR_RECORDED and value != report["recomputed_root"]:
-        print(f"  anchor   {anchor} records {value}")
+        # The path is a working-tree path and the hash may have come from HEAD,
+        # so say which copy was read. Without it an operator opens that file,
+        # finds a different hash, and has no explanation for the difference.
+        origin = f" ({resolution.approval})" if resolution.source == COMMITTED else ""
+        print(f"  anchor   {anchor} records {value}{origin}")
     _print_attestation(root, report["recomputed_root"])
+    _print_approval(resolution)
     print("A contract that is genuinely wrong reopens the approval gate. "
           "It is never edited in place.")
     append_history(root, "verify_fail", digest=report["recomputed_root"],
@@ -441,7 +473,8 @@ def cmd_status(args) -> int:
         print("canopus: no active freeze")
         return 0
     report = verify_manifest(manifest, root)
-    anchor, status, value = anchor_state(manifest)
+    resolution = resolve_anchor(manifest)
+    anchor, status, value = resolution.anchor, resolution.status, resolution.value
     state = lock_state(report, status, value)
     _print_root(manifest["root"], manifest)
     # The lock line, not just the attestation line. An earlier revision paid for
@@ -456,6 +489,7 @@ def cmd_status(args) -> int:
             if state == LOSS_OF_LOCK else "")
     print(f"{colour}{BOLD}{state}{RESET}{tail}")
     _print_attestation(root, report["recomputed_root"])
+    _print_approval(resolution)
     print(f"frozen at {manifest['frozen_at']}")
     print(f"git sha   {manifest.get('git_sha') or '(not a git working tree)'}")
     print(f"anchor    {anchor or '(none)'}  [{status}]")

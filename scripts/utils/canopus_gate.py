@@ -23,10 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.utils.canopus_freeze import (
+    APPROVED,
     LOCK_HELD,
     LOSS_OF_LOCK,
     FreezeCorrupt,
-    anchor_state,
     build_attestation,
     frozen_test_files,
     lock_state,
@@ -35,6 +35,7 @@ from scripts.utils.canopus_freeze import (
     verify_manifest,
     write_attestation,
 )
+from scripts.utils.canopus_git import resolve_anchor
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW
 
 
@@ -58,8 +59,13 @@ def freeze_gate(root: Path) -> int:
     # not crash run-tests.py with a traceback that reads like a tooling bug.
     try:
         report = verify_manifest(manifest, root)
-        _anchor, status, value = anchor_state(manifest)
+        resolution = resolve_anchor(manifest)
+        status, value = resolution.status, resolution.value
     except OSError as exc:
+        # resolve_anchor adds no new exception type here: git_output converts
+        # every subprocess failure, including a timeout, into None, so the only
+        # exceptions reaching this handler remain the filesystem ones
+        # verify_manifest raises.
         print(f"{RED}canopus: the frozen contract could not be read, so it cannot "
               f"be verified: {exc}{RESET}")
         return 1
@@ -71,6 +77,15 @@ def freeze_gate(root: Path) -> int:
         return 1
     colour = GREEN if state == LOCK_HELD else YELLOW
     print(f"{colour}canopus: {state}{RESET} (label: {manifest['label']})")
+    if resolution.approval != APPROVED:
+        # The fourth surface, and the one that actually fires: conftest runs it
+        # at every pytest session start and run-tests.py runs it before the
+        # suite, while status, verify and pack are commands an operator chooses
+        # to type. The lock axis already falls to amber when the approval is
+        # uncommitted, so this line adds the REASON rather than the signal,
+        # which is precisely what an unexplained amber costs an operator.
+        print(f"{YELLOW}canopus: {resolution.approval}{RESET}  "
+              f"{resolution.approval_reason}")
     return 0
 
 

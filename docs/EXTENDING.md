@@ -1,4 +1,4 @@
-<!-- version: 1.0.2 | last-updated: 2026-07-08 -->
+<!-- version: 1.1.0 | last-updated: 2026-07-26 -->
 # Extending the engine
 
 How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
@@ -211,7 +211,12 @@ satisfies any shape it was asked for. Only the red ones are weighed, because a
 test that was already green passes the mocked run too and proves nothing by it.
 Those tests print as `vacuous  <name>  asserts nothing`; every OTHER red test is
 labelled `import`, `assertion`, or `other` beside its outcome, and a vacuous one
-carries no mode label. A contract whose every red test is vacuous is REFUSED,
+carries no mode label. A SKIPPED test is printed as `skipped`, never as vacuous:
+the refusal weighs red outcomes only, and the display has to agree with it or the
+table describes a contract the refusal is not judging. A skipped test is the
+quiet case to read, because `pytest.importorskip` skips for real and then passes
+once the stub supplies the module. Nothing refuses it, so it carries the plain
+warning `did not run, so it proves nothing` and the operator decides. A contract whose every red test is vacuous is REFUSED,
 and a skipped or `xfail` test in the set does not buy it a freeze. Partial
 vacuity is printed and not refused, because "these three assert nothing" is a
 judgement for a human, and a test that legitimately asserts absence lands on
@@ -231,11 +236,53 @@ and finding none. It is not a refusal, because tests failing on assertions
 against code that already exists produce the same reading and are a perfectly
 ordinary contract.
 
+**One environment variable defeats the lock, and it costs the builder nothing.**
+`resolve_anchor` falls back to the artifact's WORKING copy whenever git reports
+`no_repo` or `no_git`, and both of those answers come from a child `git` process
+whose environment the builder controls. So `GIT_DIR=/tmp/nothing.git` in front of
+any command that reaches the gate makes the anchor's repository invisible, the
+fallback reads the working copy, and a genuine `LOSS OF LOCK` becomes `LOCK HELD`
+with gate exit 0. Measured on a re-baselined freeze, at both surfaces: `verify`
+went from `LOSS OF LOCK` exit 1 to `LOCK HELD` exit 0, and `freeze_gate` went
+from exit 1 to exit 0, with one environment variable and nothing else changed.
+The approval axis prints `APPROVAL UNVERIFIED` in both runs and only its reason
+string differs, so the amber line does not distinguish the defeat from an
+ordinary unverifiable approval. It writes nothing, touches no file, dirties no
+repository, and leaves no trace in the anchor's repository or in `canopus pack`,
+so nothing an operator reads afterwards records that it happened. This is not a hardening backlog item dressed up as a note: while it
+stands, the lock is a control against a careless builder and not against a
+deliberate one. The fix is its own slice with its own contract and its own
+approvals, because it needs the fallback narrowed and the child environment
+scrubbed, and the deeper form of it needs a manifest field recording which
+repository the anchor belonged to, which changes the recipe every existing freeze
+was taken with. Until then the operator's countermeasure is the obvious one and
+it works: run `canopus verify` YOURSELF, in your own shell, at the approval gate,
+rather than reading a status the builder printed.
+
+**The instrument has no committed human artifact behind it.**
+`scripts/utils/canopus_contract.py` and `scripts/utils/canopus_nullstub.py` sit
+OUTSIDE the frozen enforcer set, deliberately: they do their work BEFORE any
+freeze exists, and there is nothing yet to freeze them against. So at the moment
+the vacuity refusal fires, the builder can still edit both the refusal and the
+tests that prove it, and the operator's only evidence that a contract was
+measured is a table the builder printed. That is the same shape as the hole this
+layer closed one level up, where `freeze` used to write the anchor line and then
+verify the line it had written. Here it is unavoidable rather than overlooked,
+which is exactly why it belongs in writing: the vacuity verdict is a courtesy
+from the build to the operator, not a guarantee held against it.
+
 An anchor artifact that already records a hash is refused, because an approved
 contract's anchor is never silently overwritten. When the frozen SET legitimately
 changes mid-build, `approve --replace --reason "<why>"` appends a second line and
 writes an `anchor_replaced` entry to the ledger; the artifact keeps the whole
-trail.
+trail. The reason lands in the artifact too, on its own
+`canopus-approval-reason:` line directly above the hash it explains, because
+`.canopus/history.jsonl` is gitignored and one command removes it: without that
+line, the durable record a human commits carries two indistinguishable hash lines
+and no account of either. It is a separate line by necessity rather than by
+taste. `read_anchor` takes everything after `canopus-anchor:` as the hash value,
+so a reason appended to that line would be parsed as part of the digest; for the
+same reason the text is collapsed to a single line before it is written.
 
 **After the slice ships, the contract is retired.** A contract is a POINT IN
 TIME: it exists to pin what "done" means for one slice, and its job ends at the
@@ -402,9 +449,24 @@ assembled. The record is bound to the recomputed root hash, so editing any froze
 after a green run makes it stop applying without anyone remembering to delete it. It is a
 true statement about *a* run of this exact contract, not necessarily the most recent one.
 
-**Freeze the enforcers.** `scripts/utils/canopus_freeze.py`, `scripts/utils/canopus_gate.py`,
-`scripts/run-tests.py`, and `tests/conftest.py` are what makes a freeze fire. A freeze that
-omits them protects the contract while leaving the thing that checks the contract editable.
+**Freeze the enforcers, all eight of them.** A freeze that omits them protects the
+contract while leaving the thing that checks the contract editable.
+
+| File | Why it is in the set |
+|---|---|
+| `scripts/utils/canopus_freeze.py` | hashes the manifest and answers "did it move" |
+| `scripts/utils/canopus_gate.py` | the check pytest and the runner call |
+| `scripts/utils/canopus_git.py` | resolves the anchor, so it decides `LOCK HELD` against `LOSS OF LOCK`; a decider outside the freeze is the same hole closed for the write path |
+| `scripts/run-tests.py` | one of the two places the gate fires |
+| `tests/conftest.py` | the other, at pytest session start |
+| `scripts/utils/atomic.py` | writes the manifest, so it is the write path of the guarantee |
+| `scripts/utils/venv.py` | re-execs the interpreter, so it chooses which Python runs the gate |
+| `scripts/utils/colors.py` | imported by both of the above |
+
+The last three are the transitive import tail: leaving them out put the write
+path of the guarantee outside the guarantee. A closure test in
+`tests/test_canopus_freeze.py` recomputes the tail and fails when a new import
+escapes the set.
 
 `.canopus/` is gitignored, so CI carries no manifest and neither the gate nor attestation
 fires there. The whole mechanism is scoped to the local build loop, and an evidence pack
@@ -422,6 +484,25 @@ repository.
 
 A contract that turns out to be wrong is not edited in place. Release it, fix it,
 re-freeze it, and get the new root hash re-approved.
+
+### Known defects, in files the active freeze holds
+
+Named here rather than fixed, because each lives in a file the current freeze
+covers and a frozen file is not edited in place:
+
+- `canopus_git.py`'s module docstring says it is "the one place Canopus talks to
+  git". It is not: `_git_sha` in `scripts/canopus.py` runs its own `git rev-parse`
+  through `subprocess`.
+- The same docstring says "Every function answers rather than raising".
+  `read_committed_anchor` evaluates `Path.cwd()` outside any try block and raises
+  `FileNotFoundError` when the process working directory has been deleted. Both
+  call sites fail closed, so the code is defensible; the sentence is not.
+- `canopus_gate.py:43` claims "a build cannot reach green while its contract is
+  moved". The environment defeat above falsifies that sentence as written.
+- The PreToolUse deny message in `canopus_freeze.py` reads "The contract is not
+  editable in place. Fix the code instead", which is wrong in the one case where
+  the frozen file IS the code being fixed, and that case is this tool's own
+  maintenance.
 
 ---
 

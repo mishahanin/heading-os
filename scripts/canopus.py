@@ -54,6 +54,7 @@ from pathlib import Path
 ENGINE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ENGINE_ROOT))
 from scripts.utils.canopus_contract import (  # noqa: E402
+    RED_OUTCOMES,
     ContractError,
     contract_files,
     missing_modules,
@@ -112,6 +113,12 @@ from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
 # freeze is ever checked, so a freeze taken against it is inert by construction.
 GATE_SCRIPT = Path("scripts") / "run-tests.py"
 
+# The line `approve` writes above the anchor line when it carries a reason.
+# Deliberately NOT a prefix of, and not prefixed by, ANCHOR_PREFIX: `read_anchor`
+# matches with `startswith(ANCHOR_PREFIX)`, so this line is prose to the parser
+# and an explanation to the human reading the artifact diff.
+REASON_PREFIX = "canopus-approval-reason:"
+
 
 def _git_sha(root: Path) -> str:
     """Current HEAD, or "" outside a repository. A secondary anchor only."""
@@ -124,6 +131,51 @@ def _git_sha(root: Path) -> str:
         print(f"canopus: could not record a git sha: {exc}", file=sys.stderr)
         return ""
     return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def _record(root: Path, event: str, *, digest: str, label: str,
+            reason: str = "") -> str:
+    """Append one ledger entry, and RETURN the OSError text instead of raising.
+
+    Every ledger write in this file records an act that has already landed, or
+    one that is about to land a line later. An unguarded append therefore lets an
+    OSError fall through to `main`, which prints "the frozen contract could not be
+    read, so it cannot be verified" over a state that sentence is false of.
+    Measured on `cmd_freeze` by injecting OSError into `append_history`:
+    `freeze.json` existed, the freeze was live and enforced, and the operator was
+    told the command had failed outright.
+
+    A helper rather than four copies of a try block, because this is the seventh
+    time on this branch that a guard was applied to one function and not its
+    sibling. Each caller asks this once and then says, in its own words, which
+    half landed; that sentence is the part that cannot be shared.
+
+    `cmd_approve` keeps its own handler: it makes TWO appends and has to name
+    which of the two failed, which is a different message rather than a different
+    mechanism.
+    """
+    try:
+        append_history(root, event, digest=digest, label=label, reason=reason)
+    except OSError as exc:
+        return str(exc)
+    return ""
+
+
+def _unlogged_release(failed: str) -> int:
+    """Both release paths log BEFORE clearing, so an unlogged release is refused.
+
+    The order is what makes this branch simple to state: nothing has been
+    cleared, so the freeze is still held and the operator can retry once the
+    ledger is writable. Clearing anyway would end a freeze with no line saying it
+    ended, which is the same gap `rm .canopus/freeze.json` leaves and the one the
+    ledger exists to make visible.
+    """
+    print(f"canopus: NOTHING was released and the freeze is still held; the "
+          f"ledger entry failed: {failed}. A release that leaves no line behind "
+          f"is indistinguishable from a deleted manifest, so it is refused: make "
+          f"`.canopus/` writable and run the same command again.",
+          file=sys.stderr)
+    return 1
 
 
 def _print_root(digest: str, manifest: dict) -> None:
@@ -355,8 +407,24 @@ def cmd_approve(args) -> int:
     # not a failed one. Reporting it as a plain failure is what sends an
     # operator into a retry that demands --replace --reason for an approval they
     # were told had not happened, so that path says which half landed.
+    # The reason goes to the DURABLE record, not only to the ledger. `--replace`
+    # demands one, and writing it to `.canopus/history.jsonl` alone put it in a
+    # gitignored directory one `rm -rf` removes, while the artifact a human
+    # commits carried a bare second hash line: two indistinguishable hashes and
+    # no account of either.
+    #
+    # It sits on its OWN LINE, above the anchor line and never on it. `read_anchor`
+    # takes everything after `canopus-anchor:` as the hash value, so a reason
+    # appended there would be parsed as part of the digest. The reason's own
+    # whitespace is collapsed for the same reason in reverse: a newline inside it
+    # would start a line this file did not write.
+    reason_line = " ".join((args.reason or "").split())
     with anchor_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n{ANCHOR_PREFIX} {manifest['root']}\n")
+        if reason_line:
+            handle.write(f"\n{REASON_PREFIX} {reason_line}\n"
+                         f"{ANCHOR_PREFIX} {manifest['root']}\n")
+        else:
+            handle.write(f"\n{ANCHOR_PREFIX} {manifest['root']}\n")
     logged = ""
     try:
         append_history(root, "approve", digest=manifest["root"],
@@ -445,8 +513,26 @@ def cmd_freeze(args) -> int:
     # `verify_fail` a few lines down already writes a lock-state token into the
     # same field. Splitting status out would need a new key in `append_history`,
     # which lives in the module the PreToolUse dispatcher loads on every write.
-    append_history(root, "freeze", digest=manifest["root"], label=manifest["label"],
-                   reason=contract_note or committed_status)
+    failed = _record(root, "freeze", digest=manifest["root"],
+                     label=manifest["label"],
+                     reason=contract_note or committed_status)
+    if failed:
+        # The freeze IS active by the time this can fire, so reporting a plain
+        # failure is false of the state twice over. It tells the operator to
+        # re-run a command that will now refuse with "a freeze is already
+        # active", and it hides the second consequence: `freeze_windows` opens a
+        # window on this ledger entry, so with the entry missing `canopus pack`
+        # reports every commit made under this lock as made outside it. That is
+        # a false red on the page the operator approves from.
+        print(f"canopus: the freeze IS ACTIVE over {manifest['root']}; the "
+              f"`freeze` ledger entry failed: {failed}. The manifest was "
+              f"written, so `verify` and the test gate enforce this contract "
+              f"now, and `release --reason \"<why>\"` is how you clear it. With "
+              f"no `freeze` entry in the ledger, `canopus pack` opens no window "
+              f"here and will report every commit made under this lock as made "
+              f"outside it.",
+              file=sys.stderr)
+        return 1
     _print_root(manifest["root"], manifest)
     if contract_note:
         print(f"{YELLOW}contract{RESET}  {contract_note} before this freeze")
@@ -512,13 +598,27 @@ def cmd_probe(args) -> int:
             # also hide the "already green" reading the operator is told to
             # question. Measured: a contract of `assert True` plus a real green
             # case printed both as vacuous.
-            if outcome != "passed" and (case_rel, name) in vacuous:
+            # `outcome in RED_OUTCOMES` is the same membership test
+            # `vacuity_refusal` applies, and the two must agree or the table
+            # describes a contract the refusal is not judging. The near-miss
+            # `outcome != "passed"` admitted `skipped`, and a skipped test can
+            # be in `vacuous`: `pytest.importorskip` on the absent module skips
+            # for real and PASSES once the stub supplies it. Measured: that test
+            # printed `vacuous  <name>  asserts nothing` and the `continue`
+            # below swallowed the only line that would have said it never ran.
+            # Nothing refuses a skipped contract test, so the one surface the
+            # operator is told to read was also the one hiding it.
+            if outcome in RED_OUTCOMES and (case_rel, name) in vacuous:
                 print(f"  {YELLOW}{'vacuous':8}{RESET} {name}  asserts nothing")
                 continue
-            colour = GREEN if outcome == "passed" else RED
-            mode = ("" if outcome == "passed"
+            colour = {"passed": GREEN, "skipped": YELLOW}.get(outcome, RED)
+            # No failure-mode label on a skipped test: it has no failure child in
+            # the report, so the heuristic would default it to `other` and invent
+            # a way it failed. It says what a skip actually costs instead.
+            mode = ("" if outcome in ("passed", "skipped")
                     else f"  {modes.get((case_rel, name), 'other')}")
-            print(f"  {colour}{outcome:8}{RESET} {name}{mode}")
+            note = "  did not run, so it proves nothing" if outcome == "skipped" else ""
+            print(f"  {colour}{outcome:8}{RESET} {name}{mode}{note}")
     unmeasured = vacuity_unmeasured(outcomes, modules)
     if unmeasured:
         print(f"{YELLOW}vacuity{RESET}  {unmeasured}")
@@ -658,8 +758,17 @@ def cmd_verify(args) -> int:
     _print_approval(resolution)
     print("A contract that is genuinely wrong reopens the approval gate. "
           "It is never edited in place.")
-    append_history(root, "verify_fail", digest=report["recomputed_root"],
-                   label=manifest["label"], reason=state)
+    failed = _record(root, "verify_fail", digest=report["recomputed_root"],
+                     label=manifest["label"], reason=state)
+    if failed:
+        # The exit code is already 1 and the per-file report is already printed,
+        # so the only thing at stake is the sentence. Unguarded, the last word an
+        # operator reads on a genuinely broken lock is "the frozen contract could
+        # not be read", which invites the reading that the lock state above was
+        # never established.
+        print(f"canopus: the {state} above stands and was recomputed from disk; "
+              f"only the `verify_fail` ledger entry failed: {failed}.",
+              file=sys.stderr)
     return 1
 
 
@@ -667,7 +776,10 @@ def cmd_release(args) -> int:
     root = _resolve_root(args)
     if args.force:
         # Never parses the manifest: this is the escape FROM an unparseable one.
-        append_history(root, "force_release", digest="", label="", reason=args.reason)
+        failed = _record(root, "force_release", digest="", label="",
+                         reason=args.reason)
+        if failed:
+            return _unlogged_release(failed)
         clear_freeze(root)
         print("Force-released and logged. A forced release is a normal, recorded "
               "event; deleting the file by hand is not.")
@@ -676,8 +788,10 @@ def cmd_release(args) -> int:
     if manifest is None:
         print("canopus: no active freeze to release", file=sys.stderr)
         return 1
-    append_history(root, "release", digest=manifest["root"],
-                   label=manifest["label"], reason=args.reason)
+    failed = _record(root, "release", digest=manifest["root"],
+                     label=manifest["label"], reason=args.reason)
+    if failed:
+        return _unlogged_release(failed)
     clear_freeze(root)
     print(f"Released {manifest['root']} (label: {manifest['label']})")
     return 0

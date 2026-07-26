@@ -161,39 +161,36 @@ For each ⚠: state whether it must be resolved BEFORE `/implement` or can be mo
 
 ## Phase 5 — Test Contract (real files, not prose)
 
-The contract is written as **real test files**, not as a draft in this document.
-A prose contract and the tests that later decide whether the work is done are two
-different artifacts joined by good intentions, which is the gap Canopus wire 2
-closes.
+The contract is written as **real test files**, not as a draft in this document:
+a prose contract and the tests that later decide whether the work is done are two
+artifacts joined by good intentions.
 
 Write them to `tests/contract/{YYYY-MM-DD}-{slug}/test_*.py`.
 
 **One authoring rule, and it is enforced:** import the code under test INSIDE the
-test body, never at module scope. At this point the implementation does not
-exist, so a module-scope import stops the file collecting at all, and a file that
-collects nothing cannot be frozen.
+test body, never at module scope. The implementation does not exist yet, so a
+module-scope import stops the file collecting, and a file that collects nothing
+cannot be frozen.
 
 ```python
 def test_frozen_contract_records_a_baseline():
     from scripts.utils.canopus_freeze import build_manifest   # inside the body
 
-    manifest = build_manifest(...)
-    assert manifest["baseline"] == {"tests/contract/s/test_a.py": 7}
+    assert build_manifest(...)["baseline"] == {"tests/contract/s/test_a.py": 7}
 ```
 
-Then show the operator what the contract looks like before any code exists:
+Then show what the contract looks like before any code exists:
 
     python scripts/canopus.py probe tests/contract/{YYYY-MM-DD}-{slug}/
 
-Paste the table into the gate output. Every test it reports as `passed` is
-already green with no implementation, so it asserts nothing yet. Every test it
-reports as `vacuous` is red only because the code is absent and passes the moment
-a mock stands in for it, so it asserts nothing either. Name both groups
-explicitly and either strengthen them or justify them; a contract whose every red
-test is vacuous is refused outright at approve and freeze time, and a skipped or
-`xfail` test does not buy it a pass. If `probe` prints `vacuity was NOT
-measured`, no module was absent to mock and nothing was proved either way; say
-so, it is not a clean bill.
+Paste the table into the gate output. Three groups need naming, and each asserts
+nothing yet: every `passed` test is already green with no implementation, every
+`vacuous` one is red only because the code is absent and passes against a mock,
+and every `skipped` one never ran (nothing refuses a skipped contract test, so it
+is yours to catch here). Strengthen or justify all three. A
+contract whose every red test is vacuous is refused at approve and freeze time,
+and a skipped or `xfail` test does not buy it a pass. `vacuity was NOT measured`
+means nothing was proved either way; say so, it is not a clean bill.
 
 Close with: "Implementation is DONE when the frozen contract is green and
 `canopus status` reports both LOCK HELD and ATTESTED, AND /scrutinize reports no
@@ -241,8 +238,7 @@ HANDOFF TO /implement:
 
 ### On approval: lock on Canopus
 
-The moment the operator approves, run `approve`. There is no separate command
-to remember:
+The moment the operator approves, run `approve`:
 
     python scripts/canopus.py approve \
       --label "{slug}" \
@@ -257,38 +253,42 @@ to remember:
       --content scripts/run-tests.py \
       --content tests/conftest.py
 
-Read the already-green COUNT it prints (the per-test table belongs to `probe`),
-then COMMIT the gate artifact. That commit is Fix 1:
-it carries an author and a timestamp, and it is the only thing that makes the
-approval durable. Then re-run the identical command with `freeze` in place of
-`approve` (`python scripts/canopus.py freeze --label ... --contract ...`, same
-flags), which is what takes the lock.
+Read the already-green COUNT it prints (the per-test table is `probe`'s), then
+COMMIT the gate artifact. That commit is Fix 1: it carries an author and a
+timestamp and is the only thing making the approval durable. Then re-run the
+identical command with `freeze` in place of `approve` (`python
+scripts/canopus.py freeze --label ... --contract ...`, same flags), which takes
+the lock.
 
-Eight files, not four. The last three are the enforcers' transitive import tail:
-`atomic.py` writes the manifest, `venv.py` re-execs the interpreter and so chooses
-which Python runs the gate, and `colors.py` is imported by both. Leaving them out
-put the write path of the guarantee outside the guarantee. `canopus_git` resolves
-the anchor, so it decides LOCK HELD against LOSS OF LOCK; a decider outside the
-freeze is the same hole C4 closed for the write path. The set is pinned by
-`tests/test_canopus_freeze.py::test_the_documented_enforcer_set_covers_its_import_closure`,
-which recomputes the closure and fails when a new import escapes it.
+Eight files, not four: three enforcers (`canopus_freeze.py`, `canopus_gate.py`,
+`canopus_git.py`), two places the gate fires (`run-tests.py`,
+`tests/conftest.py`), and their three-file import tail (`atomic.py`, `venv.py`,
+`colors.py`). `docs/EXTENDING.md` carries the table saying why each is in, and a
+closure test in `tests/test_canopus_freeze.py` fails when a new import escapes
+the set.
 
 `freeze` refuses unless the contract is red for a reason that means something,
-records the per-file item count, and refuses any root the COMMITTED gate artifact
-contradicts. Where the commit records no hash at all, a first freeze included,
-nothing disagrees, so the freeze is taken, says so, and reads amber until you
-commit. It writes nothing to that artifact: an instrument that
-writes the hash and then checks the hash it wrote has verified nothing.
+records the per-file item count, and refuses a root the COMMITTED gate artifact
+contradicts. Be exact: that refusal fires only when the commit records a hash AND
+neither the committed nor the working copy carries the root being frozen. Two
+states therefore pass it: a commit recording no hash at all (a first freeze, an
+untracked artifact, a folder outside any repository), and a committed hash that
+DOES contradict while the working copy carries a freshly approved candidate. The
+second is the SAFER branch rather than a softening; `docs/EXTENDING.md` says why.
+Both are taken, both say so, and read amber. `freeze` writes nothing to that
+artifact: an instrument that writes the hash and then checks the hash it wrote
+has verified nothing.
 
-Then confirm: `python scripts/canopus.py verify` must print LOCK HELD and
-APPROVED.
+Then confirm with `python scripts/canopus.py verify`. Inside a repository the
+criterion is LOCK HELD and APPROVED. With the artifact outside any repository, a
+supported mode, no commit exists to attribute an approval to and APPROVED can
+never print: the criterion there is LOCK HELD with APPROVAL UNVERIFIED naming
+`no_repo`.
 
-**When the slice ships, retire the contract.** A contract is a point in time. Its
-job ends at the Fix 2 evidence pack, so promote whatever coverage is still valid
-into the ordinary test suite and remove `tests/contract/{YYYY-MM-DD}-{slug}/`.
-Left in place it keeps running as an ordinary test set and silently binds every
-later slice to preserve this one's behaviour verbatim, which is a rule nobody
-adopted.
+**When the slice ships, retire the contract**: promote still-valid coverage to
+the ordinary suite and remove `tests/contract/{YYYY-MM-DD}-{slug}/`; left in
+place it binds every later slice to this one's behaviour. `docs/EXTENDING.md`
+carries the case.
 
 ---
 

@@ -75,7 +75,7 @@
 <main class="content">
   <h1>Extending the engine</h1>
   <p class="page-meta">How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates</p>
-  <!-- version: 1.0.2 | last-updated: 2026-07-08 -->
+  <!-- version: 1.1.0 | last-updated: 2026-07-26 -->
 
 <p>How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
 before declaring it done. This is the developer how-to. The contribution policy (open
@@ -286,7 +286,12 @@ satisfies any shape it was asked for. Only the red ones are weighed, because a
 test that was already green passes the mocked run too and proves nothing by it.
 Those tests print as <code>vacuous  &lt;name&gt;  asserts nothing</code>; every OTHER red test is
 labelled <code>import</code>, <code>assertion</code>, or <code>other</code> beside its outcome, and a vacuous one
-carries no mode label. A contract whose every red test is vacuous is REFUSED,
+carries no mode label. A SKIPPED test is printed as <code>skipped</code>, never as vacuous:
+the refusal weighs red outcomes only, and the display has to agree with it or the
+table describes a contract the refusal is not judging. A skipped test is the
+quiet case to read, because <code>pytest.importorskip</code> skips for real and then passes
+once the stub supplies the module. Nothing refuses it, so it carries the plain
+warning <code>did not run, so it proves nothing</code> and the operator decides. A contract whose every red test is vacuous is REFUSED,
 and a skipped or <code>xfail</code> test in the set does not buy it a freeze. Partial
 vacuity is printed and not refused, because &ldquo;these three assert nothing&rdquo; is a
 judgement for a human, and a test that legitimately asserts absence lands on
@@ -304,11 +309,51 @@ report names no absent module at all, <code>probe</code>, <code>approve</code>, 
 and finding none. It is not a refusal, because tests failing on assertions
 against code that already exists produce the same reading and are a perfectly
 ordinary contract.</p>
+<p><strong>One environment variable defeats the lock, and it costs the builder nothing.</strong>
+<code>resolve_anchor</code> falls back to the artifact&rsquo;s WORKING copy whenever git reports
+<code>no_repo</code> or <code>no_git</code>, and both of those answers come from a child <code>git</code> process
+whose environment the builder controls. So <code>GIT_DIR=/tmp/nothing.git</code> in front of
+any command that reaches the gate makes the anchor&rsquo;s repository invisible, the
+fallback reads the working copy, and a genuine <code>LOSS OF LOCK</code> becomes <code>LOCK HELD</code>
+with gate exit 0. Measured on a re-baselined freeze, at both surfaces: <code>verify</code>
+went from <code>LOSS OF LOCK</code> exit 1 to <code>LOCK HELD</code> exit 0, and <code>freeze_gate</code> went
+from exit 1 to exit 0, with one environment variable and nothing else changed.
+The approval axis prints <code>APPROVAL UNVERIFIED</code> in both runs and only its reason
+string differs, so the amber line does not distinguish the defeat from an
+ordinary unverifiable approval. It writes nothing, touches no file, dirties no
+repository, and leaves no trace in the anchor&rsquo;s repository or in <code>canopus pack</code>,
+so nothing an operator reads afterwards records that it happened. This is not a hardening backlog item dressed up as a note: while it
+stands, the lock is a control against a careless builder and not against a
+deliberate one. The fix is its own slice with its own contract and its own
+approvals, because it needs the fallback narrowed and the child environment
+scrubbed, and the deeper form of it needs a manifest field recording which
+repository the anchor belonged to, which changes the recipe every existing freeze
+was taken with. Until then the operator&rsquo;s countermeasure is the obvious one and
+it works: run <code>canopus verify</code> YOURSELF, in your own shell, at the approval gate,
+rather than reading a status the builder printed.</p>
+<p><strong>The instrument has no committed human artifact behind it.</strong>
+<code>scripts/utils/canopus_contract.py</code> and <code>scripts/utils/canopus_nullstub.py</code> sit
+OUTSIDE the frozen enforcer set, deliberately: they do their work BEFORE any
+freeze exists, and there is nothing yet to freeze them against. So at the moment
+the vacuity refusal fires, the builder can still edit both the refusal and the
+tests that prove it, and the operator&rsquo;s only evidence that a contract was
+measured is a table the builder printed. That is the same shape as the hole this
+layer closed one level up, where <code>freeze</code> used to write the anchor line and then
+verify the line it had written. Here it is unavoidable rather than overlooked,
+which is exactly why it belongs in writing: the vacuity verdict is a courtesy
+from the build to the operator, not a guarantee held against it.</p>
 <p>An anchor artifact that already records a hash is refused, because an approved
 contract&rsquo;s anchor is never silently overwritten. When the frozen SET legitimately
 changes mid-build, <code>approve --replace --reason "&lt;why&gt;"</code> appends a second line and
 writes an <code>anchor_replaced</code> entry to the ledger; the artifact keeps the whole
-trail.</p>
+trail. The reason lands in the artifact too, on its own
+<code>canopus-approval-reason:</code> line directly above the hash it explains, because
+<code>.canopus/history.jsonl</code> is gitignored and one command removes it: without that
+line, the durable record a human commits carries two indistinguishable hash lines
+and no account of either. It is a separate line by necessity rather than by
+taste. <code>read_anchor</code> takes everything after <code>canopus-anchor:</code> as the hash value,
+so a reason appended to that line would be parsed as part of the digest; for the
+same reason the text is collapsed to a single line before it is written.</p>
 <p><strong>After the slice ships, the contract is retired.</strong> A contract is a POINT IN
 TIME: it exists to pin what &ldquo;done&rdquo; means for one slice, and its job ends at the
 Fix 2 evidence pack. At ship time, promote its still-valid coverage into the
@@ -513,9 +558,54 @@ record, read by a human at sign-off, where an evidence pack without <code>ATTEST
 assembled. The record is bound to the recomputed root hash, so editing any frozen file
 after a green run makes it stop applying without anyone remembering to delete it. It is a
 true statement about <em>a</em> run of this exact contract, not necessarily the most recent one.</p>
-<p><strong>Freeze the enforcers.</strong> <code>scripts/utils/canopus_freeze.py</code>, <code>scripts/utils/canopus_gate.py</code>,
-<code>scripts/run-tests.py</code>, and <code>tests/conftest.py</code> are what makes a freeze fire. A freeze that
-omits them protects the contract while leaving the thing that checks the contract editable.</p>
+<p><strong>Freeze the enforcers, all eight of them.</strong> A freeze that omits them protects the
+contract while leaving the thing that checks the contract editable.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Why it is in the set</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scripts/utils/canopus_freeze.py</code></td>
+<td>hashes the manifest and answers &ldquo;did it move&rdquo;</td>
+</tr>
+<tr>
+<td><code>scripts/utils/canopus_gate.py</code></td>
+<td>the check pytest and the runner call</td>
+</tr>
+<tr>
+<td><code>scripts/utils/canopus_git.py</code></td>
+<td>resolves the anchor, so it decides <code>LOCK HELD</code> against <code>LOSS OF LOCK</code>; a decider outside the freeze is the same hole closed for the write path</td>
+</tr>
+<tr>
+<td><code>scripts/run-tests.py</code></td>
+<td>one of the two places the gate fires</td>
+</tr>
+<tr>
+<td><code>tests/conftest.py</code></td>
+<td>the other, at pytest session start</td>
+</tr>
+<tr>
+<td><code>scripts/utils/atomic.py</code></td>
+<td>writes the manifest, so it is the write path of the guarantee</td>
+</tr>
+<tr>
+<td><code>scripts/utils/venv.py</code></td>
+<td>re-execs the interpreter, so it chooses which Python runs the gate</td>
+</tr>
+<tr>
+<td><code>scripts/utils/colors.py</code></td>
+<td>imported by both of the above</td>
+</tr>
+</tbody>
+</table>
+<p>The last three are the transitive import tail: leaving them out put the write
+path of the guarantee outside the guarantee. A closure test in
+<code>tests/test_canopus_freeze.py</code> recomputes the tail and fails when a new import
+escapes the set.</p>
 <p><code>.canopus/</code> is gitignored, so CI carries no manifest and neither the gate nor attestation
 fires there. The whole mechanism is scoped to the local build loop, and an evidence pack
 should say so.</p>
@@ -530,6 +620,24 @@ evidence that a contract was approved is the anchor artifact, committed in the o
 repository.</p>
 <p>A contract that turns out to be wrong is not edited in place. Release it, fix it,
 re-freeze it, and get the new root hash re-approved.</p>
+<h3 id="known-defects-in-files-the-active-freeze-holds">Known defects, in files the active freeze holds</h3>
+<p>Named here rather than fixed, because each lives in a file the current freeze
+covers and a frozen file is not edited in place:</p>
+<ul>
+<li><code>canopus_git.py</code>&rsquo;s module docstring says it is &ldquo;the one place Canopus talks to
+  git&rdquo;. It is not: <code>_git_sha</code> in <code>scripts/canopus.py</code> runs its own <code>git rev-parse</code>
+  through <code>subprocess</code>.</li>
+<li>The same docstring says &ldquo;Every function answers rather than raising&rdquo;.
+  <code>read_committed_anchor</code> evaluates <code>Path.cwd()</code> outside any try block and raises
+  <code>FileNotFoundError</code> when the process working directory has been deleted. Both
+  call sites fail closed, so the code is defensible; the sentence is not.</li>
+<li><code>canopus_gate.py:43</code> claims &ldquo;a build cannot reach green while its contract is
+  moved&rdquo;. The environment defeat above falsifies that sentence as written.</li>
+<li>The PreToolUse deny message in <code>canopus_freeze.py</code> reads &ldquo;The contract is not
+  editable in place. Fix the code instead&rdquo;, which is wrong in the one case where
+  the frozen file IS the code being fixed, and that case is this tool&rsquo;s own
+  maintenance.</li>
+</ul>
 <hr />
 <h2 id="6-testing-discipline">6. Testing discipline</h2>
 <p>The suite lives in <code>tests/</code> (security tests in <code>tests/security/</code>). Every behavior you

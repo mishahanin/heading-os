@@ -1575,3 +1575,54 @@ def test_a_forced_release_can_open_a_window():
                 "kind": "window", "reason": "manifest damaged"}]
 
     assert open_release_window(entries) is not None
+
+
+def test_an_unreleased_freeze_is_the_last_lock_event_being_a_freeze():
+    """The reading that made `rm freeze.json` quieter than releasing it.
+
+    `open_release_window` answers None here, correctly, and that answer used to
+    be the ONLY one anything asked for. The same walk carries the other half.
+    """
+    from scripts.utils.canopus_freeze import open_release_window, unreleased_freeze
+
+    entries = [
+        {"event": "approve", "ts": "2026-01-01T00:00:00+00:00"},
+        {"event": "freeze", "ts": "2026-01-01T01:00:00+00:00", "label": "demo"},
+    ]
+
+    assert open_release_window(entries) is None
+    assert unreleased_freeze(entries)["label"] == "demo"
+
+
+def test_a_release_closes_the_unreleased_freeze():
+    from scripts.utils.canopus_freeze import unreleased_freeze
+
+    entries = [
+        {"event": "freeze", "ts": "2026-01-01T01:00:00+00:00"},
+        {"event": "release", "ts": "2026-01-01T02:00:00+00:00", "kind": "ship"},
+    ]
+
+    assert unreleased_freeze(entries) is None
+
+
+def test_a_verify_fail_does_not_hide_the_freeze_that_holds_the_lock():
+    """Only freeze and release change who holds the lock; the rest describe it.
+
+    `verify_fail` is written by the command an operator runs while a freeze is
+    HELD, so a reader that stopped at the newest entry of any kind would answer
+    "no freeze here" on the most ordinary state this ledger records.
+    """
+    from scripts.utils.canopus_freeze import unreleased_freeze
+
+    entries = [
+        {"event": "freeze", "ts": "2026-01-01T01:00:00+00:00", "label": "demo"},
+        {"event": "verify_fail", "ts": "2026-01-01T02:00:00+00:00"},
+    ]
+
+    assert unreleased_freeze(entries)["label"] == "demo"
+
+
+def test_an_empty_ledger_has_no_unreleased_freeze():
+    from scripts.utils.canopus_freeze import unreleased_freeze
+
+    assert unreleased_freeze([]) is None

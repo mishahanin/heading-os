@@ -39,6 +39,8 @@ from scripts.utils.canopus_freeze import (
     REPO_UNKNOWN,
     anchor_state,
     approval_state,
+    parse_anchor_waiver,
+    read_anchor_waiver,
     repo_binding_state,
 )
 
@@ -183,20 +185,24 @@ def head_sha(root: Path) -> str:
     return out.strip() if out else ""
 
 
-def read_committed_anchor(artifact: Path) -> Tuple[str, Optional[str]]:
-    """The approved hash recorded in the artifact's COMMITTED state.
+def read_committed_text(artifact: Path) -> Tuple[str, Optional[str]]:
+    """The artifact's text as HEAD holds it, with the status that explains a None.
 
-    Four statuses, each kept distinct so the message can name the real reason
-    rather than a generic one:
-
-      COMMITTED    the artifact is tracked and HEAD carries a canopus-anchor line
-      UNCOMMITTED  the artifact is untracked, or HEAD carries no such line
+      COMMITTED    HEAD carries a copy of this file; the text is its blob
+      UNCOMMITTED  the artifact is untracked, or HEAD has no copy of it
       NO_REPO      the artifact is not inside a git working tree
       NO_GIT       git is unavailable, or the command failed
 
-    LAST committed line wins, matching read_anchor: a replaced approval appends
-    rather than overwriting, so the artifact keeps the whole trail and the newest
-    approval governs.
+    Extracted so the anchor hash and the waiver marker are read from the SAME
+    copy by the same route. They were not: the hash came from HEAD and the waiver
+    from the working file, so `sed -i` on one line of an uncommitted diff took
+    CONTRACT WAIVED off the evidence page while LOCK HELD and APPROVED stood.
+    Two readers of one artifact is how the halves of one approval come to
+    disagree.
+
+    Note what COMMITTED means here and does not: HEAD carries the FILE, not
+    necessarily any canopus line in it. The callers below draw that second
+    distinction themselves, because they draw it differently.
     """
     artifact = Path(artifact)
     directory = artifact.parent
@@ -209,7 +215,7 @@ def read_committed_anchor(artifact: Path) -> Tuple[str, Optional[str]]:
         # more than the case: empty output on exit 0 makes `Path("")` into
         # `Path(".")`, so `git show HEAD:<rel>` below would read the AMBIENT
         # repository and hand back a hash labelled COMMITTED. The call site is
-        # live rather than theoretical: `cmd_approve` calls this function
+        # live rather than theoretical: `cmd_approve` calls read_committed_anchor
         # directly, so it is not covered by the binding check `resolve_anchor`
         # runs first.
         #
@@ -233,6 +239,27 @@ def read_committed_anchor(artifact: Path) -> Tuple[str, Optional[str]]:
     blob = git_output(repo, "show", f"HEAD:{rel}")
     if blob is None:
         return (UNCOMMITTED, None)
+    return (COMMITTED, blob)
+
+
+def read_committed_anchor(artifact: Path) -> Tuple[str, Optional[str]]:
+    """The approved hash recorded in the artifact's COMMITTED state.
+
+    Four statuses, each kept distinct so the message can name the real reason
+    rather than a generic one:
+
+      COMMITTED    the artifact is tracked and HEAD carries a canopus-anchor line
+      UNCOMMITTED  the artifact is untracked, or HEAD carries no such line
+      NO_REPO      the artifact is not inside a git working tree
+      NO_GIT       git is unavailable, or the command failed
+
+    LAST committed line wins, matching read_anchor: a replaced approval appends
+    rather than overwriting, so the artifact keeps the whole trail and the newest
+    approval governs.
+    """
+    status, blob = read_committed_text(artifact)
+    if status != COMMITTED or blob is None:
+        return (status, None)
     found: Optional[str] = None
     for line in blob.splitlines():
         stripped = line.strip()
@@ -240,7 +267,31 @@ def read_committed_anchor(artifact: Path) -> Tuple[str, Optional[str]]:
             value = stripped[len(ANCHOR_PREFIX):].strip().lower()
             if value:
                 found = value
+    # A tracked artifact whose HEAD copy carries no anchor line is UNCOMMITTED on
+    # this axis: the approval is what is being asked about, not the file.
     return (COMMITTED, found) if found else (UNCOMMITTED, None)
+
+
+def resolve_anchor_waiver(artifact: Path, root_digest: str) -> str:
+    """The waiver recorded beside *root_digest*, COMMITTED copy first.
+
+    Mirrors how the anchor hash itself is resolved: the repository governs
+    whenever it can answer, and the working file governs only where there is no
+    committed copy to consult (an untracked artifact, a folder outside any
+    repository, no git). The fallback is what keeps a plain-folder operator's
+    waiver visible; it is never preferred over HEAD.
+
+    Bound to a digest, whichever copy answers, so a waiver from an earlier retake
+    is never reported against today's freeze. Full digests, compared whole.
+
+    Answers rather than raising, like everything else in this module: the surfaces
+    that call it are reporting surfaces, and one of them is the evidence page an
+    operator signs off from.
+    """
+    status, blob = read_committed_text(artifact)
+    if status == COMMITTED and blob is not None:
+        return parse_anchor_waiver(blob, root_digest)
+    return read_anchor_waiver(Path(artifact), root_digest)
 
 
 class AnchorResolution(NamedTuple):

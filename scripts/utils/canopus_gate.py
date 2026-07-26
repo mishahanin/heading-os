@@ -21,7 +21,6 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from scripts.utils.canopus_freeze import (
     ANCHOR_MISSING,
@@ -38,6 +37,7 @@ from scripts.utils.canopus_freeze import (
     read_freeze,
     read_ledger,
     tally_collection,
+    unreleased_freeze,
     verify_manifest,
     write_attestation,
 )
@@ -88,8 +88,8 @@ def loss_of_lock_sentences(report: dict, resolution: AnchorResolution) -> list[s
     return sentences
 
 
-def _open_window(root: Path) -> Optional[dict]:
-    """The open release window, or None. Answers rather than raising.
+def _entries(root: Path) -> list:
+    """The ledger, or an empty list. Answers rather than raising.
 
     read_ledger swallows OSError and UnicodeDecodeError and skips damaged lines
     from wire 2.2 onward, so this guard is a second wall rather than the first
@@ -99,9 +99,49 @@ def _open_window(root: Path) -> Optional[dict]:
     is four lines is cheaper than the next input nobody predicted.
     """
     try:
-        return open_release_window(read_ledger(root))
+        return read_ledger(root)
     except (OSError, ValueError):
-        return None
+        return []
+
+
+def _no_manifest(root: Path) -> int:
+    """What the gate says when there is no manifest, which is TWO states.
+
+    An ordinary day is silent, and it has to stay silent: a fresh clone has no
+    `.canopus/` at all, and a gate that speaks on every CI run teaches an
+    operator to skim it.
+
+    The other two states are not ordinary, and until wire 2.2 the WORSE of them
+    was the quieter one. A sanctioned `release --window` printed an amber line at
+    every later session start. `rm .canopus/freeze.json` under a held lock
+    printed NOTHING and exited 0, so deleting the manifest was cheaper than
+    releasing it and the ledger, whose whole purpose is to be evidence against
+    exactly that, was never read for it.
+
+    So the deletion answers RED, one step louder than the window rather than one
+    step quieter, and the escape it names is the LOGGED one. A forced release
+    clears state it never parses and writes a `force_release` line, which is
+    precisely what tells a cleared lock apart from a deleted one.
+    """
+    entries = _entries(root)
+    vanished = unreleased_freeze(entries)
+    if vanished is not None:
+        print(f"{RED}canopus: the ledger records a freeze taken "
+              f"{vanished.get('ts') or 'at an unrecorded time'} "
+              f"(label: {vanished.get('label') or 'unrecorded'}) that no release "
+              f"closed, and the manifest it wrote is GONE. There is no contract "
+              f"left to check, so the suite is treated as unverified. Re-freeze "
+              f"it, or end the lock the way the ledger can see: `python "
+              f"scripts/canopus.py release --force --window --reason "
+              f"\"<why>\"`.{RESET}")
+        return 1
+    window = open_release_window(entries)
+    if window is not None:
+        print(f"{YELLOW}canopus: a release window is open{RESET}  opened "
+              f"{window.get('ts') or 'at an unrecorded time'}: "
+              f"{window.get('reason') or 'no reason recorded'}. No lock is "
+              f"held, so a green suite proves nothing about the contract.")
+    return 0
 
 
 def freeze_gate(root: Path) -> int:
@@ -127,10 +167,11 @@ def freeze_gate(root: Path) -> int:
     relocated once), and it means the binding proves which HISTORY the anchor
     belongs to, never which copy of it a command read.
 
-    Silent when no freeze is active AND no release window is open, which is the
-    ordinary day. An open window is the state where the lock was deliberately
-    taken off mid-slice, and before wire 2.2 that was indistinguishable here
-    from never having frozen at all.
+    Silent when no freeze is active, no release window is open, and the ledger
+    records no freeze whose manifest has vanished. That is the ordinary day. The
+    other two states are `_no_manifest`'s business, and the ordering of their
+    volumes is the point: a deleted manifest is louder than a released one, not
+    quieter.
 
     NEVER RAISES, whatever the state directory looks like. That is a SHAPE, held
     by the wrapper below rather than by a handler per input, because this is the
@@ -165,13 +206,7 @@ def _freeze_gate(root: Path) -> int:
               f"--force --window --reason \"<why>\"`{RESET}")
         return 1
     if manifest is None:
-        window = _open_window(root)
-        if window is not None:
-            print(f"{YELLOW}canopus: a release window is open{RESET}  opened "
-                  f"{window.get('ts') or 'at an unrecorded time'}: "
-                  f"{window.get('reason') or 'no reason recorded'}. No lock is "
-                  f"held, so a green suite proves nothing about the contract.")
-        return 0
+        return _no_manifest(root)
 
     # A freeze is active, so the contract cannot be checked and NOT be checked:
     # an unreadable member (permissions, a vanished mount) must fail the gate,

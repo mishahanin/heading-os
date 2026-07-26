@@ -255,17 +255,26 @@ entry for that `approve` or `freeze`, AND is written onto the anchor artifact by
 `approve` as a `canopus-contract-satisfied:` line above the approval it belongs
 to. That last one is the durable half: `.canopus/` is gitignored and one
 `rm -rf` removes it, while the anchor is the artifact a human commits in another
-repository. `canopus pack` reads it back, bound to this freeze's root hash, and
-prints `CONTRACT WAIVED` on the evidence page, so a freeze that passed the
-redness rule on a stated reason never reads like one that earned it.
+repository. `canopus pack`, `verify` and `status` all read it back, bound to this
+freeze's root hash, and print `CONTRACT WAIVED`, so a freeze that passed the
+redness rule on a stated reason never reads like one that earned it — including
+on the command an operator is told to run for themselves.
 
-The two halves are held together rather than trusted to arrive together.
-`freeze --contract-satisfied` over an approval that records no matching waiver is
-REFUSED, because `pack` reads its `CONTRACT WAIVED` marker off the artifact and
-only `approve` writes it there: without the refusal, the surface an operator
-approves from would report a stronger claim than the freeze earned. The refusal
-is bound to the waiver having FIRED, never to the flag being present, so a run
-where the flag changed nothing is not refused for making no claim.
+Every one of those surfaces prefers the COMMITTED copy of the artifact and falls
+back to the working file only where no committed copy exists, which is the
+precedence the anchor hash itself already used. Reading the waiver from the
+working file while the lock and the approval came from HEAD meant one `sed -i`
+took `CONTRACT WAIVED` off the evidence page while `LOCK HELD` and `APPROVED`
+stood and HEAD still carried the waiver.
+
+Both writes are bound to the ACT rather than to the flag. A run where the
+contract is red, or where no contract ran at all, takes no waiver, so nothing is
+written to the artifact or the ledger however the flag was spelled; the command
+says the flag changed nothing, and the record says the same. The two halves are
+then held together rather than trusted to arrive together:
+`freeze --contract-satisfied` over an approval that records no matching waiver in
+either copy is REFUSED, because the evidence page reads its `CONTRACT WAIVED`
+marker off the artifact and only `approve` writes it there.
 
 Be honest about what the reason is worth. It is EVIDENCE, not a tamper-proof
 record. It rides on the anchor artifact beside the approval, exactly like
@@ -548,9 +557,17 @@ deliberate: a slice that legitimately edits a `conftest.py` mid-build gets `LOSS
 which under this standard is the correct answer.
 
 If the manifest is ever damaged, every write is denied fail-closed. Clear it with
-`release --force --window --reason "<why>"`, which is logged. Deleting
-`freeze.json` by hand also works and deliberately leaves a gap in an append-only
-ledger.
+`release --force --window --reason "<why>"`, which is logged.
+
+Deleting `freeze.json` by hand still removes the manifest, and it is no longer
+the quiet way out. The ledger already held the evidence — the last lock event is a
+`freeze`, no release closed it, and no manifest is on disk — and from wire 2.2 the
+gate reads exactly that pair: it prints a RED line naming the freeze the ledger
+records and exits 1, one step louder than the amber an honest `release --window`
+prints, rather than the silence it used to print. `status` says the same thing
+(`MANIFEST GONE`) instead of "no active freeze". Deleting the whole `.canopus/`
+directory takes the ledger with it and is still silent; see the honest-limits
+section below.
 
 **A release names its kind, and an open window is no longer silent.** `release`
 requires `--window` or `--ship`, and passing neither exits 2 with argparse's own
@@ -645,10 +662,11 @@ fires there. The whole mechanism is scoped to the local build loop, and an evide
 should say so.
 
 Be precise about what that ledger proves. It lives inside the same gitignored `.canopus/`
-directory as the manifest, so it is evidence against an *edit to* `freeze.json`, and not
-against deletion of the directory: `rm -rf .canopus` takes the ledger with it, after which
-the gate returns 0 in silence because it cannot tell "no freeze was ever taken" from "the
-freeze was removed", and git never saw either. Nor does the ledger record the gate: a
+directory as the manifest, so it is evidence against an *edit to* `freeze.json` and against
+deleting that one file, and not against deletion of the directory. Removing `freeze.json`
+alone leaves the ledger behind, and the gate reddens on it. `rm -rf .canopus` takes the
+ledger with it, after which the gate returns 0 in silence because it cannot tell "no freeze
+was ever taken" from "the freeze was removed", and git never saw either. Nor does the ledger record the gate: a
 passing gate writes nothing, so the absence of a `verify_fail` line does not mean the
 contract was verified. The gate's evidence is its exit code in the test output; the durable
 evidence that a contract was approved is the anchor artifact, committed in the other

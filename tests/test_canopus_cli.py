@@ -605,6 +605,67 @@ def test_pack_reports_both_axes_and_the_uncovered_list(tree, anchor, capsys):
     assert "staleness" in out
 
 
+# ============================================================
+# The third indicator axis: approval
+# ============================================================
+
+def test_status_prints_the_approval_axis(tree: Path, anchor: Path, capsys):
+    assert _run(["freeze", "--label", "l", "--anchor", str(anchor),
+                 "tests/test_alpha.py"], tree) == 0
+    capsys.readouterr()
+
+    assert _run(["status"], tree) == 0
+    out = capsys.readouterr().out
+    assert "APPROVAL UNVERIFIED" in out
+
+
+def test_verify_and_pack_print_the_approval_axis_too(tree: Path, anchor: Path, capsys):
+    """All three surfaces, or an operator learns to read the one that omits it."""
+    assert _run(["freeze", "--label", "l", "--anchor", str(anchor),
+                 "tests/test_alpha.py"], tree) == 0
+    capsys.readouterr()
+
+    _run(["verify"], tree)
+    assert "APPROVAL UNVERIFIED" in capsys.readouterr().out
+
+    _run(["pack"], tree)
+    assert "APPROVAL UNVERIFIED" in capsys.readouterr().out
+
+
+def test_verify_names_the_copy_the_hash_came_from(tree: Path, anchor: Path, capsys):
+    """APPROVED beside LOSS OF LOCK is a legitimate pair, and it needs explaining.
+
+    The approval axis binds to the freeze that was TAKEN; the lock binds to the
+    tree RIGHT NOW. So this pair reads "a human approved this freeze, and the
+    contract has moved since". The detail line prints a hash that came from HEAD
+    while labelling it with a working-tree path, so an operator who opens that
+    file could find a different hash and no explanation.
+    """
+    import subprocess
+
+    gate = anchor.parent
+    for argv in (["init", "-q", "-b", "main"],
+                 ["config", "user.email", "builder@example.invalid"],
+                 ["config", "user.name", "Builder"]):
+        subprocess.run(["git", "-C", str(gate), *argv], check=True,
+                       capture_output=True, text=True)
+
+    assert _freeze(tree, anchor) == 0
+    approved = _root_of(tree)
+    subprocess.run(["git", "-C", str(gate), "add", "-A"], check=True,
+                   capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(gate), "commit", "-q", "-m", "approve"],
+                   check=True, capture_output=True, text=True)
+    capsys.readouterr()
+
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+
+    assert _run(["verify"], tree) == 1
+    out = capsys.readouterr().out
+    assert canopus.LOSS_OF_LOCK in out
+    assert f"records {approved} (APPROVED)" in out
+
+
 def test_freeze_contract_reports_how_much_is_already_green(tree, anchor, capsys):
     """The redness gate needs one red in the SET, so it does not scale to the moment.
 

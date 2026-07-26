@@ -1212,6 +1212,32 @@ def test_freeze_refuses_a_committed_hash_that_disagrees(tree: Path, anchor: Path
     assert not (tree / ".canopus" / "freeze.json").exists()
 
 
+def test_the_freeze_refusal_names_both_hashes_under_their_own_labels(
+    tree: Path, anchor: Path, capsys
+):
+    """A refusal that prints two bare digests cannot be acted on.
+
+    The sibling above pins that the COMMITTED hash reaches the message. Stripping
+    the `approved` and `computed` labels leaves both digests in the text and
+    every other assertion in this file green, and the operator is handed two
+    64-character strings with nothing saying which one they approved and which
+    one this freeze would have taken. Measured: with the labels removed, the
+    whole ordinary suite stayed green.
+    """
+    gate = _init_gate_repo(anchor)
+    anchor.write_text(f"canopus-anchor: {'e' * 64}\n", encoding="utf-8")
+    _git(gate, "add", anchor.name)
+    _git(gate, "commit", "-q", "-m", "approve")
+    anchor.write_text("# gate\n", encoding="utf-8")   # the approval lives only in HEAD
+
+    assert _freeze(tree, anchor) == 1
+
+    lines = [line.strip() for line in capsys.readouterr().err.splitlines()]
+    assert f"approved  {'e' * 64}" in lines
+    computed = next(line for line in lines if line.startswith("computed  "))
+    assert len(computed.split()[1]) == 64, "a truncated digest is not a report"
+
+
 def test_freeze_refuses_a_committed_hash_that_is_a_prefix_of_the_computed_root(
     tree: Path, anchor: Path, capsys
 ):

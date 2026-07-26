@@ -14,6 +14,8 @@ for a tool that must run on a fresh public clone with no data overlay behind it.
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import subprocess
 from pathlib import Path
 from typing import NamedTuple, Optional, Tuple
@@ -24,6 +26,9 @@ from scripts.utils.canopus_freeze import (
     ANCHOR_RECORDED,
     ANCHOR_UNRECORDED,
     APPROVAL_UNVERIFIED,
+    REPO_ABSENT,
+    REPO_PRESENT,
+    REPO_UNKNOWN,
     anchor_state,
     approval_state,
 )
@@ -32,6 +37,30 @@ COMMITTED = "committed"
 UNCOMMITTED = "uncommitted"
 NO_REPO = "no_repo"
 NO_GIT = "no_git"
+
+
+def _child_env() -> dict:
+    """The parent environment with every GIT_* variable removed.
+
+    A blanket prefix, not a named denylist. Naming the variables you happened to
+    think of is the defect this project has hit seven times: a guard that covers
+    the case in front of its author rather than the class. GIT_DIR is merely the
+    cheapest of them, and GIT_WORK_TREE, GIT_COMMON_DIR, GIT_INDEX_FILE,
+    GIT_OBJECT_DIRECTORY, GIT_CEILING_DIRECTORIES and
+    GIT_DISCOVERY_ACROSS_FILESYSTEM redirect discovery just as well. The next
+    release of git may add another, and a prefix covers it in advance.
+
+    This is a CORRECTNESS fix before it is a security one. When canopus runs
+    inside a git hook, git itself exports GIT_DIR and GIT_INDEX_FILE pointing at
+    the HOOK's repository. The engine's pre-commit and pre-push hooks run the
+    suite, the suite starts the gate, and the gate then asked the wrong
+    repository about the anchor.
+
+    Nothing is lost by the scrub: every command this module runs is a local read
+    (rev-parse, show, rev-list) and none touches the network.
+    """
+    return {key: value for key, value in os.environ.items()
+            if not key.startswith("GIT_")}
 
 
 def git_output(root: Path, *arguments: str) -> Optional[str]:
@@ -57,10 +86,85 @@ def git_output(root: Path, *arguments: str) -> Optional[str]:
         proc = subprocess.run(
             ["git", "-C", str(root), *arguments],
             capture_output=True, text=True, timeout=30, check=False,
+            env=_child_env(),
         )
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
     return proc.stdout if proc.returncode == 0 else None
+
+
+def _git_available() -> bool:
+    """Is there a git binary at all, asked away from the directory that failed.
+
+    Be exact about the mechanism, because the comment this replaces in
+    read_committed_anchor said "the probe runs WITHOUT -C" and git_output ALWAYS
+    inserts `-C <root>`. What actually matters is WHICH directory -C names.
+    `git -C <dir>` chdirs before it parses anything else, so probing with the
+    directory that just failed fails again and reports "git is unavailable" on a
+    machine where git is fine. The probe therefore names a directory known to
+    exist.
+
+    Path.cwd() is inside the guard because it RAISES FileNotFoundError when the
+    process working directory has been deleted, and this module's contract is
+    that every function answers. The filesystem root is the fallback because it
+    is the one directory that cannot have been removed underneath us.
+    """
+    try:
+        probe = Path.cwd()
+    except OSError:
+        probe = Path(os.sep)
+    return git_output(probe, "--version") is not None
+
+
+def repo_identity(directory: Path) -> Tuple[str, str]:
+    """Which repository *directory* belongs to, identified path-independently.
+
+    Returns (REPO_PRESENT, digest), (REPO_PRESENT, "") for a repository with no
+    commits, (REPO_ABSENT, "") outside a repository, or (REPO_UNKNOWN, "") when
+    there is no git binary.
+
+    The identity is sha256 over the sorted root commits, newline-joined. A
+    toplevel PATH would have been cheaper and is wrong: a relocated repository is
+    the same repository, and this workspace has been relocated once already. A
+    merged history can carry more than one root commit, so the whole sorted set
+    is hashed rather than one line of output.
+
+    An empty identity for a repository with no commits is deliberate and is NOT
+    a digest of the empty set. The first commit into such a repository is the
+    approval act itself; recording a digest now would change it at the exact
+    moment a human approved. Callers refuse to freeze against it.
+
+    What this identity is NOT, named rather than discovered later. The walk is
+    HEAD-scoped (`rev-list --max-parents=0 HEAD`), not `--all`, so it is stable
+    against new refs and it CHANGES in three cases that are not a substituted
+    repository: checking out an orphan branch with its own root, merging in a
+    history that carries another root commit, and a shallow clone, whose grafted
+    boundary commit reads as a root until `git fetch --unshallow`. Each reads as
+    BINDING_BROKEN and costs the operator one release-and-re-freeze. `--all` was
+    the alternative and is worse: every fetched branch would move the identity.
+    """
+    top = git_output(Path(directory), "rev-parse", "--show-toplevel")
+    if top is None:
+        return (REPO_ABSENT, "") if _git_available() else (REPO_UNKNOWN, "")
+    roots = git_output(Path(top.strip()), "rev-list", "--max-parents=0", "HEAD")
+    lines = sorted(line.strip() for line in (roots or "").splitlines() if line.strip())
+    if not lines:
+        return (REPO_PRESENT, "")
+    return (REPO_PRESENT,
+            hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest())
+
+
+def head_sha(root: Path) -> str:
+    """Current HEAD, or "" outside a repository. A secondary anchor only.
+
+    Moved here from scripts/canopus.py, which ran its own subprocess and made
+    this module's "the one place Canopus talks to git" docstring false. The old
+    copy printed a diagnostic on OSError; git_output answers None instead, and
+    the value is explicitly secondary, recorded in the manifest and never
+    compared against anything.
+    """
+    out = git_output(Path(root), "rev-parse", "HEAD")
+    return out.strip() if out else ""
 
 
 def read_committed_anchor(artifact: Path) -> Tuple[str, Optional[str]]:
@@ -86,11 +190,12 @@ def read_committed_anchor(artifact: Path) -> Tuple[str, Optional[str]]:
         # call, and the caller reports both as APPROVAL UNVERIFIED. One extra
         # subprocess buys a truer message, and this path runs once per command.
         #
-        # The probe runs WITHOUT -C, because `git -C <dir>` chdirs before it
-        # parses anything else: with -C, a gate artifact whose directory has been
-        # removed since the freeze fails both calls and reports "git is
-        # unavailable" on a machine where git is fine.
-        if git_output(Path.cwd(), "--version") is None:
+        # The probe names a directory known to exist rather than the one that
+        # just failed, because `git -C <dir>` chdirs before it parses anything
+        # else: probing with a removed directory fails both calls and reports
+        # "git is unavailable" on a machine where git is fine. _git_available
+        # holds that reasoning, and guards Path.cwd() as well.
+        if not _git_available():
             return (NO_GIT, None)
         return (NO_REPO, None)
     repo = Path(top.strip())

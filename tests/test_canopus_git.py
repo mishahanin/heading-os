@@ -5,7 +5,7 @@ from pathlib import Path
 
 def _repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
-    root.mkdir()
+    root.mkdir(parents=True)
     for argv in (
         ["init", "-q", "-b", "main"],
         ["config", "user.email", "builder@example.invalid"],
@@ -306,3 +306,125 @@ def test_resolve_anchor_answers_when_the_git_call_times_out(tmp_path, monkeypatc
 
     assert resolution.approval == APPROVAL_UNVERIFIED
     assert (resolution.status, resolution.value) == (ANCHOR_RECORDED, "e" * 64)
+
+
+def test_a_poisoned_git_dir_does_not_hide_the_repository(tmp_path, monkeypatch):
+    """The wire 2.1 Critical, at its root.
+
+    GIT_DIR redirects git's repository discovery, and the answer decided whether
+    resolve_anchor fell back to the working copy. Measured before the fix: with
+    GIT_DIR set to an unrelated path, rev-parse --show-toplevel failed and the
+    anchor's repository became invisible at zero cost to the builder.
+    """
+    from scripts.utils.canopus_freeze import REPO_PRESENT
+    from scripts.utils.canopus_git import repo_identity
+
+    root = _repo(tmp_path)
+    (root / "gate.md").write_text("# gate\n", encoding="utf-8")
+    _commit(root, "seed")
+    clean_status, clean_identity = repo_identity(root)
+
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere.git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "nowhere"))
+
+    assert repo_identity(root) == (clean_status, clean_identity)
+    assert clean_status == REPO_PRESENT
+    assert len(clean_identity) == 64
+
+
+def test_identity_survives_relocation_and_distinguishes_repositories(tmp_path):
+    """Identity is the root commit set, not the path.
+
+    A toplevel path would have been cheaper and wrong: this workspace has been
+    relocated once already, and a relocated repository is the same repository.
+    """
+    import shutil
+
+    from scripts.utils.canopus_git import repo_identity
+
+    root = _repo(tmp_path)
+    (root / "gate.md").write_text("# gate\n", encoding="utf-8")
+    _commit(root, "seed")
+    _status, identity = repo_identity(root)
+
+    moved = tmp_path / "moved"
+    shutil.copytree(root, moved)
+    assert repo_identity(moved)[1] == identity
+
+    # Distinct CONTENT, not merely a distinct directory. A commit sha is a
+    # digest over tree, message, author and timestamp, so two repositories
+    # seeded with the same bytes by the same author inside the same second
+    # carry the same root commit and therefore the same identity. Measured
+    # here: with "# gate\n" on both sides this assertion failed on equal
+    # digests. That is a real property of a content-derived identity rather
+    # than a defect, and seeding the same bytes would make the test flaky on
+    # the clock instead of testing the claim.
+    other = _repo(tmp_path / "other-parent")
+    (other / "gate.md").write_text("# other gate\n", encoding="utf-8")
+    _commit(other, "seed")
+    assert repo_identity(other)[1] != identity
+
+
+def test_a_repository_with_no_commits_has_no_identity(tmp_path):
+    """An empty repository is REPO_PRESENT with an empty identity, never a digest.
+
+    A digest over the empty set would change the moment the first commit lands,
+    and that first commit is the approval act itself, so the freeze would turn
+    red at the exact moment a human approved it. Callers refuse instead.
+    """
+    from scripts.utils.canopus_freeze import REPO_PRESENT
+    from scripts.utils.canopus_git import repo_identity
+
+    root = _repo(tmp_path)
+
+    assert repo_identity(root) == (REPO_PRESENT, "")
+
+
+def test_a_plain_directory_is_reported_absent_not_unknown(tmp_path):
+    from scripts.utils.canopus_freeze import REPO_ABSENT
+    from scripts.utils.canopus_git import repo_identity
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    assert repo_identity(plain) == (REPO_ABSENT, "")
+
+
+def test_head_sha_answers_rather_than_raising_outside_a_repository(tmp_path):
+    from scripts.utils.canopus_git import head_sha
+
+    root = _repo(tmp_path)
+    (root / "gate.md").write_text("# gate\n", encoding="utf-8")
+    _commit(root, "seed")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    assert len(head_sha(root)) == 40
+    assert head_sha(plain) == ""
+
+
+def test_identity_answers_when_the_working_directory_is_gone(tmp_path, monkeypatch):
+    """Path.cwd() raises FileNotFoundError when the process cwd has been deleted.
+
+    The real condition, not a stub: chdir into a directory and remove it. This
+    is the second of wire 2.1's four recorded defects, and it is reachable from
+    repo_identity as well as from read_committed_anchor, which is why the probe
+    is shared. monkeypatch.chdir restores the original directory afterwards.
+
+    If this environment refuses to run a subprocess from a deleted working
+    directory, report that rather than weakening the test: the guard exists
+    because the raise it prevents crashes the pytest session start.
+    """
+    from scripts.utils.canopus_git import REPO_ABSENT, REPO_UNKNOWN, repo_identity
+
+    doomed = tmp_path / "doomed"
+    doomed.mkdir()
+    monkeypatch.chdir(doomed)
+    doomed.rmdir()
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    status, identity = repo_identity(plain)
+
+    assert identity == ""
+    assert status in (REPO_ABSENT, REPO_UNKNOWN)

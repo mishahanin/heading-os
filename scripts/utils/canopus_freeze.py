@@ -66,6 +66,16 @@ FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
 ANCHOR_PREFIX = "canopus-anchor:"
 
+# Where the anchor's repository stands RIGHT NOW, as measured by canopus_git and
+# judged by repo_binding_state below. Defined here rather than in canopus_git
+# because the judging half is pure and this module may never import the half that
+# runs subprocess. The last two values coincide with canopus_git's anchor-read
+# statuses on purpose: they describe the same fact about the world, and one
+# spelling is better than two.
+REPO_PRESENT = "in_repo"
+REPO_ABSENT = "no_repo"
+REPO_UNKNOWN = "no_git"
+
 # Tool-generated caches that live INSIDE a source tree. A recursive freeze that
 # captured these would bind the lock to artifacts no version control tracks: the
 # build loop rewrites them on its own, and any fresh checkout or cache clean

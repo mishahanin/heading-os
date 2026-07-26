@@ -20,17 +20,18 @@ Staleness is computed from git rather than from file modification times, because
 `git checkout` rewrites mtimes and a false alarm in a discipline tool costs more
 than the gap it closes.
 
-Owns subprocess, and is therefore never imported by the PreToolUse dispatcher.
+Reads git through canopus_git, and is therefore never imported by the PreToolUse
+dispatcher.
 """
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 
 from scripts.utils.canopus_freeze import history_state_path
+from scripts.utils.canopus_git import git_output
 
 
 def parse_ts(raw) -> Optional[datetime]:
@@ -117,21 +118,9 @@ def commits_outside(
     return outside
 
 
-def _git(root: Path, *arguments: str) -> Optional[str]:
-    """Run a git command, or None when git is unavailable or the command fails."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(root), *arguments],
-            capture_output=True, text=True, timeout=30, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return proc.stdout if proc.returncode == 0 else None
-
-
 def git_commits(root: Path, base: str) -> list[tuple[str, datetime, str]]:
     """(sha, committed-at, subject) for every commit after *base*, oldest first."""
-    out = _git(root, "log", "--reverse", "--format=%h%x1f%cI%x1f%s", f"{base}..HEAD")
+    out = git_output(root, "log", "--reverse", "--format=%h%x1f%cI%x1f%s", f"{base}..HEAD")
     if not out:
         return []
     commits = []
@@ -146,7 +135,7 @@ def git_commits(root: Path, base: str) -> list[tuple[str, datetime, str]]:
 
 
 def merge_base(root: Path, ref: str) -> Optional[str]:
-    out = _git(root, "merge-base", ref, "HEAD")
+    out = git_output(root, "merge-base", ref, "HEAD")
     return out.strip() if out else None
 
 
@@ -160,9 +149,9 @@ def is_dirty(root: Path) -> bool:
     rather than blocks, so the cost of the wider net is a sentence an operator
     reads and dismisses.
     """
-    out = _git(root, "status", "--porcelain")
+    out = git_output(root, "status", "--porcelain")
     return bool(out and out.strip())
 
 
 def diff_stat(root: Path, base: str) -> str:
-    return (_git(root, "diff", "--stat", f"{base}..HEAD") or "").rstrip()
+    return (git_output(root, "diff", "--stat", f"{base}..HEAD") or "").rstrip()

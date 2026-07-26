@@ -766,11 +766,20 @@ def _init_gate_repo(anchor: Path) -> Path:
 
     The identity is invented: this file ships in a public repository and carries
     no real person or host.
+
+    The seed commit is EMPTY, and both halves of that are load-bearing. It has to
+    exist because `approve` and `freeze` refuse a repository with no commits: an
+    identity is a digest over the root commits, so a repository that has none
+    would acquire its identity at the exact moment a human commits the approval.
+    It has to be empty because every caller here decides for itself whether the
+    gate artifact is tracked, and `add -A` in the helper would commit that
+    artifact behind their backs.
     """
     gate = anchor.parent
     for argv in (["init", "-q", "-b", "main"],
                  ["config", "user.email", "builder@example.invalid"],
-                 ["config", "user.name", "Builder"]):
+                 ["config", "user.name", "Builder"],
+                 ["commit", "-q", "--allow-empty", "-m", "seed"]):
         _git(gate, *argv)
     return gate
 
@@ -1820,3 +1829,53 @@ def test_a_multi_line_reason_cannot_forge_a_second_anchor_line(
     _status, value = read_anchor(anchor)
     assert value == approved
     assert len(value) == 64
+
+
+def _init_anchor_repo(anchor, *, commit: bool) -> None:
+    """Make the anchor's directory a repository, optionally with one commit."""
+    for argv in (["init", "-q", "-b", "main"],
+                 ["config", "user.email", "builder@example.invalid"],
+                 ["config", "user.name", "Builder"]):
+        subprocess.run(["git", "-C", str(anchor.parent), *argv], check=True,
+                       capture_output=True, text=True)
+    if commit:
+        subprocess.run(["git", "-C", str(anchor.parent), "add", "-A"], check=True,
+                       capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(anchor.parent), "commit", "-q", "-m", "seed"],
+                       check=True, capture_output=True, text=True)
+
+
+def test_freeze_records_the_anchors_repository(tree, anchor):
+    """The binding is built once, in _candidate_manifest, so approve and freeze
+    compute the same root. Two copies of that construction is how the approved
+    hash and the frozen hash come to differ over a default nobody noticed."""
+    from scripts.utils.canopus_git import repo_identity
+
+    _init_anchor_repo(anchor, commit=True)
+
+    assert _freeze(tree, anchor) == 0
+
+    manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
+    _status, identity = repo_identity(anchor.parent)
+    assert len(identity) == 64
+    assert manifest["anchor_repo"] == {"in_repo": True, "identity": identity}
+
+
+def test_freeze_records_no_binding_for_an_anchor_outside_a_repository(tree, anchor):
+    """The supported plain-folder case, recorded explicitly rather than by
+    omission: the freeze itself states that there was no repository to bind to."""
+    assert _freeze(tree, anchor) == 0
+
+    manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
+    assert manifest["anchor_repo"] == {"in_repo": False, "identity": ""}
+
+
+def test_freeze_refuses_an_anchor_in_a_repository_with_no_commits(tree, anchor, capsys):
+    """The first commit into an empty repository is the approval act itself, so
+    an identity recorded now would change at the exact moment a human approved
+    and turn the freeze red for doing the right thing."""
+    _init_anchor_repo(anchor, commit=False)
+
+    assert _freeze(tree, anchor) == 1
+    assert "has no commits" in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()

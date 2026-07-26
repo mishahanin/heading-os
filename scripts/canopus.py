@@ -46,7 +46,6 @@ then checks the hash it wrote has verified nothing.
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,6 +76,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     LOCK_UNCONFIRMED,
     LOSS_OF_LOCK,
     NOT_ATTESTED,
+    REPO_PRESENT,
     FreezeCorrupt,
     FreezeError,
     append_history,
@@ -94,7 +94,9 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
 from scripts.utils.canopus_git import (  # noqa: E402
     COMMITTED,
     AnchorResolution,
+    head_sha,
     read_committed_anchor,
+    repo_identity,
     resolve_anchor,
 )
 from scripts.utils.canopus_pack import (  # noqa: E402
@@ -118,19 +120,6 @@ GATE_SCRIPT = Path("scripts") / "run-tests.py"
 # matches with `startswith(ANCHOR_PREFIX)`, so this line is prose to the parser
 # and an explanation to the human reading the artifact diff.
 REASON_PREFIX = "canopus-approval-reason:"
-
-
-def _git_sha(root: Path) -> str:
-    """Current HEAD, or "" outside a repository. A secondary anchor only."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        print(f"canopus: could not record a git sha: {exc}", file=sys.stderr)
-        return ""
-    return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
 def _record(root: Path, event: str, *, digest: str, label: str,
@@ -326,6 +315,15 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             1 for _rel, _name, outcome in outcomes if outcome == "passed"
         )
         contract_note = f"{already_green} of {sum(counts.values())} already green"
+    repo_status, repo_identity_digest = repo_identity(anchor_path.parent)
+    if repo_status == REPO_PRESENT and not repo_identity_digest:
+        print("canopus: the anchor's repository has no commits, so an approval "
+              "cannot be attributed to it and the identity recorded now would "
+              "change the moment you commit. Commit something in that "
+              "repository first.", file=sys.stderr)
+        return (None, "")
+    binding = {"in_repo": repo_status == REPO_PRESENT,
+               "identity": repo_identity_digest}
     manifest = build_manifest(
         [_under_root(p, root) for p in args.paths] + contracts,
         root,
@@ -334,6 +332,7 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
         anchor=anchor_path,
         content_only=[_under_root(p, root) for p in args.content],
         baseline=baseline,
+        anchor_repo=binding,
     )
     return (manifest, contract_note)
 
@@ -505,7 +504,7 @@ def cmd_freeze(args) -> int:
               f"`approve --replace --reason \"<why>\"` and commit it.",
               file=sys.stderr)
         return 1
-    manifest["git_sha"] = _git_sha(root)
+    manifest["git_sha"] = head_sha(root)
     write_freeze(root, manifest)
     # `reason` carries the git status when no contract note exists, and that
     # conflation is deliberate rather than overlooked. This ledger's `reason` is

@@ -783,8 +783,28 @@ def _ledger(tree: Path) -> list:
 
 
 def _recorded(anchor: Path) -> str:
-    """The last hash the artifact records, read whole and never by prefix."""
-    return anchor.read_text().strip().rsplit(" ", 1)[-1]
+    """The last hash the artifact records, read whole and never by prefix.
+
+    The LAST LINE CARRYING THE PREFIX, not the file's last line. The artifact is
+    a human-authored document the tool appends one line to, so prose written
+    under that line is ordinary; a helper that read the final line would then
+    return a word from the prose and every assertion built on it would go quiet.
+    """
+    values = [
+        line.strip()[len(canopus.ANCHOR_PREFIX):].strip()
+        for line in anchor.read_text().splitlines()
+        if line.strip().startswith(canopus.ANCHOR_PREFIX)
+    ]
+    assert values, f"{anchor} records no {canopus.ANCHOR_PREFIX} line"
+    return values[-1]
+
+
+def test_the_recorded_helper_reads_the_anchor_line_not_the_last_line(anchor: Path):
+    """The helper every approve assertion below leans on, pinned itself."""
+    anchor.write_text(
+        f"# gate\n\ncanopus-anchor: {'a' * 64}\n\nApproved after the review.\n"
+    )
+    assert _recorded(anchor) == "a" * 64
 
 
 def test_approve_writes_the_candidate_hash_and_no_freeze_state(tree: Path, anchor: Path):
@@ -935,3 +955,187 @@ def test_approve_fails_closed_when_the_anchor_cannot_be_written(tree: Path, anch
     assert "Traceback" not in capsys.readouterr().err
     assert "canopus-anchor:" not in anchor.read_text()
     assert not (tree / ".canopus" / "history.jsonl").exists()
+
+
+def test_approve_refuses_a_committed_approval_whose_working_copy_was_scrubbed(
+    tree: Path, anchor: Path, capsys
+):
+    """The half of the union guard the working reader can never see.
+
+    The sibling test above covers the other direction, where the line exists in
+    the working copy and not in HEAD. This one is the direction the rule is
+    actually FOR: the approval is COMMITTED, and the working copy no longer
+    carries it. `read_anchor` answers ANCHOR_UNRECORDED, so a guard built on the
+    working copy alone appends a second hash over a different path set, with no
+    --replace, no reason, and nothing anywhere saying the approved set changed.
+
+    Reaching this state needs no cleverness and no tampering story: an operator
+    who committed an approval and then tidied the file by hand is in it. The
+    scrub here is a bare rewrite rather than `git checkout --`, because checkout
+    RESTORES the committed line and so never reaches the committed half at all.
+    """
+    _init_gate_repo(anchor)
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+    approved = _recorded(anchor)
+    _git(anchor.parent, "add", anchor.name)
+    _git(anchor.parent, "commit", "-q", "-m", "the approval")
+
+    anchor.write_text("# gate artifact\n")   # scrubbed by hand, still committed
+    assert "canopus-anchor:" not in anchor.read_text()
+    capsys.readouterr()
+
+    (tree / "tests" / "test_beta.py").write_text("def test_b():\n    assert True\n")
+    assert _run(["approve", "tests/test_alpha.py", "tests/test_beta.py",
+                 "--label", "l", "--anchor", str(anchor)], tree) == 1
+
+    err = capsys.readouterr().err
+    assert "already records" in err
+    assert approved in err
+    assert "canopus-anchor:" not in anchor.read_text()
+
+
+def test_approve_refuses_while_a_freeze_is_active(tree: Path, anchor: Path, capsys):
+    """Approving during a live freeze walks the operator into a red lock.
+
+    Measured: approve set A, commit, freeze set A, verify reads LOCK HELD. Then
+    approve set B while that freeze is still held and commit it, which is exactly
+    what `approve`'s own closing line tells the operator to do, and verify reads
+    LOSS OF LOCK with not one byte of the frozen contract moved.
+    `freeze` already carries this guard; the sibling that writes the approved
+    hash did not.
+    """
+    gate = _init_gate_repo(anchor)
+
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+    approved = _recorded(anchor)
+    _git(gate, "add", anchor.name)
+    _git(gate, "commit", "-q", "-m", "the approval")
+
+    # The scrub steps around the refusal cmd_freeze still carries on a recorded
+    # WORKING line, which moves to the committed copy in the next slice. The
+    # committed approval is what the lock reads, and it survives the scrub.
+    anchor.write_text("# gate artifact\n")
+    assert _freeze(tree, anchor) == 0
+    assert _root_of(tree) == approved
+    capsys.readouterr()
+    assert _run(["verify"], tree) == 0
+    assert canopus.LOCK_HELD in capsys.readouterr().out
+
+    (tree / "tests" / "test_beta.py").write_text("def test_b():\n    assert True\n")
+    assert _run(["approve", "tests/test_alpha.py", "tests/test_beta.py",
+                 "--label", "l", "--anchor", str(anchor),
+                 "--replace", "--reason", "widened"], tree) == 1
+    err = capsys.readouterr().err
+    assert "already active" in err
+    assert "release" in err
+
+    # The refusal is what keeps the lock green: no second candidate was appended,
+    # so there is nothing for the operator to commit that would redden it. The
+    # only line standing is the one cmd_freeze wrote back, and it is the frozen
+    # root.
+    assert _recorded(anchor) == _root_of(tree)
+    assert _run(["verify"], tree) == 0
+    assert canopus.LOCK_HELD in capsys.readouterr().out
+
+
+def test_approve_says_the_artifact_was_written_when_only_the_ledger_fails(
+    tree: Path, anchor: Path, capsys
+):
+    """A half-landed approval must not be reported as a failed one.
+
+    The artifact write comes first deliberately, and the order stays: the
+    reverse leaves a ledger claiming an approval the artifact never received.
+    What the order costs is this window, where the candidate IS on the artifact
+    and the ledger entry is not. Calling that "the command failed" sends the
+    operator into a retry that demands --replace --reason for an approval they
+    were told had not happened.
+    """
+    ledger_dir = tree / ".canopus"
+    ledger_dir.mkdir()
+    os.chmod(ledger_dir, 0o500)
+    try:
+        assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                     "--anchor", str(anchor)], tree) == 1
+    finally:
+        os.chmod(ledger_dir, 0o700)
+
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "WAS written" in err
+    assert _recorded(anchor) in err
+    assert not (ledger_dir / "history.jsonl").exists()
+
+    # The claim the message makes, checked against disk rather than trusted.
+    assert len(_recorded(anchor)) == 64
+
+
+def test_approve_refuses_an_all_green_contract(tree: Path, anchor: Path, capsys):
+    """`freeze` carries a tested copy of this refusal, so removing the check from
+    the builder they now SHARE stays green unless approve pins it too. A contract
+    that is already entirely green asserts nothing about work not yet done, and
+    approving one writes a candidate hash over a vacuous contract."""
+    _write_contract(tree, red=False)
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "asserts nothing" in capsys.readouterr().err
+    assert "canopus-anchor:" not in anchor.read_text()
+    assert not (tree / ".canopus" / "history.jsonl").exists()
+
+
+def test_approve_refuses_a_contract_directory_with_no_test_modules(
+    tree: Path, anchor: Path, capsys
+):
+    """The builder's other removable guard, pinned from the approve side.
+
+    A --contract naming nothing collectable can never be attested, so the
+    approval would record a hash for a contract that no run can ever prove.
+    """
+    empty = tree / "tests" / "contract" / "empty"
+    empty.mkdir(parents=True)
+    (empty / "helper.py").write_text("VALUE = 1\n")
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/empty"], tree) == 1
+    assert "names no test modules" in capsys.readouterr().err
+    assert "canopus-anchor:" not in anchor.read_text()
+
+
+def test_approve_prints_the_candidate_root_for_the_operator_to_read(
+    tree: Path, anchor: Path, capsys
+):
+    """The closing line says "read it, then commit". This is the line to read.
+
+    Without it the operator's only route to the hash they are about to approve is
+    to open the artifact and trust whatever is at the bottom, which is the eye
+    comparison the whole tool exists to remove.
+    """
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+
+    out = capsys.readouterr().out
+    first = out.splitlines()[0]
+    assert f"root {_recorded(anchor)}" in first
+    assert "label: l" in first
+    assert "1 file" in first
+
+
+def test_every_reason_flag_defaults_to_the_empty_string():
+    """`freeze` and `release` both default --reason to ""; `approve` did not, so
+    args.reason came through as None on the one command whose whole job is to put
+    a reason on the record. Asserted at the parser, because `args.reason or ""`
+    downstream launders the difference into the ledger and hides it."""
+    parser = canopus.build_parser()
+    for argv in (["freeze", "x", "--label", "l", "--anchor", "a"],
+                 ["approve", "x", "--label", "l", "--anchor", "a"],
+                 ["release"]):
+        assert parser.parse_args(argv).reason == "", argv[0]
+
+
+def test_approve_writes_the_empty_reason_through_to_the_ledger(tree: Path, anchor: Path):
+    assert _run(["approve", "tests/test_alpha.py", "--label", "l",
+                 "--anchor", str(anchor)], tree) == 0
+    assert _ledger(tree)[-1]["reason"] == ""

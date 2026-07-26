@@ -624,13 +624,6 @@ re-freeze it, and get the new root hash re-approved.</p>
 <p>Named here rather than fixed, because each lives in a file the current freeze
 covers and a frozen file is not edited in place:</p>
 <ul>
-<li><code>canopus_git.py</code>&rsquo;s module docstring says it is &ldquo;the one place Canopus talks to
-  git&rdquo;. It is not: <code>_git_sha</code> in <code>scripts/canopus.py</code> runs its own <code>git rev-parse</code>
-  through <code>subprocess</code>.</li>
-<li>The same docstring says &ldquo;Every function answers rather than raising&rdquo;.
-  <code>read_committed_anchor</code> evaluates <code>Path.cwd()</code> outside any try block and raises
-  <code>FileNotFoundError</code> when the process working directory has been deleted. Both
-  call sites fail closed, so the code is defensible; the sentence is not.</li>
 <li><code>canopus_gate.py:43</code> claims &ldquo;a build cannot reach green while its contract is
   moved&rdquo;. The environment defeat above falsifies that sentence as written.</li>
 <li>The PreToolUse deny message in <code>canopus_freeze.py</code> reads &ldquo;The contract is not

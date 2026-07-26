@@ -378,6 +378,13 @@ exit 1 is what makes it cost more.
 Nothing here defends against a builder who replaces the `git` binary on PATH, or
 who forges commits in a repository they control. Every answer the gate binds to
 comes from a child process, and a process the builder owns cannot prove itself.
+Name the PRICE of that, because the argument for this whole layer turns on it: it
+is one command. Measured, a five-line shell script named `git`, placed earlier on
+PATH, passing every invocation through except `git -C <dir> show HEAD:<rel>`,
+which it answers with the working file instead, converts a re-baselined contract
+whose approval was never committed from `LOSS OF LOCK` at exit 1 into `LOCK HELD`
+at exit 0. `verify` prints `LOCK HELD` and then `APPROVED`, and the anchor
+repository shows nothing but an unstaged modification.
 The operator's countermeasure is unchanged and still worth the ten seconds: run
 `canopus verify` YOURSELF, in your own shell, at the approval gate, rather than
 reading a status the builder printed.
@@ -392,6 +399,22 @@ identity and cost one release-and-re-freeze each: checking out an orphan branch
 with its own root, merging in a history carrying another root commit, and a
 shallow clone, whose grafted boundary commit reads as a root until
 `git fetch --unshallow`.
+
+**The frozen contract pins that identity DEFINITION less tightly than it claims.**
+A docstring in `tests/contract/2026-07-26-canopus-repository-binding/test_contract.py`
+says a wrong definition of repository identity would be caught, and lists "a
+toplevel path, an unsorted join, a different separator, a trailing newline".
+Measured by mutation, the toplevel-path and trailing-newline variants ARE killed
+and the other two are NOT: removing `sorted(...)` from `repo_identity`, and
+changing the newline separator to a comma, each leave all eleven contract cases
+and all 387 tests of the whole canopus set passing. The cause is the fixtures
+rather than the argument. No fixture builds a repository with more than one root
+commit, so sorted, unsorted, and any separator collapse to the same one-element
+digest. The consequence is fail-closed rather than a reopened bypass: an anchor
+repository carrying a merged second root could take a spurious broken binding
+after an ordinary commit reorders `rev-list` output, and nothing in the set would
+fail. The contract is frozen, so the multi-root fixture belongs in the next
+slice's contract.
 
 `.canopus/` is gitignored, so the ledger recording release windows and forced
 escapes can be deleted by the builder in one command, and git never saw it.
@@ -638,6 +661,35 @@ assembled. The record is bound to the recomputed root hash, so editing any froze
 after a green run makes it stop applying without anyone remembering to delete it. It is a
 true statement about *a* run of this exact contract, not necessarily the most recent one.
 
+**Nothing binds the INTERPRETER the way `anchor_repo` binds the repository.** The
+lock refuses a repository the freeze did not record; the attestation answers
+whether the contract ran. Between the two sits the pytest process itself, and it
+is unbound. `PYTEST_ADDOPTS` is not scrubbed the way every `GIT_`-prefixed
+variable is, and the tree-root composition guard watches `*.py` FILES, so a
+package DIRECTORY dropped at the tree root is invisible to it. Measured on a
+scratch tree with a held and approved freeze over a two-test contract:
+
+```bash
+mkdir -p plug && printf 'def pytest_pyfunc_call(pyfuncitem):\n    return True\n' > plug/skipper.py
+PYTEST_ADDOPTS="-p plug.skipper" python -m pytest -q      # 2 passed
+python scripts/canopus.py verify
+#   LOCK HELD ... ATTESTED  2 frozen tests passed, none deselected ... APPROVED     exit 0
+```
+
+The honest run of the same tree reports `NOT ATTESTED` with reported failures. No
+frozen byte moved and no guarded composition changed, and neither the environment
+variable nor the untracked directory appears anywhere an operator reads. A
+skip-injecting variant of the same plugin reads `0 frozen tests passed ... 2
+skipped`, which is the only visible tell.
+
+Two things about that, stated rather than implied. It is pre-existing and not a
+wire 2.2 regression: the attestation is a wire 2 mechanism, and the repository
+binding did not touch it. And the mitigation stated elsewhere on this page, that a
+skip injected from an unfrozen sibling `conftest.py` is the composition guard's
+job, does NOT cover it: a plugin loaded through the environment is neither a
+conftest nor a file any guard watches. Binding the interpreter is the next slice's
+work.
+
 **Freeze the enforcers, all eight of them.** A freeze that omits them protects the
 contract while leaving the thing that checks the contract editable.
 
@@ -671,6 +723,19 @@ passing gate writes nothing, so the absence of a `verify_fail` line does not mea
 contract was verified. The gate's evidence is its exit code in the test output; the durable
 evidence that a contract was approved is the anchor artifact, committed in the other
 repository.
+
+Three measurements say what that is worth in practice. `rm .canopus/history.jsonl`
+turns the gate's open-window amber line into total silence at exit 0, because that
+line is read out of the ledger and nothing else records the window. `release
+--ship` used mid-slice produces the same silence with no deletion at all, since a
+ship reads as a closed slice rather than an open window. And ONE line appended to
+the ledger flips `canopus pack`'s continuity section from `outside the lock` in
+red to `every commit was made while a freeze was held` in green. So the ledger is
+a convenience beside the durable record and never the record itself: it shows a
+cooperating build's own account of what it did, and it cannot be used to prove
+that a freeze was ever taken, that a window was opened and closed, or that a given
+commit was made under the lock. Those three claims rest on the anchor artifact and
+on an operator who ran `verify` in their own shell.
 
 A contract that turns out to be wrong is not edited in place. Release it, fix it,
 re-freeze it, and get the new root hash re-approved.

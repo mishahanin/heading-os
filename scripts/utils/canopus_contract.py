@@ -18,12 +18,13 @@ frozen:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Optional, Sequence
 from xml.etree import ElementTree
 
 DEFAULT_PATTERNS = ("test_*.py",)
@@ -89,6 +90,36 @@ def _is_collection_failure(case: ElementTree.Element) -> bool:
     return error is not None and error.get("message") == "collection failure"
 
 
+def _parse_report(xml_text: str) -> ElementTree.Element:
+    """The one XML entry point: refuse a DOCTYPE, wrap a parse failure.
+
+    Every reader of a contract report parses it through here, and separate copies
+    of this guard is how one of them ends up without it. A DOCTYPE is refused
+    before parsing because ElementTree expands internal entities, which is the
+    whole billion-laughs mechanism; pytest never writes one, so refusing costs
+    nothing and removes the class without adding defusedxml as a dependency.
+    """
+    if "<!DOCTYPE" in xml_text:
+        raise ContractError(
+            "the contract report carries a DOCTYPE, which pytest never writes; "
+            "refusing to parse it"
+        )
+    # Two suppressions, justified rather than waved through, and both flagged to
+    # the operator when this landed. Ruff S314 and bandit B314 are the same
+    # finding: stdlib XML on UNTRUSTED input. Every attack they stand for against
+    # ElementTree needs a DOCTYPE -- external-entity resolution, billion laughs,
+    # quadratic blowup all declare entities -- and the guard above refuses a
+    # DOCTYPE before any parsing happens, with a test pinning the refusal.
+    # ElementTree additionally never resolves external entities at all. The input
+    # is a report this process just wrote in its own temporary directory.
+    # The alternative, defusedxml, is a new runtime dependency, which is a
+    # stop-and-flag decision rather than something a lint fix makes quietly.
+    try:
+        return ElementTree.fromstring(xml_text)  # noqa: S314  # nosec B314
+    except ElementTree.ParseError as exc:
+        raise ContractError(f"the contract report is unreadable: {exc}") from exc
+
+
 def parse_junit(xml_text: str) -> tuple[dict[str, int], list[tuple[str, str, str]]]:
     """Turn a JUnit report into per-file counts and per-test outcomes.
 
@@ -102,32 +133,12 @@ def parse_junit(xml_text: str) -> tuple[dict[str, int], list[tuple[str, str, str
     behaviour the zero-item refusal relies on, and it is enforced here rather than
     inferred from a missing attribute.
 
-    A DOCTYPE is refused before parsing. `xml.etree.ElementTree` does not resolve
-    external entities, but it does expand internal ones, which is the whole
-    mechanism behind entity-expansion denial of service. pytest's JUnit writer
-    never emits a DOCTYPE, so refusing one costs nothing and removes the entire
-    class without adding defusedxml as a dependency. The input is a file this
-    process just wrote in its own temporary directory, so this is defence in
-    depth rather than a live threat.
+    A DOCTYPE is refused before parsing, in the shared `_parse_report` entry
+    point above, and the reasoning lives there.
     """
-    if "<!DOCTYPE" in xml_text:
-        raise ContractError(
-            "the contract report carries a DOCTYPE, which pytest never writes; "
-            "refusing to parse it"
-        )
     counts: dict[str, int] = {}
     outcomes: list[tuple[str, str, str]] = []
-    # Two suppressions, justified rather than waved through, and both flagged to
-    # the operator when this landed. Ruff S314 and bandit B314 are the same
-    # finding: stdlib XML on UNTRUSTED input. Every attack they stand for against
-    # ElementTree needs a DOCTYPE -- external-entity resolution, billion laughs,
-    # quadratic blowup all declare entities -- and the guard above refuses a
-    # DOCTYPE before any parsing happens, with a test pinning the refusal.
-    # ElementTree additionally never resolves external entities at all. The input
-    # is a report this process just wrote in its own temporary directory.
-    # The alternative, defusedxml, is a new runtime dependency, which is a
-    # stop-and-flag decision rather than something a lint fix makes quietly.
-    root = ElementTree.fromstring(xml_text)  # noqa: S314  # nosec B314
+    root = _parse_report(xml_text)
     for case in root.iter("testcase"):
         rel = case.get("file")
         if not rel or _is_collection_failure(case):
@@ -138,13 +149,22 @@ def parse_junit(xml_text: str) -> tuple[dict[str, int], list[tuple[str, str, str
     return counts, outcomes
 
 
-def run_contract(
+def run_pytest_report(
     paths: Sequence[Path],
     root: Path,
     *,
     timeout: int = 900,
-) -> tuple[dict[str, int], list[tuple[str, str, str]]]:
-    """Run pytest over *paths* once and read the report.
+    extra_env: Optional[dict] = None,
+    extra_args: Sequence[str] = (),
+) -> str:
+    """Run pytest over *paths* once and return the raw JUnit XML.
+
+    Extracted from run_contract so the null-stub probe can run the same command
+    with two extra arguments instead of duplicating the flag set. Every flag here
+    is load-bearing, and each is explained below.
+
+    extra_env is merged over os.environ rather than replacing it, so the trace id
+    a daemon exported still reaches the child (.claude/rules/trace-id.md).
 
     `-o addopts=` neutralises the repository's configured addopts (coverage,
     parallel workers) so the report is deterministic and cheap. CANOPUS_NO_ATTEST
@@ -185,8 +205,20 @@ def run_contract(
             "--continue-on-collection-errors",
             "-p", "no:cacheprovider",
             "-q",
+            *extra_args,
         ]
-        env = dict(os.environ, CANOPUS_NO_ATTEST="1")
+        # PYTHONDONTWRITEBYTECODE is load-bearing, not tidiness. pytest's
+        # assertion rewriter caches a .pyc for every test module it imports, so a
+        # plain run drops a __pycache__ directory INSIDE the contract tree. That
+        # tree is frozen recursively, and a directory that appeared after the
+        # freeze reads as tampering to the very lock this tool installs. The
+        # measured symptom was `['__pycache__', 'test_one.py']` where only
+        # test_one.py had been written.
+        env = dict(
+            os.environ, CANOPUS_NO_ATTEST="1", PYTHONDONTWRITEBYTECODE="1",
+        )
+        if extra_env:
+            env.update(extra_env)
         try:
             proc = subprocess.run(
                 command, cwd=str(resolved_root), capture_output=True, text=True,
@@ -208,9 +240,19 @@ def run_contract(
                 f"measured (exit {proc.returncode}): {tail}"
             )
         try:
-            return parse_junit(report.read_text(encoding="utf-8"))
-        except (OSError, ElementTree.ParseError) as exc:
+            return report.read_text(encoding="utf-8")
+        except OSError as exc:
             raise ContractError(f"the contract report is unreadable: {exc}") from exc
+
+
+def run_contract(
+    paths: Sequence[Path],
+    root: Path,
+    *,
+    timeout: int = 900,
+) -> tuple[dict[str, int], list[tuple[str, str, str]]]:
+    """Run the contract once and read the report. See run_pytest_report."""
+    return parse_junit(run_pytest_report(paths, root, timeout=timeout))
 
 
 def refusal_reasons(
@@ -242,3 +284,73 @@ def refusal_reasons(
             "exists asserts nothing"
         )
     return reasons
+
+
+_MISSING_PATTERN = re.compile(r"No module named ['\"]([A-Za-z_][A-Za-z0-9_.]*)")
+# The other half of "the code under test is not there yet". A module file that
+# exists but does not yet carry the name the contract imports raises
+# `ImportError: cannot import name 'x' from 'y'`, which the pattern above does not
+# match at all. Without this the probe returns an empty name set for every
+# partially built module, run_null_stub does nothing, and vacuity_refusal can
+# never fire in exactly the mid-build state where a retake is taken.
+_MISSING_NAME_PATTERN = re.compile(
+    r"cannot import name ['\"][A-Za-z_][A-Za-z0-9_]*['\"] from "
+    r"['\"]([A-Za-z_][A-Za-z0-9_.]*)"
+)
+
+
+def missing_modules(xml_text: str) -> set[str]:
+    """FULL dotted module names the contract run could not import.
+
+    Read out of the failure messages the child itself produced, rather than
+    resolved in this process: the child's sys.path is the one that matters, and
+    it is not necessarily ours.
+
+    The dot belongs in the character class. Truncating at the first segment turns
+    one absent `scripts.utils.canopus_git` into a stub over the entire `scripts`
+    package, so modules that exist are mocked away, every test passes, and a good
+    contract is refused as vacuous.
+    """
+    root = _parse_report(xml_text)
+    found: set[str] = set()
+    for case in root.iter("testcase"):
+        for child in case:
+            message = child.get("message") or ""
+            text = child.text or ""
+            for blob in (message, text):
+                found.update(_MISSING_PATTERN.findall(blob))
+                found.update(_MISSING_NAME_PATTERN.findall(blob))
+    return found
+
+
+def run_null_stub(
+    paths: Sequence[Path],
+    root: Path,
+    modules: Iterable[str],
+    *,
+    timeout: int = 900,
+) -> set[tuple[str, str]]:
+    """The (file, test) pairs that PASS with every absent module mocked.
+
+    Each one is proved to assert nothing. Returns an empty set when there is
+    nothing to stub, which is the ordinary state of a mid-build retake where the
+    implementation already imports.
+    """
+    names = sorted(set(modules))
+    if not names:
+        return set()
+    engine_root = str(Path(__file__).resolve().parent.parent.parent)
+    env = {
+        "CANOPUS_STUB_MODULES": ",".join(names),
+        "PYTHONPATH": os.pathsep.join(
+            [engine_root, os.environ.get("PYTHONPATH", "")]
+        ).rstrip(os.pathsep),
+    }
+    xml_text = run_pytest_report(
+        paths, root, timeout=timeout, extra_env=env,
+        extra_args=("-p", "scripts.utils.canopus_nullstub"),
+    )
+    _counts, outcomes = parse_junit(xml_text)
+    return {
+        (rel, name) for rel, name, outcome in outcomes if outcome == "passed"
+    }

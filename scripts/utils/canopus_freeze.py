@@ -230,8 +230,8 @@ def dir_member_name(rel_posix: str) -> str:
     One function, because the mark is an invariant and not a formatting choice.
     The composition is a digest over rendered names, so without the trailing
     slash a directory `plug` and a file `plug` produce the same line and one
-    replacing the other moves nothing. Both the measurement (`member_rel`) and
-    the write-deny (`frozen_reason`) spell it here.
+    replacing the other moves nothing. The measurement (`member_rel`) spells it
+    here, and any future reader of the composition should too.
     """
     return f"{rel_posix}/"
 
@@ -276,10 +276,13 @@ def guard_watches_directories(names: Sequence[str]) -> bool:
 def watched_directory(name: str, names: Sequence[str]) -> bool:
     """Would a subdirectory called *name* join a shallow guard's composition?
 
-    The rule the tree-root guard measures with, as one predicate, so the deny
-    can ask the same question the measurement asks. `frozen_reason` calls it to
-    refuse the write that CREATES such a directory; `_members` calls it to list
-    the directories that are already there.
+    The rule the tree-root guard measures with, as one predicate. `_members`
+    calls it to list the directories that are already there, and `cmd_status`
+    reaches it through `guard_watches_directories` to print the real scope. The
+    write-deny does NOT call it: refusing the write that CREATES such a
+    directory was tried in wire 2.3 and withdrawn, for the reason `frozen_reason`
+    records. So this predicate now serves DETECTION only, and the gap between
+    what is watched and what is prevented is on the open list rather than closed.
 
     The pattern-set test is spelled `tuple(names) == ...` deliberately.
     `_guard_ancestors` passes the TUPLE GUARD_NAMES_TREE_ROOT and `recompute`
@@ -1115,29 +1118,26 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
     The dispatcher calls this on every Write/Edit, so it must stay cheap: no
     hashing, no stat calls.
 
-    Three questions, and the third was measured missing in the wire 2.3 review.
-    A guard that watches directories must also refuse the write that CREATES
-    one, because the Write tool makes missing parent directories: a single
-    undenied `plug/__init__.py` installs the shadowing package that the root
-    guard exists to catch. Detection at verify held throughout; prevention at
-    the hook did not, and `matches_guard`'s own docstring names that divergence
-    as the defect to avoid.
+    Two questions, and a third that was tried and WITHDRAWN. Wire 2.3 briefly
+    also refused any Write that would CREATE a watched top-level directory, on
+    the argument that a guard watching directories should refuse the one Write
+    that installs one, since the Write tool makes missing parents. The argument
+    is sound and the deny was not: measured under a held freeze, an ordinary
+    note written under the workspace's private `threads/` tree was refused,
+    because that name is an identifier-shaped top-level directory which is
+    data-routed and absent from a fresh engine clone. `check_canopus_freeze`
+    also runs BEFORE `check_protect_personal_threads` in the dispatcher's chain,
+    so the deny took writes the workspace's own design expects to reach that
+    later check, and it did so for every frozen slice. Detection at `verify` is
+    kept and prevention is not: a guard that reddens on ordinary work is one an
+    operator learns to release around, which is worse than no guard. The
+    asymmetry is real, recorded on the open list in `docs/EXTENDING.md`, and
+    deliberate rather than overlooked.
 
-    The refusal stays exactly as wide as the measurement. It fires only for a
-    directory `watched_directory` accepts AND that the guard's recorded members
-    do not already list, so a write under an existing `scripts/` or `docs/` is
-    untouched. Recorded members, not disk: this function never stats. That is
-    also why it says "would ADD" rather than "would create": the comparison is
-    against the RECORDED members, so a directory already on disk and absent from
-    the manifest is refused with a sentence that never claimed to know which.
-
-    Every members-mode `dirs` entry must carry BOTH `"names"` and `"members"`;
-    `_created_directory` indexes the second unconditionally. `read_freeze`
-    validates both on load, so a manifest reaching here has them, and the
-    dispatcher's fail-closed handling of `FreezeCorrupt` is what covers the rest.
-    Stated because this sits on the fail-open path: the dispatcher calls it
-    unguarded (`.claude/hooks/_dispatch.py`), so a KeyError raised here reaches
-    the hook uncaught on an ordinary write.
+    So the deny is basename-shaped: a path is refused when it IS a frozen file,
+    when it sits inside a recursively frozen directory, or when its own basename
+    would join a guard's watched composition. A path whose FIRST component does
+    not exist yet is not this function's business.
     """
     if rel_posix in manifest["files"]:
         return f"{rel_posix} is a frozen contract file"
@@ -1157,35 +1157,7 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
             # measurement refuses writes nothing would have reported, which is
             # how a discipline tool becomes an obstacle.
             return f"{rel_posix} would join the guarded composition of {shown}/"
-        created = _created_directory(rel_posix, dir_rel, entry)
-        if created:
-            return (
-                f"{rel_posix} would add {created} to the guarded composition "
-                f"of {shown}/"
-            )
     return None
-
-
-def _created_directory(rel_posix: str, dir_rel: str, entry: dict) -> Optional[str]:
-    """The watched directory member *rel_posix* would add to *entry*, or None.
-
-    Split out because it is the only part of `frozen_reason` that has to reason
-    about a path's SHAPE rather than compare two strings, and burying it in the
-    loop is how the "already recorded" half gets dropped by a later edit. That
-    half is what keeps the deny honest: without it every write under an existing
-    top-level directory is refused, which is a guard nobody keeps.
-    """
-    if dir_rel:
-        if not rel_posix.startswith(dir_rel + "/"):
-            return None
-        inner = rel_posix[len(dir_rel) + 1:]
-    else:
-        inner = rel_posix
-    head, sep, _rest = inner.partition("/")
-    if not sep or not watched_directory(head, entry["names"]):
-        return None
-    member = dir_member_name(f"{dir_rel}/{head}" if dir_rel else head)
-    return None if member in entry["members"] else member
 
 
 # ============================================================

@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.utils.canopus_freeze import build_manifest, write_freeze
+from scripts.utils.canopus_freeze import (
+    build_manifest,
+    guard_watches_directories,
+    write_freeze,
+)
 
 HOOK_PATH = Path(__file__).resolve().parent.parent / ".claude" / "hooks" / "_dispatch.py"
 STAMP = "2026-01-01T00:00:00+00:00"
@@ -77,36 +81,44 @@ def test_the_covered_tool_tuple_is_exactly_the_four_write_tools(dispatch):
 
 
 def test_unrelated_file_is_not_denied(dispatch, anchor):
-    """UPDATED in wire 2.3, when the deny learned to see directories.
+    """RESTORED after the wire 2.3 retreat, to the input it was written with.
 
-    This asserted `scripts/other.py` is unrelated. There is no `scripts/` in
-    this fixture's tree, so that ONE Write creates it — the tool makes missing
-    parents — and an importable root directory joins the composition, which
-    `verify` reports as `added == ['scripts/']`. Denying it is the deny agreeing
-    with the measurement, so the expectation is corrected rather than kept.
-    Unrelated now means a path under a directory the composition already
-    records, which is what the word has to mean once directories are watched.
+    The created-directory deny had briefly made this a DENIAL, because no
+    `scripts/` exists in this fixture's tree and the Write tool makes missing
+    parents. That deny is withdrawn, so `scripts/other.py` is unrelated again
+    and the original input is put back.
     """
     module, tree = dispatch
     _freeze(tree, anchor)
-    assert module.check_canopus_freeze(_write(tree / "tests" / "sub" / "other.py")) is None
+    assert module.check_canopus_freeze(_write(tree / "scripts" / "other.py")) is None
 
 
-def test_a_write_that_would_create_an_importable_directory_is_denied(dispatch, anchor):
-    """The prevention half of the root guard, at the layer that does the denying.
+def test_a_write_under_an_absent_top_level_directory_is_not_denied(dispatch, anchor):
+    """The retreat, at the layer that does the denying.
 
-    Measured missing at the wire 2.3 review: `frozen_reason` watched a directory
-    it never refused, so an agent installed the shadowing package in one
-    undenied Write while detection at verify still worked.
+    `check_canopus_freeze` runs BEFORE `check_protect_personal_threads` in the
+    dispatcher's chain, and there is no data-path redirect between them. While
+    the created-directory deny stood, a write to the workspace's private
+    `threads/` tree — an identifier-shaped top-level name that is data-routed
+    and absent from a fresh engine clone — was refused for the whole duration of
+    every frozen slice, so writes the workspace's own design routes to that later
+    check never reached it. A guard that reddens on ordinary work is one an
+    operator learns to release around, so prevention retreated and detection at
+    `verify` stayed.
     """
     module, tree = dispatch
     _freeze(tree, anchor)
 
-    decision = module.check_canopus_freeze(_write(tree / "plug" / "__init__.py"))
+    # Non-vacuous: the composition under test really is one that WATCHES
+    # directories, so this cannot pass by the watch having quietly gone away.
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="demo", frozen_at=STAMP
+    )
+    assert guard_watches_directories(manifest["dirs"][""]["names"])
 
-    assert decision["decision"] == "block"
-    assert decision["_policy_deny"] is True
-    assert "plug/" in decision["reason"]
+    for absent in ("threads", "crm", "knowledge", "outputs"):
+        assert not (tree / absent).exists(), f"fixture drift: {absent}/ exists"
+        assert module.check_canopus_freeze(_write(tree / absent / "note.md")) is None
 
 
 def test_file_added_beside_a_frozen_file_is_denied(dispatch, anchor):

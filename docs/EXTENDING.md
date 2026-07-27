@@ -599,17 +599,15 @@ identifier, while a directory named for a Python keyword passes and is watched, 
 safe direction. Until wire 2.3 the composition listed files only, so `plug/__init__.py`
 dropped at the root shadowed an installed distribution while every guard read green.
 
-**The deny now refuses what the guard watches.** The PreToolUse hook used to match a new
-file's basename against the guard's patterns, which meant a file written INSIDE a
-newly created root directory had that directory as its parent, matched no guard entry and
-was never denied: verification reddened and the write still landed. `frozen_reason` now
-refuses any Write whose path would ADD a watched directory to a guard's recorded members,
-which is materially broader than the old rule by design: `plug/anything.txt` is refused
-too, not only `plug/__init__.py`, because the directory is what moves the composition and a
-non-Python file creates it just as well. The refusal compares against RECORDED members and
-never stats disk, so it says "would add" rather than "would create": a directory already on
-disk and absent from the manifest is refused by a sentence that never claimed to know which
-of the two it was.
+**The deny does NOT refuse what this guard watches, and that gap was tried, measured and
+withdrawn inside this slice.** The PreToolUse hook matches a new file's BASENAME against
+the guard's patterns, so a file written INSIDE a newly created root directory has that
+directory as its parent, matches no guard entry, and is not denied: verification reddens
+and the write still lands. Wire 2.3 briefly closed that by refusing any Write whose path
+would add a watched directory to a guard's recorded members, then reopened it deliberately.
+The reason is recorded in full on the open list below; the short form is that the wider deny
+refused ordinary writes to data-routed top-level names absent from a fresh engine clone, and
+a guard that reddens on ordinary work is one an operator learns to release around.
 
 **Pytest adds no second in-tree `sys.path` entry, and the reason previously recorded for
 that was false.** An earlier revision of this page said a module dropped into another
@@ -912,6 +910,39 @@ this slice.
 `pyproject.toml` is what makes the tree root the only in-tree `sys.path` entry.
 The root guard watches `*.py` files and importable directories at the root, so it
 does not watch `pyproject.toml`, and that file is not frozen by content either.
+
+**The root composition guard WATCHES identifier-shaped top-level directories, and
+the PreToolUse deny does NOT prevent their creation. This was closed during the
+slice and then deliberately reopened.** `verify` reddens when such a directory
+appears — `added` reports `plug/` — but a Write to `plug/__init__.py` while the
+lock is held is allowed through, so detection is the whole of the protection and
+the shadowing package lands before anyone runs `verify`.
+
+It was not left this way for want of trying. The deny was implemented, and the
+gate run under the retaken lock measured what it cost:
+`tests/test_protect_personal_threads_hook.py::test_hook_allows_legitimate_write_inside_personal`
+failed, because its payload writes a note under the private `threads/` tree and
+`threads/` is an identifier-shaped top-level directory that is data-routed and
+absent from a fresh engine clone. That is not a test artifact.
+`.claude/hooks/_dispatch.py` has no data-path redirect in its `CHECKS` chain and
+runs `check_canopus_freeze` BEFORE `check_protect_personal_threads` — a check
+that exists precisely to police those writes — so the deny stopped them at that
+first gate for the whole duration of every frozen slice. The same holds for
+`crm/`, `knowledge/`, `context/`, `plans/`, `outputs/` and `datastore/`, each of
+them a real gitignored, data-routed root name.
+
+The frozen contract's own
+`test_a_directory_that_cannot_be_imported_does_not` states the standard this was
+judged against: the fix's failure mode is over-reach, and a guard that reddens on
+ordinary work is one an operator learns to release around, which is worse than no
+guard. An operator who cannot write a private note while a freeze is held opens
+the window to get work done, and then the guard protects nothing. So prevention
+retreated and detection stayed. Two narrower cuts were considered and rejected:
+reading the routing map inside `canopus_freeze.py` breaks its stdlib-plus-`atomic`
+import floor, and keying on `.gitignore` adds a file read to a path that must
+never raise and would still be guessing at intent. Closing this properly needs the
+dispatcher to resolve data-routed paths before the freeze check sees them, which
+is a different slice.
 
 **Seventeen gitignored identifier-shaped root directories will redden the guard
 by design.** `.gitignore` carries eighteen identifier-shaped root-level entries,

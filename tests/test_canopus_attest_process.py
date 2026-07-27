@@ -8,14 +8,18 @@ and the freeze probe runs a different topology from the gate. A comparison over
 raw names refuses every honest run.
 
 The refusal therefore compares, in both directions, every `dist:` identity plus
-any `intree:` identity that `-p` or PYTEST_PLUGINS explicitly named. An in-tree
-plugin the tree loaded on its own, and every `anon:` entry, are recorded as
-provenance beside it, each for a reason stated where the partition is built.
+every `intree:` identity whose origin is not a `conftest.py`. That is a property
+rather than a list of channels: three revisions enumerated channels and review
+found an escape past each in turn. An in-tree conftest and every `anon:` entry
+are recorded as provenance beside it, each for a reason stated where the
+partition is built.
 """
 import os
 import sysconfig
 import types
 from pathlib import Path
+
+import pytest
 
 from scripts.utils import canopus_gate
 from scripts.utils.canopus_gate import process_facts
@@ -61,6 +65,20 @@ def _instance(module_name):
     return type("Plugin", (), {"__module__": module_name})()
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_plugin_environment(monkeypatch):
+    """No test here inherits a PYTEST_PLUGINS the session happened to carry.
+
+    A fixture rather than a `delenv` per test, because per-test hermeticity is
+    remembered by the tests that already have it and forgotten by the next one
+    written. This module reads the environment (`env_configured`, and every
+    plugin-loading route that goes through it), so an ambient value would decide
+    an assertion silently. The one test that is ABOUT the variable sets it
+    itself, after this has cleared it.
+    """
+    monkeypatch.delenv("PYTEST_PLUGINS", raising=False)
+
+
 # ============================================================
 # The identity is derived from the origin, not from the name
 # ============================================================
@@ -78,8 +96,10 @@ def test_a_plugin_from_the_interpreter_library_is_named_by_its_distribution(
     `_LIBRARY_DIRS` and its loop deleted, which is no test of them at all.
 
     Two plugins, one exclusion: the installed one is under a library directory
-    inside the root and lands in the COMPARED set, the other is a plain file
-    beside it and lands in the provenance.
+    inside the root and reads `dist:`, the other is a plain file beside it and
+    reads `intree:`. Both are compared — a non-conftest in-tree plugin is
+    compared under the property rule — so the assertion below is about which
+    IDENTITY each one gets, which is what the library exclusion decides.
     """
     library = tmp_path / ".venv" / "lib" / "site-packages"
     (library / "pytest_cov").mkdir(parents=True)
@@ -95,8 +115,9 @@ def test_a_plugin_from_the_interpreter_library_is_named_by_its_distribution(
 
     facts = process_facts(config, tmp_path)
 
-    assert facts["plugins"] == {"dist:pytest_cov": str(installed)}
-    assert facts["intree_plugins"] == ["plug.py"]
+    assert facts["plugins"] == {"dist:pytest_cov": str(installed),
+                                "intree:plug.py": str(own)}
+    assert facts["intree_plugins"] == []
 
 
 def _intree_plugin(tmp_path):
@@ -106,25 +127,52 @@ def _intree_plugin(tmp_path):
     return origin
 
 
-def test_a_plugin_the_tree_loaded_on_its_own_is_recorded_and_never_compared(
-        tmp_path, monkeypatch):
-    """The limit of spec 1.3a that SURVIVED review, pinned to its reason.
+def test_an_in_tree_conftest_is_recorded_and_never_compared(tmp_path):
+    """The one in-tree case that survives, pinned to the reason it survives.
 
-    Which in-tree conftests load depends on what is COLLECTED, so the freeze
-    probe (the contract directory) and the gate run (the whole suite)
-    legitimately differ. A conftest also cannot reach the frozen contract's own
-    results without moving frozen bytes. Both clauses are about a plugin the
-    tree loaded on its own; neither survives an explicit `-p`, which the test
-    below covers.
+    Which conftests load depends on what is COLLECTED, so the freeze probe (the
+    contract directory) and the gate run (the whole suite) legitimately differ,
+    and comparing them would refuse every honest run. A conftest also cannot
+    reach the frozen contract's own results without moving frozen bytes:
+    `tests/conftest.py` is in the `--content` set and everything inside the
+    contract directory is frozen recursively.
+
+    That reasoning is about conftests specifically, which is why every OTHER
+    in-tree plugin is compared: it can only be there because something named it.
     """
-    monkeypatch.delenv("PYTEST_PLUGINS", raising=False)
-    origin = _intree_plugin(tmp_path)
-    config = _Config([("skipper", _module("plug.skipper", str(origin)))])
+    origin = tmp_path / "tests" / "conftest.py"
+    origin.parent.mkdir(parents=True)
+    origin.write_text("def pytest_pyfunc_call(pyfuncitem):\n    return None\n")
+    config = _Config([(str(origin), _module("conftest", str(origin)))])
 
     facts = process_facts(config, tmp_path)
 
-    assert facts["intree_plugins"] == ["plug/skipper.py"]
+    assert facts["intree_plugins"] == ["tests/conftest.py"]
     assert facts["plugins"] == {}
+
+
+def test_an_in_tree_plugin_no_channel_named_is_still_compared(tmp_path):
+    """The third route, and the reason the rule stopped enumerating routes.
+
+    `pytest_plugins = ["plug.skipper"]` declared in a test module reaches
+    `_import_plugin_specs` through `consider_module`, which `_pytest/python.py`
+    calls on every imported test module. It arrives through neither `-p` nor
+    PYTEST_PLUGINS. And `GUARD_NAMES_ANCESTOR` watches only `conftest.py`, so a
+    NEW `tests/test_aaa_evil.py` carrying that line moves no byte the freeze
+    notices. Measured: it registered the in-tree skipper, hijacked the run, and
+    landed in provenance while the record attested.
+
+    So the rule is a PROPERTY: a non-conftest in-tree plugin is compared however
+    it arrived, including by a route nobody has found yet. This test names no
+    channel, which is the point of it.
+    """
+    origin = _intree_plugin(tmp_path)
+    config = _Config([("plug.skipper", _module("plug.skipper", str(origin)))])
+
+    facts = process_facts(config, tmp_path)
+
+    assert facts["plugins"] == {"intree:plug/skipper.py": str(origin)}
+    assert facts["intree_plugins"] == []
 
 
 def test_an_in_tree_plugin_a_flag_named_joins_the_compared_set(tmp_path):
@@ -168,54 +216,6 @@ def test_an_in_tree_plugin_the_environment_named_joins_the_compared_set(
 
     assert facts["plugins"] == {"intree:plug/skipper.py": str(origin)}
     assert facts["intree_plugins"] == []
-
-
-def test_the_environment_variable_is_read_comma_separated(tmp_path, monkeypatch):
-    """Matching pytest's own `_get_plugin_specs_as_list`, which splits on ",".
-
-    A reader that took the whole value as one name would see `a,plug.skipper`,
-    match nothing, and leave every multi-plugin environment uncompared -- the
-    same hole again, this time behind a parser instead of a channel.
-    """
-    monkeypatch.setenv("PYTEST_PLUGINS", "other.plugin,plug.skipper")
-    origin = _intree_plugin(tmp_path)
-    config = _Config([("plug.skipper", _module("plug.skipper", str(origin)))])
-
-    assert process_facts(config, tmp_path)["plugins"] == {
-        "intree:plug/skipper.py": str(origin)}
-
-
-def test_a_flag_that_names_a_module_registered_otherwise_still_counts(tmp_path):
-    """Matched by module name as well as by registration name.
-
-    A module something imported before `-p` reached it is already registered,
-    under whatever name that importer chose. The second key can only ever move
-    an identity INTO the compared set, so it reddens rather than waves through.
-    """
-    origin = _intree_plugin(tmp_path)
-    config = _Config([("some-other-name", _module("plug.skipper", str(origin)))],
-                     option_plugins=["plug.skipper"])
-
-    assert process_facts(config, tmp_path)["plugins"] == {
-        "intree:plug/skipper.py": str(origin)}
-
-
-def test_a_blocked_flag_entry_names_nothing(tmp_path):
-    """`-p no:plug.skipper` names a plugin that is NOT loaded.
-
-    It must contribute nothing to the compared set, the same decision `None`
-    already gets in `_module_name`. Without the `no:` filter the string
-    `no:plug.skipper` would never match anyway; the filter is what stops a
-    future matcher that strips the prefix from quietly comparing a block.
-    """
-    origin = _intree_plugin(tmp_path)
-    config = _Config([("plug.skipper", _module("plug.skipper", str(origin)))],
-                     option_plugins=["no:plug.skipper"])
-
-    facts = process_facts(config, tmp_path)
-
-    assert facts["plugins"] == {}
-    assert facts["intree_plugins"] == ["plug/skipper.py"]
 
 
 def test_a_flag_naming_a_distribution_changes_nothing(tmp_path, monkeypatch):

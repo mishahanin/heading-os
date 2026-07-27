@@ -10,7 +10,7 @@ annotated-doc==0.0.4
     # via fastapi
 annotated-types==0.8.0
     # via pydantic
-anthropic==0.116.0
+anthropic==0.120.0
     # via heading-os-engine
 anyio==4.14.2
     # via
@@ -19,7 +19,7 @@ anyio==4.14.2
     #   openai
     #   starlette
     #   watchfiles
-apify-client==3.0.4
+apify-client==3.1.0
     # via heading-os-engine
 apscheduler==3.11.3
     # via heading-os-engine
@@ -86,9 +86,9 @@ et-xmlfile==2.0.0
     # via openpyxl
 exchangelib==5.6.0
     # via heading-os-engine
-fastapi==0.139.0
+fastapi==0.140.7
     # via heading-os-engine
-firecrawl-py==4.31.0
+firecrawl-py==4.33.1
     # via heading-os-engine
 flatbuffers==25.12.19
     # via onnxruntime
@@ -100,7 +100,7 @@ google-api-core==2.33.0
     # via google-api-python-client
 google-api-python-client==2.198.0
     # via heading-os-engine
-google-auth==2.55.1
+google-auth==2.56.2
     # via
     #   google-api-core
     #   google-api-python-client
@@ -117,7 +117,7 @@ googleapis-common-protos==1.75.0
     # via
     #   google-api-core
     #   opentelemetry-exporter-otlp-proto-http
-greenlet==3.5.3
+greenlet==3.5.4
     # via
     #   heading-os-engine
     #   playwright
@@ -157,9 +157,9 @@ jiter==0.16.0
     # via
     #   anthropic
     #   openai
-langfuse==4.13.0
+langfuse==4.14.1
     # via heading-os-engine
-liteparse==2.4.1
+liteparse==2.9.0
     # via heading-os-engine
 lxml==6.1.1
     # via
@@ -204,7 +204,7 @@ olefile==0.47
     # via markitdown
 onnxruntime==1.20.1
     # via magika
-openai==2.44.0
+openai==2.48.0
     # via heading-os-engine
 openpyxl==3.1.5
     # via
@@ -391,7 +391,7 @@ uritemplate==4.2.0
     # via google-api-python-client
 urllib3==2.7.0
     # via requests
-uvicorn==0.50.2
+uvicorn==0.51.0
     # via heading-os-engine
 uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
     # via uvicorn

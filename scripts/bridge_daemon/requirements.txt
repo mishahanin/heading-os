@@ -17,3 +17,8 @@ httpx==0.28.1
 # PyYAML is shared with the main workspace at 6.0.3; do not pin
 # a different version here. If you need to bump it, bump it in
 # requirements.txt at the workspace root.
+#
+# That rule is not specific to PyYAML: every pin above also appears in the
+# uv-managed root graph and must match it. Bump at the root
+# (`uv lock --upgrade-package <name>`), regenerate requirements.txt, then mirror
+# the new pin here. Enforced by tests/test_satellite_requirements_lockstep.py.

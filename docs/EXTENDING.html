@@ -278,8 +278,10 @@ would guard <code>scripts/</code> and <code>scripts/utils/</code>, and a build t
 file there cannot build anything.</p>
 <p><code>canopus probe DIR</code> runs a contract set and prints its per-test outcomes without
 freezing anything. <code>canopus pack</code> prints the Fix 2 evidence page: all three axes
-(lock, attestation, approval), collected against baseline, commits made while no
-freeze was held, whether the attestation has gone stale, and what is not covered.</p>
+(lock, attestation, approval), collected against baseline, the <code>interpreter</code>
+block describing what configured the attesting run (which <code>pack</code> alone prints),
+commits made while no freeze was held, whether the attestation has gone stale,
+and what is not covered.</p>
 <p><strong>Red is not the same as meaningful.</strong> A contract can be red only because the
 module it imports does not exist yet, which says nothing about whether its tests
 assert anything. So <code>probe</code> always, and <code>approve</code> and <code>freeze</code> whenever
@@ -451,7 +453,8 @@ repository and this workspace has been relocated once already; a merged history
 can carry more than one root commit, so the whole sorted set is hashed rather
 than one line of output.</p>
 <p><code>anchor_repo</code> is inside the root hash, beside the recipe, the anchor path, the
-file and directory maps, and the baseline. That placement is the load-bearing
+file and directory maps, the per-file baseline, and (from wire 2.3) the plugin
+set the freeze captured. That placement is the load-bearing
 half: outside the hash, a builder edits the binding to <code>in_repo: false</code>, wins the
 working-copy fallback permanently, and the committed approval still matches.
 Inside it, the same edit moves the root and the human&rsquo;s committed approval stops
@@ -787,15 +790,20 @@ non-Python file creates it just as well. The refusal compares against RECORDED m
 never stats disk, so it says &ldquo;would add&rdquo; rather than &ldquo;would create&rdquo;: a directory already on
 disk and absent from the manifest is refused by a sentence that never claimed to know which
 of the two it was.</p>
-<p><strong>The tree root is the only in-tree <code>sys.path</code> entry, and the reason previously recorded
-for that was false.</strong> An earlier revision of this page said a module dropped into another
+<p><strong>Pytest adds no second in-tree <code>sys.path</code> entry, and the reason previously recorded for
+that was false.</strong> An earlier revision of this page said a module dropped into another
 in-tree entry such as <code>tests/</code> was outside the composition by construction, closed &ldquo;by
 practice&rdquo; because the contract freezes recursively. The practice half is true. The route it
 excused is not live at all: <code>pyproject.toml</code> sets <code>--import-mode=importlib</code>, under which
 pytest inserts no basedir for a collected test file. Measured on a scratch tree carrying
 that setting, <code>sys.path[:2]</code> inside <code>tests/contract/&lt;slice&gt;/test_contract.py</code> was the tree
 root twice and nothing else, and a package at <code>tests/plug/</code> and a package beside the
-contract both raised <code>ImportError</code>. A first attempt at the same measurement was taken on a
+contract both raised <code>ImportError</code>. Say only what that establishes: pytest contributes no
+tree-owned entry beyond the root, which is what the <code>pythonpath = ["."]</code> guard has to cover.
+It is not the claim that nothing importable lives under the tree at all, which would be
+plainly untrue of <code>.venv/…/site-packages</code>, and is why <code>_library_dirs</code> exists to tell an
+interpreter library from an in-tree file in the first place. A first attempt at the same
+measurement was taken on a
 scratch tree missing this repository&rsquo;s own <code>addopts</code>, read pytest&rsquo;s PREPEND mode instead,
 and produced a trigger that can never fire here; it is corrected rather than quietly
 dropped, because a false reason left standing is what the next slice reasons from. What
@@ -860,7 +868,7 @@ finish, and <code>verify</code> and <code>status</code> print a second line bene
 </tr>
 <tr>
 <td><code>NOT ATTESTED</code></td>
-<td>absent, recorded against a different root hash, incompletely collected, carrying failures, describing no process, or loading a plugin set the freeze did not record; the recorded reasons print beneath it</td>
+<td>absent, recorded against a different root hash, incompletely collected, carrying failures, describing no process, loading a plugin set the freeze did not record, or taken over a freeze that captured no plugin baseline at all (any freeze without <code>--contract</code>); the recorded reasons print beneath it</td>
 </tr>
 </tbody>
 </table>
@@ -899,7 +907,7 @@ whether the contract ran. Between the two sits the pytest process itself, and
 before wire 2.3 nothing described it. <code>PYTEST_ADDOPTS</code> was not scrubbed the way
 every <code>GIT_</code>-prefixed variable is, and the tree-root composition guard watched
 <code>*.py</code> FILES only, so a package DIRECTORY dropped at the root was invisible to
-it. Five things changed:</p>
+it. Five things changed, and none of them closes the bypass:</p>
 <ol>
 <li><strong>The record describes the process.</strong> Every attestation carries a <code>process</code>
    block: the launcher, the compared plugin identities, the in-tree plugins kept
@@ -911,7 +919,11 @@ it. Five things changed:</p>
    <code>freeze --contract</code> reads the set off the contract&rsquo;s own run. A later run
    whose compared set differs in either direction cannot attest, and the reason
    names the plugin. Both directions, because a plugin that VANISHED changed what
-   the run measured as surely as one that appeared.</li>
+   the run measured as surely as one that appeared. The corollary is a real cost
+   and not a footnote: a freeze taken over plain paths runs no pytest child, so
+   it captures no baseline, so NO later run of it can ever read <code>ATTESTED</code>. That
+   is fail-closed by design, and <code>freeze</code> says so at the surface the moment it
+   happens rather than leaving the operator to discover it days later.</li>
 <li><strong>The identity compared is derived from ORIGIN, never from pytest&rsquo;s
    registration name.</strong> A registration name is an absolute path for a conftest
    and a memory address for an anonymous plugin, so comparing those refuses every
@@ -926,13 +938,14 @@ it. Five things changed:</p>
 <li><strong>The tree-root guard sees importable directories, and the deny refuses the
    write that creates one.</strong> Both halves are above, under the guard table.</li>
 </ol>
-<p><code>verify</code>, <code>status</code> and <code>pack</code> print an <code>interpreter</code> block beneath the three
-axes: the launcher, the compared identities, the environment names, the parsed
-plugin option, each in-tree plugin marked <code>frozen</code> or <code>NOT FROZEN</code>, the
-recorded-and-never-compared entries, and the worker count with the number of
-distinct plugin sets among them. Origins stay in the record and off the page,
-because a distribution plugin&rsquo;s origin is a path inside the operator&rsquo;s
-virtualenv.</p>
+<p><code>pack</code> prints an <code>interpreter</code> block beneath the three axes: the launcher, the
+compared identities, the environment names, the parsed plugin option, each
+in-tree plugin marked <code>frozen</code> or <code>NOT FROZEN</code>, the recorded-and-never-compared
+entries, and the worker count with the number of distinct plugin sets among
+them. <code>verify</code> and <code>status</code> print the attestation&rsquo;s recorded reasons, which name
+the offending plugin, but not the block. Origins stay in the record and off
+every page, because a distribution plugin&rsquo;s origin is a path inside the
+operator&rsquo;s virtualenv.</p>
 <p><strong>The recorded reproduction, re-run against the new code.</strong> It now has two
 answers rather than one, and only the first is closed.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># A. the plugin at the tree root, exactly as this page recorded it</span>
@@ -1066,15 +1079,22 @@ exist on one machine when this was first written. Accepted rather than excluded,
 because an exclusion set wide enough to cover seventeen names is exactly where a
 real shadowing directory would hide, and the failure is loud and instantly
 explicable.</p>
-<p><strong>One test reaches <code>ensure_venv()</code> outside <code>.venv</code>.</strong>
-<code>tests/test_run_tests_runner.py</code> loads <code>scripts/run-tests.py</code> by path without the
-module-level skip guard its sibling <code>tests/test_run_tests_env.py</code> carries. Run
-outside the venv it re-execs, and the symptom is a truncated first collection plus
-a duplicated run rather than a silent green: <code>venv.py</code> re-execs
-<code>[venv_python, sys.argv[0], ...]</code>, under pytest <code>sys.argv[0]</code> is the pytest entry
-point, and <code>HEADING_OS_VENV_RELAUNCHED</code> stops the loop after one relaunch. The
-same unguarded pattern sits inside the frozen contract, where it cannot be fixed
-at all until the contract is retired.</p>
+<p><strong>One test module loads <code>run-tests.py</code> without the skip guard its sibling
+carries, and the gap is real but narrower than it first reads.</strong>
+<code>tests/test_run_tests_runner.py</code> and the frozen contract both import
+<code>scripts/run-tests.py</code> by path; only <code>tests/test_run_tests_env.py</code> guards the
+import with a module-level skip. <code>run-tests.py</code> calls <code>ensure_venv()</code> at import,
+which <code>os.execv</code>s the whole pytest process when the interpreter is not
+<code>.venv/bin/python</code>. What holds in practice is the root <code>tests/conftest.py</code>, which
+sets the re-exec sentinel before any test module is imported, so under an
+ordinary run the unguarded import is already a no-op. The exposed case is a run
+where that conftest never loads, which is the <code>--noconftest</code> and <code>--confcutdir</code>
+gap two items above, arriving here in its second form. Measured on 2026-07-27
+with the system interpreter: <code>pytest -q --noconftest tests/test_run_tests_env.py</code>
+prints <code>1 skipped</code> and exits 5, while the same command on
+<code>tests/test_run_tests_runner.py</code> prints ZERO bytes and exits 0. A run that prints
+nothing is indistinguishable from one that never happened, and inside the frozen
+contract the pattern cannot be fixed at all until the contract is retired.</p>
 <p><strong>Freeze the enforcers, all eight of them.</strong> A freeze that omits them protects the
 contract while leaving the thing that checks the contract editable.</p>
 <table>

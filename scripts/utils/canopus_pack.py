@@ -209,14 +209,16 @@ def render_process(process: Optional[dict], frozen_paths: Collection[str]) -> st
         lines.append(f"  other      {', '.join(other)}  (recorded, never compared)")
     workers = process.get("workers")
     if isinstance(workers, (list, tuple)) and workers:
-        # A count and a spread, not sixteen plugin lists. Each worker's set is
-        # compared against the FREEZE in `build_attestation`, and a worker that
-        # disagrees already prints its own symmetric difference as a reason; what
-        # the page adds is that the comparison covered a parallel run at all.
+        # A count and a spread, not sixteen plugin lists. RECORDED, not
+        # "compared": `build_attestation` runs its worker loop only where the
+        # freeze captured a plugin baseline, so on a baseline-less freeze under
+        # xdist a row promising a comparison would assert one that never ran.
+        # A worker that does disagree prints its own symmetric difference as a
+        # reason; what this row adds is that a parallel run was described at all.
         distinct = {tuple(_names(worker)) for worker in workers}
         plural = "" if len(distinct) == 1 else "s"
         lines.append(f"  workers    {len(workers)}, {len(distinct)} distinct plugin "
-                     f"set{plural}, each compared against the freeze")
+                     f"set{plural} recorded")
     lines.append(
         "  The comparison covers distribution plugins and the in-tree ones pytest "
         "did not\n  import by collection; a collected in-tree conftest is listed "

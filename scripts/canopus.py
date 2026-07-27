@@ -91,6 +91,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     attestation_state,
     build_manifest,
     clear_freeze,
+    guard_watches_directories,
     lock_state,
     open_release_window,
     read_anchor,
@@ -1155,8 +1156,13 @@ def cmd_status(args) -> int:
     for rel, entry in manifest["dirs"].items():
         # The filter is printed because it is the guard's actual scope. A line
         # reading "dir tests/" without it invites the reading that everything
-        # under tests/ is watched, which is the opposite of true.
+        # under tests/ is watched, which is the opposite of true. The directory
+        # half is printed for the same reason in the other direction: from wire
+        # 2.3 the tree-root guard also measures importable subdirectories, and a
+        # line reading "watching *.py" alone UNDER-states it.
         watching = " ".join(entry["names"])
+        if guard_watches_directories(entry["names"]):
+            watching += " + importable directories"
         print(f"  dir   {rel or '.'}/  ({entry['mode']}, watching {watching})")
     _print_contract(manifest, read_attestation(root))
     return 0

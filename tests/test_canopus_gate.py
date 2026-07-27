@@ -16,6 +16,24 @@ STAMP = "2026-01-01T00:00:00+00:00"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _git(directory: Path, *argv: str) -> subprocess.CompletedProcess:
+    """git in *directory*, with every GIT_* variable out of the child environment.
+
+    Not tidiness. These helpers run `git add -A`, and git exports GIT_DIR and
+    GIT_INDEX_FILE to a hook. This suite runs inside this repository's pre-push
+    hook, so an unscrubbed helper under a git version that exports them would
+    resolve the ENGINE's repository instead of the fixture's and stage a deletion
+    of the whole engine index. Measured while auditing the retirement of this
+    slice's contract: exporting GIT_DIR by hand fails eight tests in this module
+    and stages exactly that deletion. The scrub is the same one git_output uses,
+    for the same reason.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("GIT_")}
+    return subprocess.run(["git", "-C", str(directory), *argv], check=True,
+                          capture_output=True, text=True, env=env)
+
+
 def _git_init(directory: Path) -> None:
     """Make *directory* a repository, so the gate artifact has a HEAD to read."""
     for argv in (
@@ -23,15 +41,12 @@ def _git_init(directory: Path) -> None:
         ["config", "user.email", "builder@example.invalid"],
         ["config", "user.name", "Builder"],
     ):
-        subprocess.run(["git", "-C", str(directory), *argv], check=True,
-                       capture_output=True, text=True)
+        _git(directory, *argv)
 
 
 def _git_commit(directory: Path, message: str) -> None:
-    subprocess.run(["git", "-C", str(directory), "add", "-A"], check=True,
-                   capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(directory), "commit", "-q", "-m", message],
-                   check=True, capture_output=True, text=True)
+    _git(directory, "add", "-A")
+    _git(directory, "commit", "-q", "-m", message)
 
 
 def _bound_manifest(tree: Path, anchor: Path) -> dict:
@@ -368,9 +383,24 @@ def test_a_substituted_repository_reddens_the_gate(tree, anchor, capsys):
 
 def _git_out(directory: Path, *argv: str, stdin: str = "",
              env: dict = None) -> str:
-    """git, captured. The module's `_git_commit` discards stdout; this needs it."""
+    """git, captured. The module's `_git_commit` discards stdout; this needs it.
+
+    The scrub survives a caller-supplied *env*, and the rule is precise rather
+    than a denylist: the base is os.environ with every GIT_* removed, and only
+    the caller's INTENTIONAL additions are put back, an addition being a key
+    whose value differs from what os.environ already held. So
+    `dict(os.environ, GIT_AUTHOR_DATE=...)` keeps its date and cannot smuggle an
+    inherited GIT_DIR through with it. The reason is `_git`'s: these fixtures run
+    `git add -A`, and a GIT_DIR inherited from a hook points at the ENGINE's
+    repository.
+    """
+    child = {key: value for key, value in os.environ.items()
+             if not key.startswith("GIT_")}
+    if env:
+        child.update({key: value for key, value in env.items()
+                      if os.environ.get(key) != value})
     proc = subprocess.run(["git", "-C", str(directory), *argv], check=True,
-                          input=stdin, capture_output=True, text=True, env=env)
+                          input=stdin, capture_output=True, text=True, env=child)
     return proc.stdout.strip()
 
 

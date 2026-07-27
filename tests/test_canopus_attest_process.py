@@ -8,11 +8,12 @@ and the freeze probe runs a different topology from the gate. A comparison over
 raw names refuses every honest run.
 
 The refusal therefore compares, in both directions, every `dist:` identity plus
-every `intree:` identity whose origin is not a `conftest.py`. That is a property
-rather than a list of channels: three revisions enumerated channels and review
-found an escape past each in turn. An in-tree conftest and every `anon:` entry
-are recorded as provenance beside it, each for a reason stated where the
-partition is built.
+every `intree:` identity pytest did not register as a COLLECTED CONFTEST. That
+is a property rather than a list of channels, and a property of REGISTRATION
+rather than of a file's name: four revisions enumerated first channels and then
+a basename, and review reproduced an escape past each in turn. A collected
+conftest and every `anon:` entry are recorded as provenance beside it, each for
+a reason stated where the partition is built.
 """
 import os
 import sysconfig
@@ -137,8 +138,11 @@ def test_an_in_tree_conftest_is_recorded_and_never_compared(tmp_path):
     `tests/conftest.py` is in the `--content` set and everything inside the
     contract directory is frozen recursively.
 
-    That reasoning is about conftests specifically, which is why every OTHER
-    in-tree plugin is compared: it can only be there because something named it.
+    The exemption is keyed on the REGISTRATION, not on the file name: pytest
+    registers a collected conftest under `str(conftestpath)`, which is why this
+    fixture registers it under its own path. The test below renames the exploit
+    to `conftest.py` and must still be compared, which is what makes those two
+    tests a pair rather than a repetition.
     """
     origin = tmp_path / "tests" / "conftest.py"
     origin.parent.mkdir(parents=True)
@@ -149,6 +153,31 @@ def test_an_in_tree_conftest_is_recorded_and_never_compared(tmp_path):
 
     assert facts["intree_plugins"] == ["tests/conftest.py"]
     assert facts["plugins"] == {}
+
+
+def test_a_file_called_conftest_that_arrives_by_name_is_still_compared(tmp_path):
+    """Review's exploit: the previous rule was bypassed by a RENAME.
+
+    `plug/conftest.py` carrying a `pytest_pyfunc_call` hook, named by
+    `pytest_plugins = ["plug.conftest"]` in a test module, with no `-p` and no
+    environment variable, turned `assert False` into a pass. Reproduced here
+    before the fix: pytest registered it under the dotted spec `plug.conftest`,
+    the basename discriminator excused it, and the record attested.
+
+    A file CALLED `conftest.py` that arrives by name is not directory-scoped and
+    not collection-dependent; its hooks fire for every item in the run. So the
+    discriminator is pytest's own registration name, which is a PATH for a
+    collected conftest and a dotted spec for a named module.
+    """
+    origin = tmp_path / "plug" / "conftest.py"
+    origin.parent.mkdir(parents=True)
+    origin.write_text("def pytest_pyfunc_call(pyfuncitem):\n    return True\n")
+    config = _Config([("plug.conftest", _module("plug.conftest", str(origin)))])
+
+    facts = process_facts(config, tmp_path)
+
+    assert facts["plugins"] == {"intree:plug/conftest.py": str(origin)}
+    assert facts["intree_plugins"] == []
 
 
 def test_an_in_tree_plugin_no_channel_named_is_still_compared(tmp_path):
@@ -176,14 +205,14 @@ def test_an_in_tree_plugin_no_channel_named_is_still_compared(tmp_path):
 
 
 def test_an_in_tree_plugin_a_flag_named_joins_the_compared_set(tmp_path):
-    """The hole review found in spec 1.3a, and the amendment that closes it.
+    """A SPECIAL CASE of the property, kept as the record of a measured escape.
 
-    `-p plug.skipper` loads a module regardless of what is collected, and
-    `_guard_ancestors` guards only the ancestors of FROZEN paths, so the module
-    can sit in an existing unguarded directory and move no frozen byte. It was
-    registered `intree:`, excused from the comparison, skipped every test in the
-    run, and the record attested. Measured on pytest 9.1.1, which registers such
-    a plugin under the `-p` spec itself.
+    `-p` is not why this entry is compared — the entry is compared because
+    pytest did not register it by collection, and this test would pass with the
+    flag removed. It is retained because `-p plug.skipper` is the first escape
+    review reproduced: the module sat in an unguarded directory, moved no frozen
+    byte, skipped every test in the run, and the record attested. Measured on
+    pytest 9.1.1, which registers such a plugin under the `-p` spec itself.
     """
     origin = _intree_plugin(tmp_path)
     config = _Config([("plug.skipper", _module("plug.skipper", str(origin)))],
@@ -197,16 +226,14 @@ def test_an_in_tree_plugin_a_flag_named_joins_the_compared_set(tmp_path):
 
 def test_an_in_tree_plugin_the_environment_named_joins_the_compared_set(
         tmp_path, monkeypatch):
-    """PYTEST_PLUGINS is the same escape one channel over, and it was open.
+    """A SPECIAL CASE of the property, and the second measured escape.
 
-    Read in the installed pytest: `consider_env()` hands the variable to
-    `_import_plugin_specs` -> `import_plugin` -> `register(mod, modname)`, a path
-    that touches `config.option.plugins` nowhere. Measured on a real session:
-    `PYTEST_PLUGINS=plug.skipper` registered the in-tree module under
-    `plug.skipper`, `option.plugins` carried only what `-p` gave it, the module
-    skipped every test in the run, and the record attested. Explicitly named and
-    collection-independent is the side of spec 1.3a that gets compared, whichever
-    channel names it.
+    The variable is not why this entry is compared either; nothing reads it for
+    matching any more. It is retained because it was the escape one channel over:
+    `consider_env()` hands PYTEST_PLUGINS to `_import_plugin_specs` ->
+    `import_plugin` -> `register(mod, modname)`, a path that touches
+    `config.option.plugins` nowhere, so a rule keyed on the flag saw nothing
+    while the module skipped every test in the run and the record attested.
     """
     monkeypatch.setenv("PYTEST_PLUGINS", "plug.skipper")
     origin = _intree_plugin(tmp_path)

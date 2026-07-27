@@ -10,6 +10,7 @@ Usage:
   python scripts/run-tests.py --acceptance   # A+ sign-off gates
 """
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -49,6 +50,24 @@ def build_command(acceptance: bool) -> list[str]:
     return base + ["-n", "auto", "-m", "not acceptance", "--cov=scripts", f"--cov-fail-under={COVERAGE_FLOOR}"]
 
 
+def child_env() -> dict:
+    """The environment the pytest child gets: ours, minus everything PYTEST_.
+
+    Blanket prefix, never a denylist. PYTEST_ADDOPTS alone can load a plugin that
+    overrides pytest_pyfunc_call and makes every frozen test report passed without
+    executing, and naming the variables you thought of is the defect this codebase
+    has now produced eleven times. The same shape as canopus_git._child_env, which
+    does this for GIT_*.
+
+    CANOPUS_LAUNCHER is stamped so the attestation can record its provenance. It
+    is provenance and not a verdict: a bare `pytest tests/one.py` still attests.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("PYTEST_")}
+    env["CANOPUS_LAUNCHER"] = "run-tests"
+    return env
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="HEADING OS test gate.")
     ap.add_argument("--acceptance", action="store_true",
@@ -59,7 +78,7 @@ def main() -> int:
         print(f"{RED}test gate: FAIL (canopus freeze){RESET}")
         return 1
     cmd = build_command(args.acceptance)
-    proc = subprocess.run(cmd, cwd=str(root))
+    proc = subprocess.run(cmd, cwd=str(root), env=child_env())
     if proc.returncode == 0:
         print(f"{GREEN}test gate: PASS{RESET}")
     else:

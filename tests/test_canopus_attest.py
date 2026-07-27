@@ -534,6 +534,86 @@ def test_the_controller_folds_worker_deselections_in(frozen_engine):
     assert rec.frozen["tests/test_frozen.py"]["deselected"] == 4
 
 
+def test_the_record_describes_the_process_that_wrote_it(frozen_engine):
+    """The lock says the contract did not move; the tally says it ran.
+
+    Neither says WHAT ran it. A plugin loaded from outside the frozen set can
+    skip every frozen test and leave both of those answers intact, so the record
+    carries a description of the interpreter that produced it. Recorded here and
+    judged nowhere: the comparison is a later leg's, and a field judged before
+    anything records it reddens every honest run in the meantime.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.report(_Report(str(target), "passed"))
+    rec.finish(session, 0)
+
+    process = cf.read_attestation(tmp_path)["process"]
+    assert set(process) == {"plugins", "intree_plugins", "option_plugins",
+                            "env_configured", "launcher", "workers"}
+    assert process["workers"] == []
+
+
+def test_a_worker_ships_its_plugin_names_home(frozen_engine):
+    """A worker is a separate interpreter, with its own PYTEST_ADDOPTS and ini.
+
+    The controller's own plugin list therefore describes the controller and
+    nothing else, which is why the names travel back the way the deselection
+    counts already do.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    session.config.pluginmanager = SimpleNamespace(
+        list_name_plugin=lambda: [("skipper", SimpleNamespace(__file__="/lib/skipper.py"))]
+    )
+    session.config.workerinput = {"workerid": "gw0"}
+    session.config.workeroutput = {}
+    rec.collect(session)
+
+    assert rec.finish(session, 0) is False
+    assert session.config.workeroutput["canopus_plugins"] == ["skipper"]
+
+
+def test_the_controller_folds_each_workers_plugin_list_in(frozen_engine):
+    """One list per worker, kept apart rather than merged into a union.
+
+    A union of two disagreeing workers reads exactly like one honest worker, and
+    a disagreement between workers is the signal that a plugin arrived in some
+    of them and not the others.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.merge_worker({"canopus_plugins": ["skipper", "xdist"]})
+    rec.merge_worker({"canopus_plugins": ["xdist"]})
+    rec.merge_worker({"canopus_deselected": {}})   # a worker that shipped no list
+    rec.merge_worker(None)
+    rec.finish(session, 0)
+
+    record = cf.read_attestation(tmp_path)
+    assert record["process"]["workers"] == [["skipper", "xdist"], ["xdist"]]
+
+
+def test_a_description_that_fails_never_costs_the_record(frozen_engine, monkeypatch, capsys):
+    """Recording is not worth a run. The record survives, the process reads None."""
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.report(_Report(str(target), "passed"))
+
+    def _explode(config, root):
+        raise RuntimeError("no plugin manager on this config")
+
+    monkeypatch.setattr("scripts.utils.canopus_gate.process_facts", _explode)
+
+    assert rec.finish(session, 0) is True
+    record = cf.read_attestation(tmp_path)
+    assert record["process"] is None
+    assert record["attested"] is True
+    assert "could not describe the process" in capsys.readouterr().err
+
+
 def test_clearing_the_freeze_removes_the_attestation(tmp_path):
     """Reproduced defect: the record outlived its freeze and was revived.
 

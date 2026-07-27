@@ -445,15 +445,6 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             # path is owned here rather than inside run_pytest_report: its own
             # temporary directory is gone by the time it returns.
             plugins = read_plugin_dump(dump)
-        if not plugins:
-            # Named now, because the consequence lands much later and looks like
-            # a defect: a freeze with no plugin baseline attests NOTHING, so
-            # every gate run afterwards reports NOT ATTESTED with a reason about
-            # a baseline the operator never knew failed to capture.
-            print(f"{YELLOW}contract{RESET}  the contract run recorded no plugin "
-                  f"set, so this freeze carries no plugin baseline and no later "
-                  f"run can attest against one. Re-run the freeze; if it "
-                  f"persists, the contract child is not reaching session finish.")
         counts, outcomes = parse_junit(xml_text)
         modules = missing_modules(xml_text)
         satisfied = _satisfied_reason(args)
@@ -515,6 +506,25 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             1 for _rel, _name, outcome in outcomes if outcome == "passed"
         )
         contract_note = f"{already_green} of {sum(counts.values())} already green"
+    if not plugins:
+        # OUTSIDE the contract block, which is where it was first written and
+        # where it covered one of the two ways to get here. A freeze over plain
+        # paths runs no pytest child at all, so it captured nothing, said
+        # nothing, and every later run then refused for a baseline the operator
+        # never knew was expected — days later, and worded as though a capture
+        # had failed. Fail-closed is the right DIRECTION (SC-7), and silence
+        # about it is the defect.
+        detail = (
+            "The contract run recorded no plugin set; re-run the freeze, and if "
+            "it persists the contract child is not reaching session finish."
+            if contracts else
+            "A freeze taken without --contract runs no pytest child, so there is "
+            "nothing to capture the set from. Freeze the contract directory with "
+            "--contract to record one."
+        )
+        print(f"{YELLOW}plugins{RESET}  this freeze carries NO plugin baseline, "
+              f"so no later run can attest against it: every gate run will report "
+              f"NOT ATTESTED naming the missing baseline. {detail}")
     manifest = build_manifest(
         [_under_root(p, root) for p in args.paths] + contracts,
         root,

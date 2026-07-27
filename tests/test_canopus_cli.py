@@ -58,7 +58,12 @@ def _freeze(tree, anchor):
 def test_freeze_prints_the_root_hash(tree, anchor, capsys):
     assert _freeze(tree, anchor) == 0
     out = capsys.readouterr().out
-    assert "root " in out.splitlines()[0]
+    # The CANOPUS headline, not "the first line". Advisories printed while the
+    # candidate manifest is built (vacuity, contract, plugins) precede it, and
+    # this test only passed on line one because a plain freeze had none of them
+    # until the no-plugin-baseline notice was hoisted out of the contract block.
+    headline = [line for line in out.splitlines() if "CANOPUS" in line]
+    assert headline and "root " in headline[0]
 
 
 def test_freeze_requires_an_anchor(tree, capsys):
@@ -435,6 +440,11 @@ def test_verify_reports_attested_when_the_run_matches(tree, anchor, capsys):
     root = _root_of(tree)
     anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
     _attest(tree, root)
+    # The setup's own output is dropped, so the assertions below read `verify`
+    # and nothing else. The freeze prints a NOT ATTESTED advisory of its own
+    # (this tree has no plugin baseline), and a buffer holding both commands
+    # would fail the absence assertion on the wrong command's words.
+    capsys.readouterr()
     assert _run(["verify"], tree) == 0
     out = capsys.readouterr().out
     assert "LOCK HELD" in out
@@ -586,6 +596,23 @@ def test_freeze_contract_captures_the_plugin_baseline(tree, anchor):
     # absolute path; either inside the root hash would redden the next clone.
     assert all(name.startswith("dist:") for name in manifest["plugins"])
     assert str(tree) not in json.dumps(manifest["plugins"])
+
+
+def test_a_freeze_without_a_contract_says_it_carries_no_plugin_baseline(
+        tree, anchor, capsys):
+    """The silent half of the same state, which review found and nothing covered.
+
+    A freeze over plain paths runs no pytest child, so it captures nothing and
+    can never attest. The DIRECTION is right and mandated (SC-7: absence is not
+    innocence), and saying nothing about it is the defect: the operator meets it
+    days later as a gate refusal naming a baseline they never knew was expected.
+    """
+    assert _freeze(tree, anchor) == 0
+
+    assert json.loads((tree / ".canopus" / "freeze.json").read_text())["plugins"] == []
+    out = capsys.readouterr().out
+    assert "NO plugin baseline" in out
+    assert "without --contract" in out
 
 
 def test_a_freeze_that_captured_no_plugin_set_says_so(tree, anchor, capsys):
@@ -1257,7 +1284,9 @@ def test_approve_prints_the_candidate_root_for_the_operator_to_read(
                  "--anchor", str(anchor)], tree) == 0
 
     out = capsys.readouterr().out
-    first = out.splitlines()[0]
+    # The CANOPUS headline rather than "line one": the no-plugin-baseline notice
+    # is printed while the candidate manifest is built, so it precedes it.
+    first = next(line for line in out.splitlines() if "CANOPUS" in line)
     assert f"root {_recorded(anchor)}" in first
     assert "label: l" in first
     assert "1 file" in first

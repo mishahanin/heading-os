@@ -1488,11 +1488,18 @@ def build_attestation(
     `plugin_baseline` is the plugin set the freeze captured. The comparison
     against it is ONE refusal, not a list of blocked routes: an entry-point
     plugin, a `-p` on argv, a `-p` inside PYTEST_ADDOPTS and a `-p` inside an
-    ini `addopts` differ in how they arrive and not at all in what they leave
-    behind, which is a name the freeze never saw. That is why `-p` is never
-    banned here: banning it forbade PYTEST_DISABLE_PLUGIN_AUTOLOAD plus an
+    ini `addopts` all leave a name the freeze never saw. That is why `-p` is
+    never banned here: banning it forbade PYTEST_DISABLE_PLUGIN_AUTOLOAD plus an
     explicit `-p` per allowed plugin, the only measured cure for the entry-point
     route, so the first design banned its own cure.
+
+    Said no wider than it is true, because this repository has already had to
+    retract one claim of this shape. The comparison covers every plugin from a
+    DISTRIBUTION, and an in-tree plugin ONLY when a `-p` named it. A plugin the
+    tree loaded on its own — a conftest outside the frozen contract directory —
+    is recorded as provenance and not compared, because which in-tree conftests
+    load depends on what was collected. Closing that one needs a different
+    instrument, and it is on the open list rather than covered by this sentence.
 
     Both directions are refused. A plugin that VANISHED changed what the run
     measured just as surely as one that appeared, and a comparison that only
@@ -1559,8 +1566,7 @@ def build_attestation(
             if set(worker) != baseline_plugins:
                 reasons.append(
                     f"xdist worker {index} loaded a different plugin set than the "
-                    f"freeze recorded: "
-                    f"{sorted(set(worker) ^ baseline_plugins) or 'no named difference'}"
+                    f"freeze recorded: {sorted(set(worker) ^ baseline_plugins)}"
                 )
     if exit_status != 0:
         reasons.append(f"pytest exited {exit_status}")

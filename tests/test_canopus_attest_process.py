@@ -29,13 +29,22 @@ BASELINE = frozenset({"conftest", "xdist", "pytest_cov"})
 
 
 class _Config:
-    """Duck-typed stand-in for pytest's config; no pytest import here either."""
+    """Duck-typed stand-in for pytest's config; no pytest import here either.
 
-    def __init__(self, plugins=(), option_plugins=(), argv=()):
+    `collected` stands for `pluginmanager._dirpath2confmods`, the conftest
+    MODULE OBJECTS collection imported. Passing the same object that is
+    registered is the only way to be exempt, which is the whole point of the
+    rule: a test cannot fake collection by naming a file.
+    """
+
+    def __init__(self, plugins=(), option_plugins=(), argv=(), collected=(),
+                 with_conftest_map=True):
         self._plugins = list(plugins)
         self.option = type("O", (), {"plugins": list(option_plugins)})()
         self.invocation_params = type("P", (), {"args": tuple(argv)})()
         self.pluginmanager = self
+        if with_conftest_map:
+            self._dirpath2confmods = {Path("some/dir"): list(collected)}
 
     def list_name_plugin(self):
         return self._plugins
@@ -138,16 +147,19 @@ def test_an_in_tree_conftest_is_recorded_and_never_compared(tmp_path):
     `tests/conftest.py` is in the `--content` set and everything inside the
     contract directory is frozen recursively.
 
-    The exemption is keyed on the REGISTRATION, not on the file name: pytest
-    registers a collected conftest under `str(conftestpath)`, which is why this
-    fixture registers it under its own path. The test below renames the exploit
-    to `conftest.py` and must still be compared, which is what makes those two
-    tests a pair rather than a repetition.
+    The exemption is keyed on OBJECT IDENTITY: the plugin must BE a module in
+    `pluginmanager._dirpath2confmods`, which collection fills as it walks
+    directories. Not the file's name, and not any string the module can write
+    about itself — three tests below are the three forgeries that defeated those
+    weaker readings, and this one is the honest case they are paired against.
     """
     origin = tmp_path / "tests" / "conftest.py"
     origin.parent.mkdir(parents=True)
     origin.write_text("def pytest_pyfunc_call(pyfuncitem):\n    return None\n")
-    config = _Config([(str(origin), _module("conftest", str(origin)))])
+    conftest = _module("conftest", str(origin))
+    # The SAME object in both places: registered, and in the map collection
+    # fills. Identity is the exemption; nothing a plugin writes can produce it.
+    config = _Config([(str(origin), conftest)], collected=[conftest])
 
     facts = process_facts(config, tmp_path)
 
@@ -180,6 +192,81 @@ def test_a_file_called_conftest_that_arrives_by_name_is_still_compared(tmp_path)
     assert facts["intree_plugins"] == []
 
 
+def test_a_plugin_that_forges_its_file_to_its_own_name_is_still_compared(
+        tmp_path, monkeypatch):
+    """Review's defeat 1, which a previous rule INTRODUCED while closing another.
+
+    That rule asked whether the registration name equalled `plugin.__file__`.
+    `name` is pytest's and trustworthy; `__file__` is an attribute the plugin
+    author writes. `plug/evil.py` containing `__file__ = __name__`, named by
+    `pytest_plugins = ["plug.evil"]`, makes the two coincide, so the hijacker
+    read as collected and `assert False` became a pass. Reproduced on a real
+    session before the fix.
+
+    An object cannot forge `is`, so the exemption is object identity now.
+    """
+    monkeypatch.chdir(tmp_path)
+    forged = _module("plug.evil", "plug.evil")   # __file__ == its own dotted name
+    config = _Config([("plug.evil", forged)])
+
+    facts = process_facts(config, tmp_path)
+
+    assert facts["plugins"] == {"intree:plug.evil": "plug.evil"}
+    assert facts["intree_plugins"] == []
+
+
+def test_a_plugin_that_forges_its_file_onto_a_collected_conftest_is_compared(
+        tmp_path):
+    """Review's defeat 2, older than every rule that missed it.
+
+    Several registrations can fold into ONE identity. While the exemption was a
+    set of identities, a plugin whose `__file__` was forged onto the honest
+    `tests/conftest.py` inherited that identity's exemption from the honest
+    module beside it and vanished from the record ENTIRELY. Reproduced on a real
+    session: two registrations, one identity, nothing compared, `assert False`
+    a pass.
+
+    So the verdict is per REGISTRATION and folded with AND: an identity is
+    exempt only when every registration folding into it was collected. The
+    collision now reddens instead of hiding.
+    """
+    origin = tmp_path / "tests" / "conftest.py"
+    origin.parent.mkdir(parents=True)
+    origin.write_text("# an honest collected conftest\n")
+    honest = _module("conftest", str(origin))
+    forged = _module("plug.evil2", str(origin))   # same __file__, different object
+
+    facts = process_facts(
+        _Config([(str(origin), honest), ("plug.evil2", forged)], collected=[honest]),
+        tmp_path)
+
+    assert facts["plugins"] == {"intree:tests/conftest.py": str(origin)}
+    assert facts["intree_plugins"] == []
+
+
+def test_a_pluginmanager_with_no_conftest_map_compares_every_in_tree_plugin(
+        tmp_path):
+    """FAIL CLOSED. `_dirpath2confmods` is private, so a rename must be noisy.
+
+    With the map gone nothing can be proved collected, so every in-tree plugin
+    is compared. An honest run then has to match the freeze on its conftests
+    too, which is loud; the alternative direction would silently exempt
+    everything in the tree, which is the failure this whole rule exists to stop.
+    """
+    origin = tmp_path / "tests" / "conftest.py"
+    origin.parent.mkdir(parents=True)
+    origin.write_text("# an honest collected conftest\n")
+    conftest = _module("conftest", str(origin))
+
+    facts = process_facts(
+        _Config([(str(origin), conftest)], collected=[conftest],
+                with_conftest_map=False),
+        tmp_path)
+
+    assert facts["plugins"] == {"intree:tests/conftest.py": str(origin)}
+    assert facts["intree_plugins"] == []
+
+
 def test_an_in_tree_plugin_no_channel_named_is_still_compared(tmp_path):
     """The third route, and the reason the rule stopped enumerating routes.
 
@@ -204,7 +291,8 @@ def test_an_in_tree_plugin_no_channel_named_is_still_compared(tmp_path):
     assert facts["intree_plugins"] == []
 
 
-def test_an_in_tree_plugin_a_flag_named_joins_the_compared_set(tmp_path):
+def test_an_in_tree_plugin_a_flag_named_is_not_collected_so_it_is_compared(
+        tmp_path):
     """A SPECIAL CASE of the property, kept as the record of a measured escape.
 
     `-p` is not why this entry is compared — the entry is compared because
@@ -224,7 +312,7 @@ def test_an_in_tree_plugin_a_flag_named_joins_the_compared_set(tmp_path):
     assert facts["intree_plugins"] == []
 
 
-def test_an_in_tree_plugin_the_environment_named_joins_the_compared_set(
+def test_an_in_tree_plugin_the_environment_named_is_not_collected_so_it_is_compared(
         tmp_path, monkeypatch):
     """A SPECIAL CASE of the property, and the second measured escape.
 

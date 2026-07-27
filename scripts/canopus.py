@@ -1124,7 +1124,8 @@ def cmd_status(args) -> int:
     # to a report that lists nothing. Measured: with the anchor's `.git` renamed,
     # `status` printed that line while nothing on the tree had moved.
     # `loss_of_lock_sentences` was written for this and was applied to the gate
-    # alone, which is the twelfth appearance of a guard fixed on one sibling.
+    # alone, so this surface kept the fixed sentence: a guard repaired on one
+    # sibling and not the other.
     tail = ("  " + " ".join(loss_of_lock_sentences(report, resolution))
             if state == LOSS_OF_LOCK else "")
     print(f"{colour}{BOLD}{state}{RESET}{tail}")

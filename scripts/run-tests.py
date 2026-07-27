@@ -10,7 +10,6 @@ Usage:
   python scripts/run-tests.py --acceptance   # A+ sign-off gates
 """
 import argparse
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,7 +20,7 @@ from scripts.utils.venv import ensure_venv  # noqa: E402
 
 ensure_venv()  # pytest/pytest-cov live only in .venv; re-exec if launched elsewhere
 
-from scripts.utils.canopus_gate import freeze_gate  # noqa: E402
+from scripts.utils.canopus_gate import freeze_gate, pytest_child_env  # noqa: E402
 from scripts.utils.colors import GREEN, RED, RESET
 
 
@@ -53,19 +52,16 @@ def build_command(acceptance: bool) -> list[str]:
 def child_env() -> dict[str, str]:
     """The environment the pytest child gets: ours, minus everything PYTEST_.
 
-    Blanket prefix, never a denylist. PYTEST_ADDOPTS alone can load a plugin that
-    overrides pytest_pyfunc_call and makes every frozen test report passed without
-    executing, and naming the variables you thought of is the defect this codebase
-    has now produced eleven times. The same shape as canopus_git._child_env, which
-    does this for GIT_*.
+    The scrub itself lives in canopus_gate.pytest_child_env, with the measurement
+    behind it, because the freeze-time capture child has to get the identical
+    treatment: the two runs are compared against each other, so a discipline
+    applied to one of them alone makes the baseline a photograph of the shell the
+    operator froze from.
 
     CANOPUS_LAUNCHER is stamped so the attestation can record its provenance. It
     is provenance and not a verdict: a bare `pytest tests/one.py` still attests.
     """
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith("PYTEST_")}
-    env["CANOPUS_LAUNCHER"] = "run-tests"
-    return env
+    return pytest_child_env(CANOPUS_LAUNCHER="run-tests")
 
 
 def main() -> int:

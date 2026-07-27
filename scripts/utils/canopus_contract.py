@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence
 from xml.etree import ElementTree
 
+from scripts.utils.canopus_gate import pytest_child_env
+
 DEFAULT_PATTERNS = ("test_*.py",)
 RED_OUTCOMES = ("failure", "error")
 
@@ -229,8 +231,16 @@ def run_pytest_report(
         # freeze reads as tampering to the very lock this tool installs. The
         # measured symptom was `['__pycache__', 'test_one.py']` where only
         # test_one.py had been written.
-        env = dict(
-            os.environ, CANOPUS_NO_ATTEST="1", PYTHONDONTWRITEBYTECODE="1",
+        #
+        # The PYTEST_ scrub is the gate child's, taken from the one definition
+        # both share (canopus_gate.pytest_child_env). It is not tidiness either:
+        # this child CAPTURES the plugin baseline the gate child is later held
+        # to, so while it inherited the whole environment an exported
+        # PYTEST_DISABLE_PLUGIN_AUTOLOAD froze the operator's shell into the
+        # baseline and every later gate run refused. The measurement is in that
+        # function's docstring.
+        env = pytest_child_env(
+            CANOPUS_NO_ATTEST="1", PYTHONDONTWRITEBYTECODE="1",
         )
         if plugin_dump is not None:
             env["CANOPUS_PLUGIN_DUMP"] = str(plugin_dump)

@@ -693,6 +693,12 @@ def test_pack_reports_all_three_axes_and_the_uncovered_list(tree, anchor, capsys
     assert "APPROVAL" in out
     assert "NOT ATTESTED" in out          # no run has attested this freeze yet
     assert "not covered" in out
+    # The heading alone passed while the list under it named three wire-2 gaps
+    # and none of wire 2.3's. This is the slice's principal residual: the plugin
+    # comparison is by top-level module name, so a same-named plugin from another
+    # distribution reaches the greenest reading this page produces. An operator
+    # signs off from here, so it has to be here and not only in docs/EXTENDING.md.
+    assert "by top-level module NAME" in out
     assert "continuity" in out
     assert "staleness" in out
     # The interpreter section is wired into pack by ONE line. Every unit test

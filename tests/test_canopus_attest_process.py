@@ -178,8 +178,11 @@ def test_a_file_called_conftest_that_arrives_by_name_is_still_compared(tmp_path)
 
     A file CALLED `conftest.py` that arrives by name is not directory-scoped and
     not collection-dependent; its hooks fire for every item in the run. So the
-    discriminator is pytest's own registration name, which is a PATH for a
-    collected conftest and a dotted spec for a named module.
+    discriminator is object identity against the modules COLLECTION imported: the
+    exemption is a plugin object pytest itself recorded as collected, and nothing
+    a plugin writes about itself. Reading the registration name instead was the
+    fourth rule, retired by 1082430, and the very next test in this file is the
+    defeat that retired it.
     """
     origin = tmp_path / "plug" / "conftest.py"
     origin.parent.mkdir(parents=True)

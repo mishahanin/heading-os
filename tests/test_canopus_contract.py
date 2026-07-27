@@ -1,4 +1,5 @@
 """Canopus wire 2: the contract runner and its two refusal conditions."""
+import json
 from pathlib import Path
 
 import pytest
@@ -226,6 +227,70 @@ def test_the_contract_child_dumps_its_normalised_plugin_set(tmp_path):
     assert all(name.startswith("dist:") for name in names)
     assert not any(name.strip("0123456789") == "" for name in names)
     assert str(tmp_path) not in " ".join(names)
+
+
+def test_the_captured_baseline_is_the_trees_and_not_the_shells(tmp_path, monkeypatch):
+    """The freeze's capture child gets the gate child's environment discipline.
+
+    Measured before the fix, on a scratch tree with the recorder wired exactly as
+    below: a clean shell captured ['dist:_pytest', 'dist:anyio',
+    'dist:pytest_asyncio', 'dist:pytest_cov', 'dist:xdist'], and the same freeze
+    with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 exported captured ['dist:_pytest']
+    alone. The gate run, whose environment WAS scrubbed, then loaded all five and
+    refused with four "a plugin the freeze did not record was loaded" reasons,
+    for good, until the freeze was retaken in a clean shell.
+
+    Fail-closed and still inverted: the canonical gate was the run that refused
+    while a bare `pytest` in the same shell was the run that attested.
+    """
+    from scripts.utils.canopus_contract import read_plugin_dump, run_pytest_report
+
+    _write(tmp_path, "c/test_one.py", "def test_a():\n    assert False\n")
+    _wire_the_recorder(tmp_path)
+
+    clean_dump = tmp_path / "clean.json"
+    run_pytest_report([tmp_path / "c"], tmp_path, plugin_dump=clean_dump)
+    clean = read_plugin_dump(clean_dump)
+
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    poisoned_dump = tmp_path / "poisoned.json"
+    run_pytest_report([tmp_path / "c"], tmp_path, plugin_dump=poisoned_dump)
+
+    # Load-bearing: with a single-entry baseline both sides agree trivially and
+    # the equality below would hold against a child that autoloaded nothing.
+    assert len(clean) > 1, "this environment autoloads no plugins to lose"
+    assert read_plugin_dump(poisoned_dump) == clean
+
+
+def test_no_pytest_variable_reaches_the_contract_child(tmp_path, monkeypatch):
+    """The scrub is a blanket prefix, so an invented name is scrubbed too.
+
+    PYTEST_ANYTHING_AT_ALL is the case a denylist of the names someone thought of
+    passes and a prefix does not. The control variable is here so a scrub that
+    emptied the environment outright could not pass: the trace id a daemon
+    exported still has to reach the child (.claude/rules/trace-id.md).
+    """
+    from scripts.utils.canopus_contract import run_pytest_report
+
+    _write(tmp_path, "c/test_one.py",
+           "import json, os, pathlib\n"
+           "def test_a():\n"
+           "    pathlib.Path('env.json').write_text(json.dumps(sorted(os.environ)))\n")
+    injected = {
+        "PYTEST_ADDOPTS": "-q",
+        "PYTEST_PLUGINS": "plug.skipper",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTEST_ANYTHING_AT_ALL": "1",
+    }
+    for name, value in injected.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("X31C_TRACE_ID", "trace-for-the-child")
+
+    run_pytest_report([tmp_path / "c"], tmp_path)
+
+    seen = json.loads((tmp_path / "env.json").read_text(encoding="utf-8"))
+    assert not (set(injected) & set(seen))
+    assert "X31C_TRACE_ID" in seen
 
 
 def test_a_run_that_was_not_asked_for_a_dump_writes_none(tmp_path, monkeypatch):

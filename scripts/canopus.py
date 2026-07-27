@@ -995,12 +995,28 @@ def cmd_pack(args) -> int:
     if stat:
         print(f"\n{BOLD}diff{RESET}\n{stat}")
 
+    # Every gap the slice MEASURED belongs here, not only in docs/EXTENDING.md.
+    # This is the page an operator signs off from, and render_process argues the
+    # same standard three sections above: a page that omits the residual reads as
+    # a clean bill of health. Short lines, because a list nobody finishes reading
+    # covers nothing either.
     print(f"\n{BOLD}not covered{RESET}")
     print("  Mutation testing has not run; the contract is proven to be red "
           "before the code existed, not proven to be strong.")
     print("  .canopus/ is gitignored, so this ledger is evidence against an EDIT, "
           "not against deleting the directory.")
     print("  Staleness is a snapshot taken now, not a continuous property.")
+    print("  The plugin comparison is by top-level module NAME. A same-named "
+          "plugin from another distribution passes: measured, a hostile anyio "
+          "earlier on PYTHONPATH takes a red contract to this page's greenest "
+          "reading at exit 0.")
+    print("  The recorder runs inside the interpreter it describes, so a plugin "
+          "already loaded there can rewrite what the interpreter section says.")
+    print("  Whatever configured the interpreter BEFORE the recorder existed is "
+          "unobserved: PYTHONPATH, a .pth file, sitecustomize. Only PYTEST_ "
+          "names are recorded.")
+    print("  CANOPUS_NO_ATTEST and CANOPUS_PLUGIN_DUMP each suppress the record "
+          "entirely, leaving any earlier ATTESTED record standing untouched.")
     return 0
 
 

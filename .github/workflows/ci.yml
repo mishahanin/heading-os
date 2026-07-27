@@ -42,9 +42,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          prune-cache: true   # v9 flipped this default to false
       - run: uv sync --dev --all-extras --frozen
       - name: Leak guard (no hardcoded data paths in engine code)
         run: git ls-files '*.py' '*.sh' | xargs uv run python scripts/leak-guard.py check-paths --files
@@ -95,9 +96,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          prune-cache: true   # v9 flipped this default to false
       - run: uv sync --dev --all-extras --frozen
       - name: ruff - blocking security subset (mirror of the pre-commit gate)
         run: uv run ruff check . --select S --ignore S101,S105,S310,S603,S607
@@ -112,9 +114,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          prune-cache: true   # v9 flipped this default to false
       - run: uv sync --dev --all-extras --frozen
       - run: uv run pytest tests/security -q -p no:cacheprovider
 
@@ -128,9 +131,10 @@ jobs:
         python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          prune-cache: true   # v9 flipped this default to false
       - run: uv python install ${{ matrix.python }}
       - run: uv sync --dev --all-extras --frozen --python ${{ matrix.python }}
       - name: unit + capability tests (integration/acceptance excluded)
@@ -147,9 +151,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
+          prune-cache: true   # v9 flipped this default to false
           # Pin uv so the experimental cyclonedx export format cannot shift silently.
           version: "0.11.21"
       - name: Generate CycloneDX SBOM (F-9.6)

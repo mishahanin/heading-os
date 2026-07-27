@@ -449,36 +449,48 @@ def _intree_path(identity: str) -> str | None:
     return identity[len(prefix):] if identity.startswith(prefix) else None
 
 
-def _registered_by_collection(name, origin) -> bool:
-    """True when pytest registered this plugin AS A COLLECTED CONFTEST.
+def _collected_conftest_modules(config) -> tuple:
+    """The conftest MODULE OBJECTS collection actually imported, or ().
 
-    A fact about REGISTRATION, never about the file's name, and the difference
-    is a working exploit: review renamed the previous round's in-tree plugin to
-    `plug/conftest.py`, named it with `pytest_plugins = ["plug.conftest"]` from
-    a test module, and turned `assert False` into `1 passed` while a basename
-    discriminator excused it. Reproduced here before this predicate was written.
-    A file CALLED `conftest.py` that arrives BY NAME is not directory-scoped and
-    is not collection-dependent: pytest registers it as a global plugin whose
-    hooks fire for every item.
+    pytest keeps them in `pluginmanager._dirpath2confmods`, declared
+    `dict[Path, list[ModuleType]]` at `_pytest/config/__init__.py:481`, filled
+    at :714 as collection walks directories and read back at :718. Object
+    identity is the point: a plugin cannot put itself in here by writing an
+    attribute, only by being the module collection imported.
 
-    The discriminator is pytest's own, read in the installed source
-    (`_pytest/config/__init__.py`): a collected conftest is registered under
-    `str(conftestpath)` (`conftestpath_plugin_name`, handed to
-    `consider_conftest`), while `import_plugin` ends at `register(mod, modname)`
-    with the dotted import spec. A dotted spec is never a path, so "the
-    registration name IS the origin's path" separates collection from naming
-    exactly, whatever the file is called.
-
-    Never raises: it is reached once per registered plugin from a session-finish
-    hook, and a description that raises costs the record it was written to
-    produce. An unresolvable name is not a path form, which is what False says.
+    FAILS CLOSED. An absent or wrong-shaped attribute yields (), so NOTHING is
+    exempt and every in-tree plugin is compared. If a future pytest renames this
+    private attribute the gate gets noisy — an honest run's in-tree conftests
+    start needing to match the freeze — rather than quietly exempting everything
+    in the tree. Noisy and safe beats quiet and wrong; the private-attribute
+    dependency is a real cost and is on the slice's open list.
     """
-    if not origin:
-        return False
-    try:
-        return Path(str(name)).resolve() == Path(str(origin)).resolve()
-    except (OSError, ValueError):
-        return False
+    mapping = getattr(getattr(config, "pluginmanager", None),
+                      "_dirpath2confmods", None)
+    if not isinstance(mapping, dict):
+        return ()
+    modules: list = []
+    for entry in mapping.values():
+        if isinstance(entry, (list, tuple)):
+            modules.extend(entry)
+    return tuple(modules)
+
+
+def _registered_by_collection(plugin, collected_modules) -> bool:
+    """True when THIS registration is one collection imported. `is`, not `==`.
+
+    Every earlier version of this predicate decided on a string the adversary
+    writes, and each was defeated in turn: the file's basename (`plug/conftest.py`
+    named by `pytest_plugins` hijacked the run), then "the registration name is
+    the origin's path" — which compares pytest's trustworthy `name` against
+    `plugin.__file__`, an attribute the PLUGIN AUTHOR sets. `plug/evil.py`
+    containing `__file__ = __name__` makes the two coincide, and the hijacker
+    reads as collected. Reproduced before this predicate was written.
+
+    An object cannot forge `is`. The plugin either IS a module collection
+    imported, or it is not.
+    """
+    return any(plugin is module for module in collected_modules)
 
 
 def process_facts(config, root: Path) -> dict:
@@ -495,17 +507,24 @@ def process_facts(config, root: Path) -> dict:
     alone. An entry belongs to exactly one of them.
 
     The compared subset is every `dist:` identity plus every `intree:` identity
-    pytest did NOT register as a collected conftest (`_registered_by_collection`).
-    That is a PROPERTY, deliberately, and not a list of channels: three revisions
-    of this rule enumerated channels and review found an escape past each of them
-    in turn. `-p` was closed, then PYTEST_PLUGINS was the same escape one channel
-    over, then `pytest_plugins` declared inside a test module was a third. Every
-    enumeration is a denylist wearing another hat.
+    that is not exempt, and an identity is exempt only when EVERY registration
+    folding into it is a conftest module collection itself imported
+    (`_collected_conftest_modules`, `_registered_by_collection`).
 
-    A fourth revision keyed on the file being called `conftest.py`, and review
-    reproduced an escape past that too: `plug/conftest.py` named by
-    `pytest_plugins` hijacks the run and a basename discriminator excuses it. So
-    the property reads pytest's own registration instead of any name we choose.
+    That is a PROPERTY, and it is decided on OBJECT IDENTITY rather than on any
+    string, because five earlier versions decided on strings and review defeated
+    each in turn. Three enumerated channels: `-p`, then PYTEST_PLUGINS one
+    channel over, then `pytest_plugins` declared in a test module. The fourth
+    keyed on the file being called `conftest.py`, and a rename defeated it. The
+    fifth asked whether the registration name equalled `plugin.__file__`, and
+    `__file__ = __name__` in the hijacker made that trivially true. Every string
+    in that list is one the adversary writes; `is` is not.
+
+    The AND across registrations is the other half, and it closes a defeat older
+    than any of them: several registrations can fold into ONE identity, so an
+    identity exempted because SOME registration was collected let a plugin that
+    forged its `__file__` onto the honest `tests/conftest.py` vanish from the
+    record entirely.
 
     Spec 1.3a justifies leaving in-tree plugins uncompared by
     collection-dependence, and collection-dependence is a property of what
@@ -529,8 +548,9 @@ def process_facts(config, root: Path) -> dict:
     plugin past the comparison, but it is not the guard that stops it.
     """
     root = Path(root).resolve()
+    collected_modules = _collected_conftest_modules(config)
     identities: dict[str, str | None] = {}
-    collected: set = set()
+    exempt: dict[str, bool] = {}
     for name, plugin in _plugin_pairs(config):
         origin = getattr(plugin, "__file__", None)
         identity = _plugin_identity(name, plugin, root)
@@ -538,13 +558,20 @@ def process_facts(config, root: Path) -> dict:
         # identity, and one representative file answers "where did this come
         # from" as well as forty-six would.
         identities.setdefault(identity, str(origin) if origin else None)
-        if _registered_by_collection(name, origin):
-            collected.add(identity)
+        # Per REGISTRATION, then folded with AND, because an identity can carry
+        # several. A set of "identities that had a collected registration"
+        # exempted the whole identity on the strength of ONE member: measured,
+        # a plugin whose `__file__` was forged onto the honest
+        # `tests/conftest.py` folded into that identity, was covered by the
+        # honest module's exemption, and did not appear in the record at all.
+        # Every registration must be collected for the identity to be exempt.
+        by_collection = _registered_by_collection(plugin, collected_modules)
+        exempt[identity] = exempt.get(identity, True) and by_collection
     option = getattr(getattr(config, "option", None), "plugins", None) or ()
     compared = {
         identity: origin for identity, origin in sorted(identities.items())
         if identity.startswith("dist:")
-        or (_intree_path(identity) is not None and identity not in collected)
+        or (_intree_path(identity) is not None and not exempt.get(identity, False))
     }
     return {
         "plugins": compared,

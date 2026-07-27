@@ -1506,9 +1506,10 @@ def build_attestation(
     looked for additions would call that honest.
 
     The names compared are the identities `process_facts` derives, never pytest
-    registration names, and the set it hands over is the `dist:` subset alone.
-    Both are wire 2.3 measurements rather than taste, and both are argued where
-    they are computed (`canopus_gate._plugin_identity`).
+    registration names, and the set it hands over is every `dist:` identity plus
+    any `intree:` identity a `-p` or PYTEST_PLUGINS explicitly named. Both are
+    wire 2.3 measurements rather than taste, and both are argued where they are
+    computed (`canopus_gate._plugin_identity`, `canopus_gate._flag_named`).
     """
     reasons: list[str] = []
     if not frozen_tests:

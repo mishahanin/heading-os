@@ -427,8 +427,11 @@ def _plugin_identity(name, plugin, root: Path) -> str:
 
     Measured: this collapses sixty-six raw names to seven identities, and the
     `dist:` subset is identical in the freeze probe, the gate controller and
-    every gate worker. Only that subset is compared; the reasons the other two
-    are recorded and not compared are in `build_attestation`.
+    every gate worker. That subset is compared, and so is an `intree:` identity
+    that `-p` or PYTEST_PLUGINS explicitly named -- see `process_facts`, which
+    owns the partition, and `_flag_named`, which owns "explicitly". An
+    `intree:` plugin the tree loaded on its own, and every `anon:`/`name:`
+    entry, are recorded and not compared.
     """
     rel = _intree_rel(getattr(plugin, "__file__", None), root)
     if rel is not None:
@@ -442,16 +445,42 @@ def _plugin_identity(name, plugin, root: Path) -> str:
 
 
 def _flag_named(config) -> set:
-    """The plugin specs `-p` named and did NOT block.
+    """Every plugin spec this process was EXPLICITLY told to load, minus blocks.
 
-    `config.option.plugins` is the PARSED option, so it carries all three
-    channels that reach it: `-p` on argv, inside PYTEST_ADDOPTS, and inside an
-    ini `addopts`. A `no:` entry names a plugin that is deliberately NOT loaded
-    and must contribute nothing, exactly as `plugin is None` does in
-    `_module_name`.
+    TWO channels, because reading one of them and not its sibling is this
+    codebase's signature defect and this is the twelfth time it has appeared.
+
+    * `config.option.plugins` is the PARSED option, so it covers all three
+      routes into `-p`: argv, PYTEST_ADDOPTS, and an ini `addopts`.
+    * `PYTEST_PLUGINS` never reaches it. Read in the installed pytest
+      (`_pytest/config/__init__.py`): `consider_env()` hands the variable to
+      `_import_plugin_specs` -> `import_plugin` -> `register(mod, modname)`, a
+      path that touches `config.option` nowhere. Measured on a real session:
+      `PYTEST_PLUGINS=plug.skipper` registers the in-tree module under
+      `plug.skipper`, `option.plugins` carries only what `-p` gave it, and that
+      module skipped every test in the run while the record attested. It is the
+      same escape one channel over.
+    * A `pytest_plugins` declaration inside a module is a third route through
+      `_import_plugin_specs`, and it is deliberately NOT read here. Declaring it
+      means writing it into a file in the tree, so it cannot arrive without
+      moving bytes; that is the collection-dependence case which stays
+      provenance.
+
+    Comma-separated, matching pytest's own `_get_plugin_specs_as_list`, which
+    splits a string on "," and does not strip. Read from `os.environ` rather
+    than through pytest, like every other environment reading in this module.
+
+    A `no:` entry names a plugin that is NOT loaded and must contribute nothing,
+    exactly as `plugin is None` does in `_module_name`. It is a guard rather
+    than a live case, and honestly so: no registered plugin is ever named
+    `no:x`, so an unfiltered entry matches nothing today and no test can
+    discriminate this line. It stops a future matcher that normalises names from
+    quietly comparing a block.
     """
-    option = getattr(getattr(config, "option", None), "plugins", None) or ()
-    return {str(spec) for spec in option if not str(spec).startswith("no:")}
+    specs = list(getattr(getattr(config, "option", None), "plugins", None) or ())
+    specs += (os.environ.get("PYTEST_PLUGINS") or "").split(",")
+    return {spec for spec in (str(raw) for raw in specs)
+            if spec and not spec.startswith("no:")}
 
 
 def process_facts(config, root: Path) -> dict:

@@ -1385,6 +1385,7 @@ def build_attestation(
     exit_status: int,
     attested_at: str,
     baseline: Optional[dict] = None,
+    process: Optional[dict] = None,
 ) -> dict:
     """Assemble the record written at session finish. Pure: no disk, no pytest.
 
@@ -1413,6 +1414,16 @@ def build_attestation(
     tests/contract/s/test_a.py::test_one` reports 1 against 7 and does not
     attest. A frozen test file with no baseline entry keeps the wire 1
     behaviour, where collected is compared only against what was reported.
+
+    `process` describes what CONFIGURED the interpreter this record speaks for:
+    the registered plugins, the parsed `-p` option, the PYTEST_ names in the
+    environment, the launcher, and each xdist worker's plugin list. It is
+    RECORDED and judged nowhere, deliberately. Judging a field before anything
+    records it is how the previous wire reddened every session in this
+    repository from its own work; the comparison that reads this arrives next,
+    once a real run has proved the recorded set is what it is thought to be.
+    None when nothing described the process, which is every caller written
+    before the field existed.
     """
     reasons: list[str] = []
     if not frozen_tests:
@@ -1450,6 +1461,7 @@ def build_attestation(
         "exit_status": exit_status,
         "attested_at": attested_at,
         "frozen_tests": {rel: dict(counts) for rel, counts in sorted(frozen_tests.items())},
+        "process": process,
     }
 
 

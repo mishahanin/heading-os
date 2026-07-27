@@ -97,23 +97,106 @@ def test_a_plugin_from_the_interpreter_library_is_named_by_its_distribution(
     assert facts["intree_plugins"] == ["plug.py"]
 
 
-def test_a_plugin_from_the_working_tree_is_recorded_and_never_compared(tmp_path):
-    """The named limit of spec 1.3a, pinned rather than left to be discovered.
+def _intree_plugin(tmp_path):
+    origin = tmp_path / "plug" / "skipper.py"
+    origin.parent.mkdir(parents=True, exist_ok=True)
+    origin.write_text("def pytest_pyfunc_call(pyfuncitem):\n    return True\n")
+    return origin
+
+
+def test_a_plugin_the_tree_loaded_on_its_own_is_recorded_and_never_compared(tmp_path):
+    """The limit of spec 1.3a that SURVIVED review, pinned to its reason.
 
     Which in-tree conftests load depends on what is COLLECTED, so the freeze
     probe (the contract directory) and the gate run (the whole suite)
-    legitimately differ. An in-tree conftest cannot reach the frozen contract's
-    own results without moving frozen bytes.
+    legitimately differ. A conftest also cannot reach the frozen contract's own
+    results without moving frozen bytes. Both clauses are about a plugin the
+    tree loaded on its own; neither survives an explicit `-p`, which the test
+    below covers.
     """
-    origin = tmp_path / "plug" / "skipper.py"
-    origin.parent.mkdir(parents=True)
-    origin.write_text("def pytest_pyfunc_call(pyfuncitem):\n    return True\n")
+    origin = _intree_plugin(tmp_path)
     config = _Config([("skipper", _module("plug.skipper", str(origin)))])
 
     facts = process_facts(config, tmp_path)
 
     assert facts["intree_plugins"] == ["plug/skipper.py"]
     assert facts["plugins"] == {}
+
+
+def test_an_in_tree_plugin_a_flag_named_joins_the_compared_set(tmp_path):
+    """The hole review found in spec 1.3a, and the amendment that closes it.
+
+    `-p plug.skipper` loads a module regardless of what is collected, and
+    `_guard_ancestors` guards only the ancestors of FROZEN paths, so the module
+    can sit in an existing unguarded directory and move no frozen byte. It was
+    registered `intree:`, excused from the comparison, skipped every test in the
+    run, and the record attested. Measured on pytest 9.1.1, which registers such
+    a plugin under the `-p` spec itself.
+    """
+    origin = _intree_plugin(tmp_path)
+    config = _Config([("plug.skipper", _module("plug.skipper", str(origin)))],
+                     option_plugins=["plug.skipper"])
+
+    facts = process_facts(config, tmp_path)
+
+    assert facts["plugins"] == {"intree:plug/skipper.py": str(origin)}
+    assert facts["intree_plugins"] == []
+
+
+def test_a_flag_that_names_a_module_registered_otherwise_still_counts(tmp_path):
+    """Matched by module name as well as by registration name.
+
+    A module something imported before `-p` reached it is already registered,
+    under whatever name that importer chose. The second key can only ever move
+    an identity INTO the compared set, so it reddens rather than waves through.
+    """
+    origin = _intree_plugin(tmp_path)
+    config = _Config([("some-other-name", _module("plug.skipper", str(origin)))],
+                     option_plugins=["plug.skipper"])
+
+    assert process_facts(config, tmp_path)["plugins"] == {
+        "intree:plug/skipper.py": str(origin)}
+
+
+def test_a_blocked_flag_entry_names_nothing(tmp_path):
+    """`-p no:plug.skipper` names a plugin that is NOT loaded.
+
+    It must contribute nothing to the compared set, the same decision `None`
+    already gets in `_module_name`. Without the `no:` filter the string
+    `no:plug.skipper` would never match anyway; the filter is what stops a
+    future matcher that strips the prefix from quietly comparing a block.
+    """
+    origin = _intree_plugin(tmp_path)
+    config = _Config([("plug.skipper", _module("plug.skipper", str(origin)))],
+                     option_plugins=["no:plug.skipper"])
+
+    facts = process_facts(config, tmp_path)
+
+    assert facts["plugins"] == {}
+    assert facts["intree_plugins"] == ["plug/skipper.py"]
+
+
+def test_a_flag_naming_a_distribution_changes_nothing(tmp_path, monkeypatch):
+    """The contract's own case: `-p` on a plugin the freeze recorded is silent.
+
+    `option_plugins=["xdist"]` must keep attesting, which is why `-p` is never
+    banned: the only measured cure for the entry-point route is
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD plus an explicit `-p` per allowed plugin.
+    """
+    library = tmp_path / ".venv" / "lib" / "site-packages"
+    (library / "xdist").mkdir(parents=True)
+    installed = library / "xdist" / "plugin.py"
+    installed.write_text("# an installed distribution plugin\n")
+    monkeypatch.setattr(
+        canopus_gate, "_LIBRARY_DIRS", (*canopus_gate._LIBRARY_DIRS, library.resolve())
+    )
+    config = _Config([("xdist", _module("xdist.plugin", str(installed)))],
+                     option_plugins=["xdist"])
+
+    facts = process_facts(config, tmp_path)
+
+    assert facts["plugins"] == {"dist:xdist": str(installed)}
+    assert facts["intree_plugins"] == []
 
 
 def test_many_registrations_from_one_distribution_collapse_to_one_identity(tmp_path):

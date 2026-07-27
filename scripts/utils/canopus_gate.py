@@ -441,6 +441,19 @@ def _plugin_identity(name, plugin, root: Path) -> str:
     return f"name:{name}"
 
 
+def _flag_named(config) -> set:
+    """The plugin specs `-p` named and did NOT block.
+
+    `config.option.plugins` is the PARSED option, so it carries all three
+    channels that reach it: `-p` on argv, inside PYTEST_ADDOPTS, and inside an
+    ini `addopts`. A `no:` entry names a plugin that is deliberately NOT loaded
+    and must contribute nothing, exactly as `plugin is None` does in
+    `_module_name`.
+    """
+    option = getattr(getattr(config, "option", None), "plugins", None) or ()
+    return {str(spec) for spec in option if not str(spec).startswith("no:")}
+
+
 def process_facts(config, root: Path) -> dict:
     """What configured this interpreter, recorded and normalised, not judged.
 
@@ -450,12 +463,30 @@ def process_facts(config, root: Path) -> dict:
 
     The three plugin fields are one partition of the registered set by identity
     (see `_plugin_identity`), not three separate readings of it: `plugins` is
-    the COMPARED `dist:` subset, mapped to one representative origin for a human
-    to read, and the other two carry the entries the comparison deliberately
-    leaves alone. An entry belongs to exactly one of them.
+    the COMPARED subset, mapped to one representative origin for a human to
+    read, and the other two carry the entries the comparison deliberately leaves
+    alone. An entry belongs to exactly one of them.
+
+    The compared subset is every `dist:` identity PLUS any `intree:` identity a
+    `-p` explicitly named. The second half is spec 1.3a as amended after review,
+    and the amendment repaired a hole rather than tidying a rule: 1.3a excused
+    `intree:` from comparison with two clauses, both written about CONFTESTS —
+    which conftests load depends on what is COLLECTED, and a conftest cannot
+    alter the frozen contract's results without moving frozen bytes. Neither
+    clause survives contact with `-p plug.skipper`. Its loading depends on no
+    collection, and it need sit nowhere the composition guards watch, because
+    `_guard_ancestors` guards only the ancestors of frozen paths. Measured on
+    pytest 9.1.1: such a module is registered under the spec itself
+    (`plug.skipper`), reads `intree:plug/skipper.py`, and skipped every test in
+    the run while the record attested.
+
+    Everything else in-tree stays provenance, because the collection-dependence
+    clause does still hold for it.
     """
     root = Path(root).resolve()
+    named = _flag_named(config)
     identities: dict[str, str | None] = {}
+    explicit: set = set()
     for name, plugin in _plugin_pairs(config):
         origin = getattr(plugin, "__file__", None)
         identity = _plugin_identity(name, plugin, root)
@@ -463,15 +494,25 @@ def process_facts(config, root: Path) -> dict:
         # identity, and one representative file answers "where did this come
         # from" as well as forty-six would.
         identities.setdefault(identity, str(origin) if origin else None)
+        # By registration name, which pytest sets to the `-p` spec itself, and
+        # ALSO by module name for a module plugin. The second key costs one
+        # condition and closes the case where something imported the module
+        # first, so pytest registered it under another name and `-p` found it
+        # already there. It can only ever move an identity INTO the compared
+        # set, so a mistake here reddens rather than waves through.
+        if str(name) in named or _module_name(plugin) in named:
+            explicit.add(identity)
     option = getattr(getattr(config, "option", None), "plugins", None) or ()
+    compared = {
+        identity: origin for identity, origin in sorted(identities.items())
+        if identity.startswith("dist:")
+        or (identity.startswith("intree:") and identity in explicit)
+    }
     return {
-        "plugins": {
-            identity: origin for identity, origin in sorted(identities.items())
-            if identity.startswith("dist:")
-        },
+        "plugins": compared,
         "intree_plugins": sorted(
             identity[len("intree:"):] for identity in identities
-            if identity.startswith("intree:")
+            if identity.startswith("intree:") and identity not in compared
         ),
         # Recorded, never compared. An anonymous plugin was created in-process
         # by an already-loaded one, so it is downstream of a `dist:` entry the

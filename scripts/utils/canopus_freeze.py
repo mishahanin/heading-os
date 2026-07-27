@@ -1104,7 +1104,18 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
     The refusal stays exactly as wide as the measurement. It fires only for a
     directory `watched_directory` accepts AND that the guard's recorded members
     do not already list, so a write under an existing `scripts/` or `docs/` is
-    untouched. Recorded members, not disk: this function never stats.
+    untouched. Recorded members, not disk: this function never stats. That is
+    also why it says "would ADD" rather than "would create": the comparison is
+    against the RECORDED members, so a directory already on disk and absent from
+    the manifest is refused with a sentence that never claimed to know which.
+
+    Every members-mode `dirs` entry must carry BOTH `"names"` and `"members"`;
+    `_created_directory` indexes the second unconditionally. `read_freeze`
+    validates both on load, so a manifest reaching here has them, and the
+    dispatcher's fail-closed handling of `FreezeCorrupt` is what covers the rest.
+    Stated because this sits on the fail-open path: the dispatcher calls it
+    unguarded (`.claude/hooks/_dispatch.py`), so a KeyError raised here reaches
+    the hook uncaught on an ordinary write.
     """
     if rel_posix in manifest["files"]:
         return f"{rel_posix} is a frozen contract file"
@@ -1127,7 +1138,7 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
         created = _created_directory(rel_posix, dir_rel, entry)
         if created:
             return (
-                f"{rel_posix} would create {created} in the guarded composition "
+                f"{rel_posix} would add {created} to the guarded composition "
                 f"of {shown}/"
             )
     return None

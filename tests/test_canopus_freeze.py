@@ -646,15 +646,19 @@ def test_frozen_reason_does_not_leak_across_a_similar_prefix(tree: Path):
     """UPDATED in wire 2.3: the prefix claim is preserved, its spelling is not.
 
     The point is that `tests_extra/` must never be read as inside the frozen
-    `tests/`. It is now denied for a different and correct reason — it would
-    create a new importable root directory (measured: `added ==
-    ['tests_extra/']`) — so the assertion pins what it always meant: whatever
-    the deny says, it must not claim the path is inside the frozen directory.
+    `tests/`. It is now denied for a different and correct reason — it would add
+    a new importable root directory to the guarded composition (measured:
+    `added == ['tests_extra/']`) — so the assertion pins what it always meant:
+    whatever the deny says, it must not claim the path is inside the frozen
+    directory.
     """
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
     reason = frozen_reason("tests_extra/test_x.py", manifest) or ""
     assert "frozen directory" not in reason
-    assert "tests_extra/" in reason
+    # The whole clause, not the bare name: `tests_extra/` alone is satisfied by
+    # the very sentence the line above forbids, so the two assertions together
+    # said no more than the first one did.
+    assert "would add tests_extra/" in reason
 
 
 def test_read_freeze_returns_none_when_no_freeze_is_active(tree: Path):

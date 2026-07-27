@@ -138,6 +138,44 @@ def test_the_pack_renders_a_damaged_process_block_without_raising():
     assert "compared   none" in page
 
 
+def test_the_pack_names_the_plugins_that_were_recorded_and_never_compared():
+    """`process_facts` keeps them BECAUSE a pack reader would not otherwise know.
+
+    That rationale is written into `canopus_gate.process_facts` and was false
+    until this row existed: the record carried the entries and the page printed
+    none of them.
+    """
+    from scripts.utils.canopus_pack import render_process
+
+    page = render_process(
+        _process(other_plugins=["anon:unresolved", "name:capturemanager"]),
+        frozen_paths=set(),
+    )
+
+    assert "anon:unresolved" in page
+    assert "name:capturemanager" in page
+    # The mark matters as much as the name: an operator who reads these as part
+    # of the compared set reads a stronger guarantee than the wire gives.
+    assert "never compared" in page
+
+
+def test_the_pack_says_a_parallel_run_had_its_workers_compared():
+    """A worker is a separate interpreter, and the page said nothing about them."""
+    from scripts.utils.canopus_pack import render_process
+
+    page = render_process(
+        _process(workers=[["dist:xdist", "dist:pytest_cov"],
+                          ["dist:xdist", "dist:pytest_cov"],
+                          ["dist:xdist"]]),
+        frozen_paths=set(),
+    )
+
+    assert "workers    3" in page
+    # Two distinct sets, not three, because the spread is what an operator reads
+    # after a worker-mismatch reason names one interpreter out of sixteen.
+    assert "2 distinct" in page
+
+
 def test_the_pack_omits_the_origin_path_a_plugin_was_loaded_from():
     """The pack is pasted into sign-off artifacts; an origin is a local path."""
     from scripts.utils.canopus_pack import render_process

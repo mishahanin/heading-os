@@ -9,6 +9,7 @@
 pytest>=8.0,<10.0
 pytest-asyncio>=0.23,<2.0   # required by pyproject asyncio_mode=auto (sentinel hardening async tests)
 pytest-xdist>=3.0,<4.0      # parallel test gate (-n auto) — the pre-push regression speedup
+pytest-cov>=7.0,<8.0        # the gate runs under a coverage floor; without this it cannot run at all
 
 # Docs tooling
 termtosvg==1.1.0            # re-records the README demo asset (docs/assets/demo.svg via docs/assets/demo.sh); not a runtime dep
@@ -16,6 +17,6 @@ termtosvg==1.1.0            # re-records the README demo asset (docs/assets/demo
 # Security tooling
 bandit>=1.7,<2.0
 ruff>=0.4,<1.0
-pre-commit>=3.7,<4.0
+pre-commit>=4.0,<5.0        # pyproject pins 4.6.0; a <4.0 ceiling here installed a different tool
 detect-secrets>=1.4,<2.0
 pip-audit>=2.7,<3.0

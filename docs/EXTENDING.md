@@ -400,34 +400,39 @@ with its own root, merging in a history carrying another root commit, and a
 shallow clone, whose grafted boundary commit reads as a root until
 `git fetch --unshallow`.
 
-**The frozen contract pins that identity DEFINITION less tightly than it claims.**
-A docstring in `tests/contract/2026-07-26-canopus-repository-binding/test_contract.py`
-says a wrong definition of repository identity would be caught, and lists "a
-toplevel path, an unsorted join, a different separator, a trailing newline".
-Measured by mutation on 2026-07-27, the toplevel-path and trailing-newline
-variants ARE killed — the trailing newline fails 7 cases and the toplevel path
-fails 14 — and the other two are NOT: removing `sorted(...)` from
-`repo_identity`, and changing the newline separator to a comma, each leave all
-448 passing (the 437 in `tests/test_canopus_*.py` plus the eleven contract
-cases). Re-run those two mutations against those two counts to check whether this
-still holds. The cause is the fixtures
-rather than the argument. No fixture builds a repository with more than one root
-commit, so sorted, unsorted, and any separator collapse to the same one-element
-digest. The consequence is fail-closed rather than a reopened bypass: an anchor
-repository carrying a merged second root could take a spurious broken binding
-after an ordinary commit reorders `rev-list` output, and nothing in the set would
-fail. The contract is frozen, so the multi-root fixture belongs in the next
-slice's contract.
+**That identity DEFINITION is now pinned, and the fixture that once loosened it
+is repaired.** The wire 2.2 contract claimed a wrong definition of repository
+identity would be caught, listing "a toplevel path, an unsorted join, a different
+separator, a trailing newline". Measured by mutation on 2026-07-27, while the
+contract was still in place: the toplevel-path and trailing-newline variants were
+killed, and the other two were not. Removing `sorted(...)` from `repo_identity`,
+and changing the newline separator to a comma, each left all 449 cases green (the
+438 in `tests/test_canopus_*.py` plus the eleven contract cases). The cause was
+the fixture rather than the argument: no fixture built a repository with more
+than one root commit, so sorted, unsorted and any separator collapsed onto the
+same one-element digest.
 
-Two more of that file's own sentences are wrong, found by the same reading and
-frozen with the rest, so they carry to the next slice's contract too. Its module
-docstring says "Six tests" where the file collects eleven cases after
-parametrisation. And `test_hiding_the_repository_reddens_the_lock` says "the
-lock is otherwise genuinely held here", where the test writes the anchor line to
-the WORKING copy and never commits it: without the `.git` rename that fixture
-reports `LOCK UNCONFIRMED` at exit 0, so the test proves amber becomes red, not
-held becomes red. The sentence describes the pre-fix world it was written
-against; what it asserts about the rename still holds.
+Retiring that contract carried the test into
+`tests/test_canopus_gate.py::test_a_committed_approval_in_the_bound_repository_reaches_lock_held`
+with the fixture repaired. The anchor repository now merges in an orphan root, and
+the orphan is chosen so `rev-list` emits the two roots in an order that is NOT the
+sorted one, which is what makes an unsorted implementation differ from a sorted
+one. Both mutations now fail that test, one case each, reproduced over three runs.
+The test still computes the identity by hand rather than calling `repo_identity`,
+because every other binding test in the module builds its manifest through the
+implementation and so moves both sides of the comparison together.
+
+The contract's SC-1 test, the parametrised `GIT_*` poisoning one, retired to
+`tests/test_canopus_git.py::test_no_single_git_variable_hides_the_repository`
+rather than being kept as written. Its gate-level assertion was directional
+("never green"), and a directional assertion cannot fail on this seam: removing
+the `GIT_*` scrub entirely left all eleven contract cases passing, because a
+blinded gate answers RED, which the direction permits. The port asserts instead
+that `repo_identity` returns the SAME answer under each variable one at a time,
+which is the form that bites: narrowing the scrub to a two-name denylist
+(`GIT_DIR`, `GIT_WORK_TREE`) failed nothing anywhere in the suite before the port
+and fails two cases after it, `GIT_COMMON_DIR` and `GIT_OBJECT_DIRECTORY` being
+the members that reached past the denylist.
 
 `.canopus/` is gitignored, so the ledger recording release windows and forced
 escapes can be deleted by the builder in one command, and git never saw it.

@@ -29,8 +29,15 @@ SERVICE = "cliproxyapi.service"
 
 
 def _download(url: str, dest: Path) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "heading-os-update-manager"})
-    with urllib.request.urlopen(req, timeout=120) as resp, dest.open("wb") as fh:  # noqa: S310
+    # Unlike update_sources, this URL is not a literal: it arrives as
+    # `browser_download_url` inside the GitHub API response, so the SCHEME is
+    # remote-controlled data. urlopen honours `file:` and custom schemes, which
+    # would turn a hijacked API response into a local-file read staged as the
+    # new binary. Checked here rather than suppressed.
+    if not url.startswith("https://"):
+        raise ValueError(f"refusing a non-https download URL: {url!r}")
+    req = urllib.request.Request(url, headers={"User-Agent": "heading-os-update-manager"})  # noqa: S310 - scheme checked above
+    with urllib.request.urlopen(req, timeout=120) as resp, dest.open("wb") as fh:  # noqa: S310 - scheme checked above
         shutil.copyfileobj(resp, fh)
 
 

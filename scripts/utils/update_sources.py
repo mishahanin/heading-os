@@ -15,7 +15,7 @@ class SourceError(Exception):
 
 
 def _get_json(url: str) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": "heading-os-update-manager"})
+    req = urllib.request.Request(url, headers={"User-Agent": "heading-os-update-manager"})  # noqa: S310 - https literal
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 - https literal
             return json.loads(resp.read().decode("utf-8"))

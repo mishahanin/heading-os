@@ -72,5 +72,9 @@ def ssh(remote_cmd: str, timeout: int = 30, host: str = None) -> str:
     finally:
         try:
             os.unlink(askpass)
-        except OSError:
-            pass
+        except OSError as exc:
+            # The askpass helper holds the router password in cleartext. A failed
+            # unlink leaves that credential on disk, which is precisely the case
+            # that must never pass silently.
+            print(f"{RED}modem-ssh: could not remove the transient askpass file "
+                  f"{askpass}: {exc}. Delete it by hand.{RESET}", file=sys.stderr)

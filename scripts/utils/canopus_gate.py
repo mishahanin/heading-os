@@ -22,13 +22,12 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import ModuleType
 
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.canopus_freeze import (
     ANCHOR_MISSING,
-    CONFTEST_NAME,
     ANCHOR_RECORDED,
     ANCHOR_UNBOUND,
     APPROVED,
@@ -429,9 +428,9 @@ def _plugin_identity(name, plugin, root: Path) -> str:
     Measured: this collapses sixty-six raw names to seven identities, and the
     `dist:` subset is identical in the freeze probe, the gate controller and
     every gate worker. That subset is compared, and so is every `intree:`
-    identity whose origin is not a `conftest.py`. `process_facts` owns that
-    partition and argues it. An in-tree conftest, and every `anon:`/`name:`
-    entry, are recorded and not compared.
+    identity pytest did not register as a collected conftest. `process_facts`
+    owns that partition and argues it. A collected conftest, and every
+    `anon:`/`name:` entry, are recorded and not compared.
     """
     rel = _intree_rel(getattr(plugin, "__file__", None), root)
     if rel is not None:
@@ -450,17 +449,36 @@ def _intree_path(identity: str) -> str | None:
     return identity[len(prefix):] if identity.startswith(prefix) else None
 
 
-def _is_named_intree(identity: str) -> bool:
-    """True when this in-tree plugin can only have been NAMED by something.
+def _registered_by_collection(name, origin) -> bool:
+    """True when pytest registered this plugin AS A COLLECTED CONFTEST.
 
-    The whole in-tree rule in one predicate: a conftest is loaded by COLLECTION,
-    everything else in the tree is loaded because a name reached pytest. The
-    file name is the discriminator because that is what pytest itself keys on,
-    and `CONFTEST_NAME` is imported rather than spelled here so this predicate
-    and the freeze's own conftest chain can never disagree about the word.
+    A fact about REGISTRATION, never about the file's name, and the difference
+    is a working exploit: review renamed the previous round's in-tree plugin to
+    `plug/conftest.py`, named it with `pytest_plugins = ["plug.conftest"]` from
+    a test module, and turned `assert False` into `1 passed` while a basename
+    discriminator excused it. Reproduced here before this predicate was written.
+    A file CALLED `conftest.py` that arrives BY NAME is not directory-scoped and
+    is not collection-dependent: pytest registers it as a global plugin whose
+    hooks fire for every item.
+
+    The discriminator is pytest's own, read in the installed source
+    (`_pytest/config/__init__.py`): a collected conftest is registered under
+    `str(conftestpath)` (`conftestpath_plugin_name`, handed to
+    `consider_conftest`), while `import_plugin` ends at `register(mod, modname)`
+    with the dotted import spec. A dotted spec is never a path, so "the
+    registration name IS the origin's path" separates collection from naming
+    exactly, whatever the file is called.
+
+    Never raises: it is reached once per registered plugin from a session-finish
+    hook, and a description that raises costs the record it was written to
+    produce. An unresolvable name is not a path form, which is what False says.
     """
-    rel = _intree_path(identity)
-    return rel is not None and PurePosixPath(rel).name != CONFTEST_NAME
+    if not origin:
+        return False
+    try:
+        return Path(str(name)).resolve() == Path(str(origin)).resolve()
+    except (OSError, ValueError):
+        return False
 
 
 def process_facts(config, root: Path) -> dict:
@@ -477,27 +495,31 @@ def process_facts(config, root: Path) -> dict:
     alone. An entry belongs to exactly one of them.
 
     The compared subset is every `dist:` identity plus every `intree:` identity
-    whose origin is NOT a `conftest.py`. That is a PROPERTY, deliberately, and
-    not a list of channels: three revisions of this rule enumerated channels and
-    review found an escape past each of them in turn. `-p` was closed, then
-    PYTEST_PLUGINS was the same escape one channel over, then `pytest_plugins`
-    declared inside a test module was a third. Every enumeration is a denylist
-    wearing another hat, and this codebase has now produced that defect twelve
-    times.
+    pytest did NOT register as a collected conftest (`_registered_by_collection`).
+    That is a PROPERTY, deliberately, and not a list of channels: three revisions
+    of this rule enumerated channels and review found an escape past each of them
+    in turn. `-p` was closed, then PYTEST_PLUGINS was the same escape one channel
+    over, then `pytest_plugins` declared inside a test module was a third. Every
+    enumeration is a denylist wearing another hat.
 
-    The property is the rule spec 1.3a always stated. Its justification for
-    leaving in-tree plugins uncompared is collection-dependence, and
-    collection-dependence is a property of CONFTESTS: which conftests load
-    depends on what is collected, so the freeze probe (the contract directory)
-    and the gate run (the whole suite) legitimately differ. A non-conftest
-    in-tree module is loaded because something NAMED it, through one of those
-    three routes or a fourth nobody has found, and every one of those is the
-    explicitly-named side of the same rule.
+    A fourth revision keyed on the file being called `conftest.py`, and review
+    reproduced an escape past that too: `plug/conftest.py` named by
+    `pytest_plugins` hijacks the run and a basename discriminator excuses it. So
+    the property reads pytest's own registration instead of any name we choose.
+
+    Spec 1.3a justifies leaving in-tree plugins uncompared by
+    collection-dependence, and collection-dependence is a property of what
+    COLLECTION loads: which conftests load depends on what is collected, so the
+    freeze probe (the contract directory) and the gate run (the whole suite)
+    legitimately differ. Anything else in the tree is registered because a name
+    reached pytest, through one of those three routes or a fourth nobody has
+    found, and every one of those is the explicitly-named side of the same rule.
 
     Measured before adopting it: in an honest run of this repository the only
-    in-tree identity is `intree:tests/conftest.py`, so the count of non-conftest
-    in-tree plugins is ZERO and the compared set does not move. The freeze probe
-    and the gate run stay in agreement.
+    in-tree identity is `intree:tests/conftest.py`, registered by collection
+    under its own path, so the count of compared in-tree plugins is ZERO and the
+    compared set does not move. The freeze probe and the gate run stay in
+    agreement.
 
     What stays open, stated where the superseded reasoning stood rather than
     declared closed: an in-tree CONFTEST is still uncompared, for the
@@ -508,6 +530,7 @@ def process_facts(config, root: Path) -> dict:
     """
     root = Path(root).resolve()
     identities: dict[str, str | None] = {}
+    collected: set = set()
     for name, plugin in _plugin_pairs(config):
         origin = getattr(plugin, "__file__", None)
         identity = _plugin_identity(name, plugin, root)
@@ -515,10 +538,13 @@ def process_facts(config, root: Path) -> dict:
         # identity, and one representative file answers "where did this come
         # from" as well as forty-six would.
         identities.setdefault(identity, str(origin) if origin else None)
+        if _registered_by_collection(name, origin):
+            collected.add(identity)
     option = getattr(getattr(config, "option", None), "plugins", None) or ()
     compared = {
         identity: origin for identity, origin in sorted(identities.items())
-        if identity.startswith("dist:") or _is_named_intree(identity)
+        if identity.startswith("dist:")
+        or (_intree_path(identity) is not None and identity not in collected)
     }
     return {
         "plugins": compared,

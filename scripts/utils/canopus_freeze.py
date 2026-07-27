@@ -1495,10 +1495,10 @@ def build_attestation(
 
     Said no wider than it is true, because this repository has already had to
     retract one claim of this shape. The comparison covers every plugin from a
-    DISTRIBUTION and every in-tree plugin that is not a conftest, whatever route
-    loaded it. An in-tree CONFTEST outside the frozen contract directory is
-    recorded as provenance and not compared, because which conftests load depends
-    on what was collected. Closing that one needs a different instrument, and it
+    DISTRIBUTION and every in-tree plugin pytest did not register by COLLECTION,
+    whatever route loaded it. A COLLECTED conftest outside the frozen contract
+    directory is recorded as provenance and not compared, because which conftests
+    collection loads depends on what was collected. Closing that one needs a different instrument, and it
     is on the open list rather than covered by this sentence.
 
     Both directions are refused. A plugin that VANISHED changed what the run
@@ -1507,9 +1507,10 @@ def build_attestation(
 
     The names compared are the identities `process_facts` derives, never pytest
     registration names, and the set it hands over is every `dist:` identity plus
-    every `intree:` identity whose origin is not a `conftest.py`. Both are wire
-    2.3 measurements rather than taste, and both are argued where they are
-    computed (`canopus_gate._plugin_identity`, `canopus_gate.process_facts`).
+    every `intree:` identity pytest did not register as a collected conftest.
+    Both are wire 2.3 measurements rather than taste, and both are argued where
+    they are computed (`canopus_gate._plugin_identity`,
+    `canopus_gate.process_facts`).
     """
     reasons: list[str] = []
     if not frozen_tests:

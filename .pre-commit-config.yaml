@@ -38,7 +38,7 @@ repos:
   # Python linting with security rules (S=bandit-equivalent only for pre-commit gate)
   # Full rule set (S,B,A,C4,DTZ,T10,PIE,SIM,ERA) available via: ruff check --config pyproject.toml
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.20
+    rev: v0.16.0
     hooks:
       - id: ruff
         args: ['--select', 'S', '--ignore', 'S101,S105,S310,S603,S607']

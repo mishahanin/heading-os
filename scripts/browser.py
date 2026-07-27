@@ -55,7 +55,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Iterator, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
 from urllib.request import urlopen
 
 # Allow `from scripts.browser import ...` whether imported by a skill
@@ -264,10 +264,19 @@ def launch_comet(
     if not _cdp_ready(port):
         raise TimeoutError(f"CDP did not become ready on port {port} within {wait_timeout}s")
 
+    # Record the process that actually owns the CDP port, not Popen's PID. On
+    # Debian/Ubuntu `/usr/bin/brave-browser` is a shell wrapper that forks the
+    # real binary and exits, so Popen's PID is dead by now (and its number is
+    # free to be recycled onto an unrelated process).
+    owners = _pids_for_cdp_port(port)
+    real_pid = owners[0] if owners else proc.pid
+    if real_pid != proc.pid:
+        _log(f"{browser} re-parented: launcher {proc.pid} -> browser {real_pid}", GRAY)
+
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    LOCK_FILE.write_text(json.dumps({"port": port, "pid": proc.pid, "browser": browser}, indent=2))
+    LOCK_FILE.write_text(json.dumps({"port": port, "pid": real_pid, "browser": browser}, indent=2))
     _log(f"CDP ready on http://127.0.0.1:{port}", GREEN)
-    return proc.pid
+    return real_pid
 
 
 def launch_browser(
@@ -348,25 +357,176 @@ def safe_goto(page, url: str, wait_until: str = "domcontentloaded", timeout_ms: 
         return False
 
 
-def stop_comet() -> bool:
-    """Send SIGTERM to the tracked PID (if any) and clear the lock file."""
+def _pid_cmdline(pid: int) -> str:
+    """Full command line of a PID, or "" if it cannot be read.
+
+    Reads /proc where available (Linux) and falls back to `ps` (macOS).
+    """
+    proc_file = Path(f"/proc/{pid}/cmdline")
+    try:
+        if proc_file.exists():
+            return proc_file.read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+    except OSError:
+        return ""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True, text=True, check=False,
+        )
+        return out.stdout.strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def _pid_is_browser(pid: int, browser_name: str = DEFAULT_BROWSER) -> bool:
+    """True only if `pid` is live AND really is that browser.
+
+    Guards against PID reuse: the launcher wrapper exits within milliseconds,
+    so a stale tracked PID can be recycled onto an unrelated process. Signalling
+    it blind would kill a bystander.
+    """
+    try:
+        process_name = _browser_paths(browser_name)["process_name"]
+    except ValueError:
+        return False
+
+    if sys.platform == "win32":
+        try:
+            out = subprocess.check_output(
+                ["tasklist", "/FI", f"PID eq {pid}"], text=True, errors="ignore"
+            )
+        except Exception:
+            return False
+        return process_name.lower() in out.lower()
+
+    cmdline = _pid_cmdline(pid)
+    if not cmdline:
+        return False
+    # Match the executable only (argv[0]), never the whole command line: a URL
+    # or a path component containing the browser name would false-positive.
+    return process_name.lower() in Path(cmdline.split()[0]).name.lower()
+
+
+def _parse_cdp_owner_pids(ps_output: str, port: int, self_pid: int) -> List[int]:
+    """Pick the main browser PIDs out of `ps -eo pid=,args=` output.
+
+    Three kinds of process carry `--remote-debugging-port=<port>` in their
+    argv, and only the second is the one to signal (verified on WSL2,
+    2026-07-27):
+
+    * the launcher wrapper — on Debian/Ubuntu `/usr/bin/brave-browser` is a
+      bash script. It is the PID `Popen` reports, and killing it orphans the
+      browser instead of stopping it.
+    * the browser itself — no `--type=` flag.
+    * renderer / zygote / gpu / utility children — they inherit the flag in
+      their command line and are identified by `--type=`. They die with the
+      browser, so signalling them is noise at best.
+    """
+    flag = f"--remote-debugging-port={port}"
+    pids = []
+    for line in ps_output.splitlines():
+        line = line.strip()
+        if flag not in line:
+            continue
+        head, _, rest = line.partition(" ")
+        if not head.isdigit():
+            continue
+        pid = int(head)
+        if pid == self_pid:
+            continue
+        rest = rest.strip()
+        if "--type=" in rest:            # renderer / zygote / gpu / utility
+            continue
+        argv0 = rest.split()[0] if rest else ""
+        if Path(argv0).name in ("sh", "bash", "ps", "grep", "env", "timeout"):
+            continue                      # launcher wrapper or an observer
+        pids.append(pid)
+    return pids
+
+
+def _pids_for_cdp_port(port: int) -> List[int]:
+    """PIDs of the main browser process(es) holding `port` for CDP.
+
+    Authoritative because it survives the Debian/Ubuntu wrapper forking away
+    from the PID that Popen reported.
+
+    Windows returns an empty list — there the launcher is the browser exe
+    itself, so the verified tracked PID is already correct.
+    """
+    if sys.platform == "win32":
+        return []
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,args="], capture_output=True, text=True, check=False
+        )
+    except (FileNotFoundError, OSError):
+        return []
+    return _parse_cdp_owner_pids(out.stdout, port, os.getpid())
+
+
+def _wait_until_cdp_down(port: int, timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while True:
+        if not _cdp_ready(port):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
+def stop_comet(port: Optional[int] = None, timeout: float = 10.0) -> bool:
+    """Stop the CDP browser session. Returns True only if it actually stopped.
+
+    Terminates every process holding the CDP port (plus the tracked PID when it
+    verifies as the browser), waits for the port to close, escalates to SIGKILL
+    if SIGTERM is ignored, and clears the lock file only on confirmed shutdown.
+    A surviving browser leaves the lock in place so the caller can retry.
+    """
     lock = _active_lock_file()
     if lock is None:
         _log("No lock file; nothing tracked to stop.", YELLOW)
         return False
-    try:
+
+    state = {}
+    with contextlib.suppress(Exception):
         state = json.loads(lock.read_text())
-        pid = state.get("pid")
-        if pid:
-            os.kill(pid, signal.SIGTERM)
-            _log(f"Sent SIGTERM to PID {pid}", GREEN)
-    except Exception as e:
-        _log(f"stop failed: {e}", RED)
-        return False
-    finally:
+    port = port or state.get("port") or DEFAULT_PORT
+    browser_name = state.get("browser") or DEFAULT_BROWSER
+    tracked = state.get("pid")
+
+    targets = list(_pids_for_cdp_port(port))
+    if tracked and tracked not in targets and _pid_is_browser(tracked, browser_name):
+        targets.append(tracked)
+    elif tracked and tracked not in targets:
+        _log(f"Tracked PID {tracked} is not {browser_name}; ignoring it.", GRAY)
+
+    if not targets and not _cdp_ready(port):
+        _log("Browser already stopped; clearing lock.", GREEN)
         with contextlib.suppress(Exception):
             lock.unlink()
-    return True
+        return True
+
+    sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+    for sig, label, wait in ((signal.SIGTERM, "SIGTERM", timeout),
+                             (sigkill, "SIGKILL", min(timeout, 5.0))):
+        for pid in targets:
+            try:
+                os.kill(pid, sig)
+                _log(f"Sent {label} to PID {pid}", GREEN)
+            except ProcessLookupError:
+                _log(f"PID {pid} already gone", GRAY)
+            except OSError as e:
+                _log(f"{label} to PID {pid} failed: {e}", RED)
+        if _wait_until_cdp_down(port, wait):
+            _log(f"CDP port {port} closed; browser stopped.", GREEN)
+            with contextlib.suppress(Exception):
+                lock.unlink()
+            return True
+        if sig is not sigkill:
+            _log(f"Still up after {label}; escalating.", YELLOW)
+
+    _log(f"Browser still answering on port {port}; lock kept for retry.", RED)
+    return False
 
 
 def cmd_launch(args: argparse.Namespace) -> int:

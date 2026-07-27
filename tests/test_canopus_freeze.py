@@ -214,6 +214,40 @@ def test_validate_refuses_the_state_directory(tree: Path):
         validate_freeze_path(tree / ".canopus", tree)
 
 
+def test_validate_refuses_the_tree_root_itself(tree: Path):
+    """The deny and the measurement have to watch the same set, or neither does.
+
+    A root freeze recorded `dirs["."]`, the POSIX spelling of an empty relative
+    path, while `_guard_ancestors` spells the same directory `""`. `frozen_reason`
+    matches neither against an ordinary relative path, so the PreToolUse deny went
+    silently inert over the WHOLE frozen set while `verify` kept catching the
+    change -- the exact split `matches_guard` exists to prevent, arriving through
+    the one path that bypasses it.
+
+    Refused rather than taught a second spelling of the root: that removes the
+    divergence instead of patching one of its two sides.
+    """
+    with pytest.raises(FreezeError, match="working tree root"):
+        validate_freeze_path(tree, tree)
+
+
+def test_the_tree_root_guard_is_denied_as_a_dot_not_as_a_slash(tree: Path):
+    """The ancestor guard on the root reads `./`, the way `status` already prints it.
+
+    The empty relative path went into the deny message raw, so an operator was
+    told a new top-level file "would join the guarded composition of /" -- the
+    FILESYSTEM root, which is not what is guarded and not what `cmd_status`
+    calls the same manifest entry.
+    """
+    manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree,
+                              label="l", frozen_at=STAMP)
+
+    assert "" in manifest["dirs"], "the tree root carries the *.py ancestor guard"
+    reason = frozen_reason("target.py", manifest)
+    assert "composition of ./" in reason
+    assert "composition of /" not in reason
+
+
 def test_validate_anchor_refuses_a_path_inside_the_tree(tree: Path):
     inside = tree / "gate.md"
     inside.write_text("# nope\n")
@@ -857,7 +891,7 @@ def test_baseline_enters_the_root_hash(tmp_path):
     from scripts.utils.canopus_freeze import build_manifest
 
     target = _tree_with_one_file(tmp_path)
-    kwargs = dict(label="t", frozen_at="2026-07-25T00:00:00+00:00")
+    kwargs = {"label": "t", "frozen_at": "2026-07-25T00:00:00+00:00"}
 
     one = build_manifest([target], tmp_path, baseline={"tests/test_a.py": 7}, **kwargs)
     two = build_manifest([target], tmp_path, baseline={"tests/test_a.py": 1}, **kwargs)
@@ -1090,7 +1124,18 @@ def test_the_documented_enforcer_set_covers_its_import_closure():
         seen.add(rel)
         for node in ast.walk(ast.parse((root / rel).read_text(encoding="utf-8"))):
             if isinstance(node, ast.ImportFrom) and node.module:
+                # BOTH readings of `from X import y`, because y can be a module.
+                # Following only `node.module` made this guard blind to exactly
+                # the form `tests/conftest.py` uses -- `from scripts.utils import
+                # venv as _venv` yields the module `scripts.utils`, which is a
+                # package and not a file, so venv.py fell out of the closure
+                # entirely. It survived only because scripts/run-tests.py happened
+                # to spell the same import dotted. Measured: rewriting that one
+                # line to the package form dropped venv.py from the computed set
+                # and this test still passed, which is the silent escape its own
+                # docstring promises cannot happen.
                 modules = [node.module]
+                modules += [f"{node.module}.{alias.name}" for alias in node.names]
             elif isinstance(node, ast.Import):
                 modules = [alias.name for alias in node.names]
             else:

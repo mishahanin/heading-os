@@ -315,7 +315,28 @@ def validate_freeze_path(path: Path, root: Path) -> Path:
         raise FreezeError(
             f"{path} resolves outside the working tree at {resolved_root}"
         ) from None
-    if rel.parts and rel.parts[0] == FREEZE_DIRNAME:
+    if not rel.parts:
+        # The tree ROOT itself, and it is refused for the reason `matches_guard`
+        # exists: the deny and the measurement must watch the same set. A root
+        # freeze records `dirs["."]` (the POSIX spelling of an empty relative
+        # path), while `_guard_ancestors` spells the same directory `""`, and
+        # `frozen_reason` matches neither against a normal relative path -- so
+        # the PreToolUse deny went silently inert over the WHOLE frozen set while
+        # `verify` kept catching the change. Measured, not reasoned: with
+        # `dirs["."]` recursive, `frozen_reason("tests/test_a.py", manifest)`
+        # answers None.
+        #
+        # Refusing rather than teaching the matcher a second spelling of the root
+        # removes the divergence instead of patching one of its two sides, and it
+        # costs nothing real: a recursive root freeze also hashes `.venv/` and
+        # `.git/`, which the build rewrites on its own. Freeze the subdirectories
+        # that hold the contract.
+        raise FreezeError(
+            f"{path} IS the working tree root; freezing it whole would bind the "
+            f"lock to every build artifact in the tree and the write-deny cannot "
+            f"see the resulting guard. Freeze the paths that hold the contract."
+        )
+    if rel.parts[0] == FREEZE_DIRNAME:
         raise FreezeError(
             f"{FREEZE_DIRNAME}/ holds the freeze state itself and cannot be frozen"
         )
@@ -895,14 +916,19 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
         return f"{rel_posix} is a frozen contract file"
     parent, _, name = rel_posix.rpartition("/")
     for dir_rel, entry in manifest["dirs"].items():
+        # The tree root is stored as the empty string by `_guard_ancestors`, and
+        # printing it raw made the deny read "the guarded composition of /" --
+        # the filesystem root, which is not what is guarded. `cmd_status` already
+        # spells the same entry `./`; one spelling in both places.
+        shown = dir_rel or "."
         if entry["mode"] == "recursive":
             if rel_posix == dir_rel or rel_posix.startswith(dir_rel + "/"):
-                return f"{rel_posix} is inside the frozen directory {dir_rel}/"
+                return f"{rel_posix} is inside the frozen directory {shown}/"
         elif parent == dir_rel and matches_guard(name, entry["names"]):
             # The same filter verify measures with. A deny wider than the
             # measurement refuses writes nothing would have reported, which is
             # how a discipline tool becomes an obstacle.
-            return f"{rel_posix} would join the guarded composition of {dir_rel}/"
+            return f"{rel_posix} would join the guarded composition of {shown}/"
     return None
 
 

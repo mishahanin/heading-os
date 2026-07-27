@@ -54,8 +54,12 @@ def _child_env() -> dict:
     """The parent environment with every GIT_* variable removed.
 
     A blanket prefix, not a named denylist. Naming the variables you happened to
-    think of is the defect this project has hit seven times: a guard that covers
-    the case in front of its author rather than the class. GIT_DIR is merely the
+    think of is this project's most-repeated defect: a guard that covers the case
+    in front of its author rather than the class. A tally once stood in this
+    sentence and was stale by the next recurrence, which is the same failure
+    wearing prose, so the class is named here and the count is not.
+
+    GIT_DIR is merely the
     cheapest of them, and GIT_WORK_TREE, GIT_COMMON_DIR, GIT_INDEX_FILE,
     GIT_OBJECT_DIRECTORY, GIT_CEILING_DIRECTORIES and
     GIT_DISCOVERY_ACROSS_FILESYSTEM redirect discovery just as well. The next

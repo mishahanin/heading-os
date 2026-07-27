@@ -215,10 +215,25 @@ def render_process(process: Optional[dict], frozen_paths: Collection[str]) -> st
         # xdist a row promising a comparison would assert one that never ran.
         # A worker that does disagree prints its own symmetric difference as a
         # reason; what this row adds is that a parallel run was described at all.
-        distinct = {tuple(_names(worker)) for worker in workers}
+        # A worker whose record is not a sequence or a mapping is UNREADABLE, and
+        # the spread is computed over the readable ones only. Folding damage
+        # through `_names` (which answers "nothing" for the wrong type) produced
+        # two false readings, both measured: three unreadable workers printed
+        # "1 distinct plugin set recorded", the string two AGREEING workers
+        # print; and one unreadable worker beside a sound one printed
+        # "2 distinct plugin sets", the string a real plugin MISMATCH prints.
+        # The second is the expensive one. It sends an operator hunting a
+        # divergence between interpreters that never happened.
+        readable = [worker for worker in workers
+                    if isinstance(worker, (list, tuple, dict))]
+        distinct = {tuple(_names(worker)) for worker in readable}
         plural = "" if len(distinct) == 1 else "s"
-        lines.append(f"  workers    {len(workers)}, {len(distinct)} distinct plugin "
-                     f"set{plural} recorded")
+        row = (f"  workers    {len(workers)}, {len(distinct)} distinct plugin "
+               f"set{plural} recorded")
+        unreadable = len(workers) - len(readable)
+        if unreadable:
+            row += f", {RED}{unreadable} unreadable{RESET}"
+        lines.append(row)
     lines.append(
         "  The comparison covers distribution plugins and the in-tree ones pytest "
         "did not\n  import by collection; a collected in-tree conftest is listed "

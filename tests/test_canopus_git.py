@@ -6,8 +6,8 @@ import pytest
 
 # Every variable git reads to redirect repository discovery, plus the two a hook
 # exports. Named as a family rather than reduced to the one that happens to be
-# famous: a fix that names GIT_DIR alone is the defect this project has hit
-# seven times, a guard covering the case in front of its author.
+# famous: a fix that names GIT_DIR alone is this project's most-repeated defect,
+# a guard covering the case in front of its author.
 POISONS = (
     "GIT_DIR",
     "GIT_WORK_TREE",

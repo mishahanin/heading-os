@@ -185,6 +185,57 @@ def test_the_pack_says_a_parallel_run_recorded_its_workers():
     assert "2 distinct" in page
 
 
+def test_a_worker_record_that_cannot_be_read_is_named_as_such():
+    """Damage collapsed into agreement, which is the one reading it must not get.
+
+    `_names` answers "nothing" for a value of the wrong type, so a damaged worker
+    became the empty tuple and three damaged workers became ONE distinct set.
+    Measured before the fix: `workers 3, 1 distinct plugin set recorded`, a
+    string identical to the one two genuinely agreeing workers produce. The
+    record is a JSON file an operator can hand-edit, and this page is read at the
+    moment they decide to keep the work.
+    """
+    from scripts.utils.canopus_pack import render_process
+
+    page = render_process(_process(workers=["broken", None, 7]), frozen_paths=set())
+
+    assert "workers    3" in page
+    assert "3 unreadable" in page
+    assert "1 distinct" not in page
+
+
+def test_a_damaged_worker_does_not_read_as_a_disagreement():
+    """The other false reading, and the more expensive one.
+
+    One sound worker beside one damaged one printed `2 distinct plugin sets`,
+    which is what a real plugin mismatch prints. That sends an operator hunting a
+    divergence between interpreters when what happened is that a record could not
+    be read.
+    """
+    from scripts.utils.canopus_pack import render_process
+
+    page = render_process(
+        _process(workers=[["dist:xdist", "dist:pytest_cov"], None]),
+        frozen_paths=set(),
+    )
+
+    assert "workers    2" in page
+    assert "1 distinct plugin set recorded" in page
+    assert "1 unreadable" in page
+
+
+def test_sound_workers_say_nothing_about_unreadable_ones():
+    """The asymmetry: without it, a renderer that always says "unreadable" passes."""
+    from scripts.utils.canopus_pack import render_process
+
+    page = render_process(
+        _process(workers=[["dist:xdist"], ["dist:xdist"]]), frozen_paths=set()
+    )
+
+    assert "1 distinct plugin set recorded" in page
+    assert "unreadable" not in page
+
+
 def test_the_pack_omits_the_origin_path_a_plugin_was_loaded_from():
     """The pack is pasted into sign-off artifacts; an origin is a local path."""
     from scripts.utils.canopus_pack import render_process

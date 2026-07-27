@@ -366,29 +366,44 @@ def test_a_substituted_repository_reddens_the_gate(tree, anchor, capsys):
 # the whole suite AND the contract green.
 
 
-def _git_out(directory: Path, *argv: str, stdin: str = "") -> str:
+def _git_out(directory: Path, *argv: str, stdin: str = "",
+             env: dict = None) -> str:
     """git, captured. The module's `_git_commit` discards stdout; this needs it."""
     proc = subprocess.run(["git", "-C", str(directory), *argv], check=True,
-                          input=stdin, capture_output=True, text=True)
+                          input=stdin, capture_output=True, text=True, env=env)
     return proc.stdout.strip()
+
+
+# Fixed, and years before any root commit this fixture makes, so `rev-list`
+# emits the orphan SECOND on every machine and in every run.
+_ORPHAN_DATE = "2020-01-01T00:00:00+00:00"
 
 
 def _add_a_second_root(directory: Path) -> None:
     """Merge an orphan commit in, so HEAD really reaches two root commits.
 
-    The orphan is not taken as it comes. `rev-list --max-parents=0 HEAD` emits
-    the branch's own root first and the merged-in one second, so an unsorted
-    implementation differs from a sorted one only when that emitted order is the
-    DESCENDING one. The message is varied until the orphan's sha sorts below the
-    root already there, and the resulting order is asserted rather than assumed:
-    a git whose traversal order changed would otherwise quietly take this test's
-    teeth out and leave it passing.
+    Neither the orphan's date nor its sha is taken as it comes, and both are
+    deliberate. `rev-list --max-parents=0 HEAD` emits roots newest first, so with
+    two commits taken microseconds apart the emitted order is decided by which
+    side of a one-second boundary they landed on: measured, a two-second gap
+    reverses it. The orphan is therefore dated into the past, which fixes the
+    emitted order at [the branch's own root, the orphan] whatever the machine is
+    doing.
+
+    Against that fixed order, an unsorted implementation differs from a sorted
+    one only when the first-emitted sha is the LARGER one, so the message is
+    varied until the orphan's sha sorts below the root already there. The
+    resulting order is then asserted rather than assumed: a git whose traversal
+    changed would otherwise quietly take this test's teeth out and leave it
+    passing.
     """
+    dated = dict(os.environ, GIT_AUTHOR_DATE=_ORPHAN_DATE,
+                 GIT_COMMITTER_DATE=_ORPHAN_DATE)
     first = _git_out(directory, "rev-list", "--max-parents=0", "HEAD")
     empty_tree = _git_out(directory, "mktree", stdin="")
     for attempt in range(64):
         orphan = _git_out(directory, "commit-tree", empty_tree,
-                          "-m", f"a second root, take {attempt}")
+                          "-m", f"a second root, take {attempt}", env=dated)
         if orphan < first:
             break
     else:  # pragma: no cover - 64 misses needs a broken hash, not a slow day

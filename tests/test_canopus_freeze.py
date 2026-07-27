@@ -421,30 +421,58 @@ def test_the_directory_rule_keys_on_the_pattern_set_not_on_rootness(tree: Path):
     ) == ["tests/sub/test_gamma.py", "tests/test_alpha.py", "tests/test_beta.py"]
 
 
-def test_the_deny_refuses_the_write_that_creates_a_watched_directory(tree: Path):
-    """Measured missing at the wire 2.3 review: the guard watched what it never denied.
+def test_the_composition_still_watches_directories_after_the_deny_retreated(tree: Path):
+    """DETECTION is what wire 2.3 keeps. This pins the half that did not retreat.
 
-    The Write tool creates missing parent directories, so `plug/__init__.py` is
-    ONE undenied call that installs the shadowing package. `mkdir` is not a tool
-    call the hook sees, but this is, and the deny has to cover it or the
-    prevention half of the guard is decoration.
+    The write-deny for created directories was withdrawn (see the sibling test
+    below for why), and the risk of withdrawing it is that the WATCH goes with it
+    on the next edit — leaving the root guard blind to `plug/` entirely, which is
+    the shadowing case the guard exists for. So this asserts the measurement
+    directly: a new importable root directory reddens `verify`, a hyphenated one
+    does not.
     """
     manifest = build_manifest(
         [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
     )
 
-    reason = frozen_reason("plug/__init__.py", manifest)
+    (tree / "plug").mkdir()
+    (tree / "docs-2").mkdir()
 
-    assert reason is not None
-    assert "plug/" in reason
+    added = verify_manifest(manifest, tree)["added"]
+    assert "plug/" in added
+    assert "docs-2/" not in added
+
+
+def test_the_deny_does_not_refuse_a_write_under_a_directory_that_is_absent(tree: Path):
+    """The retreat, held by a test so it cannot be silently re-closed.
+
+    Wire 2.3 briefly denied any Write that would CREATE a watched top-level
+    directory. Measured under a held freeze, that refused an ordinary note under
+    the workspace's private `threads/` tree: an identifier-shaped top-level name
+    that is data-routed and absent from a fresh engine clone. The dispatcher runs
+    `check_canopus_freeze` BEFORE `check_protect_personal_threads`, so the deny
+    took writes the workspace's own design routes to that later check, for the
+    whole duration of every frozen slice.
+
+    A guard that reddens on ordinary work is one an operator learns to release
+    around, so prevention retreated and detection stayed. Each name below is a
+    real gitignored, data-routed root directory absent from a fresh engine clone.
+    """
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+
+    for absent in ("threads", "crm", "knowledge", "context", "plans", "outputs"):
+        assert not (tree / absent).exists(), f"fixture drift: {absent}/ exists"
+        assert frozen_reason(f"{absent}/note.md", manifest) is None, absent
+
+    # The verify half is untouched, so the same names still redden the guard.
+    (tree / "threads").mkdir()
+    assert "threads/" in verify_manifest(manifest, tree)["added"]
 
 
 def test_the_deny_leaves_writes_under_an_existing_root_directory_alone(tree: Path):
-    """The over-reach half. `tests/` is already in the composition, so nothing joins.
-
-    Without this the rule denies every write under every top-level directory in
-    the repository, which is not a guard anyone keeps.
-    """
+    """`tests/` is already in the composition, so nothing joins by writing under it."""
     manifest = build_manifest(
         [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
     )
@@ -452,30 +480,6 @@ def test_the_deny_leaves_writes_under_an_existing_root_directory_alone(tree: Pat
     assert frozen_reason("tests/sub/test_delta.py", manifest) is None
     assert frozen_reason("docs-2/note.md", manifest) is None
     assert frozen_reason("__pycache__/thing.pyc", manifest) is None
-
-
-def test_the_deny_and_the_measurement_agree_about_every_directory(tree: Path):
-    """`matches_guard`'s invariant, held for directories rather than asserted.
-
-    A deny narrower than the measurement watches what it never refuses; a deny
-    wider refuses what nothing would report. Both halves are checked here by
-    running the two paths over the same names.
-    """
-    manifest = build_manifest(
-        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
-    )
-
-    for name in ("plug", "docs-2", "__pycache__", ".hidden", "class", "tests"):
-        denied = frozen_reason(f"{name}/__init__.py", manifest) is not None
-        target = tree / name
-        existed = target.is_dir()
-        target.mkdir(exist_ok=True)
-        measured = f"{name}/" in verify_manifest(manifest, tree)["added"]
-        if not existed:
-            target.rmdir()
-        assert denied is measured, (
-            f"{name}: deny said {denied}, the measurement said {measured}"
-        )
 
 
 def test_a_generated_cache_directory_at_the_root_does_not_redden(tree: Path):
@@ -626,39 +630,28 @@ def test_frozen_reason_covers_a_recursive_directory(tree: Path):
 
 
 def test_frozen_reason_is_none_for_an_unrelated_path(tree: Path):
-    """UPDATED in wire 2.3, when the deny learned to see directories.
+    """RESTORED after the wire 2.3 retreat, to the input it was written with.
 
-    This asserted `scripts/canopus.py` reads as unrelated. In THIS fixture no
-    `scripts/` exists, so that write creates an importable root directory and
-    the composition moves — measured: verify reports `added == ['scripts/']`.
-    The old expectation was the divergence `matches_guard` exists to prevent,
-    watching a directory the deny never refused, so it is corrected rather than
-    preserved. The unrelated-path claim now uses a path under a directory the
-    composition already records, which is what "unrelated" has to mean once
-    directories are watched.
+    The created-directory deny had briefly made `scripts/canopus.py` a DENIAL
+    here, since no `scripts/` exists in this fixture. That deny is withdrawn, so
+    the original expectation is correct again and is put back rather than left
+    pointed at a rule that no longer exists.
     """
     manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
+    assert frozen_reason("scripts/canopus.py", manifest) is None
     assert frozen_reason("tests/sub/notes.py", manifest) is None
-    assert frozen_reason("scripts/canopus.py", manifest) is not None
 
 
 def test_frozen_reason_does_not_leak_across_a_similar_prefix(tree: Path):
-    """UPDATED in wire 2.3: the prefix claim is preserved, its spelling is not.
+    """RESTORED after the wire 2.3 retreat: `tests_extra/` is not inside `tests/`.
 
-    The point is that `tests_extra/` must never be read as inside the frozen
-    `tests/`. It is now denied for a different and correct reason — it would add
-    a new importable root directory to the guarded composition (measured:
-    `added == ['tests_extra/']`) — so the assertion pins what it always meant:
-    whatever the deny says, it must not claim the path is inside the frozen
-    directory.
+    The created-directory deny had made this path denied for an unrelated reason,
+    so the assertion was weakened to "whatever it says, not `frozen directory`".
+    With that deny withdrawn the original, stronger claim holds again and is
+    restored: nothing at all is returned.
     """
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
-    reason = frozen_reason("tests_extra/test_x.py", manifest) or ""
-    assert "frozen directory" not in reason
-    # The whole clause, not the bare name: `tests_extra/` alone is satisfied by
-    # the very sentence the line above forbids, so the two assertions together
-    # said no more than the first one did.
-    assert "would add tests_extra/" in reason
+    assert frozen_reason("tests_extra/test_x.py", manifest) is None
 
 
 def test_read_freeze_returns_none_when_no_freeze_is_active(tree: Path):

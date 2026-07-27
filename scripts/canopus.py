@@ -75,7 +75,9 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_RECORDED,
     ANCHOR_UNBOUND,
     APPROVED,
+    ATTEST_FILENAME,
     ATTESTED,
+    FREEZE_DIRNAME,
     LOCK_HELD,
     LOCK_UNCONFIRMED,
     LOSS_OF_LOCK,
@@ -275,7 +277,8 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
             # plugin delta arrives one reason per name, so the bound stops being
             # harmless exactly when it starts mattering, and a truncated list
             # that does not say so reads as the whole story.
-            print(f"  reason   ... and {len(listed) - 5} more")
+            print(f"  reason   ... and {len(listed) - 5} more, in "
+                  f"{FREEZE_DIRNAME}/{ATTEST_FILENAME}")
 
 
 def _print_approval(resolution: AnchorResolution) -> None:

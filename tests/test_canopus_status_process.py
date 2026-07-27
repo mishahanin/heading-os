@@ -51,6 +51,9 @@ def test_a_truncated_reason_list_says_it_was_truncated(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "reason 0" in out
     assert "2 more" in out
+    # Truncation that names no destination is a dead end. The record is one
+    # file away, and saying so is the difference between a bound and a wall.
+    assert "attest.json" in out
 
 
 def test_a_short_reason_list_says_nothing_about_truncation(tmp_path, capsys):
@@ -97,6 +100,42 @@ def test_the_pack_does_not_call_a_frozen_in_tree_plugin_unfrozen():
 
     assert "tests/conftest.py" in page
     assert "NOT FROZEN" not in page
+
+
+def test_the_pack_names_the_environment_and_the_parsed_plugin_option():
+    """PYTEST_ADDOPTS is the channel this wire is named for; it has to print."""
+    from scripts.utils.canopus_pack import render_process
+
+    page = render_process(
+        _process(env_configured=["PYTEST_ADDOPTS", "PYTEST_CURRENT_TEST"],
+                 option_plugins=["skipper"]),
+        frozen_paths=set(),
+    )
+
+    assert "PYTEST_ADDOPTS" in page
+    # A second name that appears in no prose on the page. Measured: asserting
+    # PYTEST_ADDOPTS alone did NOT kill "delete the env row", because the
+    # plugin-opt label names PYTEST_ADDOPTS as one of its own channels.
+    assert "PYTEST_CURRENT_TEST" in page
+    assert "skipper" in page
+    # Labelled as the PARSED option, because the name can arrive on argv, in
+    # PYTEST_ADDOPTS, or from an ini addopts, and a bare `-p` label tells an
+    # operator someone typed it.
+    assert "parsed" in page
+
+
+def test_the_pack_renders_a_damaged_process_block_without_raising():
+    """The record is a JSON file a human can edit; the pack must not traceback."""
+    from scripts.utils.canopus_pack import render_process
+
+    page = render_process(
+        {"launcher": "run-tests", "plugins": 5, "intree_plugins": 7,
+         "env_configured": None, "option_plugins": "skipper"},
+        frozen_paths=set(),
+    )
+
+    assert "interpreter" in page
+    assert "compared   none" in page
 
 
 def test_the_pack_omits_the_origin_path_a_plugin_was_loaded_from():

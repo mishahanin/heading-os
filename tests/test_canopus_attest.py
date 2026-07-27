@@ -9,7 +9,7 @@ frozen bytes intact.
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -22,12 +22,31 @@ def _tests(**counts):
     return base
 
 
-def _build(frozen_tests, *, exit_status=0, root="a" * 64):
+# One honest interpreter, shared by every record these tests build. A record with
+# no process block, or one whose plugin set the freeze never recorded, refuses
+# from wire 2.3 onward, so a test about counters has to describe a process it is
+# not asking a question about.
+PLUGINS = {"dist:xdist": "/venv/xdist/plugin.py"}
+PLUGIN_BASELINE = ["dist:xdist"]
+
+
+def _process(**overrides):
+    facts = {"plugins": dict(PLUGINS), "intree_plugins": [], "other_plugins": [],
+             "option_plugins": [], "env_configured": [], "launcher": "bare",
+             "workers": []}
+    facts.update(overrides)
+    return facts
+
+
+def _build(frozen_tests, *, exit_status=0, root="a" * 64, **overrides):
+    kwargs = {"process": _process(), "plugin_baseline": PLUGIN_BASELINE}
+    kwargs.update(overrides)
     return cf.build_attestation(
         root_digest=root,
         frozen_tests=frozen_tests,
         exit_status=exit_status,
         attested_at="2026-07-25T10:42:11+00:00",
+        **kwargs,
     )
 
 
@@ -218,9 +237,22 @@ def test_tally_with_no_frozen_files_is_empty():
 from scripts.utils.canopus_gate import AttestationRecorder  # noqa: E402
 
 
+def _module_plugin(name, module_file):
+    """A module object, which is what pytest registers for a plugin file."""
+    module = ModuleType(name)
+    module.__file__ = module_file
+    return module
+
+
 class _Config:
     def __init__(self, patterns, **options):
         self._patterns = patterns
+        # A plugin manager that answers, because the record is now COMPARED
+        # against the set the freeze captured: a config that reports no plugins
+        # at all describes an interpreter no freeze can have recorded.
+        self.pluginmanager = SimpleNamespace(list_name_plugin=lambda: [
+            ("xdist", _module_plugin("xdist.plugin", "/venv/xdist/plugin.py")),
+        ])
         defaults = {
             "keyword": None, "markexpr": None, "deselect": None, "ignore": None,
             "ignore_glob": None, "lf": False, "failedfirst": False, "stepwise": False,
@@ -263,6 +295,7 @@ def frozen_engine(tmp_path):
     manifest = cf.build_manifest(
         [target], tmp_path,
         label="attest-fixture", frozen_at="2026-07-25T00:00:00+00:00", anchor=anchor,
+        plugins=PLUGIN_BASELINE,
     )
     cf.write_freeze(tmp_path, manifest)
     return tmp_path, target, manifest, AttestationRecorder(tmp_path)
@@ -550,8 +583,9 @@ def test_the_record_describes_the_process_that_wrote_it(frozen_engine):
     rec.finish(session, 0)
 
     process = cf.read_attestation(tmp_path)["process"]
-    assert set(process) == {"plugins", "intree_plugins", "option_plugins",
-                            "env_configured", "launcher", "workers"}
+    assert set(process) == {"plugins", "intree_plugins", "other_plugins",
+                            "option_plugins", "env_configured", "launcher",
+                            "workers"}
     assert process["workers"] == []
 
 
@@ -565,14 +599,17 @@ def test_a_worker_ships_its_plugin_names_home(frozen_engine):
     tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)
     session.config.pluginmanager = SimpleNamespace(
-        list_name_plugin=lambda: [("skipper", SimpleNamespace(__file__="/lib/skipper.py"))]
+        list_name_plugin=lambda: [
+            ("skipper", _module_plugin("skipper.plugin", "/lib/skipper/plugin.py"))]
     )
     session.config.workerinput = {"workerid": "gw0"}
     session.config.workeroutput = {}
     rec.collect(session)
 
     assert rec.finish(session, 0) is False
-    assert session.config.workeroutput["canopus_plugins"] == ["skipper"]
+    # The IDENTITY, not the registration name: a worker's raw names carry memory
+    # addresses and absolute paths, and the controller compares what it is sent.
+    assert session.config.workeroutput["canopus_plugins"] == ["dist:skipper"]
 
 
 def test_the_controller_folds_each_workers_plugin_list_in(frozen_engine):
@@ -621,7 +658,15 @@ def test_a_description_that_fails_never_costs_a_workers_counts(frozen_engine, mo
 
 
 def test_a_description_that_fails_never_costs_the_record(frozen_engine, monkeypatch, capsys):
-    """Recording is not worth a run. The record survives, the process reads None."""
+    """Recording is not worth a run. The record survives; it cannot attest.
+
+    Two claims, and only the first is about the handler. The RUN is never
+    broken: `finish` returns True, the record is written, and the failure is
+    named on stderr. The record then reads NOT ATTESTED, because from wire 2.3
+    an unrecorded process is damage rather than innocence — a run whose
+    interpreter nobody could describe is exactly the one a comparison cannot
+    vouch for.
+    """
     tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)
     rec.collect(session)
@@ -635,8 +680,53 @@ def test_a_description_that_fails_never_costs_the_record(frozen_engine, monkeypa
     assert rec.finish(session, 0) is True
     record = cf.read_attestation(tmp_path)
     assert record["process"] is None
-    assert record["attested"] is True
+    assert record["attested"] is False
+    assert any("process configuration was not recorded" in reason
+               for reason in record["reasons"])
     assert "could not describe the process" in capsys.readouterr().err
+
+
+def test_a_dump_request_writes_the_plugin_set_and_nothing_else(
+        frozen_engine, monkeypatch):
+    """How `freeze --contract` captures the baseline, and why it writes nothing.
+
+    The branch is answered FIRST, ahead of every other, so it holds even in the
+    one session that could otherwise write a record: a freeze IS held here and
+    the tally IS complete. A probe that overwrote the record left by a real gate
+    run would make the capture cost more than it buys.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    dump = tmp_path.parent / f"dump-{tmp_path.name}.json"
+    monkeypatch.setenv("CANOPUS_PLUGIN_DUMP", str(dump))
+    rec.collect(session)
+    rec.report(_Report(str(target), "passed"))
+
+    assert rec.finish(session, 0) is False
+
+    assert json.loads(dump.read_text()) == PLUGIN_BASELINE
+    assert cf.read_attestation(tmp_path) is None
+
+
+def test_a_dump_that_cannot_be_written_is_named_and_never_falls_through(
+        frozen_engine, monkeypatch, capsys):
+    """A failed capture must not become an attestation the probe must not write.
+
+    True is returned when the variable was SET, not when the write succeeded,
+    which is what keeps the two outcomes apart. The failure is printed because
+    `freeze` reads this file back and a silently absent dump becomes a freeze
+    that can never attest.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    # A path whose parent is a FILE. `atomic_write_text` creates missing parent
+    # directories, so a merely absent directory is not a failure at all.
+    monkeypatch.setenv("CANOPUS_PLUGIN_DUMP", str(target / "dump.json"))
+    rec.collect(session)
+
+    assert rec.finish(session, 0) is False
+    assert cf.read_attestation(tmp_path) is None
+    assert "plugin set could not be written" in capsys.readouterr().err
 
 
 def test_clearing_the_freeze_removes_the_attestation(tmp_path):
@@ -723,6 +813,7 @@ def test_a_full_run_attests_against_the_baseline():
         exit_status=0,
         attested_at="2026-07-25T00:00:00+00:00",
         baseline={"tests/contract/s/test_a.py": 7},
+        process=_process(), plugin_baseline=PLUGIN_BASELINE,
     )
 
     assert record["attested"] is True
@@ -738,6 +829,7 @@ def test_a_frozen_test_file_with_no_baseline_behaves_as_in_wire_1():
         exit_status=0,
         attested_at="2026-07-25T00:00:00+00:00",
         baseline={},
+        process=_process(), plugin_baseline=PLUGIN_BASELINE,
     )
 
     assert record["attested"] is True

@@ -418,6 +418,13 @@ def _attest(tree, root_digest, *, qualified=True, deselected=0, passed=3, skippe
         }},
         exit_status=0,
         attested_at="2026-07-25T10:42:11+00:00",
+        # An honest interpreter, and the set the freeze recorded for it. A
+        # record with no process block reads as damage from wire 2.3 onward, so
+        # a helper about counters still has to describe one.
+        process={"plugins": {"dist:xdist": "/venv/xdist/plugin.py"},
+                 "intree_plugins": [], "other_plugins": [], "option_plugins": [],
+                 "env_configured": [], "launcher": "bare", "workers": []},
+        plugin_baseline=["dist:xdist"],
     )
     cf.write_attestation(tree, record)
     return record
@@ -537,6 +544,65 @@ def test_freeze_contract_records_the_baseline(tree, anchor):
 
     manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
     assert manifest["baseline"] == {"tests/contract/slice/test_contract.py": 2}
+
+
+def _wire_the_recorder(tree):
+    """Give a synthetic tree the conftest hook the engine's own tests carry.
+
+    The plugin baseline is captured from the contract's own pytest child, and
+    that child only records anything if a conftest routes session finish into
+    the recorder. The engine has one; a scratch tree does not, which is why a
+    freeze over a bare synthetic tree records no baseline and says so.
+    """
+    engine = Path(canopus.__file__).resolve().parents[1]
+    (tree / "tests" / "conftest.py").write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(engine)!r})\n"
+        "from scripts.utils.canopus_gate import AttestationRecorder\n"
+        f"_recorder = AttestationRecorder({str(tree)!r})\n"
+        "def pytest_sessionfinish(session, exitstatus):\n"
+        "    _recorder.finish(session, exitstatus)\n",
+        encoding="utf-8",
+    )
+
+
+def test_freeze_contract_captures_the_plugin_baseline(tree, anchor):
+    """The captured set, end to end through the child that runs the contract.
+
+    Captured rather than derived: `recompute` cannot re-run pytest, and a field
+    inside the root hash that recompute cannot reproduce is a permanent LOSS OF
+    LOCK on a tree where nothing moved.
+    """
+    _write_contract(tree)
+    _wire_the_recorder(tree)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+
+    manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
+    assert "dist:_pytest" in manifest["plugins"]
+    # Names only, and normalised ones. An origin is an absolute path inside a
+    # `.venv`, and the conftest that wired this run registers under its own
+    # absolute path; either inside the root hash would redden the next clone.
+    assert all(name.startswith("dist:") for name in manifest["plugins"])
+    assert str(tree) not in json.dumps(manifest["plugins"])
+
+
+def test_a_freeze_that_captured_no_plugin_set_says_so(tree, anchor, capsys):
+    """Silence here becomes an unexplained NOT ATTESTED days later.
+
+    A tree with no recorder wired writes no dump, so the freeze carries no
+    plugin baseline and nothing can ever attest against it. That is the
+    fail-closed direction and it is stated at the freeze, not left to surface as
+    a gate refusal nobody can account for.
+    """
+    _write_contract(tree)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+
+    assert json.loads((tree / ".canopus" / "freeze.json").read_text())["plugins"] == []
+    assert "recorded no plugin set" in capsys.readouterr().out
 
 
 def test_freeze_refuses_an_all_green_contract(tree, anchor, capsys):

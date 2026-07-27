@@ -1,11 +1,18 @@
 # Tribe Fireside daemon dependencies (pinned).
+#
+# Every pin here also appears in the uv-managed root graph and must match it.
+# Bump at the root (`uv lock --upgrade-package <name>`), regenerate
+# requirements.txt, then mirror the new pin here. Enforced by
+# tests/test_satellite_requirements_lockstep.py, which was written because this
+# file kept charset-normalizer 3.4.8 after PyPI yanked it and the root moved on.
+#
 # Re-create venv with:
 #   python -m venv scripts/.venv-fireside
 #   scripts/.venv-fireside/Scripts/python.exe -m pip install -r scripts/requirements-fireside.txt
 
 requests==2.34.2
 idna==3.18
-charset-normalizer==3.4.8
+charset-normalizer==3.4.9
 urllib3==2.7.0
 certifi==2026.6.17
 openpyxl==3.1.5

@@ -595,6 +595,31 @@ def test_the_controller_folds_each_workers_plugin_list_in(frozen_engine):
     assert record["process"]["workers"] == [["skipper", "xdist"], ["xdist"]]
 
 
+def test_a_description_that_fails_never_costs_a_workers_counts(frozen_engine, monkeypatch, capsys):
+    """The worker path is guarded too, and it has something of its own to lose.
+
+    A raise while describing the worker's interpreter would take the deselection
+    counts assigned beside it, and shipping them home is the worker's only route
+    to the record.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    session.config.workerinput = {"workerid": "gw0"}
+    session.config.workeroutput = {}
+    rec.collect(session)
+    rec.deselected([_Item(target)])
+
+    def _explode(config, root):
+        raise RuntimeError("no plugin manager on this config")
+
+    monkeypatch.setattr("scripts.utils.canopus_gate.process_facts", _explode)
+
+    assert rec.finish(session, 0) is False
+    assert session.config.workeroutput["canopus_deselected"] == {"tests/test_frozen.py": 1}
+    assert "canopus_plugins" not in session.config.workeroutput
+    assert "could not describe the process" in capsys.readouterr().err
+
+
 def test_a_description_that_fails_never_costs_the_record(frozen_engine, monkeypatch, capsys):
     """Recording is not worth a run. The record survives, the process reads None."""
     tmp_path, target, manifest, rec = frozen_engine

@@ -121,6 +121,13 @@ CACHE_DIRNAMES = frozenset({
 })
 CACHE_SUFFIXES = frozenset({".pyc", ".pyo"})
 
+# The directory names no guard ever measures, as ONE constant rather than a
+# local rebuilt per call. `_members` filters with it and `watched_directory`
+# answers with it, and those two are the measure and the deny: a set spelled
+# twice is how the deny refuses a path the measurement ignores, or excuses one
+# it watches.
+SKIPPED_DIRNAMES = CACHE_DIRNAMES | {FREEZE_DIRNAME}
+
 # Which basenames a directory guard watches, as fnmatch patterns.
 #
 # A guard is a question, and the three questions are different. A frozen
@@ -149,29 +156,50 @@ GUARD_NAMES_TREE_ROOT = ("*.py",)
 # installed `plug`) moves the guard. `_members` carries the rule; `member_rel`
 # carries the mark.
 #
-# Three cases stay open, and none of them is closed by this primitive:
+# THE TREE ROOT IS THE ONLY IN-TREE sys.path ENTRY, and that is measured, not
+# assumed. pyproject sets `addopts = "--strict-markers --import-mode=importlib"`,
+# and under importlib pytest inserts NOTHING for a collected test file: on a
+# scratch tree carrying that setting, `sys.path[:2]` at run time inside
+# `tests/contract/<slice>/test_contract.py` was the tree root twice (the
+# `pythonpath = ["."]` entry and the rootdir) and nothing else. A package at
+# `tests/plug/` and a package beside the contract were both `ImportError: No
+# module named …`; only the root-level package imported. So the root guard is
+# the whole in-tree surface, and there is no second entry to widen to.
 #
-#   * A module dropped into ANOTHER in-tree sys.path entry. pytest's prepend
-#     import mode inserts a test file's BASEDIR, which is the first directory at
-#     or above it with no `__init__.py`. Measured on a scratch tree, both ways:
-#     the directory inserted for `tests/contract/<slice>/test_contract.py` is
-#     that slice directory itself, whether or not `tests/__init__.py` exists, so
-#     `tests/plug/` is NOT importable as a bare `plug` and this case is not live
-#     for this layout. It becomes live only if the slice directory and
-#     `tests/contract/` both gain an `__init__.py` while `tests/` has none.
-#   * An EMPTY directory inside a recursively frozen one. The recursive arm
-#     lists files, so `tests/contract/<slice>/plug/` with nothing in it is not
-#     reported (measured); the moment it holds a `__init__.py` it is. An empty
-#     directory on sys.path is an implicit namespace package, so it can shadow
-#     an installed module — but it carries no code, so it can only turn a green
-#     contract red, never a red one green.
-#   * A directory the BUILD generates at the root. `dist/`, `outputs/` and
-#     `plans/` are gitignored and generated, and all three are importable, so
-#     they are watched on purpose: a `git clean -xfd`, or the first
-#     `scripts/dev/build-plugins.py` run on a tree with no `dist/`, moves the
-#     root composition and reports LOSS OF LOCK with no source edited. Accepted
-#     rather than excluded, because an exclusion set wide enough to cover them
-#     is exactly where a real shadowing directory would hide.
+# An earlier revision of this note derived the same conclusion from pytest's
+# PREPEND mode inserting a test file's basedir, and stated a trigger ("it
+# becomes live if the slice directory gains an `__init__.py`") that can never
+# fire. That measurement had been taken on a scratch tree missing this
+# repository's own addopts. It is corrected here rather than quietly dropped,
+# because a false reason left standing is what the next slice reasons from.
+#
+# Two cases stay open, and neither is closed by this primitive:
+#
+#   * A change to the IMPORT MODE re-opens the surface. `--import-mode=prepend`
+#     (the pytest default) inserts each collected test file's basedir, which
+#     puts `tests/contract/<slice>/` on sys.path — measured on the same scratch
+#     tree with the flag removed. That switch is one line in `pyproject.toml`,
+#     which is neither frozen by content nor watched by this guard, since the
+#     root guard watches `*.py` and importable directories. What holds the case
+#     today is that the contract lives in its own directory under
+#     tests/contract/, which freezes RECURSIVELY, so a package appearing beside
+#     it moves the composition anyway (measured: `plug/__init__.py` there
+#     reports added; an EMPTY `plug/` there does not, the recursive arm lists
+#     files).
+#   * A directory the BUILD generates at the root. The three present on this
+#     machine are `dist/` (written by scripts/dev/build-plugins.py), `outputs/`
+#     and `plans/`, but the real surface is the ignore list, not today's disk:
+#     `.gitignore` carries 18 identifier-shaped root-level entries, 17 of them
+#     outside CACHE_DIRNAMES — `htmlcov` (which a single `--cov-report=html`
+#     run writes at the root), `threads`, `crm`, `knowledge`, `context`,
+#     `datastore`, `corporate`, `personal`, `_archive`, `slash`, `_secure`,
+#     `Desktop`, `LauncherFolder`, `MyDocuments` and the three above. Every one
+#     is importable, so every one is watched on purpose, and the cost is that a
+#     `git clean -xfd`, a first `build-plugins.py` run, or one HTML coverage
+#     report moves the root composition with no source edited. Accepted rather
+#     than excluded, because an exclusion set wide enough to cover seventeen
+#     names is exactly where a real shadowing directory would hide, and the
+#     failure is loud and instantly explicable rather than silent.
 #
 # Widening the guard further is a reason to change this set, never a reason to
 # route around the lock.
@@ -190,49 +218,86 @@ def file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
-def member_rel(path: Path, base: Path) -> str:
-    """A member's *base*-relative POSIX name, with a trailing `/` for a directory.
+def dir_member_name(rel_posix: str) -> str:
+    """The composition's spelling of a DIRECTORY member: its name plus `/`.
+
+    One function, because the mark is an invariant and not a formatting choice.
+    The composition is a digest over rendered names, so without the trailing
+    slash a directory `plug` and a file `plug` produce the same line and one
+    replacing the other moves nothing. Both the measurement (`member_rel`) and
+    the write-deny (`frozen_reason`) spell it here.
+    """
+    return f"{rel_posix}/"
+
+
+def member_rel(path: Path, base: Path, *, is_dir: bool) -> str:
+    """A member's *base*-relative POSIX name, marked when it is a directory.
 
     ONE renderer, shared by `dir_members_digest`, `dir_member_rels` and the sort
     order all three agree on, for the reason `matches_guard` is shared by the
     measure and the deny: two hand-rolled copies is how the digest and the
     member list end up disagreeing about the same directory.
 
-    The mark cannot come from `_members`, which returns `Path` objects and
-    `Path("plug/") == Path("plug")`. It has to exist because the composition is
-    a digest over rendered NAMES: without it a directory `plug` and a file
-    `plug` produce the same line, and one replacing the other moves nothing.
+    *is_dir* is REQUIRED and carried in from `_members`, never re-derived with a
+    second `is_dir()` call. This module argues that `recompute` must carry the
+    manifest's fields through rather than re-measure them; the same discipline
+    applies four lines down. Re-statting also gave a wrong answer for a real
+    interleaving: a directory removed between the classification and the
+    rendering came out unmarked, so the digest and the member list disagreed
+    about the same entry. The mark cannot come from the Path itself, which is
+    why it is a parameter: `Path("plug/") == Path("plug")`.
     """
     rel = path.relative_to(base).as_posix()
-    return f"{rel}/" if path.is_dir() else rel
+    return dir_member_name(rel) if is_dir else rel
+
+
+def watched_directory(name: str, names: Sequence[str]) -> bool:
+    """Would a subdirectory called *name* join a shallow guard's composition?
+
+    The rule the tree-root guard measures with, as one predicate, so the deny
+    can ask the same question the measurement asks. `frozen_reason` calls it to
+    refuse the write that CREATES such a directory; `_members` calls it to list
+    the directories that are already there.
+
+    The pattern-set test is spelled `tuple(names) == ...` deliberately.
+    `_guard_ancestors` passes the TUPLE GUARD_NAMES_TREE_ROOT and `recompute`
+    passes the LIST the manifest round-tripped through JSON. Written with `is`,
+    or with a bare `==` against the tuple, it is true on the build path and
+    false on the recompute path: directories enter the stored digest and never
+    the recomputed one, and the tree reports LOSS OF LOCK forever with nothing
+    moved. That is wire 2.2's blocker B1 verbatim.
+
+    `str.isidentifier()` is most of the rest, and deliberately not a denylist of
+    bad names: `.git`, `.venv` and `.canopus` fall out because a leading dot is
+    not an identifier. A directory named for a Python keyword (`class`,
+    `import`) passes and is watched, which is the safe direction, and so does a
+    non-ASCII identifier like `café`. What `isidentifier()` does NOT do is
+    separate an authored directory from a generated one — `__pycache__` passes
+    it — which is why SKIPPED_DIRNAMES is consulted here too.
+    """
+    return (
+        tuple(names) == GUARD_NAMES_TREE_ROOT
+        and name.isidentifier()
+        and name not in SKIPPED_DIRNAMES
+    )
 
 
 def _members(
     directory: Path, *, recursive: bool, names: Sequence[str] = GUARD_NAMES_ALL
-) -> list[Path]:
-    """Members of *directory* whose basename matches *names*, sorted.
+) -> list[tuple[Path, bool]]:
+    """Members of *directory* matching *names*, sorted, each with its kind.
 
-    Regular files always, plus — at the TREE ROOT guard only, identified by
-    `tuple(names) == GUARD_NAMES_TREE_ROOT` — subdirectories whose name is a
-    Python identifier, because `pythonpath = ["."]` makes such a directory an
-    importable package at the entry the contract's own imports resolve against.
+    Returns `(path, is_dir)` pairs rather than bare paths: the classification is
+    made once here, where the entry is already being examined, and carried to
+    the renderer. Every caller is in this module.
 
-    That discriminator is spelled `tuple(names) == ...` deliberately. This
-    function is reached from `_guard_ancestors`, which passes the TUPLE
-    GUARD_NAMES_TREE_ROOT, and from `recompute`, which passes the LIST the
-    manifest round-tripped through JSON. Written with `is`, or with a bare `==`
-    against the tuple, it would be true on the build path and false on the
-    recompute path: directories would enter the stored digest and never the
-    recomputed one, and the tree would report LOSS OF LOCK forever with nothing
-    moved. That is wire 2.2's blocker B1 verbatim.
-
-    `str.isidentifier()` is most of the rule, and deliberately not a denylist of
-    bad names: `.git`, `.venv` and `.canopus` fall out because a leading dot is
-    not an identifier. A directory named for a Python keyword (`class`,
-    `import`) passes the test and is watched, which is the safe direction. What
-    `isidentifier()` does NOT do is separate an authored directory from a
-    generated one — `__pycache__` passes it — which is why the same
-    `skipped_dirs` exclusion the file arm applies covers the directory arm too.
+    Regular files always, plus — under a shallow walk with the tree-root
+    patterns — subdirectories `watched_directory` accepts, because
+    `pythonpath = ["."]` makes such a directory an importable package at the
+    entry the contract's own imports resolve against. The `not recursive` half
+    is a guard, not decoration: the discriminator keys on the PATTERN SET, so
+    without it a recursive walk asked for the root patterns would pull every
+    nested directory into the composition.
 
     Symlinks are excluded (the workspace forbids them), anything under the
     freeze state directory is excluded so the manifest never hashes itself, and
@@ -245,23 +310,24 @@ def _members(
     basename rather than the relative path is what lets the same filter serve a
     flat listing and a nested one without two spellings of every pattern.
     """
-    skipped_dirs = CACHE_DIRNAMES | {FREEZE_DIRNAME}
-    watch_dirs = not recursive and tuple(names) == GUARD_NAMES_TREE_ROOT
+    watch_dirs = not recursive
     candidates = directory.rglob("*") if recursive else directory.iterdir()
-    found = [
-        p for p in candidates
-        if not p.is_symlink()
-        and skipped_dirs.isdisjoint(p.relative_to(directory).parts)
-        and (
-            (
-                p.is_file()
-                and p.suffix not in CACHE_SUFFIXES
-                and matches_guard(p.name, names)
-            )
-            or (watch_dirs and p.is_dir() and p.name.isidentifier())
-        )
-    ]
-    return sorted(found, key=lambda p: member_rel(p, directory))
+    found: list[tuple[Path, bool]] = []
+    for p in candidates:
+        if p.is_symlink():
+            continue
+        if not SKIPPED_DIRNAMES.isdisjoint(p.relative_to(directory).parts):
+            continue
+        if p.is_dir():
+            if watch_dirs and watched_directory(p.name, names):
+                found.append((p, True))
+        elif (
+            p.is_file()
+            and p.suffix not in CACHE_SUFFIXES
+            and matches_guard(p.name, names)
+        ):
+            found.append((p, False))
+    return sorted(found, key=lambda pair: member_rel(pair[0], directory, is_dir=pair[1]))
 
 
 def matches_guard(name: str, names: Sequence[str]) -> bool:
@@ -283,8 +349,8 @@ def dir_members_digest(
     a frozen one (the conftest.py case), while per-file digests detect edits.
     """
     lines = "".join(
-        f"{member_rel(p, directory)}\n"
-        for p in _members(directory, recursive=recursive, names=names)
+        f"{member_rel(p, directory, is_dir=is_dir)}\n"
+        for p, is_dir in _members(directory, recursive=recursive, names=names)
     )
     return hashlib.sha256(lines.encode("utf-8")).hexdigest()
 
@@ -302,8 +368,8 @@ def dir_member_rels(
     added and the guard cries wolf on its first use.
     """
     return sorted(
-        member_rel(p, root)
-        for p in _members(directory, recursive=recursive, names=names)
+        member_rel(p, root, is_dir=is_dir)
+        for p, is_dir in _members(directory, recursive=recursive, names=names)
     )
 
 
@@ -597,7 +663,8 @@ def build_manifest(
                 "hash": dir_members_digest(target, recursive=True),
                 "members": dir_member_rels(target, resolved_root, recursive=True),
             }
-            for member in _members(target, recursive=True):
+            # A recursive walk yields files only, so the kind is discarded here.
+            for member, _is_dir in _members(target, recursive=True):
                 files[member.relative_to(resolved_root).as_posix()] = file_digest(member)
         else:
             files[rel] = file_digest(target)
@@ -1025,6 +1092,19 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
 
     The dispatcher calls this on every Write/Edit, so it must stay cheap: no
     hashing, no stat calls.
+
+    Three questions, and the third was measured missing in the wire 2.3 review.
+    A guard that watches directories must also refuse the write that CREATES
+    one, because the Write tool makes missing parent directories: a single
+    undenied `plug/__init__.py` installs the shadowing package that the root
+    guard exists to catch. Detection at verify held throughout; prevention at
+    the hook did not, and `matches_guard`'s own docstring names that divergence
+    as the defect to avoid.
+
+    The refusal stays exactly as wide as the measurement. It fires only for a
+    directory `watched_directory` accepts AND that the guard's recorded members
+    do not already list, so a write under an existing `scripts/` or `docs/` is
+    untouched. Recorded members, not disk: this function never stats.
     """
     if rel_posix in manifest["files"]:
         return f"{rel_posix} is a frozen contract file"
@@ -1038,12 +1118,41 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
         if entry["mode"] == "recursive":
             if rel_posix == dir_rel or rel_posix.startswith(dir_rel + "/"):
                 return f"{rel_posix} is inside the frozen directory {shown}/"
-        elif parent == dir_rel and matches_guard(name, entry["names"]):
+            continue
+        if parent == dir_rel and matches_guard(name, entry["names"]):
             # The same filter verify measures with. A deny wider than the
             # measurement refuses writes nothing would have reported, which is
             # how a discipline tool becomes an obstacle.
             return f"{rel_posix} would join the guarded composition of {shown}/"
+        created = _created_directory(rel_posix, dir_rel, entry)
+        if created:
+            return (
+                f"{rel_posix} would create {created} in the guarded composition "
+                f"of {shown}/"
+            )
     return None
+
+
+def _created_directory(rel_posix: str, dir_rel: str, entry: dict) -> Optional[str]:
+    """The watched directory member *rel_posix* would add to *entry*, or None.
+
+    Split out because it is the only part of `frozen_reason` that has to reason
+    about a path's SHAPE rather than compare two strings, and burying it in the
+    loop is how the "already recorded" half gets dropped by a later edit. That
+    half is what keeps the deny honest: without it every write under an existing
+    top-level directory is refused, which is a guard nobody keeps.
+    """
+    if dir_rel:
+        if not rel_posix.startswith(dir_rel + "/"):
+            return None
+        inner = rel_posix[len(dir_rel) + 1:]
+    else:
+        inner = rel_posix
+    head, sep, _rest = inner.partition("/")
+    if not sep or not watched_directory(head, entry["names"]):
+        return None
+    member = dir_member_name(f"{dir_rel}/{head}" if dir_rel else head)
+    return None if member in entry["members"] else member
 
 
 # ============================================================

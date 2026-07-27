@@ -77,9 +77,36 @@ def test_the_covered_tool_tuple_is_exactly_the_four_write_tools(dispatch):
 
 
 def test_unrelated_file_is_not_denied(dispatch, anchor):
+    """UPDATED in wire 2.3, when the deny learned to see directories.
+
+    This asserted `scripts/other.py` is unrelated. There is no `scripts/` in
+    this fixture's tree, so that ONE Write creates it — the tool makes missing
+    parents — and an importable root directory joins the composition, which
+    `verify` reports as `added == ['scripts/']`. Denying it is the deny agreeing
+    with the measurement, so the expectation is corrected rather than kept.
+    Unrelated now means a path under a directory the composition already
+    records, which is what the word has to mean once directories are watched.
+    """
     module, tree = dispatch
     _freeze(tree, anchor)
-    assert module.check_canopus_freeze(_write(tree / "scripts" / "other.py")) is None
+    assert module.check_canopus_freeze(_write(tree / "tests" / "sub" / "other.py")) is None
+
+
+def test_a_write_that_would_create_an_importable_directory_is_denied(dispatch, anchor):
+    """The prevention half of the root guard, at the layer that does the denying.
+
+    Measured missing at the wire 2.3 review: `frozen_reason` watched a directory
+    it never refused, so an agent installed the shadowing package in one
+    undenied Write while detection at verify still worked.
+    """
+    module, tree = dispatch
+    _freeze(tree, anchor)
+
+    decision = module.check_canopus_freeze(_write(tree / "plug" / "__init__.py"))
+
+    assert decision["decision"] == "block"
+    assert decision["_policy_deny"] is True
+    assert "plug/" in decision["reason"]
 
 
 def test_file_added_beside_a_frozen_file_is_denied(dispatch, anchor):

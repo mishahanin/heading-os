@@ -50,7 +50,7 @@ def build_command(acceptance: bool) -> list[str]:
     return base + ["-n", "auto", "-m", "not acceptance", "--cov=scripts", f"--cov-fail-under={COVERAGE_FLOOR}"]
 
 
-def child_env() -> dict:
+def child_env() -> dict[str, str]:
     """The environment the pytest child gets: ours, minus everything PYTEST_.
 
     Blanket prefix, never a denylist. PYTEST_ADDOPTS alone can load a plugin that

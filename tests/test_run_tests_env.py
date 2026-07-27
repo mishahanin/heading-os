@@ -1,6 +1,5 @@
 """The frozen runner hands its child an environment it chose, not one it inherited."""
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
@@ -52,3 +51,26 @@ def test_the_rest_of_the_environment_survives(monkeypatch):
 
 def test_the_child_is_stamped_as_launched_by_the_runner():
     assert run_tests.child_env()["CANOPUS_LAUNCHER"] == "run-tests"
+
+
+def test_the_runner_hands_that_environment_to_the_child():
+    """The call site, which every other test in this file leaves unguarded.
+
+    child_env() can be perfect and unused: deleting `env=child_env()` from the
+    one subprocess.run call keeps all seven tests above green and all five frozen
+    contract cases green too, while the child silently inherits PYTEST_ADDOPTS
+    again. This is the only assertion that fails when the wire is cut.
+
+    Source inspection rather than an import, matching the shape of
+    tests/test_canopus_gate.py::test_run_tests_calls_the_gate_before_pytest and
+    for the same reason: run-tests.py calls ensure_venv() at import time. The
+    match is scoped to the call statement rather than the whole file because a
+    whole-file substring is satisfiable by a docstring that merely mentions the
+    keyword. That scoping assumes the call stays on one line; if it is ever
+    wrapped, widen the slice rather than dropping back to a file-wide search.
+    """
+    source = (ROOT / "scripts" / "run-tests.py").read_text(encoding="utf-8")
+    call = source[source.index("subprocess.run("):]
+    call = call[:call.index("\n")]
+
+    assert "env=child_env()" in call

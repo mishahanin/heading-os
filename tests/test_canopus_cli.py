@@ -676,6 +676,10 @@ def test_pack_reports_all_three_axes_and_the_uncovered_list(tree, anchor, capsys
     assert "not covered" in out
     assert "continuity" in out
     assert "staleness" in out
+    # The interpreter section is wired into pack by ONE line. Every unit test
+    # for its renderer calls the renderer directly, so deleting that line left
+    # all of them green while the operator saw nothing.
+    assert "interpreter" in out
 
 
 def test_pack_never_raises_on_damaged_state(tree, anchor, capsys):

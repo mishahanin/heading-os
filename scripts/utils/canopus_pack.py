@@ -131,6 +131,23 @@ def diff_stat(root: Path, base: str) -> str:
     return (git_output(root, "diff", "--stat", f"{base}..HEAD") or "").rstrip()
 
 
+def _names(raw) -> list[str]:
+    """Names out of one process field, tolerating a damaged record.
+
+    A dict is read for its keys (the plugin map, whose values are origins this
+    page deliberately never renders) and sorted; a sequence keeps the order the
+    recorder chose. Anything else answers "nothing" rather than raising: the
+    record is a JSON file an operator can hand-edit, this page is read at the
+    one moment they decide to keep the work, and a TypeError there is worse
+    than a missing row.
+    """
+    if isinstance(raw, dict):
+        return sorted(str(name) for name in raw)
+    if isinstance(raw, (list, tuple)):
+        return [str(name) for name in raw]
+    return []
+
+
 def render_process(process: Optional[dict], frozen_paths: Collection[str]) -> str:
     """The interpreter the attestation speaks for, rendered for the sign-off page.
 
@@ -150,8 +167,10 @@ def render_process(process: Optional[dict], frozen_paths: Collection[str]) -> st
     catch, and a page that omits it reads as a clean bill of health.
 
     Pure string work over a dict, so it neither reads disk nor raises on a
-    damaged record. A record with no process block reads as damage rather than
-    as innocence, matching `build_attestation`.
+    damaged record; every field goes through `_names`, which answers "nothing"
+    for a value of the wrong type rather than iterating it. A record with no
+    process block reads as damage rather than as innocence, matching
+    `build_attestation`.
     """
     lines = [f"\n{BOLD}interpreter{RESET}"]
     if not isinstance(process, dict):
@@ -159,16 +178,22 @@ def render_process(process: Optional[dict], frozen_paths: Collection[str]) -> st
         return "\n".join(lines)
 
     lines.append(f"  launcher   {process.get('launcher') or 'bare'}")
-    compared = sorted(str(name) for name in (process.get("plugins") or {}))
+    compared = _names(process.get("plugins"))
     lines.append(f"  compared   {', '.join(compared) if compared else 'none'}")
-    env = [str(name) for name in (process.get("env_configured") or ())]
+    env = _names(process.get("env_configured"))
     if env:
         lines.append(f"  env        {', '.join(env)}")
-    option = [str(name) for name in (process.get("option_plugins") or ())]
+    option = _names(process.get("option_plugins"))
     if option:
-        lines.append(f"  -p         {', '.join(option)}")
+        # NOT "someone typed -p". This is the PARSED option, which is the same
+        # value whether the name arrived on argv, through PYTEST_ADDOPTS, or
+        # from an ini `addopts` (`canopus_gate.process_facts`), and a row
+        # labelled `-p` alone sends an operator hunting a command line that may
+        # never have carried it.
+        lines.append(f"  plugin opt {', '.join(option)}  "
+                     f"(parsed: argv, PYTEST_ADDOPTS or an ini addopts alike)")
     frozen = set(frozen_paths)
-    for path in process.get("intree_plugins") or ():
+    for path in _names(process.get("intree_plugins")):
         mark = "frozen" if str(path) in frozen else f"{RED}NOT FROZEN{RESET}"
         lines.append(f"  in-tree    {path}  {mark}")
     lines.append(

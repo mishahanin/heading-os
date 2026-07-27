@@ -111,13 +111,17 @@ def test_clears_the_lock_only_once_the_browser_is_gone(lock, signals, monkeypatc
 
 
 # Real `ps -eo pid=,args=` output captured on WSL2, 2026-07-27, while a CDP
-# Brave session was up. Truncated in width only.
+# Brave session was up. Truncated in width, and the capturing operator's home
+# directory replaced by a synthetic one: this repository is public, and a home
+# path is not an entity token, so `content-guard.py` reports it clean. Do NOT
+# restore a real path here when refreshing the capture. The parser reads the
+# port flag, `--type=` and argv0 only, so the value is inert to every assertion.
 PS_OUTPUT = """\
- 2234780 /bin/bash /usr/bin/brave-browser --remote-debugging-port=9222 --profile-directory=Default --user-data-dir=/home/administrator/.config/BraveSoftware/Brave-Browser --no-first-run
- 2234786 /opt/brave.com/brave/brave --remote-debugging-port=9222 --profile-directory=Default --user-data-dir=/home/administrator/.config/BraveSoftware/Brave-Browser --no-first-run
- 2234851 /opt/brave.com/brave/brave --type=renderer --crashpad-handler-pid=2234789 --user-data-dir=/home/administrator/.config/BraveSoftware/Brave-Browser --remote-debugging-port=9222
- 2234852 /opt/brave.com/brave/brave --type=renderer --crashpad-handler-pid=2234789 --user-data-dir=/home/administrator/.config/BraveSoftware/Brave-Browser --remote-debugging-port=9222
- 2234789 /opt/brave.com/brave/chrome_crashpad_handler --monitor-self --database=/home/administrator/.config/BraveSoftware/Brave-Browser
+ 2234780 /bin/bash /usr/bin/brave-browser --remote-debugging-port=9222 --profile-directory=Default --user-data-dir=/home/builder/.config/BraveSoftware/Brave-Browser --no-first-run
+ 2234786 /opt/brave.com/brave/brave --remote-debugging-port=9222 --profile-directory=Default --user-data-dir=/home/builder/.config/BraveSoftware/Brave-Browser --no-first-run
+ 2234851 /opt/brave.com/brave/brave --type=renderer --crashpad-handler-pid=2234789 --user-data-dir=/home/builder/.config/BraveSoftware/Brave-Browser --remote-debugging-port=9222
+ 2234852 /opt/brave.com/brave/brave --type=renderer --crashpad-handler-pid=2234789 --user-data-dir=/home/builder/.config/BraveSoftware/Brave-Browser --remote-debugging-port=9222
+ 2234789 /opt/brave.com/brave/chrome_crashpad_handler --monitor-self --database=/home/builder/.config/BraveSoftware/Brave-Browser
  9999 grep --color=auto -- --remote-debugging-port=9222
 """
 

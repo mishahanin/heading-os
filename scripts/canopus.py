@@ -118,6 +118,7 @@ from scripts.utils.canopus_pack import (  # noqa: E402
     is_dirty,
     merge_base,
     parse_ts,
+    render_process,
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
@@ -269,6 +270,12 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
     if isinstance(listed, list):
         for line in listed[:5]:
             print(f"  reason   {line}")
+        if len(listed) > 5:
+            # Five is a display bound, not a claim about how many there were. A
+            # plugin delta arrives one reason per name, so the bound stops being
+            # harmless exactly when it starts mattering, and a truncated list
+            # that does not say so reads as the whole story.
+            print(f"  reason   ... and {len(listed) - 5} more")
 
 
 def _print_approval(resolution: AnchorResolution) -> None:
@@ -948,6 +955,11 @@ def cmd_pack(args) -> int:
     # A freeze taken with the flag whose `approve` did not carry it renders
     # nothing here: the artifact is the record, and there is nothing on it.
     _print_waiver(anchor, manifest["root"])
+
+    # Which interpreter the attestation above speaks for. Beneath the states it
+    # qualifies, because it is the evidence behind them rather than a fourth
+    # verdict.
+    print(render_process((record or {}).get("process"), manifest.get("files") or {}))
 
     base = args.base or merge_base(root, "main") or "HEAD"
     commits = git_commits(root, base)

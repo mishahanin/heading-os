@@ -27,9 +27,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Collection, Optional, Sequence
 
 from scripts.utils.canopus_git import git_output
+from scripts.utils.colors import BOLD, RED, RESET, YELLOW
 
 
 def parse_ts(raw) -> Optional[datetime]:
@@ -128,3 +129,53 @@ def is_dirty(root: Path) -> bool:
 
 def diff_stat(root: Path, base: str) -> str:
     return (git_output(root, "diff", "--stat", f"{base}..HEAD") or "").rstrip()
+
+
+def render_process(process: Optional[dict], frozen_paths: Collection[str]) -> str:
+    """The interpreter the attestation speaks for, rendered for the sign-off page.
+
+    The record answers "which plugins configured this run" and nothing prints
+    that answer: the status lines report the VERDICT, and a verdict an operator
+    cannot trace back to a plugin name is one they can only believe or ignore.
+
+    Plugin ORIGINS are deliberately not rendered. The record maps each compared
+    identity to one representative origin, and for a distribution plugin that
+    origin is an absolute path inside the operator's virtualenv. This page is
+    read at sign-off and pasted into artifacts that get committed, so the
+    identity goes on the page and the origin stays in the record.
+
+    The in-tree entries are the ones the comparison leaves alone, and the mark
+    on each is the only place the residual gap is visible: an in-tree plugin
+    that is neither frozen nor compared is exactly the thing this wire cannot
+    catch, and a page that omits it reads as a clean bill of health.
+
+    Pure string work over a dict, so it neither reads disk nor raises on a
+    damaged record. A record with no process block reads as damage rather than
+    as innocence, matching `build_attestation`.
+    """
+    lines = [f"\n{BOLD}interpreter{RESET}"]
+    if not isinstance(process, dict):
+        lines.append(f"  {YELLOW}nothing recorded what configured this run{RESET}")
+        return "\n".join(lines)
+
+    lines.append(f"  launcher   {process.get('launcher') or 'bare'}")
+    compared = sorted(str(name) for name in (process.get("plugins") or {}))
+    lines.append(f"  compared   {', '.join(compared) if compared else 'none'}")
+    env = [str(name) for name in (process.get("env_configured") or ())]
+    if env:
+        lines.append(f"  env        {', '.join(env)}")
+    option = [str(name) for name in (process.get("option_plugins") or ())]
+    if option:
+        lines.append(f"  -p         {', '.join(option)}")
+    frozen = set(frozen_paths)
+    for path in process.get("intree_plugins") or ():
+        mark = "frozen" if str(path) in frozen else f"{RED}NOT FROZEN{RESET}"
+        lines.append(f"  in-tree    {path}  {mark}")
+    lines.append(
+        "  The comparison covers distribution plugins and the in-tree ones pytest "
+        "did not\n  import by collection; a collected in-tree conftest is listed "
+        "here as provenance\n  and never compared. That exemption reads a private "
+        "pytest attribute and fails\n  closed, comparing, if the attribute ever "
+        "disappears."
+    )
+    return "\n".join(lines)

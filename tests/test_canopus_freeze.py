@@ -400,17 +400,82 @@ def test_a_directory_is_listed_with_a_trailing_slash(tmp_path: Path):
     ) == ["plug/"]
 
 
-def test_the_directory_rule_is_a_root_rule_not_a_recursive_listing(tree: Path):
-    """No caller pairs the root names with a recursive walk, so this pins intent.
+def test_the_directory_rule_keys_on_the_pattern_set_not_on_rootness(tree: Path):
+    """What the code implements, named accurately after the wire 2.3 review.
 
-    Without it the `not recursive` half of the discriminator is an equivalent
-    mutant: removing it fails nothing, and a later caller asking for the root
-    patterns recursively would silently pull every nested directory into the
-    composition.
+    The discriminator reads the guard's PATTERNS, so a SHALLOW walk of any
+    directory asked for the root pattern set lists its subdirectories too. That
+    is latent rather than live only because `_guard_ancestors` hands the root
+    set out when `at_root` and the ancestor set otherwise. The recursive half is
+    a real guard: without it the same request over a recursive walk would pull
+    every nested directory in, and dropping it fails nothing else.
     """
+    # Shallow, NOT the root: the pattern set is what decides, so `sub/` is here.
+    assert dir_member_rels(
+        tree / "tests", tree, recursive=False, names=GUARD_NAMES_TREE_ROOT
+    ) == ["tests/sub/", "tests/test_alpha.py", "tests/test_beta.py"]
+
+    # Recursive with the same patterns: files only, no directories at any depth.
     assert dir_member_rels(
         tree, tree, recursive=True, names=GUARD_NAMES_TREE_ROOT
     ) == ["tests/sub/test_gamma.py", "tests/test_alpha.py", "tests/test_beta.py"]
+
+
+def test_the_deny_refuses_the_write_that_creates_a_watched_directory(tree: Path):
+    """Measured missing at the wire 2.3 review: the guard watched what it never denied.
+
+    The Write tool creates missing parent directories, so `plug/__init__.py` is
+    ONE undenied call that installs the shadowing package. `mkdir` is not a tool
+    call the hook sees, but this is, and the deny has to cover it or the
+    prevention half of the guard is decoration.
+    """
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+
+    reason = frozen_reason("plug/__init__.py", manifest)
+
+    assert reason is not None
+    assert "plug/" in reason
+
+
+def test_the_deny_leaves_writes_under_an_existing_root_directory_alone(tree: Path):
+    """The over-reach half. `tests/` is already in the composition, so nothing joins.
+
+    Without this the rule denies every write under every top-level directory in
+    the repository, which is not a guard anyone keeps.
+    """
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+
+    assert frozen_reason("tests/sub/test_delta.py", manifest) is None
+    assert frozen_reason("docs-2/note.md", manifest) is None
+    assert frozen_reason("__pycache__/thing.pyc", manifest) is None
+
+
+def test_the_deny_and_the_measurement_agree_about_every_directory(tree: Path):
+    """`matches_guard`'s invariant, held for directories rather than asserted.
+
+    A deny narrower than the measurement watches what it never refuses; a deny
+    wider refuses what nothing would report. Both halves are checked here by
+    running the two paths over the same names.
+    """
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+
+    for name in ("plug", "docs-2", "__pycache__", ".hidden", "class", "tests"):
+        denied = frozen_reason(f"{name}/__init__.py", manifest) is not None
+        target = tree / name
+        existed = target.is_dir()
+        target.mkdir(exist_ok=True)
+        measured = f"{name}/" in verify_manifest(manifest, tree)["added"]
+        if not existed:
+            target.rmdir()
+        assert denied is measured, (
+            f"{name}: deny said {denied}, the measurement said {measured}"
+        )
 
 
 def test_a_generated_cache_directory_at_the_root_does_not_redden(tree: Path):
@@ -561,13 +626,35 @@ def test_frozen_reason_covers_a_recursive_directory(tree: Path):
 
 
 def test_frozen_reason_is_none_for_an_unrelated_path(tree: Path):
+    """UPDATED in wire 2.3, when the deny learned to see directories.
+
+    This asserted `scripts/canopus.py` reads as unrelated. In THIS fixture no
+    `scripts/` exists, so that write creates an importable root directory and
+    the composition moves — measured: verify reports `added == ['scripts/']`.
+    The old expectation was the divergence `matches_guard` exists to prevent,
+    watching a directory the deny never refused, so it is corrected rather than
+    preserved. The unrelated-path claim now uses a path under a directory the
+    composition already records, which is what "unrelated" has to mean once
+    directories are watched.
+    """
     manifest = build_manifest([tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP)
-    assert frozen_reason("scripts/canopus.py", manifest) is None
+    assert frozen_reason("tests/sub/notes.py", manifest) is None
+    assert frozen_reason("scripts/canopus.py", manifest) is not None
 
 
 def test_frozen_reason_does_not_leak_across_a_similar_prefix(tree: Path):
+    """UPDATED in wire 2.3: the prefix claim is preserved, its spelling is not.
+
+    The point is that `tests_extra/` must never be read as inside the frozen
+    `tests/`. It is now denied for a different and correct reason — it would
+    create a new importable root directory (measured: `added ==
+    ['tests_extra/']`) — so the assertion pins what it always meant: whatever
+    the deny says, it must not claim the path is inside the frozen directory.
+    """
     manifest = build_manifest([tree / "tests"], tree, label="l", frozen_at=STAMP)
-    assert frozen_reason("tests_extra/test_x.py", manifest) is None
+    reason = frozen_reason("tests_extra/test_x.py", manifest) or ""
+    assert "frozen directory" not in reason
+    assert "tests_extra/" in reason
 
 
 def test_read_freeze_returns_none_when_no_freeze_is_active(tree: Path):

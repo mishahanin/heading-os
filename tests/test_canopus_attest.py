@@ -638,6 +638,11 @@ def test_a_description_that_fails_never_costs_a_workers_counts(frozen_engine, mo
     A raise while describing the worker's interpreter would take the deselection
     counts assigned beside it, and shipping them home is the worker's only route
     to the record.
+
+    The failure is SHIPPED as None rather than left out. Shipping nothing made a
+    worker's lost description invisible: the controller's list came home one
+    entry shorter and the run attested anyway, while the same failure on the
+    controller's own path refuses the whole record.
     """
     tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)
@@ -653,8 +658,32 @@ def test_a_description_that_fails_never_costs_a_workers_counts(frozen_engine, mo
 
     assert rec.finish(session, 0) is False
     assert session.config.workeroutput["canopus_deselected"] == {"tests/test_frozen.py": 1}
-    assert "canopus_plugins" not in session.config.workeroutput
+    assert session.config.workeroutput["canopus_plugins"] is None
     assert "could not describe the process" in capsys.readouterr().err
+
+
+def test_a_worker_nobody_could_describe_cannot_attest(frozen_engine):
+    """The asymmetry closed: one worker's lost description is damage, not silence.
+
+    `build_attestation` refuses a record with no process block on the ground that
+    a run whose interpreter nobody could describe cannot be vouched for. Under
+    -n auto the workers are the interpreters that RUN the frozen tests, so the
+    controller was refusing for the process that recorded and attesting for the
+    processes that executed. Measured before the fix: with the failed worker
+    shipping nothing, this record read attested True.
+    """
+    tmp_path, target, manifest, rec = frozen_engine
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.report(_Report(str(target), "passed"))
+    rec.merge_worker({"canopus_plugins": None})     # a worker that could not describe itself
+
+    rec.finish(session, 0)
+
+    record = cf.read_attestation(tmp_path)
+    assert record["process"]["workers"] == [None]
+    assert record["attested"] is False
+    assert any("could not be described" in reason for reason in record["reasons"])
 
 
 def test_a_description_that_fails_never_costs_the_record(frozen_engine, monkeypatch, capsys):

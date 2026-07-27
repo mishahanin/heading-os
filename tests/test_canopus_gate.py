@@ -404,9 +404,15 @@ def _git_out(directory: Path, *argv: str, stdin: str = "",
     return proc.stdout.strip()
 
 
-# Fixed, and years before any root commit this fixture makes, so `rev-list`
-# emits the orphan SECOND on every machine and in every run.
-_ORPHAN_DATE = "2020-01-01T00:00:00+00:00"
+# Two fixed dates, one on each side of every root commit this fixture makes, so
+# `rev-list` emits the orphan SECOND under the older one and FIRST under the
+# newer one, on every machine and in every run. Both are used; see below.
+_ORPHAN_OLDER = "2020-01-01T00:00:00+00:00"
+_ORPHAN_NEWER = "2099-01-01T00:00:00+00:00"
+# Rounds of the two-sided draw below. A round fails with probability at most 1/4
+# whatever the repository's own root sha is, so 40 of them bound this fixture's
+# failure at 4**-40, about 8e-25.
+_ORPHAN_ROUNDS = 40
 
 
 def _add_a_second_root(directory: Path) -> None:
@@ -416,28 +422,57 @@ def _add_a_second_root(directory: Path) -> None:
     deliberate. `rev-list --max-parents=0 HEAD` emits roots newest first, so with
     two commits taken microseconds apart the emitted order is decided by which
     side of a one-second boundary they landed on: measured, a two-second gap
-    reverses it. The orphan is therefore dated into the past, which fixes the
-    emitted order at [the branch's own root, the orphan] whatever the machine is
-    doing.
+    reverses it. Dating the orphan away from the present fixes the emitted order
+    whatever the machine is doing.
 
-    Against that fixed order, an unsorted implementation differs from a sorted
-    one only when the first-emitted sha is the LARGER one, so the message is
-    varied until the orphan's sha sorts below the root already there. The
-    resulting order is then asserted rather than assumed: a git whose traversal
-    changed would otherwise quietly take this test's teeth out and leave it
-    passing.
+    What this fixture needs is an emitted order that is NOT the sorted one, since
+    that is the only arrangement in which an unsorted implementation of
+    `repo_identity` differs from a sorted one. There are two ways to have it, and
+    using only one of them is what made this fixture flaky:
+
+      * date the orphan OLDER, so it is emitted second, and take it when its sha
+        sorts BELOW the root already there;
+      * date it NEWER, so it is emitted first, and take it when its sha sorts
+        ABOVE.
+
+    The first alone succeeds with probability f, the branch root's own sha read
+    as a fraction, so 64 draws all asking that one question failed with
+    probability the integral of (1-f)**64 over f, which is 1/65: measured 1.60%
+    over 200000 simulated fixtures, and observed once in nine real runs as
+    `AssertionError: no orphan root sorted below the existing one`. The comment
+    that stood here ("64 misses needs a broken hash, not a slow day") was
+    measurably false.
+
+    Asking BOTH questions per round is what removes it. The two conditions are
+    complementary, so a round fails with probability f*(1-f), which is at most
+    1/4 for every possible f instead of tending to 1 as f tends to 0. The retry
+    space is no longer 64 draws from one distribution, and 40 rounds bound the
+    failure at 4**-40: 0 failures over the same 200000 simulated fixtures.
+
+    The resulting order is asserted rather than assumed either way: a git whose
+    traversal changed would otherwise quietly take this test's teeth out and
+    leave it passing.
     """
-    dated = dict(os.environ, GIT_AUTHOR_DATE=_ORPHAN_DATE,
-                 GIT_COMMITTER_DATE=_ORPHAN_DATE)
     first = _git_out(directory, "rev-list", "--max-parents=0", "HEAD")
     empty_tree = _git_out(directory, "mktree", stdin="")
-    for attempt in range(64):
-        orphan = _git_out(directory, "commit-tree", empty_tree,
-                          "-m", f"a second root, take {attempt}", env=dated)
-        if orphan < first:
+
+    def _orphan(date: str, message: str) -> str:
+        return _git_out(directory, "commit-tree", empty_tree, "-m", message,
+                        env=dict(os.environ, GIT_AUTHOR_DATE=date,
+                                 GIT_COMMITTER_DATE=date))
+
+    for attempt in range(_ORPHAN_ROUNDS):
+        message = f"a second root, take {attempt}"
+        older = _orphan(_ORPHAN_OLDER, message)
+        if older < first:      # emitted [first, older]
+            orphan = older
             break
-    else:  # pragma: no cover - 64 misses needs a broken hash, not a slow day
-        raise AssertionError("no orphan root sorted below the existing one")
+        newer = _orphan(_ORPHAN_NEWER, message)
+        if newer > first:      # emitted [newer, first]
+            orphan = newer
+            break
+    else:  # pragma: no cover - 4**-40 needs a broken hash, not a slow day
+        raise AssertionError("no orphan root fell on either side of the existing one")
     _git_out(directory, "merge", "--allow-unrelated-histories", "-q",
              "-m", "merge the second root", orphan)
 

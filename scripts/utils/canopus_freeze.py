@@ -1699,7 +1699,9 @@ def build_attestation(
     the registered plugins, the parsed `-p` option, the PYTEST_ names in the
     environment, the launcher, and each xdist worker's plugin list. None when
     nothing described the process, which is every caller written before the
-    field existed, and which reads as damage rather than as innocence.
+    field existed, and which reads as damage rather than as innocence. A single
+    WORKER entry that is not a list of names says the same thing about one
+    worker, and is read the same way.
 
     `plugin_baseline` is the plugin set the freeze captured. The comparison
     against it is ONE refusal, not a list of blocked routes: an entry-point
@@ -1781,6 +1783,17 @@ def build_attestation(
             # same `dist:` entries, so this comparison is the stricter one it
             # reads as: every worker must match the freeze, and therefore its
             # siblings. The controller is held to the same set two loops above.
+            if not isinstance(worker, (list, tuple, set, frozenset)):
+                # The recorder ships None for a worker it could not describe, and
+                # this is the same rule the missing process block gets a few
+                # lines above: an interpreter nobody could describe is damage,
+                # not innocence. Under -n auto it is the interpreter that RAN the
+                # frozen tests, so silence here is worse than silence there.
+                reasons.append(
+                    f"xdist worker {index} could not be described, so what it "
+                    f"loaded is unknown"
+                )
+                continue
             if set(worker) != baseline_plugins:
                 reasons.append(
                     f"xdist worker {index} loaded a different plugin set than the "

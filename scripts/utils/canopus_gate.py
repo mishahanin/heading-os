@@ -265,6 +265,43 @@ def _freeze_gate(root: Path) -> int:
     return 0
 
 
+def pytest_child_env(**overrides: str) -> dict:
+    """The environment for a pytest child this codebase launches: ours, minus PYTEST_.
+
+    Blanket prefix, never a denylist. PYTEST_ADDOPTS alone can load a plugin that
+    overrides pytest_pyfunc_call and makes every frozen test report passed
+    without executing, and naming the variables you thought of leaves whichever
+    one you did not. The same shape as canopus_git._child_env, which does this
+    for GIT_.
+
+    ONE definition, because the two children it serves are COMPARED against each
+    other: run-tests.py launches the gate run, canopus_contract launches the
+    freeze-time capture, and build_attestation holds the first to the plugin set
+    the second recorded. While only the gate child was scrubbed, the baseline was
+    a photograph of the operator's shell. Measured on a scratch tree: a clean
+    shell captured
+
+        ['dist:_pytest', 'dist:anyio', 'dist:pytest_asyncio', 'dist:pytest_cov',
+         'dist:xdist']
+
+    and the same freeze with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 exported captured
+    ['dist:_pytest'] alone. The scrubbed gate run then loaded all five and
+    refused with four "a plugin the freeze did not record was loaded" reasons,
+    permanently, until the freeze was retaken in a clean shell. Fail-closed, and
+    still the wrong posture: the canonical gate was the run that refused while a
+    bare `pytest` in the same shell was the run that attested. The baseline is a
+    property of the TREE, not of the shell the operator froze from.
+
+    The CANOPUS_ names are deliberately NOT scrubbed here. CANOPUS_NO_ATTEST and
+    CANOPUS_PLUGIN_DUMP are how a caller tells a child what it is for, and both
+    are passed in as *overrides* by the callers that need them.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("PYTEST_")}
+    env.update(overrides)
+    return env
+
+
 def _library_dirs() -> tuple:
     """Every directory the running interpreter treats as its own library.
 
@@ -636,7 +673,8 @@ class AttestationRecorder:
         # deselection counts already are. A worker is a separate interpreter and
         # can be configured separately from the controller, so the controller's
         # own list describes the controller and nothing else.
-        self.worker_plugins: list[list[str]] = []
+        # None stands for a worker whose description failed; see merge_worker.
+        self.worker_plugins: list[list[str] | None] = []
 
     def _rel(self, candidate) -> str | None:
         """Root-relative POSIX path, or None when it lies outside the tree."""
@@ -713,12 +751,22 @@ class AttestationRecorder:
         the same question. A deselection count is meaningless without a tally to
         fold it into; a worker's plugin list describes that worker's interpreter
         whether or not this controller ever built one.
+
+        A worker whose description FAILED ships the key carrying None, and that
+        is kept as None rather than dropped: `build_attestation` refuses a record
+        whose worker could not be described, exactly as it refuses one whose own
+        process block is missing. A worker that ships no key AT ALL is a
+        different state and is still passed over: it never reached the
+        description step, which is what an older worker and a worker that
+        returned early both look like.
         """
         if not isinstance(worker_output, dict):
             return
         shipped = worker_output.get("canopus_plugins")
         if isinstance(shipped, list):
             self.worker_plugins.append([str(name) for name in shipped])
+        elif "canopus_plugins" in worker_output:
+            self.worker_plugins.append(None)
         if not self.frozen:
             return
         for rel, count in (worker_output.get("canopus_deselected") or {}).items():
@@ -872,9 +920,20 @@ class AttestationRecorder:
                 # deliberately: one describer answers for both processes (see
                 # _describe), and the rest of a worker's description is the
                 # controller's to hold.
+                #
+                # A FAILED description ships None rather than nothing, and the
+                # two are not the same. `build_attestation` reads a missing
+                # process block as damage and refuses the whole record; under
+                # -n auto the workers are the interpreters that actually run the
+                # frozen tests, so a worker nobody could describe is the same
+                # damage in the place it matters most. While this shipped
+                # nothing, `merge_worker` appended nothing, the controller's list
+                # was simply one entry shorter, and the run attested with one
+                # worker's interpreter unaccounted for.
                 described = self._describe(session.config)
-                if described is not None:
-                    output["canopus_plugins"] = sorted(described["plugins"])
+                output["canopus_plugins"] = (
+                    sorted(described["plugins"]) if described is not None else None
+                )
             return False
         process = self._describe(session.config)
         if process is not None:

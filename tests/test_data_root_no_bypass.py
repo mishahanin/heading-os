@@ -120,14 +120,47 @@ def _is_exempt(rel: str) -> bool:
     return any(s in rel for s in _EXEMPT_SUBSTRINGS)
 
 
+def _nested_checkout_roots(base: Path) -> tuple[Path, ...]:
+    """Directories under *base* that are separate git checkouts.
+
+    A git worktree or submodule nested in the engine tree (Claude Code places
+    them under `.claude/worktrees/`) is a checkout of this same repository, not
+    engine source. Two reasons it must not be walked, and the second is the one
+    that makes this a scope defect rather than a preference.
+
+    Every file in it is a copy of a file this guard already scans in its own
+    tree, so one real finding is reported twice, and a finding that belongs to
+    the other checkout's BRANCH is reported as this tree's.
+
+    And the copy is walked WIDER than the original. `_scan_roots` covers
+    `scripts/` and `.claude/` only, so a worktree living under `.claude/` drags
+    that checkout's entire `tests/` tree into a scan that deliberately excludes
+    `tests/` here. Measured 2026-07-27 against a locked worktree: 22 violations
+    across 16 files, every one of them a `tests/` file this guard does not scan
+    in its own tree, and not one of them present in this tree.
+
+    Skipping them loses no coverage. Git already excludes the worktree
+    directory, and each checkout runs this same guard over itself.
+    """
+    return tuple(marker.parent for marker in base.rglob(".git"))
+
+
+def _scan_files(base: Path, root: Path):
+    """Yield `(path, relative posix path)` for every guarded `.py` file."""
+    nested = _nested_checkout_roots(base)
+    for py in base.rglob("*.py"):
+        if any(py.is_relative_to(checkout) for checkout in nested):
+            continue
+        yield py, py.relative_to(root).as_posix()
+
+
 def test_no_data_dir_joined_to_engine_root():
     root = get_workspace_root()
     violations: list[str] = []
     for base in _scan_roots():
         if not base.exists():
             continue
-        for py in base.rglob("*.py"):
-            rel = py.relative_to(root).as_posix()
+        for py, rel in _scan_files(base, root):
             if _is_exempt(rel):
                 continue
             try:
@@ -156,8 +189,7 @@ def test_no_engine_root_alias_joined_to_data_dir():
     for base in _scan_roots():
         if not base.exists():
             continue
-        for py in base.rglob("*.py"):
-            rel = py.relative_to(root).as_posix()
+        for py, rel in _scan_files(base, root):
             if _is_exempt(rel):
                 continue
             try:
@@ -185,6 +217,33 @@ def test_no_engine_root_alias_joined_to_data_dir():
         "Engine-root variable joined to a data dir (cross-line seam bypass). Bind the "
         "data path from the matching get_*_dir() helper instead:\n  " + "\n  ".join(violations)
     )
+
+
+def test_a_nested_checkout_is_skipped_and_its_twin_in_the_tree_is_not(tmp_path):
+    """Both halves of the nested-checkout skip, so it cannot widen into a hole.
+
+    Half one: an identical bypass planted inside a nested git checkout is
+    skipped. Half two: the same bypass planted in ordinary scan scope is still
+    found. Delete the skip in `_scan_files` and the first assertion fails;
+    widen it to swallow the ordinary file and the second does.
+    """
+    bypass = 'x = get_workspace_root() / "outputs" / name\n'
+
+    ordinary = tmp_path / "scripts" / "real.py"
+    ordinary.parent.mkdir(parents=True)
+    ordinary.write_text(bypass, encoding="utf-8")
+
+    nested = tmp_path / "scripts" / "wt" / "copy.py"
+    nested.parent.mkdir(parents=True)
+    nested.write_text(bypass, encoding="utf-8")
+    # What `git worktree add` leaves behind: a FILE named .git, not a directory.
+    (tmp_path / "scripts" / "wt" / ".git").write_text(
+        "gitdir: /elsewhere/.git/worktrees/wt\n", encoding="utf-8")
+
+    scanned = {rel for _, rel in _scan_files(tmp_path / "scripts", tmp_path)}
+
+    assert "scripts/wt/copy.py" not in scanned
+    assert "scripts/real.py" in scanned
 
 
 def test_engine_root_alias_regex_detects_synthetic_bypass():

@@ -7,8 +7,10 @@ uncomparable across processes: pytest registers an anonymous plugin under
 and the freeze probe runs a different topology from the gate. A comparison over
 raw names refuses every honest run.
 
-The refusal therefore compares the `dist:` subset in both directions, and the
-`intree:` and `anon:` entries are recorded as provenance beside it.
+The refusal therefore compares, in both directions, every `dist:` identity plus
+any `intree:` identity that `-p` or PYTEST_PLUGINS explicitly named. An in-tree
+plugin the tree loaded on its own, and every `anon:` entry, are recorded as
+provenance beside it, each for a reason stated where the partition is built.
 """
 import os
 import sysconfig
@@ -104,7 +106,8 @@ def _intree_plugin(tmp_path):
     return origin
 
 
-def test_a_plugin_the_tree_loaded_on_its_own_is_recorded_and_never_compared(tmp_path):
+def test_a_plugin_the_tree_loaded_on_its_own_is_recorded_and_never_compared(
+        tmp_path, monkeypatch):
     """The limit of spec 1.3a that SURVIVED review, pinned to its reason.
 
     Which in-tree conftests load depends on what is COLLECTED, so the freeze
@@ -114,6 +117,7 @@ def test_a_plugin_the_tree_loaded_on_its_own_is_recorded_and_never_compared(tmp_
     tree loaded on its own; neither survives an explicit `-p`, which the test
     below covers.
     """
+    monkeypatch.delenv("PYTEST_PLUGINS", raising=False)
     origin = _intree_plugin(tmp_path)
     config = _Config([("skipper", _module("plug.skipper", str(origin)))])
 
@@ -141,6 +145,44 @@ def test_an_in_tree_plugin_a_flag_named_joins_the_compared_set(tmp_path):
 
     assert facts["plugins"] == {"intree:plug/skipper.py": str(origin)}
     assert facts["intree_plugins"] == []
+
+
+def test_an_in_tree_plugin_the_environment_named_joins_the_compared_set(
+        tmp_path, monkeypatch):
+    """PYTEST_PLUGINS is the same escape one channel over, and it was open.
+
+    Read in the installed pytest: `consider_env()` hands the variable to
+    `_import_plugin_specs` -> `import_plugin` -> `register(mod, modname)`, a path
+    that touches `config.option.plugins` nowhere. Measured on a real session:
+    `PYTEST_PLUGINS=plug.skipper` registered the in-tree module under
+    `plug.skipper`, `option.plugins` carried only what `-p` gave it, the module
+    skipped every test in the run, and the record attested. Explicitly named and
+    collection-independent is the side of spec 1.3a that gets compared, whichever
+    channel names it.
+    """
+    monkeypatch.setenv("PYTEST_PLUGINS", "plug.skipper")
+    origin = _intree_plugin(tmp_path)
+    config = _Config([("plug.skipper", _module("plug.skipper", str(origin)))])
+
+    facts = process_facts(config, tmp_path)
+
+    assert facts["plugins"] == {"intree:plug/skipper.py": str(origin)}
+    assert facts["intree_plugins"] == []
+
+
+def test_the_environment_variable_is_read_comma_separated(tmp_path, monkeypatch):
+    """Matching pytest's own `_get_plugin_specs_as_list`, which splits on ",".
+
+    A reader that took the whole value as one name would see `a,plug.skipper`,
+    match nothing, and leave every multi-plugin environment uncompared -- the
+    same hole again, this time behind a parser instead of a channel.
+    """
+    monkeypatch.setenv("PYTEST_PLUGINS", "other.plugin,plug.skipper")
+    origin = _intree_plugin(tmp_path)
+    config = _Config([("plug.skipper", _module("plug.skipper", str(origin)))])
+
+    assert process_facts(config, tmp_path)["plugins"] == {
+        "intree:plug/skipper.py": str(origin)}
 
 
 def test_a_flag_that_names_a_module_registered_otherwise_still_counts(tmp_path):

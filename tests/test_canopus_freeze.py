@@ -899,6 +899,47 @@ def test_baseline_enters_the_root_hash(tmp_path):
     assert one["root"] != two["root"]
 
 
+def test_the_plugin_baseline_enters_the_root_hash(tmp_path):
+    """Captured, in the hash, and carried through recompute unchanged.
+
+    In the hash so the operator's commit protects it. Carried rather than
+    derived because recompute cannot re-run pytest, and a hash field the
+    recompute path cannot reproduce is a permanent LOSS OF LOCK on an untouched
+    tree. That is wire 2.2's blocker B1 verbatim.
+    """
+    from scripts.utils.canopus_freeze import build_manifest, verify_manifest
+
+    target = _tree_with_one_file(tmp_path)
+    kwargs = {"label": "t", "frozen_at": "2026-07-25T00:00:00+00:00"}
+
+    one = build_manifest([target], tmp_path, plugins={"xdist": "/a"}, **kwargs)
+    two = build_manifest([target], tmp_path, plugins={"xdist": "/a", "evil": "/b"}, **kwargs)
+
+    assert one["root"] != two["root"]
+    assert verify_manifest(one, tmp_path)["held"] is True
+
+
+def test_the_plugin_baseline_is_recorded_by_name_never_by_origin(tmp_path):
+    """An origin is an absolute path inside `.venv`, and this repository is public.
+
+    It differs per machine and per clone, so carrying it would redden every
+    fresh checkout and would put an operator's home directory inside a hash the
+    engine repository commits against. The names ARE the identities derived in
+    `process_facts`, which already carry their provenance (`dist:`, `intree:`).
+    """
+    from scripts.utils.canopus_freeze import build_manifest
+
+    target = _tree_with_one_file(tmp_path)
+    kwargs = {"label": "t", "frozen_at": "2026-07-25T00:00:00+00:00"}
+
+    named = build_manifest([target], tmp_path, plugins=["dist:xdist"], **kwargs)
+    with_origin = build_manifest(
+        [target], tmp_path, plugins={"dist:xdist": "/home/somebody/.venv/x.py"}, **kwargs)
+
+    assert named["plugins"] == ["dist:xdist"]
+    assert named["root"] == with_origin["root"]
+
+
 def test_edited_baseline_reads_as_loss_of_lock(tmp_path):
     from scripts.utils.canopus_freeze import build_manifest, verify_manifest
 
@@ -1330,7 +1371,7 @@ def test_a_manifest_from_the_previous_recipe_is_refused(tmp_path):
 
 
 def test_a_manifest_missing_the_binding_is_refused(tmp_path):
-    """A v4 recipe string with no binding field is a hand-edited manifest."""
+    """A current recipe string with no binding field is a hand-edited manifest."""
     from scripts.utils.canopus_freeze import (
         RECIPE, FreezeCorrupt, freeze_state_path, read_freeze,
     )
@@ -1342,7 +1383,7 @@ def test_a_manifest_missing_the_binding_is_refused(tmp_path):
     path.write_text(json.dumps({
         "recipe": RECIPE, "label": "x",
         "frozen_at": "2026-01-01T00:00:00+00:00", "anchor": "", "git_sha": "",
-        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {},
+        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {}, "plugins": [],
     }))
 
     with pytest.raises(FreezeCorrupt, match="anchor_repo"):
@@ -1361,7 +1402,7 @@ def test_a_binding_with_a_wrong_typed_field_is_refused(tmp_path):
     path.write_text(json.dumps({
         "recipe": RECIPE, "label": "x",
         "frozen_at": "2026-01-01T00:00:00+00:00", "anchor": "", "git_sha": "",
-        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {},
+        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {}, "plugins": [],
         "anchor_repo": {"in_repo": "yes", "identity": ""},
     }))
 
@@ -1478,7 +1519,7 @@ def _skeleton(binding) -> dict:
     return {
         "recipe": RECIPE, "label": "x", "frozen_at": STAMP, "anchor": "",
         "git_sha": "", "root": "", "files": {}, "dirs": {}, "baseline": {},
-        "anchor_repo": binding,
+        "plugins": [], "anchor_repo": binding,
     }
 
 

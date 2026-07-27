@@ -26,13 +26,14 @@ this catches is tampering by helpfulness: the model hits a red assertion,
 concludes in good faith that the assertion is wrong, and edits it. A verification
 that merely runs catches that completely.
 
-Recipe `canopus-freeze-v4`, named in every manifest so a future algorithm change
+Recipe `canopus-freeze-v5`, named in every manifest so a future algorithm change
 breaks loudly instead of silently:
 
     file digest = sha256(LF-normalized bytes)
     dir digest  = sha256("".join(f"{relpath}\\n" for relpath in sorted members))
     root hash   = sha256(canonical JSON of
-                         {recipe, anchor, anchor_repo, files, dirs, baseline})
+                         {recipe, anchor, anchor_repo, files, dirs, baseline,
+                          plugins})
 
 where a directory's members are those whose BASENAME matches one of the entry's
 recorded `names` patterns.
@@ -62,7 +63,12 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 from scripts.utils.atomic import atomic_write_text
 
-RECIPE = "canopus-freeze-v4"
+# v5 from wire 2.3: the plugin baseline joined the root-hash payload. The bump is
+# what turns a v4 manifest into a NAMED refusal at `read_freeze` ("carries recipe
+# canopus-freeze-v4") instead of a silent LOSS OF LOCK on a tree where nothing
+# moved, which is what a new hash field without a bump produces. Same reasoning
+# as v2, which added the per-file baseline.
+RECIPE = "canopus-freeze-v5"
 FREEZE_DIRNAME = ".canopus"
 FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
@@ -269,8 +275,27 @@ def anchor_binding(manifest: dict) -> dict:
     return dict(binding)
 
 
+def manifest_plugins(manifest: dict) -> list:
+    """The plugin set a freeze captured, as a sorted list of NAMES.
+
+    Names only, and never the origins they were read from. An origin is an
+    absolute path inside `.venv`: it differs per machine and per clone, so
+    comparing it would redden every fresh checkout, and it would put an
+    operator's home directory inside a hash this repository commits against —
+    the engine repository is public. The names are the identities
+    `canopus_gate.process_facts` derives, which already carry their provenance
+    (`dist:`, `intree:`), so nothing a comparison can use is lost.
+
+    Accepts a mapping (whose keys are the names) or any iterable of names, so a
+    caller holding the recorder's `{identity: origin}` map and a caller holding
+    the captured list both write the same payload.
+    """
+    plugins = manifest.get("plugins") or ()
+    return sorted({str(name) for name in plugins})
+
+
 def root_hash(manifest: dict) -> str:
-    """sha256 over recipe, anchor path, anchor_repo binding, sorted files, dirs, baseline.
+    """sha256 over recipe, anchor, anchor_repo, files, dirs, baseline, plugins.
 
     The baseline is in here deliberately. Outside the hash it could be edited
     down to 1 with no indicator moving, and a per-file expected item count that
@@ -281,6 +306,11 @@ def root_hash(manifest: dict) -> str:
     a builder edits `anchor_repo` to `in_repo: false`, wins the working-copy
     fallback permanently, and the committed approval still matches. Inside it,
     the edit changes the root and the approval stops matching.
+
+    The plugin baseline is in here for that same reason a third time: it is the
+    set every later attestation is compared against, so outside the hash a
+    builder appends the name of the plugin that skips the contract and no
+    indicator moves.
     """
     payload = {
         "recipe": manifest["recipe"],
@@ -289,6 +319,7 @@ def root_hash(manifest: dict) -> str:
         "files": dict(sorted(manifest["files"].items())),
         "dirs": dict(sorted(manifest["dirs"].items())),
         "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
+        "plugins": manifest_plugins(manifest),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -447,6 +478,7 @@ def build_manifest(
     content_only: Iterable[Path] = (),
     baseline: Optional[dict] = None,
     anchor_repo: Optional[dict] = None,
+    plugins: Optional[Iterable[str]] = None,
 ) -> dict:
     """Build a freeze manifest over *paths*, all relative to *root*.
 
@@ -525,6 +557,12 @@ def build_manifest(
         "anchor_repo": dict(anchor_repo or ANCHOR_REPO_UNBOUND),
         "git_sha": "",
         "baseline": dict(sorted((baseline or {}).items())),
+        # The plugin set the contract run loaded, captured rather than derived:
+        # `recompute` cannot re-run pytest, and a field inside the hash that the
+        # recompute path cannot reproduce is a permanent LOSS OF LOCK on an
+        # untouched tree. That is wire 2.2's blocker B1 verbatim, and the
+        # per-file baseline beside it is carried for the same reason.
+        "plugins": manifest_plugins({"plugins": plugins}),
         "files": dict(sorted(files.items())),
         "dirs": dict(sorted(dirs.items())),
     }
@@ -580,12 +618,14 @@ def recompute(manifest: dict, root: Path) -> dict:
         "anchor_repo": anchor_binding(manifest),
         "files": dict(sorted(files.items())),
         "dirs": dict(sorted(dirs.items())),
-        # Carried through verbatim, both of them: the baseline is a recorded
-        # expectation and the binding is a recorded measurement, and neither is
-        # something disk can be re-measured for. Any key root_hash reads and
-        # recompute omits makes the recomputed root differ from the stored one
-        # forever, which reads as LOSS OF LOCK over a tree where nothing moved.
+        # Carried through verbatim, all three: the baseline and the plugin set
+        # are recorded expectations, the binding is a recorded measurement, and
+        # none of them is something disk can be re-measured for. Any key
+        # root_hash reads and recompute omits makes the recomputed root differ
+        # from the stored one forever, which reads as LOSS OF LOCK over a tree
+        # where nothing moved.
         "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
+        "plugins": manifest_plugins(manifest),
     }
 
 
@@ -990,7 +1030,8 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
     exactly those two and denies fail-closed; anything else falls through its
     outer catch-all, logs an advisory, and continues -- fail OPEN).
     """
-    for key in (*_STR_SCALAR_KEYS, "files", "dirs", "baseline", "anchor_repo"):
+    for key in (*_STR_SCALAR_KEYS, "files", "dirs", "baseline", "plugins",
+                "anchor_repo"):
         _require(key in manifest, f"freeze manifest at {path} is missing {key!r}")
 
     for key in _STR_SCALAR_KEYS:
@@ -1105,6 +1146,23 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
             isinstance(count, int) and not isinstance(count, bool),
             f"freeze manifest at {path} has a non-integer 'baseline' value for "
             f"{rel!r} ({type(count).__name__}), expected an integer",
+        )
+
+    # A non-list here would reach `manifest_plugins`, which iterates it: a JSON
+    # string iterates as characters, so `"xdist"` would become a five-name
+    # baseline and every attestation would refuse for five plugins nobody
+    # loaded. Refused with the key named, like every other shape above.
+    plugins = manifest["plugins"]
+    _require(
+        isinstance(plugins, list),
+        f"freeze manifest at {path} has a non-list 'plugins' value "
+        f"({type(plugins).__name__}), expected a list",
+    )
+    for name in plugins:
+        _require(
+            isinstance(name, str),
+            f"freeze manifest at {path} has a non-string entry in 'plugins' "
+            f"({type(name).__name__}), expected a string",
         )
 
     binding = manifest["anchor_repo"]
@@ -1337,7 +1395,12 @@ def unreleased_freeze(entries: Sequence[dict]) -> Optional[dict]:
 # what proved unreliable.
 
 ATTEST_FILENAME = "attest.json"
-ATTEST_RECIPE = "canopus-attest-v1"
+# v2 from wire 2.3: the record now carries a `process` block and is refused when
+# the plugin set differs from the one the freeze captured. A v1 record reads NOT
+# ATTESTED through the recipe check in `attestation_state` below, which is the
+# fail-closed direction and needs no migration: a record written before the
+# comparison existed cannot testify about a comparison it never made.
+ATTEST_RECIPE = "canopus-attest-v2"
 ATTESTED = "ATTESTED"
 NOT_ATTESTED = "NOT ATTESTED"
 
@@ -1386,6 +1449,7 @@ def build_attestation(
     attested_at: str,
     baseline: Optional[dict] = None,
     process: Optional[dict] = None,
+    plugin_baseline: Optional[Iterable[str]] = None,
 ) -> dict:
     """Assemble the record written at session finish. Pure: no disk, no pytest.
 
@@ -1417,13 +1481,27 @@ def build_attestation(
 
     `process` describes what CONFIGURED the interpreter this record speaks for:
     the registered plugins, the parsed `-p` option, the PYTEST_ names in the
-    environment, the launcher, and each xdist worker's plugin list. It is
-    RECORDED and judged nowhere, deliberately. Judging a field before anything
-    records it is how the previous wire reddened every session in this
-    repository from its own work; the comparison that reads this arrives next,
-    once a real run has proved the recorded set is what it is thought to be.
-    None when nothing described the process, which is every caller written
-    before the field existed.
+    environment, the launcher, and each xdist worker's plugin list. None when
+    nothing described the process, which is every caller written before the
+    field existed, and which reads as damage rather than as innocence.
+
+    `plugin_baseline` is the plugin set the freeze captured. The comparison
+    against it is ONE refusal, not a list of blocked routes: an entry-point
+    plugin, a `-p` on argv, a `-p` inside PYTEST_ADDOPTS and a `-p` inside an
+    ini `addopts` differ in how they arrive and not at all in what they leave
+    behind, which is a name the freeze never saw. That is why `-p` is never
+    banned here: banning it forbade PYTEST_DISABLE_PLUGIN_AUTOLOAD plus an
+    explicit `-p` per allowed plugin, the only measured cure for the entry-point
+    route, so the first design banned its own cure.
+
+    Both directions are refused. A plugin that VANISHED changed what the run
+    measured just as surely as one that appeared, and a comparison that only
+    looked for additions would call that honest.
+
+    The names compared are the identities `process_facts` derives, never pytest
+    registration names, and the set it hands over is the `dist:` subset alone.
+    Both are wire 2.3 measurements rather than taste, and both are argued where
+    they are computed (`canopus_gate._plugin_identity`).
     """
     reasons: list[str] = []
     if not frozen_tests:
@@ -1450,6 +1528,40 @@ def build_attestation(
                 f"frozen test file reported an incomplete tally: {rel} "
                 f"({reported} of {collected})"
             )
+    if not isinstance(process, dict):
+        reasons.append(
+            "the process configuration was not recorded, so this run cannot be "
+            "distinguished from one configured to lie about it"
+        )
+    elif plugin_baseline is None:
+        # The same rule a freeze with no test files already gets: with nothing to
+        # compare against, every plugin set is equally acceptable, which is the
+        # state this exists to end.
+        reasons.append("the freeze recorded no plugin baseline to compare against")
+    else:
+        realized = set(process.get("plugins") or {})
+        baseline_plugins = set(plugin_baseline)
+        for name in sorted(realized - baseline_plugins):
+            reasons.append(f"a plugin the freeze did not record was loaded: {name}")
+        for name in sorted(baseline_plugins - realized):
+            reasons.append(f"a plugin the freeze recorded was absent: {name}")
+        for index, worker in enumerate(process.get("workers") or ()):
+            # Against the BASELINE, never against the controller. Under -n auto
+            # the workers execute the tests the controller only records, so a
+            # controller-side reading describes an interpreter that ran nothing;
+            # and the controller legitimately carries plugins no worker does
+            # (xdist's dsession and terminaldistreporter) while the workers carry
+            # the nested conftests only a collecting process loads. Measured on
+            # 16 workers. Under the identity normalisation both fold into the
+            # same `dist:` entries, so this comparison is the stricter one it
+            # reads as: every worker must match the freeze, and therefore its
+            # siblings. The controller is held to the same set two loops above.
+            if set(worker) != baseline_plugins:
+                reasons.append(
+                    f"xdist worker {index} loaded a different plugin set than the "
+                    f"freeze recorded: "
+                    f"{sorted(set(worker) ^ baseline_plugins) or 'no named difference'}"
+                )
     if exit_status != 0:
         reasons.append(f"pytest exited {exit_status}")
 

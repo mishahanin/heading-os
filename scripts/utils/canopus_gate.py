@@ -18,11 +18,14 @@ freeze is inert without it, because a verification that is never invoked fails
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import ModuleType
 
+from scripts.utils.atomic import atomic_write_text
 from scripts.utils.canopus_freeze import (
     ANCHOR_MISSING,
     ANCHOR_RECORDED,
@@ -350,25 +353,135 @@ def _intree_rel(origin, root: Path) -> str | None:
     return resolved.relative_to(root).as_posix()
 
 
+def _module_name(plugin) -> str | None:
+    """The dotted module a plugin came from, or None when it cannot be read.
+
+    Four shapes, and every one of them was MEASURED on a real session rather
+    than reasoned about. The first draft of this function had two and the
+    measurement falsified it twice in one run.
+
+    * A plugin FILE is registered as a module object, whose `__name__` is the
+      dotted module.
+    * A BLOCKED name (`-p no:cacheprovider`, and pytest blocks four of its own
+      that way) is registered with the plugin `None`. It names a plugin that is
+      NOT loaded, so it has no distribution — and reading `type(None).__module__`
+      gave it one called `builtins`, which then differed between the freeze
+      probe (which passes `-p no:cacheprovider`) and the gate run. A plugin that
+      is absent by request must never enter the compared set.
+    * A CLASS is registered occasionally (`legacypath-tmpdir`), and a class's own
+      `__module__` is the answer; `type(a class).__module__` is `builtins` for
+      every class there is.
+    * Anything else is an INSTANCE (xdist's DSession, pytest's TerminalReporter,
+      and every plugin registered under `str(id(plugin))`), which carries no
+      `__file__` and no module `__name__`, so its distribution can only be read
+      from the class that defined it.
+
+    `isinstance(plugin, ModuleType)` rather than "has a `__name__`": a class and
+    a function both carry a `__name__` that is their OWN name, not a module's,
+    and reading one would invent a distribution called `TerminalReporter`.
+    An INFERRED name is additionally checked against `sys.modules`, and a module
+    object's own name is not. A module object is its own evidence; a class
+    attribute merely CLAIMS a module. Measured, and it is the difference between
+    a gate that runs and one that refuses every parallel run: under `-n auto`
+    each xdist worker registers a `WorkerInteractor` whose class `__module__` is
+    `__channelexec__`, execnet's synthetic namespace for source sent down a
+    channel. Nothing of that name was ever imported, it has no file, and no
+    controller and no freeze probe carries it — so trusting the claim gave every
+    worker a distribution its baseline could never hold. That plugin is
+    registered under `str(id(plugin))`, so with the claim refused it lands on
+    `anon:unresolved`, the row spec 1.3a wrote for exactly this.
+
+    The check is not extended to module objects on purpose. A module absent from
+    `sys.modules` would fall through to `anon:`/`name:`, which is NOT compared,
+    so tightening there would hand an attacker a way OUT of the comparison; the
+    weaker reading leaves them only the same-name substitution that the by-name
+    comparison already names as its limit.
+    """
+    if plugin is None:
+        return None
+    if isinstance(plugin, ModuleType):
+        candidate = getattr(plugin, "__name__", None)
+        return candidate if isinstance(candidate, str) and candidate else None
+    claimed = (getattr(plugin, "__module__", None) if isinstance(plugin, type)
+               else getattr(type(plugin), "__module__", None))
+    return claimed if isinstance(claimed, str) and claimed in sys.modules else None
+
+
+def _plugin_identity(name, plugin, root: Path) -> str:
+    """The COMPARABLE identity of one registered plugin. See spec 1.3a.
+
+    A registration name is not comparable across two processes, which is what
+    wire 2.3's first measurement established rather than assumed: pytest
+    registers an anonymous plugin under `str(id(plugin))`, its memory address,
+    and a conftest plugin under its ABSOLUTE path. Seventeen of one gate run's
+    sixty-six names were addresses, and a comparison over them refuses every
+    honest run and leaks an operator's home directory into a public hash.
+
+    So the identity is derived from the plugin's ORIGIN, in the four cases the
+    spec's table names:
+
+      intree:<path>   under the tree, outside the interpreter's own libraries
+      dist:<package>  anywhere else, with a readable module
+      anon:unresolved no readable module, registered under an address
+      name:<name>     no readable module, registered under something else
+
+    Measured: this collapses sixty-six raw names to seven identities, and the
+    `dist:` subset is identical in the freeze probe, the gate controller and
+    every gate worker. Only that subset is compared; the reasons the other two
+    are recorded and not compared are in `build_attestation`.
+    """
+    rel = _intree_rel(getattr(plugin, "__file__", None), root)
+    if rel is not None:
+        return f"intree:{rel}"
+    module = _module_name(plugin)
+    if module:
+        return f"dist:{module.split('.')[0]}"
+    if str(name).isdigit():
+        return "anon:unresolved"
+    return f"name:{name}"
+
+
 def process_facts(config, root: Path) -> dict:
-    """What configured this interpreter, recorded and not judged.
+    """What configured this interpreter, recorded and normalised, not judged.
 
     Judgement lives in `build_attestation`, so this stays a description of the
     process and the reasons stay in one list with every other reason an operator
     reads beneath NOT ATTESTED.
+
+    The three plugin fields are one partition of the registered set by identity
+    (see `_plugin_identity`), not three separate readings of it: `plugins` is
+    the COMPARED `dist:` subset, mapped to one representative origin for a human
+    to read, and the other two carry the entries the comparison deliberately
+    leaves alone. An entry belongs to exactly one of them.
     """
     root = Path(root).resolve()
-    plugins, intree = {}, []
+    identities: dict[str, str | None] = {}
     for name, plugin in _plugin_pairs(config):
         origin = getattr(plugin, "__file__", None)
-        plugins[str(name)] = str(origin) if origin else None
-        rel = _intree_rel(origin, root)
-        if rel is not None:
-            intree.append(rel)
+        identity = _plugin_identity(name, plugin, root)
+        # First origin wins: forty-six `_pytest` registrations fold into one
+        # identity, and one representative file answers "where did this come
+        # from" as well as forty-six would.
+        identities.setdefault(identity, str(origin) if origin else None)
     option = getattr(getattr(config, "option", None), "plugins", None) or ()
     return {
-        "plugins": dict(sorted(plugins.items())),
-        "intree_plugins": sorted(set(intree)),
+        "plugins": {
+            identity: origin for identity, origin in sorted(identities.items())
+            if identity.startswith("dist:")
+        },
+        "intree_plugins": sorted(
+            identity[len("intree:"):] for identity in identities
+            if identity.startswith("intree:")
+        ),
+        # Recorded, never compared. An anonymous plugin was created in-process
+        # by an already-loaded one, so it is downstream of a `dist:` entry the
+        # comparison does see; a `name:` entry has no origin to compare at all.
+        # Their absence from the record would be the quiet part: a reader of the
+        # evidence pack would not know they were there.
+        "other_plugins": sorted(
+            identity for identity in identities
+            if identity.startswith(("anon:", "name:"))
+        ),
         # The PARSED option. argv carries only one of the three channels that
         # reach it: `-p` on the command line shows up in invocation_params.args,
         # while PYTEST_ADDOPTS and an ini `addopts` never do, and a reader
@@ -405,6 +518,10 @@ class AttestationRecorder:
         # Empty for a wire 1 freeze, and an absent entry keeps the wire 1
         # behaviour for that file rather than failing it.
         self.baseline: dict = {}
+        # The plugin set captured at freeze time, or None when the freeze
+        # recorded none. None and empty are the same answer here and both refuse:
+        # with nothing to compare against, every plugin set is acceptable.
+        self.plugin_baseline: list | None = None
         # Deselections arrive BEFORE the tally exists (see deselected below), so
         # they are buffered by root-relative path and folded in on every route
         # that builds or rebuilds self.frozen.
@@ -432,6 +549,7 @@ class AttestationRecorder:
             return None
         self.patterns = config.getini("python_files") or ["test_*.py"]
         self.baseline = manifest.get("baseline") or {}
+        self.plugin_baseline = manifest.get("plugins") or None
         self.root_digest = verify_manifest(manifest, self.root)["recomputed_root"]
         return frozen_test_files(manifest, self.patterns)
 
@@ -574,13 +692,58 @@ class AttestationRecorder:
             print(f"canopus: could not describe the process: {exc}", file=sys.stderr)
             return None
 
+    def _dump_plugins(self, config) -> bool:
+        """Write the plugin identities to CANOPUS_PLUGIN_DUMP. True when asked.
+
+        The NORMALISED identities, never pytest's registration names. A raw dump
+        is what makes a baseline machine-specific: a conftest plugin registers
+        under its absolute path and an anonymous one under a memory address, so
+        the captured set would diverge on the next clone and would carry an
+        operator's home directory into a hash this public repository commits.
+
+        True is returned whenever the variable was SET, not whenever the write
+        succeeded, so a failed write never falls through into writing an
+        attestation the freeze probe must not write. The failure is named on
+        stderr rather than swallowed: `freeze` reads this file back, and a
+        silently absent dump becomes a freeze with no plugin baseline, which
+        attests nothing forever after.
+        """
+        target = os.environ.get("CANOPUS_PLUGIN_DUMP")
+        if not target:
+            return False
+        described = self._describe(config)
+        if described is None:
+            # `_describe` has already named the failure. Writing an empty set
+            # here would capture "this contract loaded no plugins", which is a
+            # claim rather than a gap; leaving the file absent is what lets
+            # `freeze` say the baseline could not be captured.
+            return True
+        try:
+            atomic_write_text(
+                Path(target), json.dumps(sorted(described["plugins"]), indent=2) + "\n"
+            )
+        except (OSError, ValueError) as exc:
+            print(f"canopus: the plugin set could not be written to {target}: "
+                  f"{exc}", file=sys.stderr)
+        return True
+
     def finish(self, session, exitstatus) -> bool:
         """Write the record from the controller only. True when one was written.
 
         Under pytest-xdist every worker reaches session finish holding a partial
         tally and its own exit status, and the last writer would win. A worker is
         the only process carrying config.workerinput.
+
+        CANOPUS_PLUGIN_DUMP is answered FIRST, before every other branch. It is
+        how `freeze --contract` captures the baseline: the contract already runs
+        through a real pytest child, so the set is taken from the recorder that
+        computes it anyway rather than from a second session or a second
+        describer. That child also sets CANOPUS_NO_ATTEST, and the tally is
+        empty because no freeze is held yet, so any later branch would return
+        before writing the dump.
         """
+        if self._dump_plugins(session.config):
+            return False
         if os.environ.get("CANOPUS_NO_ATTEST"):
             # The contract runner sets this in the child it spawns. `probe` can
             # run while a freeze is held, and a probe's partial tally must never
@@ -617,5 +780,6 @@ class AttestationRecorder:
             attested_at=datetime.now(timezone.utc).isoformat(),
             baseline=self.baseline,
             process=process,
+            plugin_baseline=self.plugin_baseline,
         ))
         return True

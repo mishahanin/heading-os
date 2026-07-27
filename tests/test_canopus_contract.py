@@ -188,6 +188,87 @@ def test_recorder_writes_nothing_when_attestation_is_disabled(tmp_path, monkeypa
     assert recorder.finish(_Session(), 0) is False
 
 
+def _wire_the_recorder(tmp_path: Path) -> None:
+    """The conftest hook that makes a tree's pytest child record anything.
+
+    The engine's own `tests/conftest.py` carries it; a scratch tree does not,
+    so a scratch contract child records nothing unless this is written first.
+    """
+    engine = Path(__file__).resolve().parents[1]
+    _write(tmp_path, "conftest.py",
+           "import sys\n"
+           f"sys.path.insert(0, {str(engine)!r})\n"
+           "from scripts.utils.canopus_gate import AttestationRecorder\n"
+           f"_recorder = AttestationRecorder({str(tmp_path)!r})\n"
+           "def pytest_sessionfinish(session, exitstatus):\n"
+           "    _recorder.finish(session, exitstatus)\n")
+
+
+def test_the_contract_child_dumps_its_normalised_plugin_set(tmp_path):
+    """The capture point for the freeze-time baseline, through a real child.
+
+    Normalised identities, never pytest's registration names. Measured on this
+    repository: a raw dump carries the conftest's ABSOLUTE path and a memory
+    address per anonymous plugin, so the captured baseline would diverge on the
+    next clone and would carry an operator's home directory into a root hash
+    this public repository commits against.
+    """
+    from scripts.utils.canopus_contract import read_plugin_dump, run_pytest_report
+
+    _write(tmp_path, "c/test_one.py", "def test_a():\n    assert False\n")
+    _wire_the_recorder(tmp_path)
+    dump = tmp_path / "plugins.json"
+
+    run_pytest_report([tmp_path / "c"], tmp_path, plugin_dump=dump)
+
+    names = read_plugin_dump(dump)
+    assert "dist:_pytest" in names
+    assert all(name.startswith("dist:") for name in names)
+    assert not any(name.strip("0123456789") == "" for name in names)
+    assert str(tmp_path) not in " ".join(names)
+
+
+def test_a_run_that_was_not_asked_for_a_dump_writes_none(tmp_path, monkeypatch):
+    """Never inherited from the environment.
+
+    A dump path left there by an outer freeze would have an unrelated child
+    overwrite a capture it knows nothing about, and the null-stub run is exactly
+    such a child: its plugin set carries the stub plugin and is not the
+    contract's.
+    """
+    from scripts.utils.canopus_contract import run_pytest_report
+
+    _write(tmp_path, "c/test_one.py", "def test_a():\n    assert False\n")
+    _wire_the_recorder(tmp_path)
+    stray = tmp_path / "stray.json"
+    monkeypatch.setenv("CANOPUS_PLUGIN_DUMP", str(stray))
+
+    run_pytest_report([tmp_path / "c"], tmp_path)
+
+    assert not stray.exists()
+
+
+def test_an_unusable_plugin_dump_reads_as_no_capture(tmp_path, capsys):
+    """Damage reads as absence, and a freeze with no baseline attests nothing.
+
+    The same posture `read_attestation` takes: this file is a measurement, and
+    an unreadable measurement is one that was not taken. Reported on stderr,
+    because the consequence lands much later as a refusal nobody can account for.
+    """
+    from scripts.utils.canopus_contract import read_plugin_dump
+
+    assert read_plugin_dump(tmp_path / "absent.json") == []
+
+    damaged = _write(tmp_path, "damaged.json", "{not json")
+    assert read_plugin_dump(damaged) == []
+
+    wrong_shape = _write(tmp_path, "wrong.json", '{"dist:xdist": "/a"}')
+    assert read_plugin_dump(wrong_shape) == []
+    err = capsys.readouterr().err
+    assert "unreadable" in err
+    assert "not a list of" in err
+
+
 def test_missing_modules_names_what_the_contract_could_not_import(tmp_path):
     from scripts.utils.canopus_contract import missing_modules, run_pytest_report
 

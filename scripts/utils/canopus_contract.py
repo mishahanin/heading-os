@@ -17,6 +17,7 @@ frozen:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -156,6 +157,7 @@ def run_pytest_report(
     timeout: int = 900,
     extra_env: Optional[dict] = None,
     extra_args: Sequence[str] = (),
+    plugin_dump: Optional[Path] = None,
 ) -> str:
     """Run pytest over *paths* once and return the raw JUnit XML.
 
@@ -189,6 +191,19 @@ def run_pytest_report(
     rule already forbids module-scope imports, but the diagnostic a builder reads
     when they break it should name the one file that broke, not the whole set.
 
+    `plugin_dump` is where the child writes the plugin set it loaded, and it is
+    the whole capture mechanism for the freeze-time plugin baseline: the child
+    is already a real pytest session running the contract, so the set comes from
+    the recorder that computes it anyway rather than from a second run or a
+    second describer. The caller owns the path because this function's own
+    scratch directory is gone by the time it returns.
+
+    Measured before it was relied on: `-o addopts=` above makes this child a
+    different topology from a gate run (no coverage, no `-n auto`), and the two
+    still load the same DISTRIBUTIONS. That is why one capture point serves
+    both, and it is also why the comparison is over distributions rather than
+    over raw plugin names.
+
     The return code is deliberately ignored. A contract that has not been
     implemented yet EXITS NONZERO, and that is the state this function exists to
     observe.
@@ -217,6 +232,14 @@ def run_pytest_report(
         env = dict(
             os.environ, CANOPUS_NO_ATTEST="1", PYTHONDONTWRITEBYTECODE="1",
         )
+        if plugin_dump is not None:
+            env["CANOPUS_PLUGIN_DUMP"] = str(plugin_dump)
+        else:
+            # Never inherited. A dump path left in the environment by an outer
+            # freeze would have this child overwrite a capture it knows nothing
+            # about, and the null-stub run below is exactly such a child: its
+            # plugin set carries the stub plugin and is not the contract's.
+            env.pop("CANOPUS_PLUGIN_DUMP", None)
         if extra_env:
             env.update(extra_env)
         try:
@@ -253,6 +276,34 @@ def run_contract(
 ) -> tuple[dict[str, int], list[tuple[str, str, str]]]:
     """Run the contract once and read the report. See run_pytest_report."""
     return parse_junit(run_pytest_report(paths, root, timeout=timeout))
+
+
+def read_plugin_dump(path: Path) -> list[str]:
+    """The plugin identities the contract child recorded, or [] when it did not.
+
+    Empty is the fail-closed answer, not a shrug: a freeze that captures no
+    plugin baseline attests NOTHING afterwards, the same rule a freeze with no
+    test files already gets. The callers say so on the way past, because a
+    baseline that silently failed to capture would only announce itself much
+    later, as an attestation nobody can explain.
+
+    Damage is reported rather than raised for the same reason the attestation
+    reader treats damage as absence: this file is a measurement, and an
+    unreadable measurement is one that was not taken.
+    """
+    try:
+        data = json.loads(Path(path).read_bytes().decode("utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        print(f"canopus: the contract's plugin dump at {path} is unreadable: "
+              f"{exc}", file=sys.stderr)
+        return []
+    if not isinstance(data, list) or any(not isinstance(name, str) for name in data):
+        print(f"canopus: the contract's plugin dump at {path} is not a list of "
+              f"plugin names", file=sys.stderr)
+        return []
+    return sorted(set(data))
 
 
 def refusal_reasons(

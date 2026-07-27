@@ -562,7 +562,7 @@ class MeetingInviteSource:
 
 _ZERO_WIDTH = dict.fromkeys([0x200b, 0x200c, 0x200d, 0x2060, 0xfeff], None)
 
-_DEFAULT_RUNE_TOKEN = "[RUNE]"
+_DEFAULT_RUNE_TOKEN = "[RUNE]"  # noqa: S105 — a subject tag, not a credential
 
 
 def _normalize_subject(s: str) -> str:

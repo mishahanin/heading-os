@@ -107,8 +107,6 @@
   "scripts/memory-index.py::B905": 1,
   "scripts/memory-index.py::C416": 1,
   "scripts/memory-index.py::SIM113": 1,
-  "scripts/modem-tune.py::B007": 1,
-  "scripts/modem-tune.py::SIM105": 1,
   "scripts/mullvad-fastest.py::S310": 2,
   "scripts/odin-brain-health.py::C401": 2,
   "scripts/odin-brain-health.py::C416": 1,

@@ -19,6 +19,7 @@ freeze is inert without it, because a verification that is never invoked fails
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -261,6 +262,97 @@ def _freeze_gate(root: Path) -> int:
     return 0
 
 
+def _library_dirs() -> tuple:
+    """Every directory the running interpreter treats as its own library.
+
+    Named by role rather than by path. `.venv/` sits UNDER the working tree, so a
+    plugin from site-packages resolves in-tree and would be marked; excluding
+    `.venv` by name would be the denylist shape this project keeps getting wrong,
+    and it would also miss a venv named anything else.
+    """
+    import site
+    import sysconfig
+
+    dirs = []
+    for key in ("purelib", "platlib", "stdlib", "platstdlib"):
+        path = sysconfig.get_paths().get(key)
+        if path:
+            dirs.append(Path(path).resolve())
+    # Asked for rather than caught. Some embedded builds and older virtualenvs
+    # ship a `site` without this function, and the handler that would have
+    # covered it is a silent swallow: the house rule wants every handler to log
+    # or re-raise, and there is nothing here worth logging.
+    getsitepackages = getattr(site, "getsitepackages", None)
+    if getsitepackages is not None:
+        dirs.extend(Path(p).resolve() for p in getsitepackages())
+    return tuple(dirs)
+
+
+_LIBRARY_DIRS = _library_dirs()
+
+
+def _plugin_pairs(config) -> list:
+    """Every (name, plugin) pytest has registered, or [] when there is no manager.
+
+    Answers rather than raising, like everything else on this path: the caller is
+    reached from a session-finish hook, and a description that raises would cost
+    the record it was written to produce.
+    """
+    lister = getattr(getattr(config, "pluginmanager", None), "list_name_plugin", None)
+    return list(lister()) if callable(lister) else []
+
+
+def _intree_rel(origin, root: Path) -> str | None:
+    """*origin* as a root-relative POSIX path, when it is the TREE's own code.
+
+    None for anything the interpreter owns. `.venv/` lives under the working
+    tree, so "under root" alone would mark every installed plugin as in-tree.
+    """
+    if not origin:
+        return None
+    try:
+        resolved = Path(str(origin)).resolve()
+    except (OSError, ValueError):
+        return None
+    if not resolved.is_relative_to(root):
+        return None
+    if any(resolved.is_relative_to(library) for library in _LIBRARY_DIRS):
+        return None
+    return resolved.relative_to(root).as_posix()
+
+
+def process_facts(config, root: Path) -> dict:
+    """What configured this interpreter, recorded and not judged.
+
+    Judgement lives in `build_attestation`, so this stays a description of the
+    process and the reasons stay in one list with every other reason an operator
+    reads beneath NOT ATTESTED.
+    """
+    root = Path(root).resolve()
+    plugins, intree = {}, []
+    for name, plugin in _plugin_pairs(config):
+        origin = getattr(plugin, "__file__", None)
+        plugins[str(name)] = str(origin) if origin else None
+        rel = _intree_rel(origin, root)
+        if rel is not None:
+            intree.append(rel)
+    option = getattr(getattr(config, "option", None), "plugins", None) or ()
+    return {
+        "plugins": dict(sorted(plugins.items())),
+        "intree_plugins": sorted(set(intree)),
+        # The PARSED option. argv carries only one of the three channels that
+        # reach it: `-p` on the command line shows up in invocation_params.args,
+        # while PYTEST_ADDOPTS and an ini `addopts` never do, and a reader
+        # written against argv would see one channel in three.
+        "option_plugins": [str(name) for name in option],
+        # Names only. A value can carry a token, and this record is committed
+        # into the evidence pack.
+        "env_configured": sorted(k for k in os.environ if k.startswith("PYTEST_")),
+        "launcher": os.environ.get("CANOPUS_LAUNCHER") or "bare",
+        "workers": [],
+    }
+
+
 class AttestationRecorder:
     """One pytest session's attestation state, driven by the conftest hooks.
 
@@ -288,6 +380,11 @@ class AttestationRecorder:
         # they are buffered by root-relative path and folded in on every route
         # that builds or rebuilds self.frozen.
         self.pending_deselected: dict[str, int] = {}
+        # One plugin-name list per xdist worker, shipped home the way the
+        # deselection counts already are. A worker is a separate interpreter and
+        # can be configured separately from the controller, so the controller's
+        # own list describes the controller and nothing else.
+        self.worker_plugins: list[list[str]] = []
 
     def _rel(self, candidate) -> str | None:
         """Root-relative POSIX path, or None when it lies outside the tree."""
@@ -358,8 +455,18 @@ class AttestationRecorder:
         set and deselects identically, so adding across workers multiplied the
         count by the worker number. The larger of the two wins, so a worker that
         somehow filtered more is not silently under-reported.
+
+        The plugin list is folded in BEFORE the tally guard, and the two are not
+        the same question. A deselection count is meaningless without a tally to
+        fold it into; a worker's plugin list describes that worker's interpreter
+        whether or not this controller ever built one.
         """
-        if not self.frozen or not isinstance(worker_output, dict):
+        if not isinstance(worker_output, dict):
+            return
+        shipped = worker_output.get("canopus_plugins")
+        if isinstance(shipped, list):
+            self.worker_plugins.append([str(name) for name in shipped])
+        if not self.frozen:
             return
         for rel, count in (worker_output.get("canopus_deselected") or {}).items():
             counts = self.frozen.get(rel)
@@ -439,12 +546,24 @@ class AttestationRecorder:
                     rel: counts["deselected"] for rel, counts in self.frozen.items()
                     if counts["deselected"]
                 }
+                # A worker is a separate interpreter, configured separately: it
+                # reads its own PYTEST_ADDOPTS and its own ini, so the
+                # controller's plugin list says nothing about what ran in here.
+                output["canopus_plugins"] = sorted(
+                    process_facts(session.config, self.root)["plugins"])
             return False
+        try:
+            process = process_facts(session.config, self.root)
+            process["workers"] = sorted(self.worker_plugins, key=repr)
+        except Exception as exc:  # noqa: BLE001 - description never breaks a run
+            print(f"canopus: could not describe the process: {exc}", file=sys.stderr)
+            process = None
         write_attestation(self.root, build_attestation(
             root_digest=self.root_digest or "",
             frozen_tests=self.frozen,
             exit_status=int(exitstatus),
             attested_at=datetime.now(timezone.utc).isoformat(),
             baseline=self.baseline,
+            process=process,
         ))
         return True

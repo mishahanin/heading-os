@@ -155,12 +155,21 @@ def test_the_pack_names_the_plugins_that_were_recorded_and_never_compared():
     assert "anon:unresolved" in page
     assert "name:capturemanager" in page
     # The mark matters as much as the name: an operator who reads these as part
-    # of the compared set reads a stronger guarantee than the wire gives.
-    assert "never compared" in page
+    # of the compared set reads a stronger guarantee than the wire gives. The
+    # WHOLE parenthetical, because the block's static footer already carries the
+    # words "and never compared" -- asserting the bare phrase passed against a
+    # row that had been deleted, which is the third vacuous assertion this slice
+    # has caught.
+    assert "(recorded, never compared)" in page
 
 
-def test_the_pack_says_a_parallel_run_had_its_workers_compared():
-    """A worker is a separate interpreter, and the page said nothing about them."""
+def test_the_pack_says_a_parallel_run_recorded_its_workers():
+    """A worker is a separate interpreter, and the page said nothing about them.
+
+    RECORDED, not compared: `build_attestation` compares workers only where the
+    freeze captured a plugin baseline, and this renderer is never told whether it
+    did.
+    """
     from scripts.utils.canopus_pack import render_process
 
     page = render_process(

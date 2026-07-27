@@ -10,10 +10,22 @@ from scripts.utils.venv import venv_python
 # run-tests.py calls ensure_venv() at import, and ensure_venv() calls os.execv
 # when the running interpreter is not .venv/bin/python. Importing this module
 # from a pytest launched on the system interpreter would therefore REPLACE the
-# pytest process mid-collection with `python tests/test_run_tests_env.py`, which
-# exits silently green. canopus_gate.py's module docstring already states that
-# run-tests.py "is not safely importable from a test"; this guard is what makes
-# the exception to that statement safe rather than lucky.
+# pytest process mid-collection, and the replacement exits silently green.
+#
+# WHEN that can happen is narrower than it reads, and is stated because the
+# narrowing is what makes this guard look redundant to a later reader. The root
+# tests/conftest.py sets venv._SENTINEL at import, before any test module loads,
+# so under an ordinary run ensure_venv() is already a no-op here. The exposed
+# case is a run where that conftest never loads. Measured on 2026-07-27 with the
+# system interpreter: `pytest -q --noconftest tests/test_run_tests_env.py`
+# prints `1 skipped` and exits 5 (this guard firing), while the same command on
+# the unguarded tests/test_run_tests_runner.py prints ZERO bytes and exits 0.
+# The re-exec is `[venv_python, sys.argv[0], ...]`, and under pytest sys.argv[0]
+# is the pytest entry point rather than this file.
+#
+# canopus_gate.py's module docstring already states that run-tests.py "is not
+# safely importable from a test"; this guard is what makes the exception to that
+# statement safe rather than lucky.
 if Path(sys.executable).resolve() != venv_python().resolve():
     pytest.skip("run-tests.py re-execs at import; importable only under .venv",
                 allow_module_level=True)

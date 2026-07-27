@@ -257,6 +257,25 @@ def test_status_reports_an_active_freeze_and_its_anchor(tree, anchor, capsys):
     assert str(anchor.resolve()) in out
 
 
+def test_status_says_the_root_guard_watches_directories_too(tree, anchor, capsys):
+    """The filter line is the only place a guard's scope is printed.
+
+    It was added because `dir tests/` alone over-states the guard. Printing
+    `watching *.py` for the tree root under-states it in the same way, from the
+    wire 2.3 change that put importable subdirectories into the root
+    composition: an operator reads a narrower guard than the one that will
+    redden on them.
+    """
+    _freeze(tree, anchor)
+    assert _run(["status"], tree) == 0
+    out = capsys.readouterr().out
+
+    assert "dir   ./  (members, watching *.py + importable directories)" in out
+    # The ancestor guards are unchanged and must NOT gain the phrase: they watch
+    # conftest.py and no directory at all.
+    assert "watching conftest.py + importable" not in out
+
+
 def test_status_reports_the_lock_state_not_just_the_stored_root(tree, anchor, capsys):
     """`status` on a MOVED contract must not look like `status` on an intact one.
 
@@ -2521,9 +2540,9 @@ def test_release_records_the_kind_it_was_given(tree, anchor):
 # The waiver is written by the ACT, not by the flag
 # ============================================================
 # `cmd_freeze` bound its refusal to the waiver having FIRED and `cmd_approve`
-# bound its ARTIFACT WRITE to `args.contract_satisfied` being non-empty, which is
-# the eleventh appearance on this project of a guard applied to one sibling and
-# not the other. The consequence is worse than an inconsistency: `approve` said
+# bound its ARTIFACT WRITE to `args.contract_satisfied` being non-empty: a guard
+# applied to one sibling and not the other, which is a defect this project has
+# produced repeatedly. The consequence is worse than an inconsistency: `approve` said
 # "--contract-satisfied changed nothing" and then wrote the waiver into the
 # artifact a human commits, so `canopus pack` printed CONTRACT WAIVED over a
 # contract that was red, or over no contract at all.

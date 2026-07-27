@@ -156,7 +156,7 @@ GUARD_NAMES_TREE_ROOT = ("*.py",)
 # installed `plug`) moves the guard. `_members` carries the rule; `member_rel`
 # carries the mark.
 #
-# THE TREE ROOT IS THE ONLY IN-TREE sys.path ENTRY, and that is measured, not
+# PYTEST ADDS NO SECOND IN-TREE sys.path ENTRY, and that is measured, not
 # assumed. pyproject sets `addopts = "--strict-markers --import-mode=importlib"`,
 # and under importlib pytest inserts NOTHING for a collected test file: on a
 # scratch tree carrying that setting, `sys.path[:2]` at run time inside
@@ -164,7 +164,13 @@ GUARD_NAMES_TREE_ROOT = ("*.py",)
 # `pythonpath = ["."]` entry and the rootdir) and nothing else. A package at
 # `tests/plug/` and a package beside the contract were both `ImportError: No
 # module named …`; only the root-level package imported. So the root guard is
-# the whole in-tree surface, and there is no second entry to widen to.
+# the whole surface pytest contributes, and there is no second entry to widen to.
+#
+# Said exactly that wide. It is NOT the claim that nothing importable lives
+# under the tree: `.venv/…/site-packages` does, which is the reason
+# `canopus_gate._library_dirs` exists to tell an interpreter library from an
+# in-tree file. What is measured is that pytest adds no tree-owned entry beyond
+# the one `pythonpath = ["."]` already declares.
 #
 # An earlier revision of this note derived the same conclusion from pytest's
 # PREPEND mode inserting a test file's basedir, and stated a trigger ("it
@@ -251,6 +257,22 @@ def member_rel(path: Path, base: Path, *, is_dir: bool) -> str:
     return dir_member_name(rel) if is_dir else rel
 
 
+def guard_watches_directories(names: Sequence[str]) -> bool:
+    """Does this guard's pattern set watch subdirectories at all?
+
+    The discriminator `watched_directory` keys on, split out so `cmd_status` can
+    print a guard's real scope without a second copy of it. `status` printed
+    `watching *.py` for the tree root and said nothing about the importable
+    directories the same guard measures, which UNDER-states the scope: the
+    inverse of the misreading that filter was added to prevent.
+
+    Spelled `tuple(names) == ...` for the reason argued in `watched_directory`:
+    the build path passes the TUPLE and the recompute path passes the LIST that
+    JSON round-tripped it into.
+    """
+    return tuple(names) == GUARD_NAMES_TREE_ROOT
+
+
 def watched_directory(name: str, names: Sequence[str]) -> bool:
     """Would a subdirectory called *name* join a shallow guard's composition?
 
@@ -276,7 +298,7 @@ def watched_directory(name: str, names: Sequence[str]) -> bool:
     it — which is why SKIPPED_DIRNAMES is consulted here too.
     """
     return (
-        tuple(names) == GUARD_NAMES_TREE_ROOT
+        guard_watches_directories(names)
         and name.isidentifier()
         and name not in SKIPPED_DIRNAMES
     )

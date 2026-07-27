@@ -269,23 +269,42 @@ def _library_dirs() -> tuple:
     plugin from site-packages resolves in-tree and would be marked; excluding
     `.venv` by name would be the denylist shape this project keeps getting wrong,
     and it would also miss a venv named anything else.
-    """
-    import site
-    import sysconfig
 
-    dirs = []
-    for key in ("purelib", "platlib", "stdlib", "platstdlib"):
-        path = sysconfig.get_paths().get(key)
-        if path:
-            dirs.append(Path(path).resolve())
-    # Asked for rather than caught. Some embedded builds and older virtualenvs
-    # ship a `site` without this function, and the handler that would have
-    # covered it is a silent swallow: the house rule wants every handler to log
-    # or re-raise, and there is nothing here worth logging.
-    getsitepackages = getattr(site, "getsitepackages", None)
-    if getsitepackages is not None:
-        dirs.extend(Path(p).resolve() for p in getsitepackages())
-    return tuple(dirs)
+    NEVER RAISES, and the reason is WHERE it runs rather than how likely a raise
+    is. The result is cached at module import, and every import of this module is
+    outside a handler: tests/conftest.py imports `freeze_gate` from inside
+    `pytest_sessionstart`, which has no handler of its own, and run-tests.py
+    imports at its top level. So an exception here does not fail OPEN the way
+    `freeze_gate` deliberately does — it kills the pytest session with an
+    internal error before any gate can report a state, and kills run-tests.py
+    before it can run anything. Probability low, cost total.
+
+    Degrading to `()` marks MORE plugins in-tree, which is the conservative
+    direction for a field nothing judges yet, and the failure is named on stderr
+    rather than swallowed: unlike the sentinel handlers below, this one loses
+    information a reader of the record would want.
+    """
+    try:
+        import site
+        import sysconfig
+
+        dirs = []
+        for key in ("purelib", "platlib", "stdlib", "platstdlib"):
+            path = sysconfig.get_paths().get(key)
+            if path:
+                dirs.append(Path(path).resolve())
+        # Asked for rather than caught. Some embedded builds and older
+        # virtualenvs ship a `site` without this function, and a handler around
+        # it would report nothing this one does not already report.
+        getsitepackages = getattr(site, "getsitepackages", None)
+        if getsitepackages is not None:
+            dirs.extend(Path(p).resolve() for p in getsitepackages())
+        return tuple(dirs)
+    except Exception as exc:  # noqa: BLE001 — an import-time raise kills the session
+        print(f"canopus: the interpreter's library directories could not be "
+              f"located, so a plugin loaded from one reads as in-tree: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return ()
 
 
 _LIBRARY_DIRS = _library_dirs()
@@ -307,6 +326,16 @@ def _intree_rel(origin, root: Path) -> str | None:
 
     None for anything the interpreter owns. `.venv/` lives under the working
     tree, so "under root" alone would mark every installed plugin as in-tree.
+
+    The handler below neither logs nor re-raises, and that is the reading this
+    diff applies wherever a handler's SENTINEL IS THE ANSWER: an origin that
+    cannot be resolved to a path is not in the tree, which is exactly what None
+    says here, and the caller acts on it. Nothing is lost, so there is nothing
+    to report — and at session finish, over every registered plugin, a line per
+    unresolvable origin would be noise on the one surface an operator reads. The
+    opposite reading governs `_library_dirs` above, where the failure silently
+    degrades a whole exclusion set and IS therefore printed. `_rel` on this
+    class takes the same shape as this one and is left as it stands.
     """
     if not origin:
         return None
@@ -524,6 +553,27 @@ class AttestationRecorder:
         elif report.outcome == "passed" and report.when == "call":
             counts["passed"] += 1
 
+    def _describe(self, config) -> dict | None:
+        """The process description, or None when it could not be taken.
+
+        NEVER RAISES, on either of `finish`'s two paths. The controller's path
+        is obvious — a description that escaped would cost the record it was
+        written to produce. The worker's path is the one that was left unguarded
+        first: a raise there loses the deselection counts already assigned
+        beside it, and those are the worker's only route home. Blast radius one
+        worker rather than the run, and still not worth a bare call.
+
+        One describer for both, rather than a plugin-name reader beside a full
+        one. A second spelling of "what configured this interpreter" is how the
+        controller and its workers come to answer the same question differently,
+        which is precisely the difference the record exists to show.
+        """
+        try:
+            return process_facts(config, self.root)
+        except Exception as exc:  # noqa: BLE001 - description never breaks a run
+            print(f"canopus: could not describe the process: {exc}", file=sys.stderr)
+            return None
+
     def finish(self, session, exitstatus) -> bool:
         """Write the record from the controller only. True when one was written.
 
@@ -549,15 +599,17 @@ class AttestationRecorder:
                 # A worker is a separate interpreter, configured separately: it
                 # reads its own PYTEST_ADDOPTS and its own ini, so the
                 # controller's plugin list says nothing about what ran in here.
-                output["canopus_plugins"] = sorted(
-                    process_facts(session.config, self.root)["plugins"])
+                # The whole description is taken and only the names are shipped,
+                # deliberately: one describer answers for both processes (see
+                # _describe), and the rest of a worker's description is the
+                # controller's to hold.
+                described = self._describe(session.config)
+                if described is not None:
+                    output["canopus_plugins"] = sorted(described["plugins"])
             return False
-        try:
-            process = process_facts(session.config, self.root)
+        process = self._describe(session.config)
+        if process is not None:
             process["workers"] = sorted(self.worker_plugins, key=repr)
-        except Exception as exc:  # noqa: BLE001 - description never breaks a run
-            print(f"canopus: could not describe the process: {exc}", file=sys.stderr)
-            process = None
         write_attestation(self.root, build_attestation(
             root_digest=self.root_digest or "",
             frozen_tests=self.frozen,

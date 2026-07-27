@@ -1,8 +1,8 @@
 """The attestation records what configured the interpreter, not only what ran."""
 import os
-import sysconfig
 from pathlib import Path
 
+from scripts.utils import canopus_gate
 from scripts.utils.canopus_gate import process_facts
 
 
@@ -23,14 +23,35 @@ def _plugin(module_file):
     return type("M", (), {"__file__": module_file})()
 
 
-def test_a_plugin_from_the_interpreter_library_is_not_in_tree(tmp_path):
-    purelib = sysconfig.get_paths()["purelib"]
-    config = _Config([("pytest_cov", _plugin(os.path.join(purelib, "pytest_cov", "plugin.py")))])
+def test_a_plugin_from_the_interpreter_library_is_not_in_tree(tmp_path, monkeypatch):
+    """The library sits INSIDE the tree, because that is the real geometry.
+
+    `.venv/` lives under the working tree, so "under root" alone marks every
+    installed plugin as in-tree and the whole field says nothing. This test's
+    first shape planted the origin under the REAL purelib while passing
+    `root=tmp_path`: the origin was outside the root, `_intree_rel` answered at
+    the root check, and the library loop never ran. It held identically with
+    `_LIBRARY_DIRS` and its loop deleted, which is no test of them at all.
+
+    Two plugins, one exclusion: the installed one is under a library directory
+    inside the root, the other is a plain file beside it.
+    """
+    library = tmp_path / ".venv" / "lib" / "site-packages"
+    (library / "pytest_cov").mkdir(parents=True)
+    installed = library / "pytest_cov" / "plugin.py"
+    installed.write_text("# an installed distribution plugin\n")
+    own = tmp_path / "plug.py"
+    own.write_text("def pytest_pyfunc_call(pyfuncitem):\n    return True\n")
+    monkeypatch.setattr(
+        canopus_gate, "_LIBRARY_DIRS", (*canopus_gate._LIBRARY_DIRS, library.resolve())
+    )
+    config = _Config([("pytest_cov", _plugin(str(installed))),
+                      ("plug", _plugin(str(own)))])
 
     facts = process_facts(config, tmp_path)
 
-    assert facts["plugins"]["pytest_cov"] is not None
-    assert facts["intree_plugins"] == []
+    assert facts["plugins"]["pytest_cov"] == str(installed)
+    assert facts["intree_plugins"] == ["plug.py"]
 
 
 def test_a_plugin_from_the_working_tree_is_marked_as_in_tree(tmp_path):
@@ -75,6 +96,27 @@ def test_a_plugin_with_no_resolvable_origin_is_recorded_as_null(tmp_path):
     facts = process_facts(_Config([("builtin", object())]), tmp_path)
 
     assert facts["plugins"]["builtin"] is None
+
+
+def test_locating_the_interpreter_libraries_never_raises(monkeypatch, capsys):
+    """This one is cached at module IMPORT, and no import of it sits in a handler.
+
+    tests/conftest.py imports `freeze_gate` from inside `pytest_sessionstart`,
+    which has no handler, and run-tests.py imports at its top level. A raise here
+    therefore does not fail open the way `freeze_gate` deliberately does: it
+    kills the session with an internal error before any gate reports a state.
+    Degrading to `()` marks more plugins in-tree, which is the conservative
+    direction for a field nothing judges yet.
+    """
+    import sysconfig
+
+    def _explode(*args, **kwargs):
+        raise RuntimeError("no such scheme on this interpreter")
+
+    monkeypatch.setattr(sysconfig, "get_paths", _explode)
+
+    assert canopus_gate._library_dirs() == ()
+    assert "library directories could not be located" in capsys.readouterr().err
 
 
 def test_the_launcher_is_recorded_as_provenance(tmp_path, monkeypatch):

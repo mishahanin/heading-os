@@ -9,6 +9,7 @@ from scripts.utils.canopus_freeze import (
     ANCHOR_NONE,
     ANCHOR_RECORDED,
     ANCHOR_UNRECORDED,
+    GUARD_NAMES_TREE_ROOT,
     LOCK_HELD,
     LOCK_UNCONFIRMED,
     LOSS_OF_LOCK,
@@ -20,6 +21,7 @@ from scripts.utils.canopus_freeze import (
     append_history,
     build_manifest,
     clear_freeze,
+    dir_member_rels,
     dir_members_digest,
     file_digest,
     freeze_state_path,
@@ -337,6 +339,115 @@ def test_explicit_directory_freeze_catches_a_subdirectory_addition(tree: Path):
     report = verify_manifest(manifest, tree)
     assert report["held"] is False
     assert report["added"] == ["tests/sub/test_delta.py"]
+
+
+def test_a_package_directory_at_the_root_joins_the_composition(tree: Path):
+    """The hole the root guard's own comment stated, and wire 2.2 measured.
+
+    pyproject declares `pythonpath = ["."]`, so the tree root is the first
+    sys.path entry the contract's own run-time imports resolve against. A
+    package directory dropped there shadows an installed module while every
+    frozen byte stays intact.
+    """
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+    (tree / "plug").mkdir()
+
+    report = verify_manifest(manifest, tree)
+
+    assert report["held"] is False
+    assert report["added"] == ["plug/"]
+
+
+def test_a_directory_that_cannot_be_imported_does_not(tree: Path):
+    """`docs-2` is not an identifier, so it cannot shadow an import.
+
+    The fix's failure mode is over-reach: a guard that reddens on every new
+    top-level directory is one an operator learns to release around, which is
+    worse than no guard.
+    """
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+    (tree / "docs-2").mkdir()
+
+    assert verify_manifest(manifest, tree)["held"] is True
+
+
+def test_the_state_directory_is_not_watched(tree: Path):
+    """`.canopus` holds the manifest being compared; watching it is a loop."""
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+    (tree / ".canopus").mkdir(exist_ok=True)
+    (tree / ".canopus" / "scratch").mkdir()
+
+    assert verify_manifest(manifest, tree)["held"] is True
+
+
+def test_a_directory_is_listed_with_a_trailing_slash(tmp_path: Path):
+    """Composition is a digest over rendered names; `plug` and `plug/` are two.
+
+    Asserted directly rather than by comparing a directory listing against a
+    file listing: under `*.py` a file named `plug` is filtered out anyway, so
+    the comparison form passes without ever proving the mark is written.
+    """
+    (tmp_path / "plug").mkdir()
+
+    assert dir_member_rels(
+        tmp_path, tmp_path, recursive=False, names=GUARD_NAMES_TREE_ROOT
+    ) == ["plug/"]
+
+
+def test_the_directory_rule_is_a_root_rule_not_a_recursive_listing(tree: Path):
+    """No caller pairs the root names with a recursive walk, so this pins intent.
+
+    Without it the `not recursive` half of the discriminator is an equivalent
+    mutant: removing it fails nothing, and a later caller asking for the root
+    patterns recursively would silently pull every nested directory into the
+    composition.
+    """
+    assert dir_member_rels(
+        tree, tree, recursive=True, names=GUARD_NAMES_TREE_ROOT
+    ) == ["tests/sub/test_gamma.py", "tests/test_alpha.py", "tests/test_beta.py"]
+
+
+def test_a_generated_cache_directory_at_the_root_does_not_redden(tree: Path):
+    """`__pycache__`.isidentifier() is True, so isidentifier alone is not the rule.
+
+    CACHE_DIRNAMES exists because a lock bound to an artifact the build
+    regenerates reports LOSS OF LOCK for a change nobody made. Admitting
+    directories to the composition without carrying that exclusion across
+    re-opens it on the one directory Python creates most often.
+    """
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+    (tree / "__pycache__").mkdir(exist_ok=True)
+
+    assert verify_manifest(manifest, tree)["held"] is True
+
+
+def test_the_recomputed_root_agrees_with_the_built_one(tree: Path):
+    """Wire 2.2's blocker B1, guarded rather than remembered.
+
+    `_guard_ancestors` builds with the TUPLE GUARD_NAMES_TREE_ROOT; `recompute`
+    reads the LIST the manifest round-tripped through JSON. A discriminator
+    written with `is`, or with `==` against the tuple, is true on one path and
+    false on the other, directories enter the stored digest and never the
+    recomputed one, and the tree reports LOSS OF LOCK forever with nothing
+    moved.
+    """
+    (tree / "plug").mkdir()
+    manifest = build_manifest(
+        [tree / "tests" / "test_alpha.py"], tree, label="l", frozen_at=STAMP
+    )
+
+    report = verify_manifest(manifest, tree)
+
+    assert report["held"] is True
+    assert report["added"] == []
 
 
 def test_read_anchor_reports_missing(tmp_path: Path):

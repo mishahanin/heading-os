@@ -36,7 +36,8 @@ breaks loudly instead of silently:
                           plugins})
 
 where a directory's members are those whose BASENAME matches one of the entry's
-recorded `names` patterns.
+recorded `names` patterns, and a member that is itself a directory is rendered
+with a trailing `/` so a file and a directory of the same name are two lines.
 
 Per-file bytes are LF-normalized (\\r\\n -> \\n) so a CRLF working copy and a
 fresh LF checkout agree, matching the recipe already proven in
@@ -140,15 +141,40 @@ GUARD_NAMES_ALL = ("*",)
 GUARD_NAMES_ANCESTOR = ("conftest.py",)
 GUARD_NAMES_TREE_ROOT = ("*.py",)
 
-# Stated rather than implied, because the boundary is where the next hole lives:
-# composition lists FILES, so a PACKAGE DIRECTORY appearing at the tree root
-# (`target/__init__.py` shadowing an installed `target`) is not caught, and
-# neither is a module dropped into another in-tree sys.path entry such as
-# tests/. Both are closed by practice rather than by this primitive: the
-# contract lives in its own directory under tests/contract/, which freezes
-# RECURSIVELY, so anything appearing beside it is caught by content and by
-# composition alike. Widening the guard to cover them is a reason to change this
-# set, never a reason to route around the lock.
+# Stated rather than implied, because the boundary is where the next hole lives.
+#
+# CLOSED in wire 2.3: the tree-root guard's composition now lists importable
+# SUBDIRECTORIES beside `*.py` files, each rendered with a trailing `/`, so a
+# package directory dropped at the root (`plug/__init__.py` shadowing an
+# installed `plug`) moves the guard. `_members` carries the rule; `member_rel`
+# carries the mark.
+#
+# Three cases stay open, and none of them is closed by this primitive:
+#
+#   * A module dropped into ANOTHER in-tree sys.path entry. pytest's prepend
+#     import mode inserts a test file's BASEDIR, which is the first directory at
+#     or above it with no `__init__.py`. Measured on a scratch tree, both ways:
+#     the directory inserted for `tests/contract/<slice>/test_contract.py` is
+#     that slice directory itself, whether or not `tests/__init__.py` exists, so
+#     `tests/plug/` is NOT importable as a bare `plug` and this case is not live
+#     for this layout. It becomes live only if the slice directory and
+#     `tests/contract/` both gain an `__init__.py` while `tests/` has none.
+#   * An EMPTY directory inside a recursively frozen one. The recursive arm
+#     lists files, so `tests/contract/<slice>/plug/` with nothing in it is not
+#     reported (measured); the moment it holds a `__init__.py` it is. An empty
+#     directory on sys.path is an implicit namespace package, so it can shadow
+#     an installed module — but it carries no code, so it can only turn a green
+#     contract red, never a red one green.
+#   * A directory the BUILD generates at the root. `dist/`, `outputs/` and
+#     `plans/` are gitignored and generated, and all three are importable, so
+#     they are watched on purpose: a `git clean -xfd`, or the first
+#     `scripts/dev/build-plugins.py` run on a tree with no `dist/`, moves the
+#     root composition and reports LOSS OF LOCK with no source edited. Accepted
+#     rather than excluded, because an exclusion set wide enough to cover them
+#     is exactly where a real shadowing directory would hide.
+#
+# Widening the guard further is a reason to change this set, never a reason to
+# route around the lock.
 
 
 class FreezeError(Exception):
@@ -164,10 +190,49 @@ def file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
+def member_rel(path: Path, base: Path) -> str:
+    """A member's *base*-relative POSIX name, with a trailing `/` for a directory.
+
+    ONE renderer, shared by `dir_members_digest`, `dir_member_rels` and the sort
+    order all three agree on, for the reason `matches_guard` is shared by the
+    measure and the deny: two hand-rolled copies is how the digest and the
+    member list end up disagreeing about the same directory.
+
+    The mark cannot come from `_members`, which returns `Path` objects and
+    `Path("plug/") == Path("plug")`. It has to exist because the composition is
+    a digest over rendered NAMES: without it a directory `plug` and a file
+    `plug` produce the same line, and one replacing the other moves nothing.
+    """
+    rel = path.relative_to(base).as_posix()
+    return f"{rel}/" if path.is_dir() else rel
+
+
 def _members(
     directory: Path, *, recursive: bool, names: Sequence[str] = GUARD_NAMES_ALL
 ) -> list[Path]:
-    """Regular files in *directory* whose basename matches *names*, sorted.
+    """Members of *directory* whose basename matches *names*, sorted.
+
+    Regular files always, plus — at the TREE ROOT guard only, identified by
+    `tuple(names) == GUARD_NAMES_TREE_ROOT` — subdirectories whose name is a
+    Python identifier, because `pythonpath = ["."]` makes such a directory an
+    importable package at the entry the contract's own imports resolve against.
+
+    That discriminator is spelled `tuple(names) == ...` deliberately. This
+    function is reached from `_guard_ancestors`, which passes the TUPLE
+    GUARD_NAMES_TREE_ROOT, and from `recompute`, which passes the LIST the
+    manifest round-tripped through JSON. Written with `is`, or with a bare `==`
+    against the tuple, it would be true on the build path and false on the
+    recompute path: directories would enter the stored digest and never the
+    recomputed one, and the tree would report LOSS OF LOCK forever with nothing
+    moved. That is wire 2.2's blocker B1 verbatim.
+
+    `str.isidentifier()` is most of the rule, and deliberately not a denylist of
+    bad names: `.git`, `.venv` and `.canopus` fall out because a leading dot is
+    not an identifier. A directory named for a Python keyword (`class`,
+    `import`) passes the test and is watched, which is the safe direction. What
+    `isidentifier()` does NOT do is separate an authored directory from a
+    generated one — `__pycache__` passes it — which is why the same
+    `skipped_dirs` exclusion the file arm applies covers the directory arm too.
 
     Symlinks are excluded (the workspace forbids them), anything under the
     freeze state directory is excluded so the manifest never hashes itself, and
@@ -181,16 +246,22 @@ def _members(
     flat listing and a nested one without two spellings of every pattern.
     """
     skipped_dirs = CACHE_DIRNAMES | {FREEZE_DIRNAME}
+    watch_dirs = not recursive and tuple(names) == GUARD_NAMES_TREE_ROOT
     candidates = directory.rglob("*") if recursive else directory.iterdir()
-    files = [
+    found = [
         p for p in candidates
-        if p.is_file()
-        and not p.is_symlink()
+        if not p.is_symlink()
         and skipped_dirs.isdisjoint(p.relative_to(directory).parts)
-        and p.suffix not in CACHE_SUFFIXES
-        and matches_guard(p.name, names)
+        and (
+            (
+                p.is_file()
+                and p.suffix not in CACHE_SUFFIXES
+                and matches_guard(p.name, names)
+            )
+            or (watch_dirs and p.is_dir() and p.name.isidentifier())
+        )
     ]
-    return sorted(files, key=lambda p: p.relative_to(directory).as_posix())
+    return sorted(found, key=lambda p: member_rel(p, directory))
 
 
 def matches_guard(name: str, names: Sequence[str]) -> bool:
@@ -212,7 +283,7 @@ def dir_members_digest(
     a frozen one (the conftest.py case), while per-file digests detect edits.
     """
     lines = "".join(
-        f"{p.relative_to(directory).as_posix()}\n"
+        f"{member_rel(p, directory)}\n"
         for p in _members(directory, recursive=recursive, names=names)
     )
     return hashlib.sha256(lines.encode("utf-8")).hexdigest()
@@ -231,7 +302,7 @@ def dir_member_rels(
     added and the guard cries wolf on its first use.
     """
     return sorted(
-        p.relative_to(root).as_posix()
+        member_rel(p, root)
         for p in _members(directory, recursive=recursive, names=names)
     )
 
@@ -445,9 +516,11 @@ def _guard_ancestors(target: Path, root: Path, dirs: dict) -> None:
     the conclusion was wrong: pyproject declares `pythonpath = ["."]`, so the
     root is the first sys.path entry the contract's own imports resolve against,
     and stopping there left a plain `target.py` at the root able to flip the
-    contract green while verify printed LOCK HELD. Watching `*.py` there answers
-    the objection instead of surrendering to it: a note or a lockfile written
-    during the slice is not importable and does not move the guard.
+    contract green while verify printed LOCK HELD. Watching what is IMPORTABLE
+    there answers the objection instead of surrendering to it: `*.py` files, and
+    subdirectories whose name is an identifier, so a package directory shadows
+    nothing quietly, while a note or a lockfile written during the slice does
+    not move the guard.
 
     An ancestor that already carries a recursive guard keeps it.
     """
@@ -487,9 +560,10 @@ def build_manifest(
 
     A file freezes itself and additionally installs a NON-recursive composition
     guard on its parent directory, which is what catches a conftest.py dropped
-    beside a frozen test. The guard is skipped when the parent is the working
-    tree root, because guarding the root's composition would deny every new
-    top-level file and make the tool something people route around.
+    beside a frozen test. The tree root gets a guard too, filtered down to what
+    is importable there (see `_guard_ancestors`): guarding the root's whole
+    composition would deny every new top-level file and make the tool something
+    people route around.
 
     A `content_only` path freezes its BYTES and installs no composition guard on
     its parent. This is how the enforcer files are frozen. Freezing

@@ -31,17 +31,48 @@ from scripts.utils.workspace import get_workspace_root  # noqa: E402
 BASELINE = get_workspace_root() / ".lint-baseline.json"
 
 
+def _interpreter() -> str:
+    """The interpreter ruff is run as a module of.
+
+    The repo's own `.venv` first, because the pre-commit hook that calls this
+    script is `language: system` and pre-commit resolves `python3` from PATH.
+    On a machine where that PATH interpreter is not the venv, reading
+    `sys.executable` alone put the whole gate under an interpreter that had
+    never heard of ruff, and the answer came back "0 findings".
+    """
+    root = get_workspace_root()
+    for candidate in (root / ".venv" / "bin" / "python",
+                      root / ".venv" / "Scripts" / "python.exe"):
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
 def _current() -> Counter:
     """Counter keyed ``relpath::CODE`` of current ruff findings (pyproject select)."""
     root = get_workspace_root()
+    interpreter = _interpreter()
     r = subprocess.run(  # nosec B603 - fixed args; ruff run as a module of this interpreter
-        [sys.executable, "-m", "ruff", "check", ".", "--output-format", "json"],
+        [interpreter, "-m", "ruff", "check", ".", "--output-format", "json"],
         cwd=str(root), capture_output=True, text=True,
     )
     # ruff exits 0 (clean) or 1 (findings); >=2 is a real tool error.
     if r.returncode >= 2:
         sys.stderr.write(r.stderr)
         raise SystemExit(2)
+    # "ruff found nothing" and "ruff never ran" both arrive as an empty result,
+    # and treating them as one answer is how a gate reports the reassuring half
+    # of the truth. A run that produced findings prints a JSON array; a missing
+    # module exits 1 with nothing at all. The empty-with-failure case is the one
+    # that must never be read as a clean tree, because `update` would then write
+    # an empty baseline and disarm the ratchet for good.
+    if r.returncode != 0 and not r.stdout.strip():
+        raise SystemExit(
+            f"lint-ratchet: ruff did not run under {interpreter}"
+            f"{': ' + r.stderr.strip().splitlines()[-1] if r.stderr.strip() else ''}\n"
+            "Refusing to report a clean tree it never measured. Install the dev "
+            "toolchain (`uv sync` or `pip install -r requirements-dev.txt`) and retry."
+        )
     try:
         items = json.loads(r.stdout or "[]")
     except json.JSONDecodeError as exc:

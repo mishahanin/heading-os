@@ -164,13 +164,16 @@ repos:
 
   # CVE scan on dependency changes -- closes P1.8 from the 2026-05-17 workspace deep audit.
   # Runs pip-audit ONLY when requirements*.txt is staged. Strict mode -- any HIGH/CRITICAL
-  # CVE blocks the commit. Skips silently if pip_audit isn't installed (graceful degrade
-  # rather than block commits on machines that haven't pip-installed requirements-dev.txt).
+  # CVE blocks the commit. It still degrades rather than blocking a commit on a machine
+  # without the dev toolchain, but it SAYS SO -- the sibling lint-ratchet hook carried the
+  # same silent `find_spec -> exit 0` guard and reported Passed for two days while the same
+  # gate failed in CI. The venv is tried before the ambient interpreter for the same reason:
+  # `language: system` resolves `python3` from PATH, which is often not the repo's venv.
   - repo: local
     hooks:
       - id: pip-audit-cve
         name: Scan requirements.txt for known CVEs (pip-audit)
-        entry: python3 -c "import importlib.util, subprocess, sys; spec = importlib.util.find_spec('pip_audit'); sys.exit(0) if spec is None else sys.exit(subprocess.run([sys.executable, '-m', 'pip_audit', '--requirement', 'requirements.txt', '--strict'], capture_output=False).returncode)"
+        entry: python3 -c "import importlib.util, os, subprocess, sys; venv = os.path.join('.venv', 'bin', 'pip-audit'); cmd = [venv] if os.path.exists(venv) else ([sys.executable, '-m', 'pip_audit'] if importlib.util.find_spec('pip_audit') else None); sys.exit(subprocess.run(cmd + ['--requirement', 'requirements.txt', '--strict']).returncode) if cmd else (print('pip-audit-cve SKIPPED - pip-audit is installed nowhere this hook can reach, so the CVE gate did NOT run. CI dependency-audit still covers it.') or sys.exit(0))"
         language: system
         files: '^(requirements\.txt|requirements-dev\.txt)$'
         pass_filenames: false
@@ -179,11 +182,18 @@ repos:
   # committed .lint-baseline.json and fails on any NEW violation. Runs the whole
   # tree (pass_filenames: false) when a .py file is staged. Fixing lint lowers the
   # baseline via `python scripts/lint-ratchet.py update`. Mirrors the CI lint job.
+  #
+  # The entry called the script through a `find_spec('ruff') is None -> exit 0`
+  # guard, evaluated by the PATH `python3` that `language: system` resolves. On a
+  # machine where that interpreter is not the venv, the guard fired every time and
+  # this hook reported Passed for two days while CI failed the same gate on four
+  # real entries. The script now resolves the repo venv itself and REFUSES when
+  # ruff genuinely cannot run, so a skip can no longer be silent.
   - repo: local
     hooks:
       - id: lint-ratchet
         name: Full-ruleset lint ratchet (fails on new lint debt)
-        entry: python3 -c "import importlib.util, subprocess, sys; sys.exit(0) if importlib.util.find_spec('ruff') is None else sys.exit(subprocess.run([sys.executable, 'scripts/lint-ratchet.py', 'check']).returncode)"
+        entry: python3 scripts/lint-ratchet.py check
         language: system
         files: '\.py$'
         pass_filenames: false

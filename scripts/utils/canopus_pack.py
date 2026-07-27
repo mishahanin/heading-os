@@ -164,7 +164,12 @@ def render_process(process: Optional[dict], frozen_paths: Collection[str]) -> st
     The in-tree entries are the ones the comparison leaves alone, and the mark
     on each is the only place the residual gap is visible: an in-tree plugin
     that is neither frozen nor compared is exactly the thing this wire cannot
-    catch, and a page that omits it reads as a clean bill of health.
+    catch, and a page that omits it reads as a clean bill of health. The
+    `anon:`/`name:` entries and the per-worker sets are here for the same
+    reason and were measured missing: the record keeps both, `process_facts`
+    justifies keeping `other_plugins` on the ground that a reader of THIS page
+    would otherwise not know they were there, and until this row existed that
+    rationale described something the page never printed.
 
     Pure string work over a dict, so it neither reads disk nor raises on a
     damaged record; every field goes through `_names`, which answers "nothing"
@@ -196,6 +201,22 @@ def render_process(process: Optional[dict], frozen_paths: Collection[str]) -> st
     for path in _names(process.get("intree_plugins")):
         mark = "frozen" if str(path) in frozen else f"{RED}NOT FROZEN{RESET}"
         lines.append(f"  in-tree    {path}  {mark}")
+    other = _names(process.get("other_plugins"))
+    if other:
+        # `canopus_gate.process_facts` records these on the stated ground that a
+        # reader of THIS page would otherwise not know they were there, so the
+        # page has to carry them or that rationale is false.
+        lines.append(f"  other      {', '.join(other)}  (recorded, never compared)")
+    workers = process.get("workers")
+    if isinstance(workers, (list, tuple)) and workers:
+        # A count and a spread, not sixteen plugin lists. Each worker's set is
+        # compared against the FREEZE in `build_attestation`, and a worker that
+        # disagrees already prints its own symmetric difference as a reason; what
+        # the page adds is that the comparison covered a parallel run at all.
+        distinct = {tuple(_names(worker)) for worker in workers}
+        plural = "" if len(distinct) == 1 else "s"
+        lines.append(f"  workers    {len(workers)}, {len(distinct)} distinct plugin "
+                     f"set{plural}, each compared against the freeze")
     lines.append(
         "  The comparison covers distribution plugins and the in-tree ones pytest "
         "did not\n  import by collection; a collected in-tree conftest is listed "

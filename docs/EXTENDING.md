@@ -1,4 +1,4 @@
-<!-- version: 1.2.0 | last-updated: 2026-07-27 -->
+<!-- version: 1.3.0 | last-updated: 2026-07-27 -->
 # Extending the engine
 
 How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
@@ -505,13 +505,16 @@ Three layers, and the differences matter:
   verification that is never invoked is worth nothing, however well its expected value is
   protected.
 
-  One route is not covered, and it is named here rather than left to be discovered:
-  `pytest --noconftest` skips conftest loading altogether, so the session-start check never
-  runs. Measured: with a moved contract, `pytest tests/contract/s -q` aborts with exit 4,
-  and the same command with `--noconftest` prints `2 passed` and exits 0. That is deliberate
-  evasion rather than tampering by helpfulness, and the threat model this tool states is the
-  latter, so the gap is accepted — but `scripts/run-tests.py` is then the only gate of
-  record, and a slice signed off from a `--noconftest` run has not been gated at all.
+  Two routes are not covered, and they are named here rather than left to be discovered.
+  `pytest --noconftest` skips conftest loading altogether, and `--confcutdir` pointed at the
+  contract's own directory stops the walk below the root conftest, so in both the
+  session-start check never runs. Measured on a scratch tree with a moved contract: bare
+  `pytest tests/contract/s -q` aborts on the gate, while `--noconftest` and
+  `--confcutdir=tests/contract/s` each print `2 passed` with no canopus line at all. Wire
+  2.3 did not touch either. That is deliberate evasion rather than tampering by
+  helpfulness, and the threat model this tool states is the latter, so the gap is accepted
+  — but `scripts/run-tests.py` is then the only gate of record, and a slice signed off from
+  such a run has not been gated at all.
 
 `verify` reports one of three states:
 
@@ -572,7 +575,7 @@ of basenames rather than everything:
 |---|---|---|
 | the frozen directory itself | everything | a directory freeze asks whether anything at all moved inside it |
 | each ancestor | `conftest.py` | the one file pytest imports without being told to, and the place a stub reaches `sys.path` |
-| the tree root | `*.py` | `pyproject` declares `pythonpath = ["."]`, so the root is the first entry the contract's own imports resolve against |
+| the tree root | `*.py`, plus every importable subdirectory | `pyproject` declares `pythonpath = ["."]`, so the root is the first entry the contract's own imports resolve against, and a package directory shadows an import as readily as a module file |
 
 The narrowing is what makes the guard usable. A first version watched the full membership
 of every ancestor; that put 201 of this repository's 296 test files under a write deny and
@@ -585,11 +588,40 @@ the narrowing the same freeze denies 2 files, both of them frozen for a stated r
 `status` prints each guard's filter beside it, because a line reading `dir tests/` on its own
 invites the reading that everything under `tests/` is watched.
 
-Composition lists **files**, so two things are outside it by construction: a package
-directory appearing at the tree root, and a module dropped into another in-tree `sys.path`
-entry such as `tests/`. Both are closed by practice rather than by the primitive: the
-contract lives in its own directory under `tests/contract/`, which freezes recursively, so
-anything appearing beside it is caught by content and by composition alike.
+The tree-root guard lists **importable subdirectories** beside `*.py` files, each rendered
+with a trailing `/` so a directory `plug` and a file `plug` can never produce the same line.
+Importable is `str.isidentifier()` minus the cache names, deliberately not a denylist of
+suspicious ones: `.git`, `.venv` and `.canopus` fall out because a leading dot is not an
+identifier, while a directory named for a Python keyword passes and is watched, which is the
+safe direction. Until wire 2.3 the composition listed files only, so `plug/__init__.py`
+dropped at the root shadowed an installed distribution while every guard read green.
+
+**The deny now refuses what the guard watches.** The PreToolUse hook used to match a new
+file's basename against the guard's patterns, which meant a file written INSIDE a
+newly created root directory had that directory as its parent, matched no guard entry and
+was never denied: verification reddened and the write still landed. `frozen_reason` now
+refuses any Write whose path would ADD a watched directory to a guard's recorded members,
+which is materially broader than the old rule by design: `plug/anything.txt` is refused
+too, not only `plug/__init__.py`, because the directory is what moves the composition and a
+non-Python file creates it just as well. The refusal compares against RECORDED members and
+never stats disk, so it says "would add" rather than "would create": a directory already on
+disk and absent from the manifest is refused by a sentence that never claimed to know which
+of the two it was.
+
+**The tree root is the only in-tree `sys.path` entry, and the reason previously recorded
+for that was false.** An earlier revision of this page said a module dropped into another
+in-tree entry such as `tests/` was outside the composition by construction, closed "by
+practice" because the contract freezes recursively. The practice half is true. The route it
+excused is not live at all: `pyproject.toml` sets `--import-mode=importlib`, under which
+pytest inserts no basedir for a collected test file. Measured on a scratch tree carrying
+that setting, `sys.path[:2]` inside `tests/contract/<slice>/test_contract.py` was the tree
+root twice and nothing else, and a package at `tests/plug/` and a package beside the
+contract both raised `ImportError`. A first attempt at the same measurement was taken on a
+scratch tree missing this repository's own `addopts`, read pytest's PREPEND mode instead,
+and produced a trigger that can never fire here; it is corrected rather than quietly
+dropped, because a false reason left standing is what the next slice reasons from. What
+replaces it is narrower and open: the import mode is one line of `pyproject.toml`, and that
+file is neither frozen by content nor watched by the root guard.
 
 Every `conftest.py` from a frozen path up to the tree root is additionally frozen by
 **content**. A composition guard records member paths only, so a conftest sitting beside a
@@ -647,8 +679,8 @@ finish, and `verify` and `status` print a second line beneath the lock state:
 
 | State | Meaning |
 |---|---|
-| `ATTESTED` | a run of THIS exact contract collected every frozen test file in full, deselected none of them, and passed |
-| `NOT ATTESTED` | absent, recorded against a different root hash, incompletely collected, or carrying failures; the recorded reasons print beneath it |
+| `ATTESTED` | a run of THIS exact contract collected every frozen test file in full, deselected none of them, passed, described its own process, and loaded the plugin set the freeze recorded |
+| `NOT ATTESTED` | absent, recorded against a different root hash, incompletely collected, carrying failures, describing no process, or loading a plugin set the freeze did not record; the recorded reasons print beneath it |
 
 The record is **last-write-wins**, and the canonical gate must therefore be the LAST thing
 you run before reading `status` or `pack`. Measured during the wire 2 sign-off: the gate
@@ -676,39 +708,221 @@ and cannot attest; that is what "measure collection" means, and nothing works ar
 
 **Attestation blocks nothing and changes no exit code.** It cannot: the gate that would act
 on it runs at session start, before the run it would attest has finished. It is a passive
-record, read by a human at sign-off, where an evidence pack without `ATTESTED` cannot be
-assembled. The record is bound to the recomputed root hash, so editing any frozen file
+record, read by a human at sign-off, where a pack that does not say `ATTESTED` is the
+operator's cue to refuse the slice. `pack` itself prints the page either way and returns 0:
+it reports and never blocks, so the refusal is the operator's act and not the tool's.
+The record is bound to the recomputed root hash, so editing any frozen file
 after a green run makes it stop applying without anyone remembering to delete it. It is a
 true statement about *a* run of this exact contract, not necessarily the most recent one.
 
-**Nothing binds the INTERPRETER the way `anchor_repo` binds the repository.** The
-lock refuses a repository the freeze did not record; the attestation answers
-whether the contract ran. Between the two sits the pytest process itself, and it
-is unbound. `PYTEST_ADDOPTS` is not scrubbed the way every `GIT_`-prefixed
-variable is, and the tree-root composition guard watches `*.py` FILES, so a
-package DIRECTORY dropped at the tree root is invisible to it. Measured on a
-scratch tree with a held and approved freeze over a two-test contract:
+### What configured the interpreter, and what that is worth
+
+The lock refuses a repository the freeze did not record; the attestation answers
+whether the contract ran. Between the two sits the pytest process itself, and
+before wire 2.3 nothing described it. `PYTEST_ADDOPTS` was not scrubbed the way
+every `GIT_`-prefixed variable is, and the tree-root composition guard watched
+`*.py` FILES only, so a package DIRECTORY dropped at the root was invisible to
+it. Five things changed:
+
+1. **The record describes the process.** Every attestation carries a `process`
+   block: the launcher, the compared plugin identities, the in-tree plugins kept
+   as provenance, the `anon:`/`name:` entries kept and never compared, the
+   `PYTEST_`-prefixed variable NAMES present in the environment, the parsed `-p`
+   option, and one plugin list per xdist worker. Names only, never values: a
+   value can carry a token and this record is pasted into a committed artifact.
+2. **The freeze captures a plugin baseline, and it is inside the root hash.**
+   `freeze --contract` reads the set off the contract's own run. A later run
+   whose compared set differs in either direction cannot attest, and the reason
+   names the plugin. Both directions, because a plugin that VANISHED changed what
+   the run measured as surely as one that appeared.
+3. **The identity compared is derived from ORIGIN, never from pytest's
+   registration name.** A registration name is an absolute path for a conftest
+   and a memory address for an anonymous plugin, so comparing those refuses every
+   honest run and carries an operator's home directory into a public hash.
+   Measured: sixty-six raw names collapse to seven identities, and the
+   distribution subset is identical in the freeze probe, the gate controller and
+   every gate worker.
+4. **`scripts/run-tests.py` chooses its child's environment** instead of
+   inheriting it, dropping every variable whose name begins `PYTEST_` by prefix
+   rather than by a denylist. A bare `pytest` still inherits whatever the shell
+   holds; the canonical gate does not.
+5. **The tree-root guard sees importable directories, and the deny refuses the
+   write that creates one.** Both halves are above, under the guard table.
+
+`verify`, `status` and `pack` print an `interpreter` block beneath the three
+axes: the launcher, the compared identities, the environment names, the parsed
+plugin option, each in-tree plugin marked `frozen` or `NOT FROZEN`, the
+recorded-and-never-compared entries, and the worker count with the number of
+distinct plugin sets among them. Origins stay in the record and off the page,
+because a distribution plugin's origin is a path inside the operator's
+virtualenv.
+
+**The recorded reproduction, re-run against the new code.** It now has two
+answers rather than one, and only the first is closed.
 
 ```bash
+# A. the plugin at the tree root, exactly as this page recorded it
 mkdir -p plug && printf 'def pytest_pyfunc_call(pyfuncitem):\n    return True\n' > plug/skipper.py
-PYTEST_ADDOPTS="-p plug.skipper" python -m pytest -q      # 2 passed
+PYTEST_ADDOPTS="-p plug.skipper" python -m pytest -q
+#   ERROR: canopus: the freeze gate is red
+#   canopus: LOSS OF LOCK ... this tree computes <a root the anchor does not record>
 python scripts/canopus.py verify
-#   LOCK HELD ... ATTESTED  2 frozen tests passed, none deselected ... APPROVED     exit 0
+#   LOSS OF LOCK    added  plug/                                        exit 1
 ```
 
-The honest run of the same tree reports `NOT ATTESTED` with reported failures. No
-frozen byte moved and no guarded composition changed, and neither the environment
-variable nor the untracked directory appears anywhere an operator reads. A
-skip-injecting variant of the same plugin reads `0 frozen tests passed ... 2
-skipped`, which is the only visible tell.
+Nothing is collected: `plug/` moved the root composition, and the gate reddens at
+session start. The same file written through the Write tool is refused before it
+lands.
 
-Two things about that, stated rather than implied. It is pre-existing and not a
-wire 2.2 regression: the attestation is a wire 2 mechanism, and the repository
-binding did not touch it. And the mitigation stated elsewhere on this page, that a
-skip injected from an unfrozen sibling `conftest.py` is the composition guard's
-job, does NOT cover it: a plugin loaded through the environment is neither a
-conftest nor a file any guard watches. Binding the interpreter is the next slice's
-work.
+```bash
+# B. the same plugin from OUTSIDE the tree, where no composition guard can see it
+mkdir -p ../outside/plug
+printf 'def pytest_pyfunc_call(pyfuncitem):\n    return True\n' > ../outside/plug/skipper.py
+PYTHONPATH=../outside PYTEST_ADDOPTS="-p plug.skipper" python -m pytest -q
+#   2 passed          (over a contract that is RED by construction)
+python scripts/canopus.py verify
+#   LOCK HELD ...
+#   NOT ATTESTED    reason  a plugin the freeze did not record was loaded: dist:plug
+#   APPROVED                                                             exit 0
+```
+
+Say what that is and is not. The lie to pytest still succeeds: two frozen tests
+that cannot pass report `2 passed`, and `verify` still exits 0, because
+attestation blocks nothing by construction. What closed is the SIGN-OFF claim:
+the record now names the plugin that made the suite green, on the page the
+operator reads before approving, instead of leaving the environment variable and
+the untracked directory invisible to everyone. Route A is closed at the gate;
+route B is reported and not prevented, and reporting is worth what an operator
+who reads the page makes it worth.
+
+### What wire 2.3 leaves open
+
+Every item below was measured or reproduced during the slice rather than
+assumed, and they run from the ceiling of the design downward. None of them is
+softened by a later sentence.
+
+**A plugin in the same process can lie about the process block.** This is the
+ceiling of the whole design, and it is cost and visibility rather than
+impossibility. The recorder runs inside the interpreter it describes, so anything
+already loaded there can rewrite what it reports. Reproduced on the same scratch
+tree, with a seventeen-line plugin that wraps `canopus_gate.process_facts`,
+deletes its own identity from the returned map, and returns `True` from
+`pytest_pyfunc_call`:
+
+```bash
+PYTHONPATH=../outside PYTEST_ADDOPTS="-p plug.liar" python -m pytest -q   # 2 passed
+python scripts/canopus.py verify
+#   LOCK HELD ... ATTESTED  2 frozen tests passed, none deselected ... APPROVED   exit 0
+```
+
+The contract was red. Every axis reads green at exit 0, and the record carries no
+trace of the plugin. Closing this needs a describer the described process cannot
+reach, which is a different instrument. What the slice buys against it is the
+same thing the anchor buys against a forged approval: the attack now costs a
+deliberate, written artifact instead of one environment variable.
+
+**Whatever configures the interpreter BEFORE the recorder exists is unobserved.**
+A `.pth` file in site-packages, a `sitecustomize` module, `PYTHONPATH` and
+`PYTHONHOME` all take effect at interpreter startup, before `tests/conftest.py`
+is imported, and nothing here records them: `env_configured` collects
+`PYTEST_`-prefixed names only. Measured on the scratch tree, a `sitecustomize.py`
+reached through `PYTHONPATH` printed its own marker to stderr ahead of the gate
+line, the run read `ATTESTED`, and the record's `env_configured` held one entry,
+`PYTEST_VERSION`. Route B above is the same gap in its other form: `PYTHONPATH`
+is what put the hostile plugin where pytest could find it, and no field says so.
+Closing it means launching the interpreter isolated, which is a different slice.
+
+**The plugin comparison is BY NAME.** A plugin replaced by a same-named one from
+a different distribution passes, because comparing origins would redden every
+fresh clone and every relocated workspace. Reproduced: a hostile `anyio` package
+placed earlier on `PYTHONPATH`, with a `pytest_plugin` submodule returning `True`
+from `pytest_pyfunc_call`, is loaded through the real entry point, resolves to the
+identity `dist:anyio` that the freeze already recorded, and takes the red contract
+to `2 passed`, `LOCK HELD`, `ATTESTED`, `APPROVED` at exit 0.
+
+**The comparison covers distributions plus every in-tree plugin pytest did not
+import BY COLLECTION.** A collected in-tree conftest is recorded as provenance
+and never compared, because which conftests load depends on what is collected:
+the freeze probe collects the contract directory and the gate run collects the
+whole suite, so they legitimately differ. It cannot reach the frozen contract's
+own tests without moving frozen bytes, which is why the exemption is acceptable
+rather than an excuse for not trying. The exemption is decided by OBJECT IDENTITY
+against pytest's own record of what collection imported, not by any string, and
+that is a repair rather than a preference: two defeats were reproduced against
+string rules. A hijacker containing `__file__ = __name__` satisfied "the
+registration name equals the plugin's file", and a second one forging `__file__`
+onto the honest `tests/conftest.py` folded into that identity and vanished from
+the record entirely. Each turned `assert False` into `1 passed`. An object cannot
+forge `is`.
+
+**That exemption reads a PRIVATE pytest attribute,
+`pluginmanager._dirpath2confmods`.** It is the only place pytest records which
+modules collection actually imported, and it carries no compatibility promise. If
+a future pytest renames it the predicate yields nothing, so NOTHING is exempt and
+every in-tree plugin is compared: an honest run's own conftests start needing to
+match the freeze. That is the fail-closed direction, noisy and safe rather than
+quiet and wrong, and the dependency is a real cost stated here rather than left
+in a comment.
+
+**`GUARD_NAMES_ANCESTOR` still watches only `conftest.py`.** A new non-conftest
+file under `tests/` does not redden `verify_manifest`. Under the identity rule it
+can no longer smuggle a plugin past the comparison, but it is not the guard that
+stops it.
+
+**Two environment variables suppress the record entirely.**
+`CANOPUS_PLUGIN_DUMP` joins `CANOPUS_NO_ATTEST`: with either set, session finish
+writes no attestation and any earlier `ATTESTED` record stands untouched.
+Measured with a green record in place, a poisoned run under each variable left
+the record's own timestamp unchanged and `verify` still printing `ATTESTED`.
+Neither is scrubbed by `child_env`, which strips `PYTEST_` and nothing else. Both
+exist for the contract runner, which must not overwrite a real gate run's record
+with a probe's partial tally, and both are one `export` away from an operator.
+
+**The root hash now depends on a measured property of the machine.** `approve`
+and `freeze` each run the contract and capture the `dist:` set that run loaded,
+and that set is in the root-hash payload. So a dependency installed between the
+two commands moves the hash, and the committed approval stops matching the
+freeze. Intended and fail-closed, and it is the price of item 2 above: the
+baseline has to be inside the hash or a builder appends the name of the plugin
+that skips the contract and the approval still matches. It does mean the root
+hash is no longer purely a function of file content.
+
+**`pytest --noconftest` and `--confcutdir` skip the gate entirely.** Untouched by
+this slice; measured and argued above, under the three layers.
+
+**The ledger is deletable with the directory that holds it**, `.canopus/` being
+gitignored, and a five-line shell script named `git` placed earlier on `PATH`
+converts `LOSS OF LOCK` into `LOCK HELD`. Both are argued above; neither moved in
+this slice.
+
+**The import mode is one unwatched line.** `--import-mode=importlib` in
+`pyproject.toml` is what makes the tree root the only in-tree `sys.path` entry.
+The root guard watches `*.py` files and importable directories at the root, so it
+does not watch `pyproject.toml`, and that file is not frozen by content either.
+
+**Seventeen gitignored identifier-shaped root directories will redden the guard
+by design.** `.gitignore` carries eighteen identifier-shaped root-level entries,
+seventeen of them outside the cache names the guard already skips: `htmlcov`,
+`dist`, `outputs`, `plans`, `threads`, `crm`, `knowledge`, `context`,
+`datastore`, `corporate`, `personal`, `_archive`, `slash`, `_secure`, `Desktop`,
+`LauncherFolder` and `MyDocuments`. Every one is importable, so every one is
+watched on purpose. A `git clean -xfd`, a first `build-plugins.py` run, or a
+single `--cov-report=html` moves the root composition with no source edited. The
+real surface is that ignore list, not the three directories that happened to
+exist on one machine when this was first written. Accepted rather than excluded,
+because an exclusion set wide enough to cover seventeen names is exactly where a
+real shadowing directory would hide, and the failure is loud and instantly
+explicable.
+
+**One test reaches `ensure_venv()` outside `.venv`.**
+`tests/test_run_tests_runner.py` loads `scripts/run-tests.py` by path without the
+module-level skip guard its sibling `tests/test_run_tests_env.py` carries. Run
+outside the venv it re-execs, and the symptom is a truncated first collection plus
+a duplicated run rather than a silent green: `venv.py` re-execs
+`[venv_python, sys.argv[0], ...]`, under pytest `sys.argv[0]` is the pytest entry
+point, and `HEADING_OS_VENV_RELAUNCHED` stops the loop after one relaunch. The
+same unguarded pattern sits inside the frozen contract, where it cannot be fixed
+at all until the contract is retired.
 
 **Freeze the enforcers, all eight of them.** A freeze that omits them protects the
 contract while leaving the thing that checks the contract editable.

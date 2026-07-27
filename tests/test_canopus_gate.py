@@ -1,4 +1,5 @@
 """Tests for the Canopus freeze check inside the test gate."""
+import hashlib
 import importlib.util
 import os
 import shutil
@@ -7,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from scripts.utils.canopus_freeze import build_manifest, write_freeze
+from scripts.utils.canopus_freeze import APPROVED, build_manifest, write_freeze
 from scripts.utils.canopus_gate import freeze_gate
+from scripts.utils.canopus_git import resolve_anchor
 
 STAMP = "2026-01-01T00:00:00+00:00"
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -346,6 +348,107 @@ def test_a_substituted_repository_reddens_the_gate(tree, anchor, capsys):
     out = capsys.readouterr().out
     assert "LOSS OF LOCK" in out
     assert "a different repository than the freeze recorded" in out
+
+
+# ============================================================
+# The identity DEFINITION, measured against an independent computation
+# ============================================================
+# Retired here from the wire 2.2 frozen contract, with the fixture defect its
+# auditor recorded repaired rather than carried over.
+#
+# Every other binding test in this module builds its manifest through the
+# implementation's own `repo_identity`, so freeze time and gate time move
+# together and a wrong DEFINITION of repository identity is invisible to all of
+# them. The contract computed the identity itself, which is the right shape, but
+# its anchor repository carried ONE root commit, and sorting one element and
+# joining one element are both no-ops: measured on that fixture, dropping
+# `sorted(...)` from `repo_identity` and joining the roots with a comma each left
+# the whole suite AND the contract green.
+
+
+def _git_out(directory: Path, *argv: str, stdin: str = "") -> str:
+    """git, captured. The module's `_git_commit` discards stdout; this needs it."""
+    proc = subprocess.run(["git", "-C", str(directory), *argv], check=True,
+                          input=stdin, capture_output=True, text=True)
+    return proc.stdout.strip()
+
+
+def _add_a_second_root(directory: Path) -> None:
+    """Merge an orphan commit in, so HEAD really reaches two root commits.
+
+    The orphan is not taken as it comes. `rev-list --max-parents=0 HEAD` emits
+    the branch's own root first and the merged-in one second, so an unsorted
+    implementation differs from a sorted one only when that emitted order is the
+    DESCENDING one. The message is varied until the orphan's sha sorts below the
+    root already there, and the resulting order is asserted rather than assumed:
+    a git whose traversal order changed would otherwise quietly take this test's
+    teeth out and leave it passing.
+    """
+    first = _git_out(directory, "rev-list", "--max-parents=0", "HEAD")
+    empty_tree = _git_out(directory, "mktree", stdin="")
+    for attempt in range(64):
+        orphan = _git_out(directory, "commit-tree", empty_tree,
+                          "-m", f"a second root, take {attempt}")
+        if orphan < first:
+            break
+    else:  # pragma: no cover - 64 misses needs a broken hash, not a slow day
+        raise AssertionError("no orphan root sorted below the existing one")
+    _git_out(directory, "merge", "--allow-unrelated-histories", "-q",
+             "-m", "merge the second root", orphan)
+
+    roots = _git_out(directory, "rev-list", "--max-parents=0", "HEAD").splitlines()
+    assert len(roots) == 2, "the merge did not give HEAD a second root commit"
+    assert roots != sorted(roots), "git emitted the roots already sorted"
+
+
+def _independent_identity(directory: Path) -> str:
+    """sha256 over the sorted root commits, newline-joined, computed HERE.
+
+    Deliberately not a call to `repo_identity`. A test that imports the
+    definition it is measuring agrees with every wrong version of it.
+    """
+    top = _git_out(directory, "rev-parse", "--show-toplevel")
+    roots = _git_out(Path(top), "rev-list", "--max-parents=0", "HEAD")
+    lines = sorted(line.strip() for line in roots.splitlines() if line.strip())
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def test_a_committed_approval_in_the_bound_repository_reaches_lock_held(
+    tree, anchor, capsys
+):
+    """The green row of the resolution matrix, and the identity behind it.
+
+    Two claims, and the second is why the identity is recomputed by hand. A bound
+    freeze whose approval is COMMITTED reaches LOCK HELD through the gate, so an
+    implementation answering red whenever a binding exists cannot pass the
+    binding tests above by reddening everything. And the identity the gate
+    computes is the one this test computed independently, over a repository with
+    two root commits, so the sortedness and the separator are both load-bearing.
+
+    Measured after the fixture repair, each mutation applied alone to
+    `repo_identity`: dropping `sorted(...)` fails this test, and joining the
+    roots with "," fails it. On the one-root fixture neither did.
+
+    The approval axis is asserted directly rather than through printed text,
+    because the gate prints the approval line only when it is NOT approved.
+    """
+    _git_init(anchor.parent)
+    _git_commit(anchor.parent, "the gate artifact, before approval")
+    _add_a_second_root(anchor.parent)
+    manifest = build_manifest(
+        [tree / "tests"], tree, label="demo", frozen_at=STAMP, anchor=anchor,
+        anchor_repo={"in_repo": True,
+                     "identity": _independent_identity(anchor.parent)},
+    )
+    write_freeze(tree, manifest)
+    anchor.write_text(f"canopus-anchor: {manifest['root']}\n", encoding="utf-8")
+    _git_commit(anchor.parent, "the approval")
+
+    assert freeze_gate(tree) == 0
+    out = capsys.readouterr().out
+    assert "LOCK HELD" in out
+    assert "APPROVAL UNVERIFIED" not in out
+    assert resolve_anchor(manifest).approval == APPROVED
 
 
 def test_run_tests_calls_the_gate_before_pytest():

@@ -2,6 +2,21 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
+# Every variable git reads to redirect repository discovery, plus the two a hook
+# exports. Named as a family rather than reduced to the one that happens to be
+# famous: a fix that names GIT_DIR alone is the defect this project has hit
+# seven times, a guard covering the case in front of its author.
+POISONS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_INDEX_FILE",
+    "GIT_CEILING_DIRECTORIES",
+)
+
 
 def _repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
@@ -349,6 +364,43 @@ def test_a_poisoned_git_dir_does_not_hide_the_repository(tmp_path, monkeypatch):
     assert repo_identity(root) == (clean_status, clean_identity)
     assert clean_status == REPO_PRESENT
     assert len(clean_identity) == 64
+
+
+@pytest.mark.parametrize("variable", POISONS)
+def test_no_single_git_variable_hides_the_repository(tmp_path, monkeypatch, variable):
+    """The whole family, one variable at a time. Retired from the wire 2.2 contract.
+
+    The sibling above sets GIT_DIR and GIT_WORK_TREE TOGETHER, which is the wire
+    2.1 Critical as it was reported. A denylist scrubbing exactly those two
+    survives it, and that is the shape the fix was written against: the guard is
+    a `GIT_*` PREFIX, so the claim being pinned is about the class, and the class
+    needs a member the denylist would have missed.
+
+    Measured, and this is why the port lands here rather than at the gate. The
+    contract asserted this through `freeze_gate`, directionally ("never green"),
+    and that assertion cannot fail on this seam: removing the scrub entirely left
+    all six of its cases passing, because a blinded gate answers RED, which the
+    direction permits. Removing the scrub fails the equality below instead. With
+    the scrub narrowed to a two-name denylist, nothing in the suite failed at all
+    and GIT_COMMON_DIR and GIT_OBJECT_DIRECTORY were the members that reached
+    past it.
+
+    Some of these do not blind git at all; those runs simply reproduce the clean
+    answer, which is the same assertion and costs one subprocess.
+    """
+    from scripts.utils.canopus_freeze import REPO_PRESENT
+    from scripts.utils.canopus_git import repo_identity
+
+    root = _repo(tmp_path)
+    (root / "gate.md").write_text("# gate\n", encoding="utf-8")
+    _commit(root, "seed")
+    clean_status, clean_identity = repo_identity(root)
+    assert clean_status == REPO_PRESENT
+    assert len(clean_identity) == 64
+
+    monkeypatch.setenv(variable, str(tmp_path / "nowhere"))
+
+    assert repo_identity(root) == (clean_status, clean_identity)
 
 
 def test_identity_survives_relocation_and_distinguishes_repositories(tmp_path):

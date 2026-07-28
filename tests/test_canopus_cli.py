@@ -504,6 +504,18 @@ def test_verify_reports_attested_when_the_run_matches(tree, anchor, capsys):
     assert "ATTESTED" in out
     assert "3 frozen tests passed" in out
 
+    # The CLI must compare the record against the REAL current tree, not
+    # against the tree the record itself carries -- that comparison would
+    # always agree with itself and print ATTESTED forever. An edit to a file
+    # that is not even part of the frozen set is enough to prove it: the tree
+    # axis covers the whole working copy, and this is the wiring at the
+    # `verify` call site (scripts/canopus.py `_print_attestation`).
+    (tree / "scripts" / "run-tests.py").write_text("# stub test gate, edited\n")
+    assert _run(["verify"], tree) == 0
+    out = capsys.readouterr().out
+    assert "NOT ATTESTED" in out
+    assert "scripts/run-tests.py" in out
+
 
 def test_verify_reports_not_attested_when_no_run_has_attested(tree, anchor, capsys):
     _freeze(tree, anchor)
@@ -537,6 +549,12 @@ def test_a_deselecting_run_prints_its_reasons(tree, anchor, capsys):
 
 
 def test_loss_of_lock_still_shows_the_attestation_axis(tree, anchor, capsys):
+    # Without a git identity, `tree_state(tree)` is None for this whole test and
+    # the record is disqualified on TREE grounds (no usable tree description)
+    # before the ROOT axis below is ever reached -- so a broken root comparison
+    # in `attestation_state` could not fail this test. `_git_init_tree` gives
+    # the record a real tree state so the root axis is what actually decides it.
+    _git_init_tree(tree)
     _freeze(tree, anchor)
     root = _root_of(tree)
     anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
@@ -546,8 +564,13 @@ def test_loss_of_lock_still_shows_the_attestation_axis(tree, anchor, capsys):
     out = capsys.readouterr().out
     assert "LOSS OF LOCK" in out
     # The edit moved the root, so the earlier attestation stops applying without
-    # anyone having to remember to delete it.
+    # anyone having to remember to delete it. Pinned by the reason text, not
+    # just the presence of NOT ATTESTED: the edited file is both frozen and
+    # git-tracked, so it *also* dirties the tree, and a broken root comparison
+    # would still read NOT ATTESTED via that independent tree-drift path. Only
+    # the specific "different root hash" reason proves the root axis fired.
     assert "NOT ATTESTED" in out
+    assert "different root hash" in out
 
 
 def test_status_carries_the_attestation_line(tree, anchor, capsys):
@@ -779,6 +802,70 @@ def test_pack_never_raises_on_damaged_state(tree, anchor, capsys):
     assert "NOT ATTESTED" in out
     assert "continuity" in out
     assert "staleness" in out
+
+
+def test_pack_compares_the_record_against_the_real_current_tree(tree, anchor, capsys):
+    """`pack`'s ATTESTED/NOT ATTESTED banner is rendered by `_print_attestation`,
+    the same shared function `verify` calls -- so this exercises the same
+    comparison `test_verify_reports_attested_when_the_run_matches` pins,
+    through the `pack` command instead of `verify`. The dedicated call site
+    `pack` carries beyond that shared banner -- the `attestation_state` call
+    inside `cmd_pack` that feeds the `staleness` section's fallback reason --
+    is pinned separately below, because it can print ATTESTED-shaped silence
+    while this banner correctly says NOT ATTESTED.
+    """
+    _git_init_tree(tree)
+    _freeze(tree, anchor)
+    root = _root_of(tree)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
+    _attest(tree, root)
+    capsys.readouterr()
+
+    assert _run(["pack"], tree) == 0
+    out = capsys.readouterr().out
+    assert "NOT ATTESTED" not in out
+    assert "ATTESTED" in out
+
+    (tree / "scripts" / "run-tests.py").write_text("# stub test gate, edited\n")
+    assert _run(["pack"], tree) == 0
+    out = capsys.readouterr().out
+    assert "NOT ATTESTED" in out
+    assert "scripts/run-tests.py" in out
+
+
+def test_pack_staleness_reason_reflects_the_real_current_tree(tree, anchor, capsys):
+    """`cmd_pack` (scripts/canopus.py:996) has its OWN `attestation_state` call,
+    separate from the one inside `_print_attestation` (line 257) that renders
+    the main banner. Its `reason` only surfaces in the `staleness` section, and
+    only when the record carries no usable `attested_at` -- so a record with a
+    real tree but no timestamp is what it takes to observe this call site at
+    all. Comparing the record against ITSELF there (instead of the real
+    current tree) would silently drop the reason instead of naming the path
+    that moved: exactly the fail-open this whole slice exists to close, on the
+    call site's own terms rather than through the shared banner.
+    """
+    from scripts.utils import canopus_freeze as cf
+
+    _git_init_tree(tree)
+    _freeze(tree, anchor)
+    root = _root_of(tree)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
+    record = _attest(tree, root)
+    record = dict(record)
+    del record["attested_at"]
+    cf.write_attestation(tree, record)
+    capsys.readouterr()
+
+    (tree / "scripts" / "run-tests.py").write_text("# stub test gate, edited\n")
+    assert _run(["pack"], tree) == 0
+    out = capsys.readouterr().out
+    # Scoped to the staleness section specifically: the shared banner at
+    # line 257 already names the path via a separate, correct read, and an
+    # assertion against the whole output would pass on that alone even if
+    # this call site's own reason went silent.
+    staleness = out.rsplit("staleness", 1)[1]
+    assert "no attestation to age" in staleness
+    assert "scripts/run-tests.py" in staleness
 
 
 # ============================================================

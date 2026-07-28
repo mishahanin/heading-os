@@ -930,6 +930,28 @@ def test_a_tree_that_moved_during_the_run_refuses_the_record():
     assert any("scripts/thing.py" in r for r in record["reasons"])
 
 
+def test_a_tree_with_more_than_five_moved_paths_says_how_many_were_dropped():
+    """`build_attestation` names at most 5 moved paths in `reasons` -- the same
+    display bound `_print_attestation` applies on the way out. Silently
+    dropping the rest is the "lie by omission" this repository's own
+    `test_a_truncated_reason_list_says_it_was_truncated`
+    (tests/test_canopus_status_process.py) calls out for the CLI's reason
+    list; the record `reasons` are written here, before any CLI truncation
+    runs, so an unnannounced cap here reads as the whole story to anyone who
+    reads the record directly (`canopus.py`'s own display cap computes its
+    "(and N more)" off of this already-capped list).
+    """
+    from scripts.utils.canopus_freeze import build_attestation
+
+    moved = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+              "dirty": {f"scripts/thing_{n}.py": "b" * 64 for n in range(8)}}
+    record = build_attestation(**_green_kwargs(tree_at_finish=moved))
+    assert record["attested"] is False
+    named = [r for r in record["reasons"] if "scripts/thing_" in r]
+    assert len(named) == 5
+    assert any("3 more" in r for r in record["reasons"])
+
+
 def test_attestation_state_perishes_when_the_tree_moved_since(tmp_path):
     import scripts.utils.canopus_freeze as cf
 
@@ -962,11 +984,21 @@ def test_attestation_state_has_no_current_tree_default():
 
 
 def test_a_record_from_the_previous_recipe_is_refused():
+    """Refused FOR THE RECIPE, not for drift the record would fail on anyway.
+
+    A `stale` record with a mismatched root or no usable tree state would read
+    NOT ATTESTED regardless of the recipe check, and would keep reading that
+    way even if the recipe bump were reverted -- proving nothing about the
+    bump. Root and tree are made to match here so the recipe mismatch is the
+    only thing standing between this record and ATTESTED.
+    """
     import scripts.utils.canopus_freeze as cf
 
     stale = {"recipe": "canopus-attest-v2", "root": "a" * 64, "attested": True,
-             "frozen_tests": {}, "reasons": []}
-    assert cf.attestation_state(stale, "a" * 64, CLEAN_TREE)[0] == cf.NOT_ATTESTED
+             "frozen_tests": {}, "reasons": [], "tree": CLEAN_TREE}
+    state, reason = cf.attestation_state(stale, "a" * 64, CLEAN_TREE)
+    assert state == cf.NOT_ATTESTED
+    assert "different recipe" in reason
 
 
 def test_attestation_state_names_how_many_more_paths_moved():

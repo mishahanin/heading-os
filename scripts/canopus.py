@@ -111,7 +111,6 @@ from scripts.utils.canopus_git import (  # noqa: E402
     resolve_anchor,
     resolve_anchor_waiver,
 )
-from scripts.utils.canopus_tree import tree_state  # noqa: E402
 from scripts.utils.canopus_pack import (  # noqa: E402
     commits_outside,
     diff_stat,
@@ -123,6 +122,7 @@ from scripts.utils.canopus_pack import (  # noqa: E402
     render_process,
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
+from scripts.utils.canopus_tree import tree_state  # noqa: E402
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
 
 # The gate script every root must carry. A tree without it has no place where the

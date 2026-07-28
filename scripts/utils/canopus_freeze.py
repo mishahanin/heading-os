@@ -1789,8 +1789,19 @@ def build_attestation(
             "this run recorded no usable description of the tree it ran "
             "against, so this record cannot perish when the code moves")
     else:
-        for moved in tree_drift(tree_at_start, tree_at_finish)[:5]:
+        drifted = tree_drift(tree_at_start, tree_at_finish)
+        for moved in drifted[:5]:
             reasons.append(f"the tree changed while the run was in progress: {moved}")
+        if len(drifted) > 5:
+            # Five is a display bound, not a claim about how many there were --
+            # the same rule `_print_attestation` states for its own truncation
+            # of this list on the way out. Left silent, a caller that reads
+            # `reasons` directly (or a CLI whose own "(and N more)" is computed
+            # from this already-capped list) sees 5 of however many actually
+            # moved and has no way to know the difference.
+            reasons.append(
+                f"the tree changed while the run was in progress: "
+                f"(and {len(drifted) - 5} more, not named here)")
     if exit_status != 0:
         reasons.append(f"pytest exited {exit_status}")
 

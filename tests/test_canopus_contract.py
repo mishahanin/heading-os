@@ -956,6 +956,73 @@ def test_a_probe_that_collected_nothing_is_not_a_clean_verdict(tmp_path, monkeyp
         run_null_stub([contract], tmp_path)
 
 
+def test_run_null_stub_refuses_a_stub_run_that_executed_nothing(tmp_path):
+    """Zero executed tests is not "nothing was vacuous".
+
+    A stub run that collected nothing measured nothing, and the caller cannot
+    tell that from a run where every test genuinely failed under the stub.
+    """
+    import pytest
+
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import pytest\n"
+        "pytest.skip('nothing runs here', allow_module_level=True)\n"
+        "\n"
+        "def test_a():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() is not None\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractError):
+        run_null_stub([contract], tmp_path)
+
+
+def test_run_null_stub_refuses_when_the_two_runs_collected_different_tests(
+    tmp_path, monkeypatch
+):
+    """An intersection over two different populations means nothing.
+
+    The verdict is "passed under BOTH", so a test present in one run and absent
+    from the other silently counts as "did not pass both times", which reads as
+    "asserts something" whatever it actually does. The two runs differ only in
+    the stub VALUES, so a collection that depends on them is precisely the
+    surprise worth refusing on.
+    """
+    import scripts.utils.canopus_contract as contract_mod
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() is not None\n",
+        encoding="utf-8",
+    )
+
+    real = contract_mod.run_pytest_report
+    seen = []
+
+    def _drop_a_test_on_the_second_run(*args, **kwargs):
+        xml_text = real(*args, **kwargs)
+        seen.append(1)
+        if len(seen) == 2:
+            return xml_text.replace("<testcase", "<skipped-case", 1)
+        return xml_text
+
+    monkeypatch.setattr(
+        contract_mod, "run_pytest_report", _drop_a_test_on_the_second_run
+    )
+
+    with pytest.raises(ContractError):
+        run_null_stub([contract], tmp_path)
+
+
 def test_the_probe_refuses_to_stub_a_package_prefix_of_the_contract_itself(tmp_path):
     """A stub over the contract's own package would poison collection silently.
 

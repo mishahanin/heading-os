@@ -2000,3 +2000,24 @@ def test_tree_drift_compares_across_a_type_mismatched_key_pair():
 
     assert isinstance(result, list)
     assert result != []
+
+
+def test_tree_drift_accounts_for_a_dropped_non_string_key():
+    """The comment above the sort key in `tree_drift` states the reason for
+    sorting by `(type(rel).__name__, repr(rel))` rather than filtering by
+    type: every key of every hashable type must be compared, never dropped.
+    Pinned directly: a `dirty` map keyed by a bare int, present in `was` and
+    absent from `now`, must be REPORTED as a vanished path. Sorting with a
+    string-only filter (`isinstance(k, str)`) silently drops the int key
+    instead, and the result reads as a clean, unmoved tree over a path that
+    disappeared -- the greener and therefore wrong direction.
+    """
+    from scripts.utils.canopus_freeze import tree_drift
+
+    was = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {1: "h"}}
+    now = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {}}
+
+    result = tree_drift(was, now)
+
+    assert result != [], "the vanished int key must not be silently dropped"
+    assert any("1" in reason for reason in result)

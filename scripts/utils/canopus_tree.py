@@ -89,7 +89,18 @@ def tree_state(root: Path) -> Optional[dict]:
     if head is None:
         return None
     top = git_output(root, "rev-parse", "--show-toplevel")
-    if top is None or not top.strip():
+    if top is None:
+        return None
+    # rstrip only git's trailing line ending, never `.strip()`: a repository
+    # whose toplevel path genuinely ends in a space or a tab is real, and
+    # stripping it resolves every later join against the WRONG directory --
+    # every porcelain path then hashes to None and two different tree states
+    # compare equal, the exact silent-green failure this module exists to
+    # prevent. `\r\n` is included because git on a CRLF checkout can emit it;
+    # `\r\n`.rstrip("\r\n") strips both characters in one pass regardless of
+    # order, so a bare `\n` and a `\r\n` line ending are both fully removed.
+    top = top.rstrip("\r\n")
+    if not top:
         # Empty output on exit 0 is git's "not really a repository" case --
         # canopus_git.repo_identity guards the identical call the same way,
         # because `Path("")` is `Path(".")`, and joining porcelain paths onto
@@ -97,7 +108,7 @@ def tree_state(root: Path) -> Optional[dict]:
         # instead of refusing. Answered as None, the same posture `head` and
         # `status` already take a few lines either side of this one.
         return None
-    toplevel = Path(top.strip())
+    toplevel = Path(top)
     status = git_output(root, "status", "--porcelain=v1",
                         "--untracked-files=all", "-z")
     if status is None:

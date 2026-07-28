@@ -1070,16 +1070,37 @@ implementation, and survived breaking it and running nothing at all — measured
 on a scratch tree, not theorised. <code>scripts/utils/canopus_tree.tree_state(root)</code>
 closes that: <code>{"recipe", "head", "dirty"}</code>, where <code>head</code> is <code>git rev-parse
 HEAD</code> and <code>dirty</code> maps every path <code>git status --porcelain=v1
---untracked-files=all -z</code> reports — changed, added, deleted, or untracked — to
-the sha256 of its current bytes (or to <code>None</code> for a path that is gone).
-<code>AttestationRecorder</code> samples it TWICE: once at <code>collect</code> (session collection,
-not process start) and once at <code>finish</code>. Both samples are required; either
-missing refuses the record the same way a missing <code>process</code> block already
-does, and a tree that moved BETWEEN the two samples — the bytes on disk at
-finish are not the bytes that were imported — refuses it too, naming the path
-that moved.</p>
+--untracked-files=all -z</code> reports — changed, added, deleted, or untracked —
+PLUS every path git&rsquo;s index marks <code>assume-unchanged</code> or <code>skip-worktree</code> (see
+below), to the sha256 of its current bytes (or to <code>None</code> for a path that is
+gone). <code>AttestationRecorder</code> samples it TWICE: once at <code>collect</code> (session
+collection, not process start) and once at <code>finish</code>. Both samples are
+required; either missing refuses the record the same way a missing <code>process</code>
+block already does, and a tree that moved BETWEEN the two samples — the bytes
+on disk at finish are not the bytes that were imported — refuses it too,
+naming the path that moved.</p>
+<p><strong><code>git status</code> is not the whole story: assume-unchanged and skip-worktree
+paths are read directly.</strong> Both bits tell git to say NOTHING about a path&rsquo;s
+worktree copy, by design — <code>git status --porcelain</code> stays silent for a
+flagged path even after its bytes are edited. Measured before this closed:
+a green record, then <code>git update-index --assume-unchanged path</code>, then the
+implementation broken and nothing re-run, and <code>verify</code> still read ATTESTED.
+Reproduced identically for <code>--skip-worktree</code>. <code>tree_state</code> now also asks
+<code>git ls-files -v -z</code> for every path carrying either bit (a lowercase status
+letter marks assume-unchanged, a bare <code>S</code> marks skip-worktree) and hashes
+those directly, bypassing status entirely, so an attestation now perishes on
+an edit to a flagged path whether the bit was set before the record or after
+it. What this does NOT close: flipping either bit with no content change is
+itself read as drift the next time the tree is sampled — the path enters or
+leaves <code>dirty</code> because of the FLAG, not the bytes — so an operator who parks
+a genuinely untouched file under either bit sees a &ldquo;path appeared&rdquo; or &ldquo;path
+no longer reported&rdquo; line on the very next read, in the safe (false-positive,
+never false-negative) direction. And the existing &ldquo;edited and reverted inside
+the sampling window leaves no trace&rdquo; ceiling below applies here exactly as it
+does to any other path — flagged or not.</p>
 <p>What perishes an ATTESTED record, all measured against a live scratch tree:
-editing any tracked file, adding an untracked file (the reason
+editing any tracked file — including one carrying either bit, per the
+paragraph above — adding an untracked file (the reason
 <code>--untracked-files=all</code> is load-bearing: default porcelain collapses a new
 directory to <code>newdir/</code> with no hash, so a new module dropped into a new
 package would not move the state), deleting a file, and committing — a commit
@@ -1107,7 +1128,12 @@ discovered as a false green:</p>
 <li><strong>A root that is not a git working copy cannot attest at all.</strong>
   <code>tree_state</code> answers <code>None</code> for it — <code>git rev-parse HEAD</code>, <code>--show-toplevel</code>
   and <code>status</code> all fail closed on a non-repository — and <code>build_attestation</code>
-  refuses on that ground before any other axis is even checked.</li>
+  refuses on that ground, but not FIRST: it checks the frozen test files and
+  the process description before it ever looks at the tree, and
+  <code>attestation_state</code> (what <code>verify</code>/<code>status</code>/<code>pack</code> read) checks the recipe,
+  the root hash, and whether the attesting run qualified at all before it
+  compares the tree. The tree comparison is the LAST thing either function
+  looks at, not the first.</li>
 <li><strong>The sampling window opens at collection, not at process start.</strong> Whatever
   ran before pytest began collecting is unobserved, the same gap the process
   descriptor already has for whatever configured the interpreter before the

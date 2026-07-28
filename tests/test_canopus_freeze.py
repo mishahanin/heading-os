@@ -2002,6 +2002,82 @@ def test_tree_drift_compares_across_a_type_mismatched_key_pair():
     assert result != []
 
 
+def test_tree_drift_refuses_a_state_with_the_wrong_tree_recipe():
+    """Pins `_usable_tree_state`'s `candidate.get("recipe") == TREE_RECIPE`
+    line specifically. The existing damaged-shape test
+    (`test_tree_drift_refuses_an_absent_or_damaged_state`) never supplies a
+    dict that is otherwise well-formed -- correct `head` and `dirty` types --
+    but carries the wrong recipe, so mutating that one comparison to
+    `and True` leaves every existing test green: a well-shaped state with the
+    wrong recipe would then read as usable and be compared for real, which
+    is exactly what this test catches.
+    """
+    from scripts.utils.canopus_freeze import tree_drift
+
+    good = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {}}
+    wrong_recipe = {"recipe": "some-other-recipe", "head": "a" * 40, "dirty": {}}
+    assert tree_drift(wrong_recipe, good) != []
+    assert tree_drift(good, wrong_recipe) != []
+
+
+def test_tree_drift_distinguishes_appeared_from_no_longer_reported():
+    """Four kinds get four sentences, this function's own docstring says, and
+    'appeared' is not interchangeable with 'no longer reported': one names a
+    path that is NEW, the other one that VANISHED. Swapping the two sentence
+    templates in `tree_drift` leaves both path names present SOMEWHERE in the
+    output, which is exactly why
+    `test_tree_drift_sees_an_appearance_a_disappearance_and_a_moved_head`
+    (which only checks substring membership, not which sentence carries which
+    path) does not catch the swap. This test checks the pairing instead.
+    """
+    from scripts.utils.canopus_freeze import tree_drift
+
+    before = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+              "dirty": {"gone.py": "b" * 64}}
+    after = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+             "dirty": {"new.py": "c" * 64}}
+    reasons = tree_drift(before, after)
+
+    vanished = [r for r in reasons if "gone.py" in r]
+    appeared = [r for r in reasons if "new.py" in r]
+    assert vanished and "no longer reported" in vanished[0]
+    assert appeared and "appeared" in appeared[0]
+    assert "no longer reported" not in appeared[0]
+    assert "appeared" not in vanished[0]
+
+
+def test_attestation_state_reasons_are_not_duplicated_between_modules():
+    """`REASON_DIFFERENT_RECIPE` and `REASON_DIFFERENT_ROOT` are the ONE
+    spelling of these two strings; `canopus.py:_print_attestation` imports and
+    compares against these same names rather than carrying its own literal
+    copies. Pinned here so a reader who greps for either string finds both
+    call sites agree by construction, not by two authors independently typing
+    the same sentence.
+    """
+    from scripts.utils.canopus_freeze import (
+        ATTEST_RECIPE,
+        REASON_DIFFERENT_RECIPE,
+        REASON_DIFFERENT_ROOT,
+        attestation_state,
+    )
+
+    stale_recipe = {"recipe": "canopus-attest-v2", "root": "a" * 64,
+                    "attested": True, "frozen_tests": {}, "reasons": [],
+                    "tree": {"recipe": "canopus-tree-v1", "head": "a" * 40,
+                             "dirty": {}}}
+    state, reason = attestation_state(stale_recipe, "a" * 64, stale_recipe["tree"])
+    assert state == "NOT ATTESTED"
+    assert reason == REASON_DIFFERENT_RECIPE
+
+    stale_root = {"recipe": ATTEST_RECIPE, "root": "a" * 64,
+                  "attested": True, "frozen_tests": {}, "reasons": [],
+                  "tree": {"recipe": "canopus-tree-v1", "head": "a" * 40,
+                           "dirty": {}}}
+    state, reason = attestation_state(stale_root, "b" * 64, stale_root["tree"])
+    assert state == "NOT ATTESTED"
+    assert reason == REASON_DIFFERENT_ROOT
+
+
 def test_tree_drift_accounts_for_a_dropped_non_string_key():
     """The comment above the sort key in `tree_drift` states the reason for
     sorting by `(type(rel).__name__, repr(rel))` rather than filtering by

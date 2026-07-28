@@ -573,6 +573,28 @@ def test_loss_of_lock_still_shows_the_attestation_axis(tree, anchor, capsys):
     assert "different root hash" in out
 
 
+def test_loss_of_lock_also_names_the_trees_own_half(tree, anchor, capsys):
+    """`_print_attestation`'s supplementary block only fires when `reason`
+    equals one of `REASON_DIFFERENT_RECIPE` / `REASON_DIFFERENT_ROOT`,
+    imported from `canopus_freeze` rather than hand-typed here as a second
+    copy. The top-level "different root hash" line above comes straight from
+    `attestation_state`'s own return value regardless of whether that
+    comparison still matches, so it alone cannot prove the branch fired; only
+    the supplementary per-path reason line does.
+    """
+    _git_init_tree(tree)
+    _freeze(tree, anchor)
+    root = _root_of(tree)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
+    _attest(tree, root)
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+    assert _run(["verify"], tree) == 1
+    out = capsys.readouterr().out
+    assert "different root hash" in out
+    assert ("reason   a path appeared since the attesting run: "
+            "tests/test_alpha.py") in out
+
+
 def test_status_carries_the_attestation_line(tree, anchor, capsys):
     _git_init_tree(tree)
     _freeze(tree, anchor)
@@ -866,6 +888,35 @@ def test_pack_staleness_reason_reflects_the_real_current_tree(tree, anchor, caps
     staleness = out.rsplit("staleness", 1)[1]
     assert "no attestation to age" in staleness
     assert "scripts/run-tests.py" in staleness
+
+
+def test_pack_samples_the_tree_exactly_once(tree, anchor, capsys, monkeypatch):
+    """`cmd_pack` used to call `tree_state` twice behind ONE verdict: once
+    directly, to feed its own `attestation_state` read for the `staleness`
+    section, and once more inside `_print_attestation` for the main banner --
+    two separate git walks, and a window between them for the tree to move
+    and the two readings to disagree. `_print_attestation` now takes a
+    `current_tree` parameter so `cmd_pack` can sample once and hand the same
+    dict to both readers.
+    """
+    _git_init_tree(tree)
+    _freeze(tree, anchor)
+    root = _root_of(tree)
+    anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
+    _attest(tree, root)
+    capsys.readouterr()
+
+    calls = []
+    real_tree_state = canopus.tree_state
+
+    def counting_tree_state(path):
+        calls.append(path)
+        return real_tree_state(path)
+
+    monkeypatch.setattr(canopus, "tree_state", counting_tree_state)
+
+    assert _run(["pack"], tree) == 0
+    assert len(calls) == 1, f"tree_state sampled {len(calls)} times, expected 1"
 
 
 # ============================================================

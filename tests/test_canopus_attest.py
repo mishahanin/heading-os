@@ -7,6 +7,8 @@ decline to run it, and every filtered pytest invocation reaches green with the
 frozen bytes intact.
 """
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -1063,3 +1065,122 @@ def test_attestation_state_names_how_many_more_paths_moved():
              "dirty": {"a.py": "b" * 64, "b.py": "c" * 64}}
     _state, reason = cf.attestation_state(record, "a" * 64, moved)
     assert "1 more" in reason
+
+
+# ============================================================
+# End-to-end: the whole recorder, through a real pytest child
+# ============================================================
+#
+# Everything above drives AttestationRecorder's hooks directly, or drives
+# build_attestation with hand-built tree dicts. Neither exercises the ONE line
+# that actually wires a session's two samples together:
+# `AttestationRecorder.finish` passes `tree_at_start=self.tree_at_start` (the
+# sample `collect`/`seed_from_ids` took, once, at collection) into
+# `build_attestation`. Swap that for a fresh `self._tree()` call taken at
+# finish time and every unit test above still passes, because none of them
+# runs a real session in which the tree moves BETWEEN collection and finish --
+# they either hold the tree fixed across both samples or pass both samples in
+# by hand. Only a real child process, with a real hook firing mid-run, can
+# tell the two apart.
+
+def _git_e2e(directory: Path, *argv: str) -> None:
+    """git in *directory*, with every GIT_* variable scrubbed from the child.
+
+    The same scrub `tests/test_canopus_gate.py::_git` applies and for the same
+    measured reason: this suite runs inside the engine's own pre-push hook,
+    which exports GIT_DIR and GIT_INDEX_FILE, and an unscrubbed call here would
+    resolve the ENGINE's repository instead of the scratch one.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("GIT_")}
+    subprocess.run(["git", "-C", str(directory), *argv], check=True,
+                   capture_output=True, text=True, env=env)
+
+
+def test_a_mid_run_edit_to_a_tracked_file_refuses_the_end_to_end_record(tmp_path):
+    """The reviewer's exact reproduction: a scratch git tree whose conftest
+    edits a tracked sibling file during `pytest_runtest_call`, run for real.
+
+    A scratch repository gets its own `tests/conftest.py`, wiring the same
+    three attestation hooks the engine's root conftest wires (collection,
+    per-test report, session finish) around a fresh `AttestationRecorder`,
+    plus one more hook that mutates `src/calc.py` -- a TRACKED, already
+    committed file -- from inside `pytest_runtest_call`, between the
+    collection sample and the finish sample. A real freeze is taken over the
+    one frozen test file so the recorder has a contract to attest, and the
+    whole thing runs as a genuine `python -m pytest` subprocess, so the two
+    tree samples are two separate hook firings in one real session, not two
+    calls written by hand in this test's own body.
+
+    Unmutated (`tree_at_start=self.tree_at_start`), the recorded start sample
+    predates the edit and the finish sample postdates it, so the record
+    refuses naming `src/calc.py`. Mutated (`tree_at_start=self._tree()`), both
+    samples are taken back-to-back at finish time with nothing to disturb
+    them in between, so no drift is ever seen and the whole in-run race
+    guarantee is inert -- reproduced by hand while writing this test, per the
+    debugging discipline this repository follows: revert
+    `scripts/utils/canopus_gate.py`'s `finish()` to pass `tree_at_start=self._tree()`
+    and this test fails; restore the original line and it passes again.
+    """
+    engine_root = Path(__file__).resolve().parents[1]
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "tests").mkdir(parents=True)
+    (repo / "src" / "calc.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "tests" / "test_calc.py").write_text(
+        "def test_something():\n    assert True\n", encoding="utf-8"
+    )
+    (repo / "tests" / "conftest.py").write_text(
+        "from pathlib import Path\n"
+        "from scripts.utils.canopus_gate import AttestationRecorder\n"
+        "\n"
+        "ROOT = Path(__file__).resolve().parent.parent\n"
+        "_REC = AttestationRecorder(ROOT)\n"
+        "\n"
+        "def pytest_collection_finish(session):\n"
+        "    _REC.collect(session)\n"
+        "\n"
+        "def pytest_runtest_call(item):\n"
+        "    # The measured reproduction: a TRACKED file edited DURING the\n"
+        "    # run, from a conftest hook, strictly between the collection\n"
+        "    # sample above and the finish sample below.\n"
+        "    target = ROOT / 'src' / 'calc.py'\n"
+        "    target.write_text(target.read_text() + '\\n# mutated mid-run\\n')\n"
+        "\n"
+        "def pytest_runtest_logreport(report):\n"
+        "    _REC.report(report)\n"
+        "\n"
+        "def pytest_sessionfinish(session, exitstatus):\n"
+        "    _REC.finish(session, exitstatus)\n",
+        encoding="utf-8",
+    )
+
+    _git_e2e(repo, "init", "-q", "-b", "main")
+    _git_e2e(repo, "config", "user.email", "builder@example.invalid")
+    _git_e2e(repo, "config", "user.name", "Builder")
+    _git_e2e(repo, "add", "-A")
+    _git_e2e(repo, "commit", "-q", "-m", "seed")
+
+    manifest = cf.build_manifest(
+        [repo / "tests" / "test_calc.py"], repo,
+        label="e2e-mid-run-race", frozen_at="2026-07-28T00:00:00+00:00",
+    )
+    cf.write_freeze(repo, manifest)
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(engine_root)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/", "-q",
+         "-p", "no:cacheprovider", "-o", "addopts="],
+        cwd=repo, capture_output=True, text=True, env=env, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    record = cf.read_attestation(repo)
+    assert record is not None, "the child never wrote an attestation record"
+    assert record["attested"] is False
+    assert any(
+        "while the run was in progress" in reason and "src/calc.py" in reason
+        for reason in record["reasons"]
+    ), record["reasons"]

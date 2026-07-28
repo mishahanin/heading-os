@@ -914,17 +914,39 @@ implementation, and survived breaking it and running nothing at all — measured
 on a scratch tree, not theorised. `scripts/utils/canopus_tree.tree_state(root)`
 closes that: `{"recipe", "head", "dirty"}`, where `head` is `git rev-parse
 HEAD` and `dirty` maps every path `git status --porcelain=v1
---untracked-files=all -z` reports — changed, added, deleted, or untracked — to
-the sha256 of its current bytes (or to `None` for a path that is gone).
-`AttestationRecorder` samples it TWICE: once at `collect` (session collection,
-not process start) and once at `finish`. Both samples are required; either
-missing refuses the record the same way a missing `process` block already
-does, and a tree that moved BETWEEN the two samples — the bytes on disk at
-finish are not the bytes that were imported — refuses it too, naming the path
-that moved.
+--untracked-files=all -z` reports — changed, added, deleted, or untracked —
+PLUS every path git's index marks `assume-unchanged` or `skip-worktree` (see
+below), to the sha256 of its current bytes (or to `None` for a path that is
+gone). `AttestationRecorder` samples it TWICE: once at `collect` (session
+collection, not process start) and once at `finish`. Both samples are
+required; either missing refuses the record the same way a missing `process`
+block already does, and a tree that moved BETWEEN the two samples — the bytes
+on disk at finish are not the bytes that were imported — refuses it too,
+naming the path that moved.
+
+**`git status` is not the whole story: assume-unchanged and skip-worktree
+paths are read directly.** Both bits tell git to say NOTHING about a path's
+worktree copy, by design — `git status --porcelain` stays silent for a
+flagged path even after its bytes are edited. Measured before this closed:
+a green record, then `git update-index --assume-unchanged path`, then the
+implementation broken and nothing re-run, and `verify` still read ATTESTED.
+Reproduced identically for `--skip-worktree`. `tree_state` now also asks
+`git ls-files -v -z` for every path carrying either bit (a lowercase status
+letter marks assume-unchanged, a bare `S` marks skip-worktree) and hashes
+those directly, bypassing status entirely, so an attestation now perishes on
+an edit to a flagged path whether the bit was set before the record or after
+it. What this does NOT close: flipping either bit with no content change is
+itself read as drift the next time the tree is sampled — the path enters or
+leaves `dirty` because of the FLAG, not the bytes — so an operator who parks
+a genuinely untouched file under either bit sees a "path appeared" or "path
+no longer reported" line on the very next read, in the safe (false-positive,
+never false-negative) direction. And the existing "edited and reverted inside
+the sampling window leaves no trace" ceiling below applies here exactly as it
+does to any other path — flagged or not.
 
 What perishes an ATTESTED record, all measured against a live scratch tree:
-editing any tracked file, adding an untracked file (the reason
+editing any tracked file — including one carrying either bit, per the
+paragraph above — adding an untracked file (the reason
 `--untracked-files=all` is load-bearing: default porcelain collapses a new
 directory to `newdir/` with no hash, so a new module dropped into a new
 package would not move the state), deleting a file, and committing — a commit
@@ -953,7 +975,12 @@ discovered as a false green:
 - **A root that is not a git working copy cannot attest at all.**
   `tree_state` answers `None` for it — `git rev-parse HEAD`, `--show-toplevel`
   and `status` all fail closed on a non-repository — and `build_attestation`
-  refuses on that ground before any other axis is even checked.
+  refuses on that ground, but not FIRST: it checks the frozen test files and
+  the process description before it ever looks at the tree, and
+  `attestation_state` (what `verify`/`status`/`pack` read) checks the recipe,
+  the root hash, and whether the attesting run qualified at all before it
+  compares the tree. The tree comparison is the LAST thing either function
+  looks at, not the first.
 - **The sampling window opens at collection, not at process start.** Whatever
   ran before pytest began collecting is unobserved, the same gap the process
   descriptor already has for whatever configured the interpreter before the

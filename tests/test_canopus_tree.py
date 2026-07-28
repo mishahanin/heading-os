@@ -220,6 +220,157 @@ def test_a_toplevel_path_ending_in_a_space_is_not_truncated(tmp_path):
     )
 
 
+def test_flagged_paths_recognises_lowercase_and_capital_s_tags(monkeypatch):
+    """`git ls-files -v`'s tag alphabet, pinned directly against `git_output`
+    rather than a real index in every one of these states: `H` is an ordinary
+    cached file and is never flagged; `S` alone is skip-worktree; `h` and `s`
+    are BOTH lowercased -- assume-unchanged, whichever base letter it started
+    from -- and lowercasing is what actually marks the bit, not the letter
+    itself. Measured against a real index (four successive `update-index`
+    calls on one file) before this was written, not taken from the manual
+    page.
+    """
+    import scripts.utils.canopus_tree as canopus_tree
+
+    raw = "H clean.py\x00h hidden.py\x00S worktree.py\x00s both.py\x00"
+
+    def fake_git_output(root, *args):
+        assert args == ("ls-files", "-v", "-z")
+        return raw
+
+    monkeypatch.setattr(canopus_tree, "git_output", fake_git_output)
+    assert canopus_tree._flagged_paths(Path(".")) == [
+        "hidden.py", "worktree.py", "both.py",
+    ]
+
+
+def test_flagged_paths_answers_none_on_a_git_failure(monkeypatch):
+    """Fail-closed, matching every other reader in this module: a check that
+    could not run must never be read as a check that found nothing."""
+    import scripts.utils.canopus_tree as canopus_tree
+
+    monkeypatch.setattr(canopus_tree, "git_output", lambda root, *a: None)
+    assert canopus_tree._flagged_paths(Path(".")) is None
+
+
+def test_an_assume_unchanged_edit_is_hashed_despite_a_clean_status(repo):
+    """`git status --porcelain` is DEFINED to say nothing about a path
+    carrying this bit -- that is the whole reason the bit exists -- so `dirty`
+    built from status alone misses exactly the edit an attacker would reach
+    for. Reproduced: set the bit, edit the tracked file, confirm status is
+    genuinely silent while `tree_state` still moves.
+    """
+    from scripts.utils.canopus_tree import tree_state
+
+    _git(repo, "update-index", "--assume-unchanged", "kept.py")
+    before = tree_state(repo)
+    assert "kept.py" in before["dirty"]  # flagged and unedited: hashed anyway
+
+    (repo / "kept.py").write_text("x = 2\n", encoding="utf-8")
+    status = _git(repo, "status", "--porcelain")
+    assert status.stdout == "", "the whole point of the bit: status stays silent"
+
+    after = tree_state(repo)
+    assert after["dirty"]["kept.py"] != before["dirty"]["kept.py"]
+
+
+def test_a_skip_worktree_edit_is_hashed_despite_a_clean_status(repo):
+    """The same reproduction, for `--skip-worktree` rather than
+    `--assume-unchanged`. Both bits hide a path from status; both are closed
+    the same way, by reading the bytes directly instead of trusting status."""
+    from scripts.utils.canopus_tree import tree_state
+
+    _git(repo, "update-index", "--skip-worktree", "kept.py")
+    before = tree_state(repo)
+    assert "kept.py" in before["dirty"]
+
+    (repo / "kept.py").write_text("x = 2\n", encoding="utf-8")
+    status = _git(repo, "status", "--porcelain")
+    assert status.stdout == ""
+
+    after = tree_state(repo)
+    assert after["dirty"]["kept.py"] != before["dirty"]["kept.py"]
+
+
+def test_the_bit_set_after_a_clean_record_still_perishes_it(repo):
+    """The reviewer's literal reproduction, ordered exactly as measured: a
+    clean record taken BEFORE the bit is ever set, then the bit is set, then
+    the file is broken, then nothing is run. Without the merge in
+    `tree_state`, `git status` stays silent at both samples and two
+    DIFFERENT tree states compare equal -- a green record over a corrupted
+    implementation.
+    """
+    from scripts.utils.canopus_freeze import tree_drift
+    from scripts.utils.canopus_tree import tree_state
+
+    recorded = tree_state(repo)  # taken before the bit exists at all
+
+    _git(repo, "update-index", "--assume-unchanged", "kept.py")
+    (repo / "kept.py").write_text("x = broken\n", encoding="utf-8")
+
+    current = tree_state(repo)
+    drift = tree_drift(recorded, current)
+    assert any("kept.py" in reason for reason in drift)
+
+
+def test_the_bit_set_before_the_record_still_perishes_on_a_later_edit(repo):
+    """The other ordering: the bit is ALREADY set when the record is taken
+    (so the recorded state already carries the path, hashed), and the edit
+    happens afterward. Both orderings have to close, not just the one in the
+    reproduction, or the fix only half-answers the finding."""
+    from scripts.utils.canopus_freeze import tree_drift
+    from scripts.utils.canopus_tree import tree_state
+
+    _git(repo, "update-index", "--assume-unchanged", "kept.py")
+    recorded = tree_state(repo)  # the bit is already set here
+
+    (repo / "kept.py").write_text("x = broken\n", encoding="utf-8")
+    current = tree_state(repo)
+
+    drift = tree_drift(recorded, current)
+    assert any("kept.py" in reason for reason in drift)
+
+
+def test_a_flagged_path_through_a_subdirectory_hashes_against_the_toplevel(repo):
+    """`git ls-files` paths are relative to wherever git was invoked, unlike
+    `git status --porcelain`'s toplevel-relative guarantee -- the same class
+    of bug `test_tree_state_through_a_subdirectory_hashes_against_the_toplevel`
+    pins for the porcelain half, reproduced here for the flagged half: joining
+    a root-relative ls-files path onto the wrong base would hash a path that
+    does not exist and report no drift for a file that changed.
+    """
+    from scripts.utils.canopus_tree import tree_state
+
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "pkg/a.py")
+    _git(repo, "commit", "-q", "-m", "add pkg")
+    _git(repo, "update-index", "--assume-unchanged", "pkg/a.py")
+
+    (pkg / "a.py").write_text("x = 2\n", encoding="utf-8")
+    dirty = tree_state(pkg)["dirty"]
+    assert "pkg/a.py" in dirty
+    assert dirty["pkg/a.py"] is not None
+
+
+def test_tree_state_answers_none_when_ls_files_fails(repo, monkeypatch):
+    """Fail-closed the same way the empty-toplevel guard is: a half of the
+    tree this function cannot examine must never be silently reported as a
+    tree with nothing wrong in that half."""
+    import scripts.utils.canopus_tree as canopus_tree
+
+    real_git_output = canopus_tree.git_output
+
+    def fake_git_output(root, *args):
+        if args and args[0] == "ls-files":
+            return None
+        return real_git_output(root, *args)
+
+    monkeypatch.setattr(canopus_tree, "git_output", fake_git_output)
+    assert canopus_tree.tree_state(repo) is None
+
+
 def test_tree_state_answers_none_when_the_toplevel_is_empty(tmp_path, monkeypatch):
     """The empty-toplevel guard is what stops `Path("")` (`.` in disguise)
     from becoming the toplevel every porcelain path gets joined against.

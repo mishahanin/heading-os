@@ -80,6 +80,8 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     LOCK_UNCONFIRMED,
     LOSS_OF_LOCK,
     NOT_ATTESTED,
+    REASON_DIFFERENT_RECIPE,
+    REASON_DIFFERENT_ROOT,
     REPO_PRESENT,
     REPO_UNKNOWN,
     SATISFIED_PREFIX,
@@ -240,7 +242,7 @@ def _under_root(raw: str, root: Path) -> Path:
     return candidate if candidate.is_absolute() else root / candidate
 
 
-def _print_attestation(root: Path, recomputed_root: str) -> None:
+def _print_attestation(root: Path, recomputed_root: str, current_tree=None) -> None:
     """The second axis: did the frozen tests actually RUN, and pass?
 
     The lock line answers "did the contract move". It cannot answer "did the
@@ -253,9 +255,19 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
     the gate that would act on it runs at pytest session start, before the run
     it would attest has finished. Making it fatal would fail every run on its
     own missing record.
+
+    *current_tree* lets a caller that already sampled the tree hand its own
+    sample down instead of this function taking a second one. `cmd_pack` is
+    the one caller that needs it: it reads the tree once for its own
+    `staleness` section and, before this parameter existed, read it again
+    here -- two separate git walks behind one verdict, and a window between
+    them for the tree to move and the two readings to disagree. None (every
+    other caller) means "sample it here", unchanged from before this
+    parameter was added.
     """
     record = read_attestation(root)
-    current_tree = tree_state(root)
+    if current_tree is None:
+        current_tree = tree_state(root)
     state, reason = attestation_state(record, recomputed_root, current_tree)
     if state == ATTESTED:
         counts = [
@@ -287,10 +299,7 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
             # that does not say so reads as the whole story.
             print(f"  reason   ... and {len(listed) - 5} more, in "
                   f"{FREEZE_DIRNAME}/{ATTEST_FILENAME}")
-    if record and reason in (
-        "the attestation was recorded against a different root hash",
-        "the attestation was written by a different recipe",
-    ):
+    if record and reason in (REASON_DIFFERENT_ROOT, REASON_DIFFERENT_RECIPE):
         # `attestation_state` answers with ONE reason, and the root/recipe axis
         # it names here short-circuits before it ever compares the tree -- so a
         # root that moved AND a tree that moved (the ordinary case: a new file
@@ -1015,14 +1024,21 @@ def cmd_pack(args) -> int:
     anchor, status, value = resolution.anchor, resolution.status, resolution.value
     state = lock_state(report, status, value)
     record = read_attestation(root)
+    # Sampled ONCE, here, and handed to both readers below. This used to be two
+    # separate `tree_state(root)` calls -- one here, feeding the staleness
+    # section's fallback reason, and a second inside `_print_attestation` for
+    # the banner -- two git walks behind one verdict, and a window between
+    # them in which the tree could move and the two readings disagree. See
+    # `_print_attestation`'s `current_tree` parameter.
+    current_tree = tree_state(root)
     # _print_attestation below already renders the state; only the reason string
     # is needed again, for the staleness section.
-    _state, reason = attestation_state(record, report["recomputed_root"], tree_state(root))
+    _state, reason = attestation_state(record, report["recomputed_root"], current_tree)
 
     _print_root(report["recomputed_root"], manifest)
     colour = {LOCK_HELD: GREEN, LOCK_UNCONFIRMED: YELLOW}.get(state, RED)
     print(f"{colour}{BOLD}{state}{RESET}   anchor {anchor or '(none)'} [{status}]")
-    _print_attestation(root, report["recomputed_root"])
+    _print_attestation(root, report["recomputed_root"], current_tree=current_tree)
     _print_approval(resolution)
 
     _print_contract(manifest, record)
@@ -1090,7 +1106,12 @@ def cmd_pack(args) -> int:
           "filesystem, so an edit to one does not perish the record.")
     print("  A root that is not a git working copy cannot attest at all: "
           "tree_state answers None for it, and every run over it refuses on "
-          "that ground before any other axis is even checked.")
+          "that ground. Not FIRST, though: build_attestation checks the "
+          "frozen test files and the process description before it ever "
+          "looks at the tree, and attestation_state (what verify/status/pack "
+          "read here) checks the recipe, the root hash, and whether the "
+          "attesting run qualified at all before it compares the tree. The "
+          "tree comparison is the LAST thing either function looks at.")
     print("  The tree is sampled twice, at collection and at finish. The "
           "sampling window opens at collection, not at process start, so "
           "whatever ran before pytest began collecting is unobserved, and a "

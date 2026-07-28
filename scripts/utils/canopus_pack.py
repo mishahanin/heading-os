@@ -11,10 +11,18 @@ Two facts here exist nowhere else.
     whether the lock was held while the work happened. Commits whose timestamps
     fall outside every freeze window in the ledger are listed, so "released it,
     finished the work, froze it again" is visible rather than invisible.
-  * STALENESS. An attestation binds to the frozen CONTRACT, not to the
-    implementation. Green, then an edit to the implementation, leaves ATTESTED
-    standing. Comparing the attestation's timestamp against the working tree and
-    the commit log answers the question the record cannot.
+  * STALENESS. Retracted from what this bullet claimed through wire 2.3: an
+    attestation no longer binds to the frozen CONTRACT alone. From wire 3.2 it
+    also binds to the working TREE (`scripts/utils/canopus_tree.py`), so
+    green, then an edit to the implementation, does NOT leave ATTESTED
+    standing any more -- `verify`, `status` and `pack` all read NOT ATTESTED
+    the moment the tree the record was written against moves, whether or not
+    anything was re-run. What this section still adds, now that the banner
+    itself already perishes on that ground: it names WHICH commits post-date
+    the attestation and whether the tree carries any uncommitted change at
+    all, in the vocabulary of "when" rather than a list of hashed paths, so an
+    operator scanning this page for freshness reads it here before parsing the
+    `tree` reasons the banner above already gives.
 
 Staleness is computed from git rather than from file modification times, because
 `git checkout` rewrites mtimes and a false alarm in a discipline tool costs more

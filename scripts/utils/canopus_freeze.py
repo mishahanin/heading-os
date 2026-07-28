@@ -1872,6 +1872,20 @@ def write_attestation(root: Path, attestation: dict) -> None:
     atomic_write_text(path, json.dumps(attestation, indent=2, sort_keys=True) + "\n")
 
 
+# The two "this record does not even apply here" reasons `attestation_state`
+# returns, named rather than spelled inline. `canopus.py:_print_attestation`
+# reads this pair back to decide whether to print the tree's own half of the
+# story (see the branch's own comment there), and a SECOND spelling of either
+# string is a rename in one module away from that branch going permanently
+# silent -- measured as a live defect during the wire 3.2 scrutiny pass:
+# rewording the recipe reason here left the CLI's literal tuple stale and
+# nothing failed, because nothing compared the two. One constant, imported
+# where the second copy used to live, removes the class rather than adding a
+# test that only pins today's spelling.
+REASON_DIFFERENT_RECIPE = "the attestation was written by a different recipe"
+REASON_DIFFERENT_ROOT = "the attestation was recorded against a different root hash"
+
+
 def attestation_state(
     attestation: Optional[dict], recomputed_root: str, current_tree
 ) -> Tuple[str, str]:
@@ -1891,9 +1905,9 @@ def attestation_state(
     if not isinstance(attestation, dict) or not attestation:
         return NOT_ATTESTED, "no run has attested this freeze yet"
     if attestation.get("recipe") != ATTEST_RECIPE:
-        return NOT_ATTESTED, "the attestation was written by a different recipe"
+        return NOT_ATTESTED, REASON_DIFFERENT_RECIPE
     if attestation.get("root") != recomputed_root:
-        return NOT_ATTESTED, "the attestation was recorded against a different root hash"
+        return NOT_ATTESTED, REASON_DIFFERENT_ROOT
     if not attestation.get("attested"):
         return NOT_ATTESTED, "the attesting run did not qualify"
     drift = tree_drift(attestation.get("tree"), current_tree)

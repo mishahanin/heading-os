@@ -131,3 +131,175 @@ class Stub:
 
     def __repr__(self):
         return f"<canopus stub {object.__getattribute__(self, '_values')['item']}>"
+
+
+def _values():
+    """The value set this child was told to carry.
+
+    Read per call rather than captured at import, so a test can set the variable
+    after the module is loaded.
+    """
+    return STUB_VALUES[os.environ.get(VALUES_VAR, "A")]
+
+
+def _stub_attribute(name: str):
+    if name.startswith("__") and name.endswith("__"):
+        raise AttributeError(name)
+    return Stub(_values())
+
+
+class _StubLoader(Loader):
+    """Builds a module whose every non-dunder attribute is a Stub."""
+
+    def create_module(self, spec):
+        module = ModuleType(spec.name)
+        module.__getattr__ = _stub_attribute  # PEP 562
+        return module
+
+    def exec_module(self, module):
+        return None
+
+
+class _WrapLoader(Loader):
+    """Runs the real loader, then supplies the names the module lacks.
+
+    The catch-all `__getattr__` delegation is not decoration. A loader is read
+    for far more than create/exec: `get_source`, `get_filename`, `is_package`,
+    `get_data` and `get_resource_reader` are pulled off `spec.loader` by
+    importlib.reload, importlib.resources, pkgutil and inspect.getsource. A
+    wrapper answering only two of them narrows the real loader for the length of
+    the probe, and the failure surfaces as an unrelated AttributeError inside
+    somebody else's library.
+    """
+
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        # Only reached for names this class does not define, so create_module and
+        # exec_module below still win. `_real` is set in __init__ and is
+        # therefore always in __dict__ before this can run.
+        return getattr(self._real, name)
+
+    def create_module(self, spec):
+        return self._real.create_module(spec)
+
+    def exec_module(self, module):
+        self._real.exec_module(module)
+        existing = module.__dict__.get("__getattr__")
+
+        def supply(name, _existing=existing):
+            if _existing is not None:
+                try:
+                    return _existing(name)
+                except AttributeError:
+                    pass
+            return _stub_attribute(name)
+
+        module.__getattr__ = supply
+
+
+class _NamedFinder(MetaPathFinder):
+    """Claims exactly the modules the contract's AST named, and no others.
+
+    INSERTED at the front, because it must claim a named module before
+    PathFinder resolves it unwrapped. It is safe there only because the claim is
+    narrow: an earlier revision answered every otherwise-failing import and made
+    a stub the parent package of the collected test module, under the
+    `--import-mode=importlib` this repository pins.
+
+    The re-entrancy set is load-bearing. `find_spec` consults sys.meta_path,
+    which reaches this finder again for the same name; without the guard the
+    resolution recurses.
+    """
+
+    def __init__(self, names):
+        self._names = tuple(sorted(names))
+        self._busy: set[str] = set()
+
+    def _claims(self, fullname: str) -> bool:
+        return any(
+            fullname == name or fullname.startswith(f"{name}.")
+            for name in self._names
+        )
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in self._busy or not self._claims(fullname):
+            return None
+        self._busy.add(fullname)
+        try:
+            real = find_spec(fullname)
+        except (ImportError, AttributeError, ValueError):
+            # The name does not resolve, which is the stub case below. A
+            # first-party CIRCULAR import reaches here too: find_spec on a
+            # submodule reads the parent's __path__, and a parent still being
+            # initialised has none. That genuine defect is then stubbed and its
+            # test can earn a vacuity label. The direction is toward REFUSAL, so
+            # it cannot wave a bad contract through, and the refusal text names
+            # the alternative readings.
+            real = None
+        finally:
+            self._busy.discard(fullname)
+        if real is None or real.loader is None:
+            return ModuleSpec(fullname, _StubLoader(), is_package=True)
+        real.loader = _WrapLoader(real.loader)
+        return real
+
+
+def _expand_claims(names):
+    """Every named module, plus the prefixes of it that do not resolve.
+
+    Measured: claiming `ghost.sub` ALONE makes `from ghost.sub import thing` die
+    with `ModuleNotFoundError: No module named 'ghost'`, and the finder is never
+    consulted for the child at all, because Python resolves the parent first. The
+    test then stays red under both stubs and is never labelled, so a vacuous test
+    escapes the verdict entirely. Claiming both names made the same import
+    succeed.
+
+    A prefix that RESOLVES is deliberately NOT claimed: `PathFinder` handles it,
+    and claiming it would wrap a real package for nothing. Measured on this
+    repository, `brandnew.pkg.mod` expands to all three levels while
+    `scripts.utils.canopus_contract` claims only the full name, leaving `scripts`
+    and `scripts.utils` untouched. This is what stops the previous design's blast
+    radius returning through the prefix door.
+
+    Resolution happens here, once, BEFORE the finder is installed. Doing it inside
+    `find_spec` would re-enter the finder being constructed.
+    """
+    claimed = set()
+    for name in names:
+        parts = name.split(".")
+        for index in range(1, len(parts) + 1):
+            prefix = ".".join(parts[:index])
+            if prefix == name:
+                claimed.add(prefix)
+                continue
+            try:
+                resolves = find_spec(prefix) is not None
+            except (ImportError, AttributeError, ValueError):
+                resolves = False
+            if not resolves:
+                claimed.add(prefix)
+    return claimed
+
+
+def pytest_configure(config):
+    """Install the finder, or do nothing when unconfigured."""
+    names = [
+        name for name in os.environ.get(MODULES_VAR, "").split(",") if name
+    ]
+    if names:
+        sys.meta_path.insert(0, _NamedFinder(_expand_claims(names)))
+
+
+def pytest_unconfigure(config):
+    """Take the finder back out at session end.
+
+    The probe child exits straight after, so nothing observable depends on this
+    today. It is here so "the finder is removed cleanly" is a property of the
+    code rather than of the process boundary.
+    """
+    sys.meta_path[:] = [
+        finder for finder in sys.meta_path
+        if not isinstance(finder, _NamedFinder)
+    ]

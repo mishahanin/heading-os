@@ -1,5 +1,6 @@
 """Canopus wire 2: the contract runner and its two refusal conditions."""
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -334,41 +335,8 @@ def test_an_unusable_plugin_dump_reads_as_no_capture(tmp_path, capsys):
     assert "not a list of" in err
 
 
-def test_missing_modules_names_what_the_contract_could_not_import(tmp_path):
-    from scripts.utils.canopus_contract import missing_modules, run_pytest_report
-
-    _write(tmp_path, "c/test_one.py",
-           "def test_a():\n    from absent_thing import answer\n    assert answer() == 42\n")
-
-    assert "absent_thing" in missing_modules(run_pytest_report([tmp_path / "c"], tmp_path))
-
-
-def test_missing_modules_sees_a_missing_name_not_just_a_missing_module(tmp_path):
-    """A module file that EXISTS without the name the contract imports is the
-    ordinary mid-build state, and the probe is blind to it without this.
-
-    Nothing here raises `No module named`: present_module imports cleanly and the
-    child reports `ImportError: cannot import name 'not_written_yet' from
-    'present_module'`. Matching only the first pattern returns an empty set, so
-    run_null_stub stubs nothing, returns nothing, and vacuity_refusal can never
-    fire in exactly the state where a retake is taken. The sibling above uses a
-    wholly absent module and so cannot reach this half.
-    """
-    from scripts.utils.canopus_contract import missing_modules, run_pytest_report
-
-    _write(tmp_path, "present_module.py", "existing = 1\n")
-    _write(tmp_path, "c/test_one.py",
-           "def test_a():\n"
-           "    from present_module import not_written_yet\n"
-           "    assert not_written_yet\n")
-
-    found = missing_modules(run_pytest_report([tmp_path / "c"], tmp_path))
-
-    assert "present_module" in found
-
-
 def test_a_test_that_passes_against_a_mock_asserts_nothing(tmp_path):
-    """The construction proves it: a MagicMock satisfies any shape."""
+    """The construction proves it: a stand-in satisfies any shape assertion."""
     from scripts.utils.canopus_contract import run_null_stub
 
     _write(tmp_path, "c/test_one.py",
@@ -380,7 +348,7 @@ def test_a_test_that_passes_against_a_mock_asserts_nothing(tmp_path):
            "    from absent_thing import answer\n"
            "    assert answer() == 42\n")
 
-    passed = run_null_stub([tmp_path / "c"], tmp_path, {"absent_thing"})
+    passed = run_null_stub([tmp_path / "c"], tmp_path)
 
     assert ("c/test_one.py", "test_vacuous") in passed
     assert ("c/test_one.py", "test_real") not in passed
@@ -389,9 +357,15 @@ def test_a_test_that_passes_against_a_mock_asserts_nothing(tmp_path):
 def test_the_stub_does_not_shadow_a_sibling_module_that_exists(tmp_path):
     """The blocker a plan review caught before any code was written.
 
-    Matching on the first dotted segment made one absent `scripts.utils.X` mock
-    the whole `scripts` package, so modules that exist came back as MagicMock,
+    Matching on the first dotted segment made one absent `scripts.utils.X` stub
+    the whole `scripts` package, so modules that exist came back as stand-ins,
     every test passed, and the wholly-vacuous refusal fired on a good contract.
+
+    Two things now hold that line, and this pins the second. The claim set is
+    the contract's own AST, so nothing under `scripts.utils` is claimed except
+    the one name written here; and a claimed name that RESOLVES is wrapped
+    rather than replaced, so the real module's real constant is what the import
+    binds.
     """
     from scripts.utils.canopus_contract import run_null_stub
 
@@ -400,26 +374,27 @@ def test_the_stub_does_not_shadow_a_sibling_module_that_exists(tmp_path):
            "    from scripts.utils.canopus_freeze import ANCHOR_PREFIX\n"
            "    assert ANCHOR_PREFIX == 'canopus-anchor:'\n")
 
-    passed = run_null_stub(
-        [tmp_path / "c"], tmp_path, {"scripts.utils.canopus_absent_thing"}
-    )
+    passed = run_null_stub([tmp_path / "c"], tmp_path)
 
     assert ("c/test_one.py", "test_real_module_survives") in passed
-    # It passes because the REAL constant was imported, not because a mock
-    # satisfied the comparison: a MagicMock never equals that string.
+    # It passes because the REAL constant was imported, not because a stand-in
+    # satisfied the comparison: a Stub never equals that string.
 
 
-def test_the_stub_does_not_shadow_a_module_that_merely_starts_with_a_stubbed_name(
-    tmp_path,
-):
-    """Pins the DOT in the matcher's separator, not just the first-segment case.
+def test_a_wrapped_module_keeps_the_values_it_already_has(tmp_path):
+    """A claimed module that exists must not lose the names it already carries.
 
-    The sibling test above pins `startswith(name.split('.')[0])`. This one pins
-    the other way of dropping the dot: a bare `fullname.startswith(name)`. With
-    `absent` stubbed, that mutation answers for `absent_extra`, a module that
-    EXISTS and whose compute() returns None, so `assert compute() is not None`
-    passes against the mock and a contract test that asserts something real is
-    labelled vacuous.
+    The stand-in is supplied only for what the module DECLINES to answer. Supply
+    everything instead and `compute()` comes back a truthy Stub under both value
+    sets, so `assert compute() is not None` passes twice and a test asserting
+    something real about existing code is labelled vacuous. That is the
+    direction that refuses a good contract.
+
+    The name is deliberate: this file's earlier revision reached the same
+    assertion through the finder's prefix rule, by stubbing `absent` and
+    watching `absent_extra` survive. That route is closed by construction now,
+    because the claim set is exactly what the contract imports, and `absent` is
+    not in it. The prefix rule is pinned where it lives, in the finder's tests.
     """
     from scripts.utils.canopus_contract import run_null_stub
 
@@ -429,7 +404,7 @@ def test_the_stub_does_not_shadow_a_module_that_merely_starts_with_a_stubbed_nam
            "    from absent_extra import compute\n"
            "    assert compute() is not None\n")
 
-    passed = run_null_stub([tmp_path / "c"], tmp_path, {"absent"})
+    passed = run_null_stub([tmp_path / "c"], tmp_path)
 
     # It fails under the stub because the REAL compute() ran and returned None.
     assert ("c/test_one.py", "test_prefix_sibling_survives") not in passed
@@ -444,9 +419,464 @@ def test_the_stub_run_leaves_no_file_behind_in_the_tree(tmp_path):
            "def test_a():\n    from absent_thing import x\n    assert x\n")
     before = sorted(p.name for p in (tmp_path / "c").iterdir())
 
-    run_null_stub([tmp_path / "c"], tmp_path, {"absent_thing"})
+    run_null_stub([tmp_path / "c"], tmp_path)
 
     assert sorted(p.name for p in (tmp_path / "c").iterdir()) == before
+
+
+def test_run_null_stub_catches_the_from_none_bypass(tmp_path):
+    """The defect this slice exists to close, at the seam that closes it."""
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    try:\n"
+        "        from absent_thing import answer\n"
+        "    except ImportError:\n"
+        "        raise AssertionError('not implemented yet') from None\n"
+        "    assert answer() is not None\n",
+        encoding="utf-8",
+    )
+
+    assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_a")}
+
+
+def test_run_null_stub_catches_a_bypass_over_a_partial_module(tmp_path):
+    """The half a sink cannot see: the module exists, the name does not."""
+    from scripts.utils.canopus_contract import run_null_stub
+
+    (tmp_path / "halfbuilt.py").write_text("EXISTS = 1\n", encoding="utf-8")
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    try:\n"
+        "        from halfbuilt import NOT_THERE_YET\n"
+        "    except ImportError:\n"
+        "        raise AssertionError('not implemented yet') from None\n"
+        "    assert NOT_THERE_YET is not None\n",
+        encoding="utf-8",
+    )
+
+    assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_a")}
+
+
+def test_run_null_stub_does_not_accuse_a_container_assertion(tmp_path):
+    """The v1 regression, pinned. THIS is what the second stub run buys.
+
+    Measured on the prototype: under one stub this test passes and is labelled
+    vacuous. Under two stubs carrying different lengths it passes once and fails
+    once, so it is not invariant to the value and asserts something after all.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    from absent_thing import listing\n"
+        "    assert len(listing()) == 0\n",
+        encoding="utf-8",
+    )
+
+    assert run_null_stub([contract], tmp_path) == set()
+
+
+def test_run_null_stub_leaves_a_real_value_assertion_red(tmp_path):
+    from scripts.utils.canopus_contract import run_null_stub
+
+    (tmp_path / "present.py").write_text(
+        "def answer():\n    return 1\n", encoding="utf-8"
+    )
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    from present import answer\n"
+        "    assert answer() == 42\n",
+        encoding="utf-8",
+    )
+
+    assert run_null_stub([contract], tmp_path) == set()
+
+
+def test_run_null_stub_separates_a_vacuous_test_from_a_real_one(tmp_path):
+    """Per test, never collapsed to the file."""
+    from scripts.utils.canopus_contract import run_null_stub
+
+    (tmp_path / "present.py").write_text(
+        "def answer():\n    return 1\n", encoding="utf-8"
+    )
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_weak():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() is not None\n"
+        "\n\n"
+        "def test_strong():\n"
+        "    from present import answer\n"
+        "    assert answer() == 42\n",
+        encoding="utf-8",
+    )
+
+    assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_weak")}
+
+
+def test_a_skipped_test_is_not_proved_to_assert_anything(tmp_path):
+    """Not proved is not proved innocent, and a skip is the cheapest bypass.
+
+    `pytest.skip("not implemented yet")` at the top of a vacuous test is one call
+    and leaves the same `skipped` token under BOTH value sets, so an intersection
+    of PASSES alone would never see it and the freeze would proceed. Written with
+    `unittest.SkipTest` rather than `pytest.skip` so the claim set stays off
+    pytest's own package while the session that reads the outcome is running
+    inside it.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    import unittest\n"
+        "    raise unittest.SkipTest('not implemented yet')\n",
+        encoding="utf-8",
+    )
+
+    assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_a")}
+
+
+def test_nothing_is_proved_when_the_contract_imports_nothing(tmp_path):
+    """No name to claim means no stand-in ran, so no test was measured.
+
+    Also the cost guard: without it a contract naming nothing still pays for two
+    whole pytest sessions, and every test that happened to pass on its own would
+    come back labelled as asserting nothing.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n    assert True\n", encoding="utf-8"
+    )
+
+    assert run_null_stub([contract], tmp_path) == set()
+
+
+_ONE_PASSING_REPORT = (
+    '<testsuites><testsuite>'
+    '<testcase classname="c.test_one" name="test_a" file="c/test_one.py" '
+    'time="0.0"/>'
+    '</testsuite></testsuites>'
+)
+_EMPTY_REPORT = '<testsuites><testsuite></testsuite></testsuites>'
+
+
+def _capture_probe_env(monkeypatch, reports=None):
+    """Stand in for the child and hand back the environments it was given.
+
+    The two runs are what this task's verdict is made of, so the parent half of
+    the handshake is worth reading directly rather than only through a child
+    that would have to be believed.
+    """
+    from scripts.utils import canopus_contract
+
+    seen: list[dict] = []
+    bodies = list(reports or [_ONE_PASSING_REPORT, _ONE_PASSING_REPORT])
+
+    def _fake(paths, root, *, timeout=900, extra_env=None, extra_args=(),
+              plugin_dump=None):
+        seen.append(dict(extra_env or {}))
+        return bodies[len(seen) - 1]
+
+    monkeypatch.setattr(canopus_contract, "run_pytest_report", _fake)
+    return seen
+
+
+def _one_import_contract(tmp_path, body="def test_a():\n    import absent_thing\n"):
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(body, encoding="utf-8")
+    return contract
+
+
+def test_the_probe_sets_exactly_the_variables_the_plugin_reads(tmp_path, monkeypatch):
+    """The parent-to-child handshake, pinned from both ends at once.
+
+    `MODULES_VAR` and `VALUES_VAR` are read from the plugin here rather than
+    spelled again, so renaming either constant on one side only fails this test
+    instead of leaving a green suite whose verdict is silently always empty: the
+    child would read an unset variable, claim nothing, and both runs would agree
+    on a red the rule never fires over.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+    from scripts.utils.canopus_nullstub import MODULES_VAR, STUB_VALUES, VALUES_VAR
+
+    contract = _one_import_contract(tmp_path)
+    seen = _capture_probe_env(monkeypatch)
+
+    run_null_stub([contract], tmp_path)
+
+    assert [env[VALUES_VAR] for env in seen] == ["A", "B"]
+    assert [env[MODULES_VAR] for env in seen] == ["absent_thing", "absent_thing"]
+    # The labels are the plugin's own value-set keys, not two letters that happen
+    # to match today.
+    assert set(STUB_VALUES) == {"A", "B"}
+
+
+def test_the_probe_hands_the_child_the_engine_the_tree_and_the_outer_path(
+    tmp_path, monkeypatch
+):
+    """Three path entries, and each one buys something different.
+
+    The engine root is where `-p scripts.utils.canopus_nullstub` resolves from.
+    The contract root is what makes the tree's own modules importable, so a named
+    module that EXISTS is wrapped rather than stubbed whole. The inherited entry
+    is the caller's, and dropping it would change what the contract can import
+    between the real run and the probe.
+    """
+    from scripts.utils import canopus_contract
+    from scripts.utils.canopus_contract import run_null_stub
+
+    monkeypatch.setenv("PYTHONPATH", "/outer/synthetic/path")
+    contract = _one_import_contract(tmp_path)
+    seen = _capture_probe_env(monkeypatch)
+
+    run_null_stub([contract], tmp_path)
+
+    engine_root = str(Path(canopus_contract.__file__).resolve().parents[2])
+    parts = seen[0]["PYTHONPATH"].split(os.pathsep)
+    assert parts[0] == engine_root
+    assert str(tmp_path.resolve()) in parts
+    assert "/outer/synthetic/path" in parts
+
+
+def test_the_probe_path_carries_no_empty_trailing_entry(tmp_path, monkeypatch):
+    """An empty entry on PYTHONPATH is the current directory, silently.
+
+    With nothing inherited the join leaves a trailing separator, and the child
+    then treats its own working directory as a search root, which is not a path
+    this probe chose to hand it.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    contract = _one_import_contract(tmp_path)
+    seen = _capture_probe_env(monkeypatch)
+
+    run_null_stub([contract], tmp_path)
+
+    assert "" not in seen[0]["PYTHONPATH"].split(os.pathsep)
+
+
+def test_a_collected_name_carrying_the_separator_is_dropped_and_reported(
+    tmp_path, monkeypatch, capsys
+):
+    """The AST reader over-reports on purpose, and some of it is not a name.
+
+    `pytest.importorskip` carries a `reason`, and every string constant among a
+    dynamic import's arguments is collected, prose included. A collected string
+    holding the separator this probe joins on would split in the child into
+    fragments the contract never named, and a fragment can claim a module that
+    exists. A comma cannot appear in an importable dotted name, so dropping it
+    loses no claim, and the drop is said out loud rather than made quietly.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = _one_import_contract(
+        tmp_path,
+        "import pytest\n"
+        "def test_a():\n"
+        "    pytest.importorskip('absent_thing', reason='needs, the thing')\n",
+    )
+    seen = _capture_probe_env(monkeypatch)
+
+    run_null_stub([contract], tmp_path)
+
+    assert seen[0]["CANOPUS_AST_MODULES"] == "absent_thing,pytest"
+    assert "needs, the thing" in capsys.readouterr().err
+
+
+_ORDER_NAMES = (
+    "alfa_mod", "bravo_mod", "charlie_mod", "delta_mod",
+    "echo_mod", "foxtrot_mod", "golf_mod", "hotel_mod",
+)
+
+
+def test_the_claim_set_reaches_the_child_in_a_stable_order(tmp_path, monkeypatch):
+    """Two runs of one contract must be one probe, not two.
+
+    `contract_imports` returns a SET, whose iteration order is a function of the
+    interpreter's hash seed and therefore differs between runs of the same
+    contract. Handing that order to the child unsorted makes the claim string a
+    property of the process rather than of the contract, and an operator
+    comparing two probes is then comparing two different inputs.
+
+    Eight names rather than two on purpose: an unsorted set matching sorted order
+    by accident is one arrangement in 8!, so this pins the sort rather than
+    catching it on most runs.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+    from scripts.utils.canopus_nullstub import MODULES_VAR
+
+    contract = _one_import_contract(
+        tmp_path,
+        "def test_a():\n"
+        + "".join(f"    import {name}\n" for name in reversed(_ORDER_NAMES)),
+    )
+    seen = _capture_probe_env(monkeypatch)
+
+    run_null_stub([contract], tmp_path)
+
+    assert seen[0][MODULES_VAR] == ",".join(sorted(_ORDER_NAMES))
+
+
+def test_a_root_level_contract_file_is_not_mistaken_for_its_own_package(
+    tmp_path, monkeypatch
+):
+    """A contract file at the root has no package prefix to collide with.
+
+    Read the file NAME as a package prefix and `test_one.py` becomes one, so a
+    collected string that happens to equal it refuses the whole contract with a
+    message about a package that does not exist. The AST reader collects every
+    string constant among a dynamic import's arguments, so producing such a
+    string takes no contrivance beyond writing it.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+    from scripts.utils.canopus_nullstub import MODULES_VAR
+
+    (tmp_path / "test_one.py").write_text(
+        "def test_a():\n    __import__('test_one.py')\n", encoding="utf-8"
+    )
+    seen = _capture_probe_env(monkeypatch)
+
+    run_null_stub([tmp_path / "test_one.py"], tmp_path)
+
+    assert seen[0][MODULES_VAR] == "test_one.py"
+
+
+def test_only_the_stub_plugins_own_lines_are_echoed_from_the_child(
+    tmp_path, monkeypatch, capsys
+):
+    """The marker, not the stream.
+
+    A contract child's ordinary stderr is the child's business, and echoing all
+    of it buries the one line that is this side's business under whatever the
+    contract and its libraries chose to print. The child is faked here because
+    pytest CAPTURES a test's own stderr inside the child, so a passing contract
+    cannot put noise on the stream this filter reads.
+    """
+    from scripts.utils import canopus_contract
+
+    _write(tmp_path, "c/test_one.py", "def test_a():\n    assert True\n")
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = (
+            "CHILD-NOISE-MARKER\n"
+            "canopus-nullstub: resolving ghost raised RuntimeError(); "
+            "stubbing it instead\n"
+        )
+
+    def _fake_run(command, **kwargs):
+        report = Path(command[command.index("--junit-xml") + 1])
+        report.write_text(_ONE_PASSING_REPORT, encoding="utf-8")
+        return _Proc()
+
+    monkeypatch.setattr(canopus_contract.subprocess, "run", _fake_run)
+
+    canopus_contract.run_pytest_report([tmp_path / "c"], tmp_path)
+
+    err = capsys.readouterr().err
+    assert "canopus-nullstub: resolving ghost" in err
+    assert "CHILD-NOISE-MARKER" not in err
+
+
+def test_the_two_probe_runs_must_have_measured_the_same_tests(tmp_path, monkeypatch):
+    """An intersection over two different populations is not evidence.
+
+    A run that collected a different set of tests from its partner has not been
+    compared with it, and the quiet answer is an empty verdict, which reads
+    exactly like "measured, nothing vacuous".
+    """
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    contract = _one_import_contract(tmp_path)
+    _capture_probe_env(monkeypatch, [_ONE_PASSING_REPORT, _EMPTY_REPORT])
+
+    with pytest.raises(ContractError, match="did not measure the same tests"):
+        run_null_stub([contract], tmp_path)
+
+
+def test_a_probe_that_collected_nothing_is_not_a_clean_verdict(tmp_path, monkeypatch):
+    """Both runs empty is the fail-open the intersection cannot see on its own.
+
+    A stub that breaks collection outright leaves two empty populations, they
+    agree, the intersection is empty, and a contract whose every test asserts
+    nothing walks through the refusal on the strength of a probe that never ran
+    a test.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    contract = _one_import_contract(tmp_path)
+    _capture_probe_env(monkeypatch, [_EMPTY_REPORT, _EMPTY_REPORT])
+
+    with pytest.raises(ContractError, match="collected no test at all"):
+        run_null_stub([contract], tmp_path)
+
+
+def test_the_probe_refuses_to_stub_a_package_prefix_of_the_contract_itself(tmp_path):
+    """A stub over the contract's own package would poison collection silently.
+
+    A stub lands in `sys.modules` and answers every later import from there, so
+    the contract's own test modules would be collected out of a stand-in and the
+    verdict would describe nothing. Refused rather than measured.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    contract = _one_import_contract(
+        tmp_path, "def test_a():\n    import c\n    assert c\n"
+    )
+
+    with pytest.raises(ContractError, match="package prefix of its own"):
+        run_null_stub([contract], tmp_path)
+
+
+def test_the_childs_stub_diagnostics_reach_the_caller(tmp_path, capsys):
+    """The only surviving trace of a swallowed exception must not be dropped.
+
+    The plugin stubs a name whose resolution raised rather than dying, and says
+    so on its own stderr. A caller that discards the child's stderr turns a
+    first-party module that blows up on import into a bare vacuity refusal with
+    no hint of the real cause.
+
+    Constructed so the raise happens where the plugin catches it: resolving the
+    prefix `boom.sub` imports `boom`, whose body raises.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    package = tmp_path / "boom"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "raise RuntimeError('boom')\n", encoding="utf-8"
+    )
+    contract = _one_import_contract(
+        tmp_path,
+        "def test_a():\n"
+        "    from boom.sub.deep import thing\n"
+        "    assert thing\n",
+    )
+
+    run_null_stub([contract], tmp_path)
+
+    err = capsys.readouterr().err
+    assert "canopus-nullstub:" in err
+    assert "boom.sub" in err
 
 
 def test_a_wholly_vacuous_contract_is_refused():
@@ -540,35 +970,6 @@ def test_an_xfail_reaches_the_filter_as_skipped_and_not_as_red(tmp_path):
     _counts, outcomes = run_contract([tmp_path / "c"], tmp_path)
 
     assert [outcome for _rel, _name, outcome in outcomes] == ["skipped"]
-
-
-def test_vacuity_is_reported_as_unmeasured_when_no_module_was_absent():
-    """A red contract that names no absent module measured NOTHING.
-
-    Silence there is indistinguishable from "measured, nothing vacuous", and
-    the two are not the same claim.
-    """
-    from scripts.utils.canopus_contract import vacuity_unmeasured
-
-    outcomes = [("c/test_one.py", "test_a", "failure")]
-
-    assert "NOT measured" in vacuity_unmeasured(outcomes, set())
-
-
-def test_vacuity_is_not_reported_as_unmeasured_when_a_module_was_stubbed():
-    from scripts.utils.canopus_contract import vacuity_unmeasured
-
-    outcomes = [("c/test_one.py", "test_a", "failure")]
-
-    assert vacuity_unmeasured(outcomes, {"absent_thing"}) == ""
-
-
-def test_an_all_green_contract_is_not_reported_as_unmeasured():
-    """`refusal_reasons` refuses it for being green; this line would only add
-    noise to a run that is already being refused for a better reason."""
-    from scripts.utils.canopus_contract import vacuity_unmeasured
-
-    assert vacuity_unmeasured([("c/test_one.py", "test_a", "passed")], set()) == ""
 
 
 def test_failure_modes_tell_an_import_from_an_assertion(tmp_path):

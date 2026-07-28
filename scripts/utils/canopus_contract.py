@@ -20,19 +20,34 @@ from __future__ import annotations
 import ast
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 from xml.etree import ElementTree
 
 from scripts.utils.canopus_gate import pytest_child_env
+# The child's half of the handshake, imported rather than spelled again. Two
+# copies of an environment-variable name is a rename on one side away from a
+# child that claims nothing, two runs that agree on a red the rule never fires
+# over, and a suite that stays green while the verdict is silently always empty.
+# Importing the plugin module runs no pytest hook: hooks are registered by
+# `-p`, not by import, and this module is stdlib-only.
+from scripts.utils.canopus_nullstub import MODULES_VAR, VALUES_VAR
 
 DEFAULT_PATTERNS = ("test_*.py",)
 RED_OUTCOMES = ("failure", "error")
+
+# The one character the claim set is passed to the child with, and the one
+# character a claim may therefore not contain. The child splits on it.
+STUB_NAME_SEPARATOR = ","
+# What the stub plugin prefixes its own diagnostics with, on the child's stderr.
+# The plugin reports a name whose resolution RAISED and was stubbed anyway; that
+# line is the only surviving trace of the swallowed exception, so this side has
+# to know the shape to forward it.
+NULLSTUB_STDERR_MARKER = "canopus-nullstub:"
 
 
 class ContractError(Exception):
@@ -110,8 +125,10 @@ def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
     matched on the bare callee name rather than on the resolved object.
     Matching by name over-reports rather than under-reports (a shadowed local
     function named `import_module` also gets picked up), and over-reporting is
-    the safe direction here, on the same "when in doubt, report the name"
-    reasoning `missing_modules` uses for its own widening direction.
+    the safe direction here: a wider claim set can only turn a passing probe
+    test into a vacuity label, never hide one. The consumer is
+    `_passable_claims`, which tolerates the junk that direction produces rather
+    than assuming every element is an importable dotted name.
 
     Relative imports are skipped: `from . import x` names no absolute module, and
     a name no import statement can produce is a claim that can only be wrong.
@@ -256,6 +273,11 @@ def run_pytest_report(
     extra_env is merged over os.environ rather than replacing it, so the trace id
     a daemon exported still reaches the child (.claude/rules/trace-id.md).
 
+    Returns the XML and, on the way past, forwards any line of the child's stderr
+    that carries NULLSTUB_STDERR_MARKER. See the comment at that loop: it is the
+    stub plugin's report of an exception it swallowed, and this is the only place
+    it can still be read.
+
     `-o addopts=` neutralises the repository's configured addopts (coverage,
     parallel workers) so the report is deterministic and cheap. CANOPUS_NO_ATTEST
     stops the child session writing an attestation over the real one: `probe` can
@@ -345,6 +367,17 @@ def run_pytest_report(
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise ContractError(f"the contract could not be run: {exc}") from exc
+        # The child's stub diagnostics, forwarded rather than dropped. The stub
+        # plugin STUBS a claimed name whose resolution raised and reports the
+        # exception instead of propagating it, so this line is the only trace
+        # that anything went wrong at all. Discarded, a first-party module that
+        # blows up on import reaches the operator as a bare vacuity refusal with
+        # nothing to explain it. Scoped to the marker rather than echoing the
+        # whole stream: an ordinary contract run loads no plugin, writes no such
+        # line, and is unaffected.
+        for line in (proc.stderr or "").splitlines():
+            if line.startswith(NULLSTUB_STDERR_MARKER):
+                print(line, file=sys.stderr)
         if not report.is_file():
             # The child's own words, or this is a diagnosis tool that refuses to
             # diagnose. Measured: `probe` is documented as runnable while a freeze
@@ -454,109 +487,144 @@ def refusal_reasons(
     return reasons
 
 
-_MISSING_PATTERN = re.compile(r"No module named ['\"]([A-Za-z_][A-Za-z0-9_.]*)")
-# The other half of "the code under test is not there yet". A module file that
-# exists but does not yet carry the name the contract imports raises
-# `ImportError: cannot import name 'x' from 'y'`, which the pattern above does not
-# match at all. Without this the probe returns an empty name set for every
-# partially built module, run_null_stub does nothing, and vacuity_refusal can
-# never fire in exactly the mid-build state where a retake is taken.
-_MISSING_NAME_PATTERN = re.compile(
-    r"cannot import name ['\"][A-Za-z_][A-Za-z0-9_]*['\"] from "
-    r"['\"]([A-Za-z_][A-Za-z0-9_.]*)"
-)
+def _passable_claims(collected: set[str]) -> list[str]:
+    """The collected strings that can survive the trip to the child, sorted.
 
+    `contract_imports` OVER-reports by design, and some of what it returns was
+    never a module name: every string constant among a dynamic import's
+    arguments is collected, so `pytest.importorskip("x", reason="needs, the
+    thing")` contributes the prose too. A string carrying the separator this
+    probe joins on would arrive in the child as two fragments the contract never
+    named, and a fragment can claim a module that EXISTS, which replaces real
+    values with stand-ins for the length of the probe.
 
-def missing_modules(xml_text: str) -> set[str]:
-    """FULL dotted module names the contract run could not import.
+    Dropped rather than escaped, and the direction is safe both ways: a comma
+    cannot appear in an importable dotted name, so nothing that could ever be
+    imported is lost, and nothing the contract did not write is claimed. The drop
+    is reported, because a claim silently removed is a verdict silently widened.
 
-    Read out of the failure messages the child itself produced, rather than
-    resolved in this process: the child's sys.path is the one that matters, and
-    it is not necessarily ours.
-
-    The dot belongs in the character class. Truncating at the first segment turns
-    one absent `scripts.utils.canopus_git` into a stub over the entire `scripts`
-    package, so modules that exist are mocked away, every test passes, and a good
-    contract is refused as vacuous.
-
-    The text read here is text the contract's own test code can shape, and the
-    two directions are NOT symmetrical. Be exact about both, because an earlier
-    revision of this docstring claimed "the direction is fail-closed" without
-    qualification and that was true of only one of them.
-
-    WIDENING is the safe one. A test that merely mentions the literal string
-    `No module named 'scripts'` gets that package stubbed for the probe run; a
-    wider stub can only turn a passing probe test into a vacuity label, never
-    hide one. The names reach the child through an environment variable only,
-    never through argv.
-
-    NARROWING is author-controlled and FAIL-OPEN, and it costs one keyword:
-
-        def test_vacuous():
-            try:
-                from absent_thing import answer
-            except ImportError:
-                raise AssertionError('not implemented yet') from None
-            assert answer() is not None
-
-    `from None` suppresses the chained traceback, so the child's failure text
-    never carries `No module named 'absent_thing'`, this function returns an
-    empty set, `run_null_stub` returns immediately with nothing stubbed, and
-    `vacuity_refusal` cannot fire over a contract every test of which asserts
-    nothing. Measured: freeze exits 0 and writes a manifest. Without `from None`
-    the chained ModuleNotFoundError leaks into the report and the refusal fires
-    correctly.
-
-    Nothing here closes that, and pretending otherwise is worse than naming it:
-    the instrument reads the child's own words, and the contract author writes
-    the child. What the callers DO about it is refuse to stay silent: see
-    `vacuity_unmeasured` below, which the operator-facing commands print when a
-    red contract names no absent module at all, so a probe that measured
-    nothing never reads like a probe that measured vacuity and found none.
+    Sorted so the value handed to the child is a function of the set alone. Two
+    runs of the same contract that differ only in iteration order would otherwise
+    be two different probes.
     """
-    root = _parse_report(xml_text)
-    found: set[str] = set()
-    for case in root.iter("testcase"):
-        for child in case:
-            message = child.get("message") or ""
-            text = child.text or ""
-            for blob in (message, text):
-                found.update(_MISSING_PATTERN.findall(blob))
-                found.update(_MISSING_NAME_PATTERN.findall(blob))
-    return found
+    passable = sorted(
+        name for name in collected if STUB_NAME_SEPARATOR not in name
+    )
+    for name in sorted(collected - set(passable)):
+        print(f"canopus: the contract names {name!r} where a module name was "
+              f"expected, and it carries the {STUB_NAME_SEPARATOR!r} this probe "
+              f"passes names with, so it is not claimed", file=sys.stderr)
+    return passable
 
 
 def run_null_stub(
     paths: Sequence[Path],
     root: Path,
-    modules: Iterable[str],
     *,
     timeout: int = 900,
 ) -> set[tuple[str, str]]:
-    """The (file, test) pairs that PASS with every absent module mocked.
+    """The (file, test) pairs that pass under BOTH stub value sets.
 
-    Each one is proved to assert nothing. Returns an empty set when there is
-    nothing to stub, which is the ordinary state of a mid-build retake where the
-    implementation already imports.
+    Each one is proved to assert nothing about the code under test: it passed
+    while the implementation was absent, and its outcome did not change when the
+    stub's values changed, so it cannot be reading those values.
+
+    Two runs, not one, and the second is not belt-and-braces. Measured: under a
+    single stub `assert len(result) == 0` passes and earns a vacuity label it did
+    not deserve, along with `assert key not in result` and `assert int(v) == 1`.
+    Nine of nine assertions classify correctly under the differential rule; four
+    are wrong under the single-stub rule, every one toward refusing a good
+    contract, which is the direction that teaches a builder to route around the
+    gate.
+
+    The stub set comes from the contract's own AST. Nothing the child SAYS is
+    read; its JUnit report is, for the outcomes, and the distinction is the point
+    rather than a caveat. An outcome is pytest's verdict on a test; the prose the
+    earlier revision parsed was the contract author's.
+
+    One escape family stays open, by construction rather than by oversight: a
+    claimed module that EXISTS and whose own body raises at import time is never
+    stubbed, so its test stays red for its original reason and never enters the
+    intersection. The claim set is what the contract's AST named, and this is the
+    price of that. The child reports what it swallowed on stderr, and
+    run_pytest_report forwards it, so the operator has the thread to pull.
     """
-    names = sorted(set(modules))
-    if not names:
+    modules = _passable_claims(contract_imports(paths, root))
+    if not modules:
         return set()
+    # A stub standing in for the contract's OWN package would poison collection
+    # silently. A stub lands in sys.modules and is returned by every later
+    # import_module even after the finder is gone, because sys.modules is read
+    # before sys.meta_path; under --import-mode=importlib pytest builds each
+    # collected module's parent packages through exactly that path. `__path__` is
+    # refused, but `__getattr__` answers everything else, so the damage is
+    # invisible rather than mock-shaped. This repository's `pythonpath = ["."]`
+    # makes `tests` resolve, so the prefix filter never claims it and the case
+    # cannot arise today; it arises under a different rootdir, so the refusal is
+    # written now rather than left as a property of one config file.
+    own_packages = {
+        rel.split("/", 1)[0] for rel in contract_files(paths, root) if "/" in rel
+    }
+    collision = own_packages & set(modules)
+    if collision:
+        raise ContractError(
+            "the contract imports a name that is also a package prefix of its own "
+            "files, so stubbing it would stand in for the contract itself: "
+            + ", ".join(sorted(collision))
+        )
+    # The ENGINE root is where the plugin lives (`-p scripts.utils.canopus_nullstub`
+    # must import); the CONTRACT root makes the tree's own modules importable, so a
+    # named module that exists is WRAPPED rather than stubbed whole.
     engine_root = str(Path(__file__).resolve().parent.parent.parent)
-    env = {
-        "CANOPUS_STUB_MODULES": ",".join(names),
+    base_env = {
+        MODULES_VAR: STUB_NAME_SEPARATOR.join(modules),
         "PYTHONPATH": os.pathsep.join(
-            [engine_root, os.environ.get("PYTHONPATH", "")]
+            [engine_root, str(Path(root).resolve()),
+             os.environ.get("PYTHONPATH", "")]
         ).rstrip(os.pathsep),
     }
-    xml_text = run_pytest_report(
-        paths, root, timeout=timeout, extra_env=env,
-        extra_args=("-p", "scripts.utils.canopus_nullstub"),
-    )
-    _counts, outcomes = parse_junit(xml_text)
-    return {
-        (rel, name) for rel, name, outcome in outcomes if outcome == "passed"
-    }
+    populations = []
+    unproved_each = []
+    for label in ("A", "B"):
+        xml_text = run_pytest_report(
+            paths, root, timeout=timeout,
+            extra_env={**base_env, VALUES_VAR: label},
+            extra_args=("-p", "scripts.utils.canopus_nullstub"),
+        )
+        _counts, outcomes = parse_junit(xml_text)
+        populations.append({(rel, name) for rel, name, _o in outcomes})
+        # "passed" is not the whole of "was not proved to assert anything".
+        # Measured on the prototype: `pytest.skip("not implemented yet")` at the
+        # top of a vacuous test yields `skipped` under BOTH runs, so it never
+        # enters an intersection of PASSES and the freeze proceeds. That is a
+        # one-call bypass, cheaper than the `from None` this slice closes, and it
+        # is a recurrence: wire 2.3 already found that a skipped test is never in
+        # the vacuous set. A test that did not run was not proved innocent.
+        unproved_each.append(
+            {(rel, name) for rel, name, outcome in outcomes
+             if outcome in ("passed", "skipped")}
+        )
+    # An intersection is only evidence over one population. Two runs that
+    # collected different tests were never compared, and two that collected
+    # nothing measured nothing; both reach the same empty verdict, which reads
+    # exactly like "measured, and nothing was vacuous". Refused instead, because
+    # the quiet reading is the one that freezes a contract asserting nothing.
+    if populations[0] != populations[1]:
+        raise ContractError(
+            "the two stub runs did not measure the same tests, so their verdicts "
+            "cannot be compared: "
+            + ", ".join(
+                f"{rel}::{name}"
+                for rel, name in sorted(populations[0] ^ populations[1])
+            )
+        )
+    if not populations[0]:
+        raise ContractError(
+            "the stub runs collected no test at all, so nothing was proved "
+            "either way: vacuity was NOT measured, which is not the same claim "
+            "as measured and found absent"
+        )
+    return unproved_each[0] & unproved_each[1]
 
 
 def vacuity_unmeasured(

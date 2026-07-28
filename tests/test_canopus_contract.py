@@ -549,22 +549,95 @@ def test_a_skipped_test_is_not_proved_to_assert_anything(tmp_path):
     assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_a")}
 
 
-def test_nothing_is_proved_when_the_contract_imports_nothing(tmp_path):
-    """No name to claim means no stand-in ran, so no test was measured.
+def test_a_contract_that_names_no_module_refuses_rather_than_returning_empty(
+    tmp_path,
+):
+    """No name to claim means no stand-in ran, so NO test was measured.
 
-    Also the cost guard: without it a contract naming nothing still pays for two
-    whole pytest sessions, and every test that happened to pass on its own would
-    come back labelled as asserting nothing.
+    The revision this replaces returned an empty set here, and an empty set is
+    what a completed measurement that found nothing vacuous also returns. The two
+    are opposite claims read off one value: the caller printed no vacuity word,
+    exited 0, and wrote the manifest. Measured through the CLI on
+    `def test_a(): assert 1 == 2` before the fix: `probe` exited 0 and `freeze`
+    froze it.
+
+    Refusing costs the caller nothing it had: with no name claimed there was
+    never a verdict to lose. It also keeps the cost guard the empty return was
+    partly there for, because the two stub sessions are still never spent.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n    assert 1 == 2\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        run_null_stub([contract], tmp_path)
+    assert "NOT measured" in str(excinfo.value)
+
+
+def test_a_claim_set_emptied_by_the_passability_filter_also_refuses(tmp_path):
+    """The same state reached one step later, and it must land the same way.
+
+    `contract_imports` reads a name here, so the refusal cannot key off the AST
+    being silent; `_passable_claims` then drops it because it carries the wire
+    separator, and what reaches the child is again nothing. Whether the set was
+    empty on arrival or emptied on the way, no stand-in ran.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+    from scripts.utils.canopus_nullstub import STUB_NAME_SEPARATOR
+
+    # `__import__` rather than `importlib.import_module`, so the file carries no
+    # plain `import` statement either; otherwise `importlib` survives the filter
+    # and this measures a set that was never empty.
+    unpassable = "absent" + STUB_NAME_SEPARATOR + "thing"
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        f"    __import__({unpassable!r})\n"
+        "    assert False\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        run_null_stub([contract], tmp_path)
+    assert "NOT measured" in str(excinfo.value)
+
+
+def test_a_vacuous_test_whose_absent_import_lives_in_a_conftest_is_caught(tmp_path):
+    """Building the subject in a fixture is ordinary pytest, and it was an escape.
+
+    The contract's only absent import sits in `conftest.py`, which the test-module
+    glob never read, so the claim set came back empty, nothing was stubbed, and
+    the probe returned a verdict it had not taken. The test is the canonical
+    vacuous shape the two-stub rule exists to catch: `len(...) == 0` against a
+    subject that does not exist.
     """
     from scripts.utils.canopus_contract import run_null_stub
 
     contract = tmp_path / "c"
     contract.mkdir()
+    (contract / "conftest.py").write_text(
+        "import pytest\n"
+        "\n\n"
+        "@pytest.fixture\n"
+        "def widget():\n"
+        "    from absent_thing import Widget\n"
+        "    return Widget()\n",
+        encoding="utf-8",
+    )
     (contract / "test_one.py").write_text(
-        "def test_a():\n    assert True\n", encoding="utf-8"
+        "def test_widget_is_not_none(widget):\n"
+        "    assert widget is not None\n",
+        encoding="utf-8",
     )
 
-    assert run_null_stub([contract], tmp_path) == set()
+    assert run_null_stub([contract], tmp_path) == {
+        ("c/test_one.py", "test_widget_is_not_none")
+    }
 
 
 _ONE_PASSING_REPORT = (
@@ -1645,6 +1718,76 @@ def test_contract_imports_sees_an_import_hidden_in_a_try_block(tmp_path):
     )
 
     assert contract_imports([contract], tmp_path) == {"absent_thing"}
+
+
+def test_contract_imports_reads_a_conftest_beside_the_test_module(tmp_path):
+    """A conftest inside a contract directory is contract source.
+
+    Its fixtures are where the absent code is most naturally reached, so a reader
+    that globs `test_*.py` alone misses the contract's only import and reports
+    that the contract names nothing.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    (contract / "nested").mkdir(parents=True)
+    (contract / "conftest.py").write_text(
+        "def _build():\n    from absent_thing import Widget\n    return Widget\n",
+        encoding="utf-8",
+    )
+    (contract / "nested" / "conftest.py").write_text(
+        "def _also():\n    from deeper_absence import Thing\n    return Thing\n",
+        encoding="utf-8",
+    )
+    (contract / "nested" / "test_one.py").write_text(
+        "def test_a(widget):\n    assert widget\n", encoding="utf-8"
+    )
+
+    assert contract_imports([contract], tmp_path) == {
+        "absent_thing", "deeper_absence",
+    }
+
+
+def test_contract_imports_reads_the_conftest_beside_a_named_test_file(tmp_path):
+    """A file argument brings its own directory's conftest, because pytest does.
+
+    `probe tests/contract/slice/test_contract.py` loads that conftest for the
+    run, so a reader that ignored it would report an empty claim set and turn a
+    perfectly measurable contract into a refusal.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "conftest.py").write_text(
+        "def _build():\n    from absent_thing import Widget\n    return Widget\n",
+        encoding="utf-8",
+    )
+    (contract / "test_one.py").write_text(
+        "def test_a(widget):\n    assert widget\n", encoding="utf-8"
+    )
+
+    assert contract_imports([contract / "test_one.py"], tmp_path) == {"absent_thing"}
+
+
+def test_contract_files_still_counts_test_modules_only(tmp_path):
+    """The conftest widening is the AST reader's alone, and this is the fence.
+
+    `contract_files` feeds the manifest baseline and the collected-nothing
+    refusal. A conftest yields no test items, so counting one there would record
+    a baseline of 0 for a file that can never move off it and refuse every
+    contract that carries one.
+    """
+    from scripts.utils.canopus_contract import contract_files
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "conftest.py").write_text("x = 1\n", encoding="utf-8")
+    (contract / "test_one.py").write_text(
+        "def test_a():\n    assert False\n", encoding="utf-8"
+    )
+
+    assert contract_files([contract], tmp_path) == ["c/test_one.py"]
 
 
 def test_contract_imports_reads_plain_and_dotted_imports(tmp_path):

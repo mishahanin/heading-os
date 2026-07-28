@@ -941,7 +941,24 @@ def cmd_probe(args) -> int:
             # a way it failed. It says what a skip actually costs instead.
             mode = ("" if outcome in ("passed", "skipped")
                     else f"  {modes.get((case_rel, name), 'other')}")
-            note = "  did not run, so it proves nothing" if outcome == "skipped" else ""
+            if probe_failed and outcome in RED_OUTCOMES:
+                # Said on the ROW, not only in the refusal line at the bottom.
+                # With the probe failed `vacuous` is empty, so every red row
+                # printed its ordinary failure line and nothing on it
+                # distinguished "measured, and this test asserts something" from
+                # "never measured". The operator who reads to the end is told by
+                # the refusal and the exit code; the one who skims the table is
+                # the one this exists for, and a table that reads clean while
+                # nothing was measured is the reading this slice removes.
+                #
+                # Red rows only, matching `vacuity_refusal`: a green test is
+                # outside the verdict either way, so stamping it UNKNOWN would
+                # invent a measurement that was never owed.
+                note = "  vacuity UNKNOWN, it was never measured"
+            elif outcome == "skipped":
+                note = "  did not run, so it proves nothing"
+            else:
+                note = ""
             print(f"  {colour}{outcome:8}{RESET} {name}{mode}{note}")
     reasons = refusal_reasons(counts, outcomes, expected)
     if probe_failed:

@@ -100,11 +100,57 @@ def contract_files(
     return sorted(found)
 
 
+CONFTEST_PATTERNS = ("conftest.py",)
+
+
+def contract_source_files(
+    paths: Sequence[Path],
+    root: Path,
+    patterns: Sequence[str] = DEFAULT_PATTERNS,
+) -> list[str]:
+    """The contract's own SOURCE: its test modules and the conftests beside them.
+
+    A separate accessor rather than a wider default on `contract_files`, because
+    the two answer different questions and only one of them may grow.
+    `contract_files` says which files are contract TESTS: it feeds the per-file
+    baseline the manifest records and the collected-nothing refusal. A conftest
+    yields no test items, so counting one there would record a baseline of zero
+    for a file that can never move off it, and every contract carrying a conftest
+    would be refused for collecting nothing.
+
+    A conftest IS contract source, and the AST reader has to see it. Measured
+    through the CLI: a fixture whose body is `from absent_thing import Widget`
+    puts the contract's only absent import in a file the `test_*.py` glob never
+    reads, so the claim set came back empty, nothing was stubbed, and `freeze`
+    took a contract whose one test asserted `len(widget.items()) == 0` against a
+    subject that did not exist. Building the subject in a fixture is ordinary
+    pytest, not an exotic shape.
+
+    A path named as a FILE brings its own directory's conftest with it, because
+    pytest loads that conftest for that file too. Only the immediate parent: a
+    directory argument is walked whole below, and climbing further from a file
+    argument would claim modules named by files the contract does not contain.
+    """
+    targets = list(paths)
+    for raw in paths:
+        target = Path(raw)
+        if target.is_dir():
+            continue
+        for pattern in CONFTEST_PATTERNS:
+            sibling = target.parent / pattern
+            if sibling.is_file():
+                targets.append(sibling)
+    return contract_files(targets, root, tuple(patterns) + CONFTEST_PATTERNS)
+
+
 _DYNAMIC_IMPORT_CALLEES = ("import_module", "__import__", "importorskip")
 
 
 def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
     """Dotted module names the contract's own source imports.
+
+    Source means `contract_source_files`, so the contract's conftests are read
+    alongside its test modules; the reasoning is in that function's docstring.
 
     Read from the AST rather than from the child's failure text, and that is the
     whole slice. `try/except ImportError` around a plain `import` or `from`
@@ -148,11 +194,12 @@ def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
     a name no import statement can produce is a claim that can only be wrong.
 
     A file that will not parse, or cannot be read as UTF-8, raises rather than
-    contributing nothing. An empty set is indistinguishable from "this contract
-    imports nothing", which stubs nothing, which cannot refuse.
+    contributing nothing. An empty set here is a real answer ("this contract's
+    source names no module"), and `run_null_stub` refuses on it rather than
+    reading it as a verdict, so the two must not be conflated at this level.
     """
     modules: set[str] = set()
-    for rel in contract_files(paths, root):
+    for rel in contract_source_files(paths, root):
         path = Path(root) / rel
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -650,10 +697,16 @@ def run_null_stub(
     contract, which is the direction that teaches a builder to route around the
     gate.
 
-    The stub set comes from the contract's own AST. Nothing the child SAYS is
-    read; its JUnit report is, for the outcomes, and the distinction is the point
-    rather than a caveat. An outcome is pytest's verdict on a test; the prose the
-    earlier revision parsed was the contract author's.
+    The stub set comes from the contract's own AST, over its test modules AND its
+    conftests. Nothing the child SAYS is read; its JUnit report is, for the
+    outcomes, and the distinction is the point rather than a caveat. An outcome is
+    pytest's verdict on a test; the prose the earlier revision parsed was the
+    contract author's.
+
+    A claim set that comes back EMPTY raises rather than returning an empty
+    verdict. Nothing was stubbed there, so nothing was measured, and the empty set
+    a caller would have received is the same value a completed measurement that
+    found nothing vacuous returns.
 
     One escape family stays open, by construction rather than by oversight: a
     claimed module that EXISTS and whose own body raises at import time is never
@@ -684,7 +737,23 @@ def run_null_stub(
     """
     modules = _passable_claims(contract_imports(paths, root))
     if not modules:
-        return set()
+        # Nothing was stubbed, so nothing was measured, and an empty verdict from
+        # that state is not evidence. Returning `set()` here was the same silent
+        # acquittal the guards below refuse, one step earlier: the caller cannot
+        # tell it from "measured, and nothing was vacuous", so it printed no
+        # vacuity word, exited 0, and wrote the manifest. Measured through the
+        # CLI on `def test_a(): assert 1 == 2`, and on a contract whose only
+        # absent import lived in a fixture in its conftest.
+        raise ContractError(
+            "the contract's source names no module this probe could stand in "
+            "for, so nothing was stubbed and vacuity was NOT measured: the "
+            "contract's redness has not been shown to mean anything. A contract "
+            "that never names the code under test cannot be shown to assert "
+            "something about it. Import the code under test inside the test "
+            "body or a fixture; if the contract reaches it only through a name "
+            "computed at run time, spell that name in a plain import statement "
+            "too, so this probe can read it."
+        )
     files = contract_files(paths, root)
     # A stub standing in for the contract's OWN package would poison collection
     # silently. A stub lands in sys.modules and is returned by every later
@@ -894,11 +963,20 @@ def run_null_stub(
 # One advisory used to stand here, and it is DELETED rather than left unused. It
 # said "the contract is red and its report names no absent module, so nothing
 # could be stubbed", reading that name set off the reader of the child's failure
-# text that this module no longer carries either. The stub set comes from the
-# contract's own import AST now, which `from None` cannot erase, so the state
-# that sentence described is unreachable. The states that ARE unmeasurable raise
-# `ContractError` out of `run_null_stub`, and the callers turn those into
-# refusals rather than a note printed beside an exit 0.
+# text that this module no longer carries either.
+#
+# The state it described is REACHABLE. An earlier revision of this comment
+# claimed the AST reader made it unreachable, and review measured that false: the
+# claim set is empty whenever the contract's source names no importable module at
+# all (a test that imports nothing, a contract whose only import is relative), and
+# whenever every name it does read is dropped as unpassable. What changed is not
+# that the state went away but where it LANDS. It used to be an advisory printed
+# beside an exit 0, which reads as a clean bill; it is now a `ContractError` out
+# of `run_null_stub`, like every other state in which nothing was measured, and
+# the callers turn those into refusals. Two families stay outside even that: a
+# name computed at run time is invisible to any static reader, and a claimed
+# module that EXISTS and raises on import is never stubbed. Both fail OPEN, and
+# both are argued where they arise rather than here.
 
 _IMPORT_MARKERS = ("ModuleNotFoundError", "ImportError")
 

@@ -556,12 +556,26 @@ def test_freeze_requires_at_least_one_path(tree, anchor, capsys):
 
 
 def _write_contract(tree, red=True):
+    """Two tests: one red under `red=True`, one green either way.
+
+    The red one dies on an ABSENT import and then asserts a value no stand-in can
+    satisfy, so it is red for real, red under both stub value sets, and therefore
+    never vacuous. The absent import is load-bearing rather than decoration: a
+    contract whose source names no module at all is one the vacuity probe now
+    refuses, because with no name to stand in for, nothing is stubbed and nothing
+    is measured. `red=False` keeps its import-free all-green shape, which
+    `refusal_reasons` owns and the probe is never reached for.
+    """
     directory = tree / "tests" / "contract" / "slice"
     directory.mkdir(parents=True, exist_ok=True)
-    body = ("def test_a():\n    assert False\n\n\ndef test_b():\n    assert True\n"
-            if red else
-            "def test_a():\n    assert True\n\n\ndef test_b():\n    assert True\n")
-    (directory / "test_contract.py").write_text(body)
+    first = ("def test_a():\n"
+             "    from absent_thing import answer\n"
+             "    assert answer() == 42\n"
+             if red else
+             "def test_a():\n    assert True\n")
+    (directory / "test_contract.py").write_text(
+        first + "\n\ndef test_b():\n    assert True\n"
+    )
     return directory
 
 
@@ -1610,14 +1624,33 @@ def test_probe_lists_the_tests_that_assert_nothing(tree, capsys):
 
 def test_probe_labels_how_a_red_test_failed(tree, capsys):
     """The operator's first question is whether anything failed for a reason
-    other than the code being absent."""
-    _write_contract(tree)   # test_a asserts False, test_b passes
+    other than the code being absent.
+
+    Its own contract rather than `_write_contract`, because that helper's red test
+    now dies on an absent import and would be labelled `import` on every run: this
+    test needs one red test of each kind side by side to show the label
+    discriminating.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True)
+    (directory / "test_contract.py").write_text(
+        "def test_asserts():\n"
+        "    assert 1 == 2\n"
+        "\n\n"
+        "def test_imports():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() == 42\n"
+    )
 
     _run(["probe", "tests/contract/slice"], tree)
     out = capsys.readouterr().out
 
-    line = next(part for part in out.splitlines() if "test_a" in part)
-    assert "assertion" in line
+    rows = {
+        name: next(line for line in out.splitlines() if name in line)
+        for name in ("test_asserts", "test_imports")
+    }
+    assert "assertion" in rows["test_asserts"]
+    assert "import" in rows["test_imports"]
 
 
 def test_freeze_refuses_a_wholly_vacuous_contract(tree, anchor, capsys):
@@ -1762,6 +1795,133 @@ def test_freeze_refuses_the_from_none_bypass(tree, anchor, capsys):
     assert not (tree / ".canopus" / "freeze.json").exists()
 
 
+def _write_conftest_fixture_contract(tree) -> Path:
+    """Escape shape (a): the contract's only absent import is in its conftest.
+
+    Building the subject in a fixture is ordinary pytest, and the AST reader
+    globbed `test_*.py` only, so the claim set came back empty, nothing was
+    stubbed, and the probe returned a verdict it had never taken. Measured
+    through this CLI before the fix: `probe` exited 0 printing no vacuity word at
+    all, and `freeze` exited 0 and wrote the manifest.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "conftest.py").write_text(
+        "import pytest\n"
+        "\n\n"
+        "@pytest.fixture\n"
+        "def widget():\n"
+        "    from absent_thing import Widget\n"
+        "    return Widget()\n"
+    )
+    (directory / "test_contract.py").write_text(
+        "def test_widget_exists(widget):\n"
+        "    assert widget is not None\n"
+    )
+    return directory
+
+
+def test_freeze_refuses_a_vacuous_test_built_in_a_conftest_fixture(
+    tree, anchor, capsys,
+):
+    _write_conftest_fixture_contract(tree)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "asserts nothing" in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_probe_names_a_vacuous_test_built_in_a_conftest_fixture(tree, capsys):
+    _write_conftest_fixture_contract(tree)
+
+    assert _run(["probe", "tests/contract/slice"], tree) == 1
+    out = capsys.readouterr().out
+    assert "asserts nothing" in next(
+        line for line in out.splitlines() if "test_widget_exists" in line
+    )
+
+
+def test_freeze_still_takes_a_real_contract_whose_fixture_is_in_a_conftest(
+    tree, anchor,
+):
+    """The other direction, because a gate that refuses good contracts is routed
+    around, and one that is routed around proves nothing while looking as though
+    it does.
+
+    The assertion is `len(...) == 0`, which is the container assertion the two
+    stub value sets exist to separate: it passes under the set whose length is 0
+    and fails under the one whose length is 7, so its outcome moves with the value
+    and it asserts something after all. Reading the conftest makes that
+    measurement possible; it must not make it an accusation.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True)
+    (directory / "conftest.py").write_text(
+        "import pytest\n"
+        "\n\n"
+        "@pytest.fixture\n"
+        "def widget():\n"
+        "    from absent_thing import Widget\n"
+        "    return Widget()\n"
+    )
+    (directory / "test_contract.py").write_text(
+        "def test_widget_reports_zero(widget):\n"
+        "    assert len(widget.items()) == 0\n"
+    )
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 0
+
+
+def _write_importless_contract(tree) -> Path:
+    """Escape shape (b): a red contract whose source names no module at all.
+
+    Nothing is stubbed, so the probe measures nothing, and the empty set it
+    returned was indistinguishable from a completed measurement that found
+    nothing vacuous. Measured before the fix: `probe` exited 0 and `freeze` wrote
+    the manifest.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "test_contract.py").write_text("def test_a():\n    assert 1 == 2\n")
+    return directory
+
+
+def test_freeze_refuses_a_contract_that_names_no_module(tree, anchor, capsys):
+    _write_importless_contract(tree)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    err = capsys.readouterr().err
+    assert "NOT measured" in err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_approve_refuses_a_contract_that_names_no_module(tree, anchor, capsys):
+    """`approve` is the surface a human commits from, so the refusal has to land
+    here too rather than only at the freeze that follows it."""
+    _write_importless_contract(tree)
+
+    assert _run(["approve", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "NOT measured" in capsys.readouterr().err
+    assert "canopus-anchor" not in anchor.read_text()
+
+
+def test_probe_refuses_a_contract_that_names_no_module(tree, capsys):
+    """And it is a refusal, not a traceback: the CLI turns ContractError into an
+    operator-visible line on every one of the three surfaces."""
+    _write_importless_contract(tree)
+
+    assert _run(["probe", "tests/contract/slice"], tree) == 1
+    out = capsys.readouterr().out
+    assert "NOT measured" in out
+    assert "vacuity UNKNOWN" in next(
+        line for line in out.splitlines() if "test_a" in line
+    )
+
+
 def test_freeze_refuses_when_the_vacuity_probe_cannot_run(
     tree, anchor, monkeypatch, capsys,
 ):
@@ -1808,6 +1968,68 @@ def test_probe_refuses_when_the_vacuity_probe_cannot_run(
     assert "could not be measured" in out
     # The table still rendered: the failure is reported, not raised through it.
     assert "test_vacuous" in out
+
+
+def test_probe_marks_every_red_row_unknown_when_the_probe_failed(
+    tree, monkeypatch, capsys,
+):
+    """The table has to say it too, not only the trailing refusal.
+
+    With `vacuous` empty every red row printed its ordinary failure line and
+    nothing on it marked vacuity as unmeasured, so an operator who read to the
+    end was told and one who skimmed the rows was not. The rows are the surface
+    this command exists to be read from.
+    """
+    from scripts.utils.canopus_contract import ContractError
+
+    def _explode(*args, **kwargs):
+        raise ContractError("pytest wrote no JUnit report")
+
+    monkeypatch.setattr(canopus, "run_null_stub", _explode)
+    _write_vacuous_contract(tree, real=True)
+
+    assert _run(["probe", "tests/contract/slice"], tree) == 1
+    lines = capsys.readouterr().out.splitlines()
+    rows = [
+        next(line for line in lines if name in line)
+        for name in ("test_vacuous", "test_other")
+    ]
+    assert all("vacuity UNKNOWN" in row for row in rows)
+
+
+def test_probe_leaves_a_green_row_alone_when_the_probe_failed(
+    tree, monkeypatch, capsys,
+):
+    """UNKNOWN belongs on the rows the verdict would have judged, and no others.
+
+    Only RED tests are weighed by `vacuity_refusal`, so a green row's vacuity was
+    never going to be reported either way; stamping it UNKNOWN would invent a
+    missing measurement rather than name one.
+    """
+    from scripts.utils.canopus_contract import ContractError
+
+    def _explode(*args, **kwargs):
+        raise ContractError("pytest wrote no JUnit report")
+
+    monkeypatch.setattr(canopus, "run_null_stub", _explode)
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True)
+    (directory / "test_contract.py").write_text(
+        "def test_green_for_real():\n"
+        "    import json\n"
+        "    assert json.dumps({'a': 1}) == '{\"a\": 1}'\n"
+        "\n\n"
+        "def test_red():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() is not None\n"
+    )
+
+    assert _run(["probe", "tests/contract/slice"], tree) == 1
+    lines = capsys.readouterr().out.splitlines()
+    green = next(line for line in lines if "test_green_for_real" in line)
+    red = next(line for line in lines if "test_red" in line)
+    assert "vacuity UNKNOWN" not in green
+    assert "vacuity UNKNOWN" in red
 
 
 # ============================================================

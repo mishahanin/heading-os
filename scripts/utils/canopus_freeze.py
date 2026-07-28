@@ -1591,6 +1591,12 @@ ATTEST_FILENAME = "attest.json"
 ATTEST_RECIPE = "canopus-attest-v2"
 ATTESTED = "ATTESTED"
 NOT_ATTESTED = "NOT ATTESTED"
+# The recipe `canopus_tree.tree_state` stamps into its own state dict. Kept
+# here, beside ATTEST_RECIPE, and imported by canopus_tree.py rather than the
+# other way round, so the two modules cannot come to disagree about the name
+# without canopus_freeze's import tail growing a subprocess dependency it may
+# never carry.
+TREE_RECIPE = "canopus-tree-v1"
 
 
 def attest_state_path(root: Path) -> Path:
@@ -1858,3 +1864,44 @@ def attestation_state(
     if not attestation.get("attested"):
         return NOT_ATTESTED, "the attesting run did not qualify"
     return ATTESTED, ""
+
+
+def _usable_tree_state(candidate) -> bool:
+    """The shape every reader here assumes, checked once rather than four times."""
+    return (isinstance(candidate, dict)
+            and candidate.get("recipe") == TREE_RECIPE
+            and isinstance(candidate.get("head"), str)
+            and isinstance(candidate.get("dirty"), dict))
+
+
+def tree_drift(recorded, current) -> list[str]:
+    """Reasons the recorded tree state no longer describes the tree. Never raises.
+
+    A PURE comparison of two structures: this module runs no git and reads no
+    file, so its import tail stays stdlib plus `atomic`, which is what lets the
+    gate call it at every pytest session start.
+
+    Damage on either side is a reason rather than a pass, for the rule wire 3.1
+    settled over an empty claim set: not proved is not proved innocent.
+
+    Four kinds get four sentences. An operator who reads one string for all of
+    them cannot tell a new file from a deleted one from an edit from a commit.
+    """
+    if not _usable_tree_state(recorded):
+        return ["this run recorded no usable description of the tree it ran against"]
+    if not _usable_tree_state(current):
+        return ["the tree could not be described now, so the record cannot be checked"]
+    reasons: list[str] = []
+    if recorded["head"] != current["head"]:
+        reasons.append(
+            f"HEAD moved since the attesting run: {recorded['head']} to "
+            f"{current['head']}")
+    was, now = recorded["dirty"], current["dirty"]
+    for rel in sorted(set(was) | set(now)):
+        if rel not in now:
+            reasons.append(f"a path the attesting run saw is no longer reported: {rel}")
+        elif rel not in was:
+            reasons.append(f"a path appeared since the attesting run: {rel}")
+        elif was[rel] != now[rel]:
+            reasons.append(f"a path changed since the attesting run: {rel}")
+    return reasons

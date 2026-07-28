@@ -1907,3 +1907,59 @@ def test_an_empty_ledger_has_no_unreleased_freeze():
     from scripts.utils.canopus_freeze import unreleased_freeze
 
     assert unreleased_freeze([]) is None
+
+
+def test_tree_drift_is_silent_between_two_identical_states():
+    from scripts.utils.canopus_freeze import tree_drift
+
+    state = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+             "dirty": {"x.py": "b" * 64}}
+    assert tree_drift(state, dict(state)) == []
+
+
+def test_tree_drift_names_the_path_that_moved():
+    from scripts.utils.canopus_freeze import tree_drift
+
+    before = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+              "dirty": {"x.py": "b" * 64}}
+    after = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+             "dirty": {"x.py": "c" * 64}}
+    reasons = tree_drift(before, after)
+    assert len(reasons) == 1
+    assert "x.py" in reasons[0]
+
+
+def test_tree_drift_sees_an_appearance_a_disappearance_and_a_moved_head():
+    """Three different truths, three different sentences. An operator who reads
+    one string for all of them cannot tell a new file from a deleted one from a
+    commit."""
+    from scripts.utils.canopus_freeze import tree_drift
+
+    before = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+              "dirty": {"gone.py": "b" * 64}}
+    after = {"recipe": "canopus-tree-v1", "head": "d" * 40,
+             "dirty": {"new.py": "c" * 64}}
+    joined = " | ".join(tree_drift(before, after))
+    assert "gone.py" in joined
+    assert "new.py" in joined
+    assert "HEAD" in joined
+
+
+def test_tree_drift_refuses_an_absent_or_damaged_state():
+    """Not proved is not proved innocent, the rule wire 3.1 settled."""
+    from scripts.utils.canopus_freeze import tree_drift
+
+    good = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {}}
+    for damaged in (None, {}, "text", 7, {"head": "a" * 40}):
+        assert tree_drift(damaged, good) != []
+        assert tree_drift(good, damaged) != []
+
+
+def test_tree_drift_never_raises_on_a_hostile_state():
+    from scripts.utils.canopus_freeze import tree_drift
+
+    good = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {}}
+    for hostile in ({"recipe": "canopus-tree-v1", "head": 7, "dirty": {}},
+                    {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": 7},
+                    {"recipe": "other", "head": "a" * 40, "dirty": {}}):
+        assert isinstance(tree_drift(hostile, good), list)

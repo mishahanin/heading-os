@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pytest plugin: resolve named absent modules to mocks, for the null-stub probe.
+"""pytest plugin: stub exactly what the contract imports, and nothing else.
 
 Loaded with `-p scripts.utils.canopus_nullstub` in the probe child only, never in
 an ordinary run. Passing it as a plugin rather than writing a conftest is
@@ -8,11 +8,25 @@ beside it would read as tampering to the very lock this tool installs.
 
 What it buys. Before the implementation exists every contract test dies on
 ImportError, so "the contract is red" proves the code is absent and says nothing
-about whether the contract asserts anything. With the absent modules resolved to
-mocks the imports succeed and the implementation still does not exist, so a test
-that PASSES has been proved to assert nothing, by construction rather than by
-opinion: `assert answer() == 42` fails against a MagicMock, while
-`assert answer() is not None` passes and earns the label.
+about whether the contract asserts anything. With the contract's own imports
+resolved to stubs, a test that PASSES under two stubs carrying DIFFERENT values
+has been proved not to depend on those values, and therefore to assert nothing
+about them.
+
+Why two stubs and not one. A single stub cannot separate a vacuous test from a
+container assertion: measured on MagicMock, `len` is 0, `int` is 1, `list` is
+empty and `in` is False, so `assert len(result) == 0` passes under the stub and
+earns a label it did not deserve. The differential rule got nine of nine
+assertions right where the single-stub rule got four wrong, every one of them
+toward refusing a good contract.
+
+Why the name set comes from the AST. An earlier revision read it from the child's
+failure text, which the contract author writes, so `raise AssertionError(...) from
+None` inside the ImportError handler erased the evidence. A later one answered
+EVERY otherwise-failing import, which broke pytest's own
+`importlib.import_module(parent)` under `--import-mode=importlib`. The AST is what
+the interpreter executes: it cannot be suppressed by the handler, and it names
+nothing the contract did not write.
 """
 from __future__ import annotations
 
@@ -20,81 +34,76 @@ import os
 import sys
 from importlib.abc import Loader, MetaPathFinder
 from importlib.machinery import ModuleSpec
+from importlib.util import find_spec
 from types import ModuleType
-from unittest.mock import MagicMock
 
-ENV_VAR = "CANOPUS_STUB_MODULES"
+MODULES_VAR = "CANOPUS_AST_MODULES"
+VALUES_VAR = "CANOPUS_STUB_VALUES"
+
+# Every channel differs between the two sets. A channel they agreed on could not
+# separate a vacuous test from one that reads it.
+STUB_VALUES = {
+    "A": {"len": 0, "int": 1, "bool": True, "contains": False, "item": "a"},
+    "B": {"len": 7, "int": 99, "bool": False, "contains": True, "item": "b"},
+}
 
 
-class _MockLoader(Loader):
-    """Builds a module whose every attribute is a fresh MagicMock.
+class Stub:
+    """A value-carrying stand-in whose descendants inherit its values.
 
-    Fresh per access, so `mod.f is mod.f` is False. That is safe for the same
-    reason the finder's docstring leans on: an identity assertion FAILS under the
-    stub, so the test keeps its red outcome and is never mislabelled vacuous. It
-    is named here because the property is easy to trip over when reading a
-    passing probe run.
+    Deliberately not a MagicMock. Configuring a MagicMock's dunders recurses
+    without bound, and subclassing it does not help because it owns its dunders
+    on the instance; both were measured before this class was written.
+
+    Dunder ATTRIBUTE access raises, so a stub cannot answer `__path__` and
+    masquerade as a package.
     """
 
-    def create_module(self, spec):
-        module = ModuleType(spec.name)
-        module.__getattr__ = lambda name: MagicMock()  # PEP 562
-        return module
+    __slots__ = ("_values",)
 
-    def exec_module(self, module):
-        return None
+    def __init__(self, values):
+        object.__setattr__(self, "_values", values)
 
+    def _sibling(self):
+        return Stub(object.__getattribute__(self, "_values"))
 
-class _MockFinder(MetaPathFinder):
-    """Answers for the named modules and their submodules, and nothing else.
+    def __getattr__(self, name):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return self._sibling()
 
-    Matching on the FULL dotted name is load-bearing. An earlier draft matched on
-    the first segment, so a single absent `scripts.utils.canopus_git` mocked the
-    whole `scripts` package, including the modules the contract legitimately
-    imports. Every test then passed against mocks and the wholly-vacuous refusal
-    fired on a perfectly good contract.
+    def __call__(self, *args, **kwargs):
+        return self._sibling()
 
-    Be exact about what the name list is, because the obvious claim is not quite
-    true. It is what the real run could not import, and half of it comes from
-    `cannot import name 'x' from 'y'`, where `y` EXISTS and is merely incomplete.
-    So a partially built module IS shadowed whole, and every name it already
-    carries correctly becomes a MagicMock for the probe run. That is safe rather
-    than sound: a MagicMock compares unequal to every literal, so a test asserting
-    on one of those real names still FAILS under the stub and is not mislabelled
-    vacuous. Only a test asserting mere presence passes, which is the label it has
-    earned. The property this leans on is MagicMock inequality, not the absence of
-    shadowing, and it is written down here so the next reader does not weaken the
-    matcher on a false premise.
-    """
+    def __getitem__(self, key):
+        return self._sibling()
 
-    def __init__(self, names):
-        self._names = tuple(sorted(names))
+    def __len__(self):
+        return object.__getattribute__(self, "_values")["len"]
 
-    def find_spec(self, fullname, path=None, target=None):
-        if not any(
-            fullname == name or fullname.startswith(f"{name}.")
-            for name in self._names
-        ):
-            return None
-        return ModuleSpec(fullname, _MockLoader(), is_package=True)
+    def __int__(self):
+        return object.__getattribute__(self, "_values")["int"]
 
+    def __bool__(self):
+        return object.__getattribute__(self, "_values")["bool"]
 
-def pytest_configure(config):
-    """Install the finder before collection, or do nothing when unconfigured."""
-    names = [name for name in os.environ.get(ENV_VAR, "").split(",") if name]
-    if names:
-        sys.meta_path.insert(0, _MockFinder(names))
+    def __contains__(self, key):
+        return object.__getattribute__(self, "_values")["contains"]
 
+    def __iter__(self):
+        values = object.__getattribute__(self, "_values")
+        return iter([values["item"]] * values["len"])
 
-def pytest_unconfigure(config):
-    """Take the finder back out at session end.
+    def __eq__(self, other):
+        # Equal only to another stub, so `assert answer() == 42` stays red. This
+        # is the property the whole vacuity reading rests on for value asserts.
+        return isinstance(other, Stub)
 
-    The probe child exits straight after, so nothing observable depends on this
-    today. It is here so "the finder is removed cleanly" is a property of the
-    code rather than of the process boundary, which is what would be relied on
-    the first time this plugin is loaded into a session that keeps running.
-    Absent finders are tolerated: pytest_configure installs nothing when the
-    environment names no modules, and unconfigure still runs.
-    """
-    for finder in [f for f in sys.meta_path if isinstance(f, _MockFinder)]:
-        sys.meta_path.remove(finder)
+    def __hash__(self):
+        return id(self)
+
+    def __str__(self):
+        return object.__getattribute__(self, "_values")["item"]
+
+    def __repr__(self):
+        return f"<canopus stub {object.__getattribute__(self, '_values')['item']}>"

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -26,6 +27,8 @@ CPX_DIR = Path.home() / "cliproxyapi"
 BIN = CPX_DIR / "cli-proxy-api"
 REPO = "router-for-me/CLIProxyAPI"
 SERVICE = "cliproxyapi.service"
+HEALTH_TIMEOUT_S = 30.0
+HEALTH_INTERVAL_S = 1.0
 
 
 def _download(url: str, dest: Path) -> None:
@@ -47,6 +50,31 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _health_ok() -> bool:
+    res = subprocess.run(["bash", "-c", f"{Path.home()}/.local/bin/cliproxy health"],
+                         capture_output=True, text=True, check=False)
+    return "HTTP 200" in (res.stdout + res.stderr)
+
+
+def _wait_healthy(timeout_s: float = HEALTH_TIMEOUT_S,
+                  interval_s: float = HEALTH_INTERVAL_S) -> bool:
+    """Poll the health gate instead of probing it once.
+
+    `systemctl start` returns when the process is spawned, not when it listens.
+    A single immediate probe read that gap as a dead service and rolled a good
+    binary back (observed 2026-07-28 on the 7.2.92 -> 7.2.104 bump: the journal
+    shows the port bound in the same second the rollback fired). Only a service
+    that never answers inside the budget counts as a failure.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if _health_ok():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval_s)
 
 
 def _current_version() -> str:
@@ -125,9 +153,7 @@ def main() -> int:
             _restore()
             return 1
 
-        health = subprocess.run(["bash", "-c", f"{Path.home()}/.local/bin/cliproxy health"],
-                               capture_output=True, text=True, check=False)
-        if "HTTP 200" in (health.stdout + health.stderr):
+        if _wait_healthy():
             print(f"cliproxyapi updated -> {latest}")
             return 0
 

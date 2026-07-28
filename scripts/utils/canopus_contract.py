@@ -824,11 +824,17 @@ def run_null_stub(
     # A syntactic walk would refuse a contract for a stub the child never
     # installs. The cost of borrowing the child's own function is named: it
     # resolves names in THIS process, so an ancestor package's `__init__` runs
-    # here too (its own handler reports and claims on a raise), and it resolves
-    # under the parent's `sys.path` rather than the child's extra PYTHONPATH
-    # entries, so a name importable only from the contract root reads as
-    # unresolvable and is claimed. Both push toward claiming more, which can
-    # only refuse a contract, never wave one through.
+    # here too, and it resolves under the parent's `sys.path` rather than the
+    # child's extra PYTHONPATH entries, so a name importable only from the
+    # contract root reads as unresolvable and is claimed. The first of those
+    # costs was measured false for one release: `_expand_claims`'s handler
+    # named only `Exception`, so an ancestor's ordinary `sys.exit(0)` walked
+    # past it, past this function, and past `cmd_freeze`'s own `except
+    # ContractError` — there is no child process boundary here to contain the
+    # escape the way there is inside the probe — and the CLI exited 0 having
+    # measured nothing. `_expand_claims` now catches `SystemExit` alongside
+    # `Exception` for exactly this call site, so both costs push toward
+    # claiming more, which can only refuse a contract, never wave one through.
     own_packages = {rel.split("/", 1)[0] for rel in files if "/" in rel}
     collision = own_packages & _expand_claims(modules)
     if collision:

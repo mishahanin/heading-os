@@ -2289,3 +2289,64 @@ def test_the_own_package_guard_leaves_a_prefix_that_really_resolves_alone(tmp_pa
     )
 
     assert run_null_stub([contract], tmp_path) == set()
+
+
+def test_the_cli_does_not_exit_0_having_measured_nothing_on_an_exiting_ancestor(
+    tmp_path, monkeypatch, capsys
+):
+    """The crossing the finding rode through: unit and CLI were tested apart.
+
+    `_expand_claims` is called directly by `canopus`'s own CLI process, in
+    `run_null_stub`'s own-package collision guard above, to predict the child's
+    claim before any child is spawned. There is no probe-child process boundary
+    around that call, so an ordinary `sys.exit(0)` in an ancestor package's
+    `__init__.py` — reached only because the contract names the deeper
+    `sneaky.mid.leaf` — used to walk past `except Exception`, past
+    `cmd_freeze`'s and `cmd_probe`'s own `except ContractError`, and out of
+    `main()` uncaught: the CLI exited 0 having printed nothing and measured
+    nothing, which the operator reads as a clean pass.
+
+    `monkeypatch.syspath_prepend` puts the ancestor on THIS process's
+    `sys.path` only. The pytest children this command spawns (the real
+    baseline run and the two stub runs) read `PYTHONPATH` from the
+    environment, never this process's `sys.path`, so none of them ever see the
+    ancestor and the escape stays isolated to the one call site the finding
+    names — exactly the crossing a unit test on `_expand_claims` alone, or a
+    CLI test built without this isolation, cannot exercise.
+    """
+    import scripts.canopus as canopus
+
+    root = tmp_path / "root"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
+    contract = root / "tests" / "contract" / "sysexit-slice"
+    contract.mkdir(parents=True)
+    (contract / "test_contract.py").write_text(
+        "def test_claims_a_deep_prefix():\n"
+        "    from sneaky.mid.leaf import answer\n"
+        "    assert len(answer()) == 0\n",
+        encoding="utf-8",
+    )
+    ancestor = tmp_path / "ancestor"
+    (ancestor / "sneaky" / "mid").mkdir(parents=True)
+    (ancestor / "sneaky" / "__init__.py").write_text(
+        "import sys\nsys.exit(0)\n", encoding="utf-8"
+    )
+    (ancestor / "sneaky" / "mid" / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(ancestor))
+
+    try:
+        exit_code = canopus.main(["--root", str(root), "probe", str(contract)])
+    except SystemExit as exc:
+        pytest.fail(
+            f"canopus.main escaped via an uncaught SystemExit({exc.code}) "
+            f"having measured nothing, printing nothing on the way out"
+        )
+
+    # A returned int, not a raised SystemExit, is the property this test pins:
+    # `main()` ran to its own end and reported a real verdict, whatever that
+    # verdict is, rather than having the interpreter torn down from inside an
+    # ancestor's import.
+    assert isinstance(exit_code, int)
+    captured = capsys.readouterr()
+    assert captured.out or captured.err

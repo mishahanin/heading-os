@@ -418,6 +418,23 @@ def _expand_claims(names):
     code reaches here; unhandled it takes `pytest_configure` down, and a pytest
     INTERNALERROR is a probe child that returns no test report at all.
 
+    `SystemExit` is caught alongside `Exception`, deliberately, and the two are
+    not the same hazard. `SystemExit` derives from `BaseException`, so an
+    ordinary `sys.exit(0)` in an ancestor's `__init__.py` — a version check, a
+    dependency bail-out — walks straight past a handler that only names
+    `Exception`. Inside `pytest_configure` that was already contained: the
+    escape crashes the probe CHILD, and this module's own caller reads a child
+    that returns no JUnit report as a refusal, never a pass. `canopus_contract`
+    also calls this function directly, in the PARENT process, to predict the
+    child's claim before spawning it; there is no child boundary to contain an
+    escape there, and `cmd_freeze` wraps that call in `except ContractError`,
+    which `SystemExit` also walks past. Measured before this handler named it:
+    a claim of `sneaky.mid.leaf` over an ancestor `sneaky/__init__.py` calling
+    `sys.exit(0)` exited the CLI at 0, having written no manifest and printed
+    nothing — a contract measured as nothing, read as a clean pass, which is
+    the exact failure this instrument exists to refuse. `KeyboardInterrupt`
+    keeps propagating; it is not caught here, only `Exception` and `SystemExit`.
+
     Resolution happens here, once, BEFORE the finder is installed. Doing it inside
     `find_spec` would re-enter the finder being constructed.
     """
@@ -431,7 +448,7 @@ def _expand_claims(names):
                 continue
             try:
                 spec = find_spec(prefix)
-            except Exception as exc:  # noqa: BLE001 - reported, and claimed below
+            except (Exception, SystemExit) as exc:  # noqa: BLE001 - reported, and claimed below
                 _report(f"resolving the prefix {prefix} raised {exc!r}; claiming it")
                 spec = None
             if spec is None or spec.submodule_search_locations is None:

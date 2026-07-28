@@ -812,6 +812,66 @@ def test_expanding_a_prefix_whose_ancestor_code_raises_does_not_kill_the_probe(
     assert "blowup_fixture.mid" in capsys.readouterr().err
 
 
+def test_expanding_a_prefix_whose_ancestor_calls_sys_exit_claims_it_and_returns(
+    clean_imports, tmp_path, monkeypatch, capsys
+):
+    """`SystemExit` is not an `Exception`, and one call site has no child to
+    contain it.
+
+    `sys.exit(0)` in an ancestor's `__init__.py` — a version check, a
+    dependency bail-out, nothing adversarial — raises `SystemExit`, which
+    derives from `BaseException` and walks straight past a handler that only
+    names `Exception`. Inside `pytest_configure` (the probe child) that used to
+    be contained: the escape crashed the CHILD, and the parent read a child
+    that wrote no JUnit report as a refusal. `canopus_contract.run_null_stub`
+    also calls `_expand_claims` directly, in the CLI's own PARENT process, with
+    no child boundary to catch a `SystemExit` there — see
+    `test_the_cli_does_not_exit_0_having_measured_nothing_on_an_exiting_ancestor`
+    in `tests/test_canopus_contract.py` for that crossing measured end to end.
+
+    This test pins the mechanism alone: the call returns the claimed prefixes,
+    rather than letting `SystemExit` escape, and reports what it swallowed on
+    the same stderr channel every other resolution failure here uses.
+    """
+    from scripts.utils.canopus_nullstub import _expand_claims
+
+    package = tmp_path / "exiting_fixture"
+    (package / "mid").mkdir(parents=True)
+    (package / "__init__.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    (package / "mid" / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    claimed = _expand_claims({"exiting_fixture.mid.leaf"})
+
+    assert claimed == {"exiting_fixture.mid", "exiting_fixture.mid.leaf"}
+    assert "exiting_fixture.mid" in capsys.readouterr().err
+
+
+def test_expanding_a_prefix_still_lets_a_keyboard_interrupt_propagate(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The one `BaseException` this handler must NOT swallow.
+
+    Catching `SystemExit` alongside `Exception` is the safe over-claim
+    direction the handler already takes on every other resolution failure; it
+    must not widen into `except BaseException`, which would also catch a
+    `KeyboardInterrupt` an operator sends to cancel a hung freeze and turn a
+    cancel into a silent claim instead of a stopped process.
+    """
+    from scripts.utils.canopus_nullstub import _expand_claims
+
+    package = tmp_path / "interrupted_fixture"
+    (package / "mid").mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "raise KeyboardInterrupt()\n", encoding="utf-8"
+    )
+    (package / "mid" / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(KeyboardInterrupt):
+        _expand_claims({"interrupted_fixture.mid.leaf"})
+
+
 def test_find_spec_stubs_a_name_whose_ancestor_code_raises(
     clean_imports, tmp_path, monkeypatch, capsys
 ):

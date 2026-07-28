@@ -1423,3 +1423,67 @@ def test_a_live_package_keeps_the_path_it_already_had(
     pytest_unconfigure(config=None)
 
     assert list(livepkg_fixture.__path__) == original
+
+
+def test_a_builtin_module_is_never_claimed(capsys):
+    """`import sys` in a contract used to make the whole contract unmeasurable.
+
+    `_supply_absent_attributes` writes a module-level `__getattr__` onto a live
+    module so its absent names read as stubs. `sys` is a live module the
+    interpreter itself introspects: `traceback.TracebackException` reads
+    `sys.tracebacklimit` through `getattr` with a default, got a Stub instead of
+    the AttributeError it is written against, and died on `limit < 0`. The child
+    then produced no test report at all and the parent refused the contract as
+    unmeasurable -- the safe direction, but a legitimate contract that cannot be
+    frozen teaches an operator to route around the gate.
+    """
+    from scripts.utils.canopus_nullstub import NULLSTUB_STDERR_MARKER, _expand_claims
+
+    assert _expand_claims({"sys"}) == set()
+    assert _expand_claims({"sys.path"}) == set()
+
+    reported = capsys.readouterr().err
+    assert NULLSTUB_STDERR_MARKER in reported
+    assert "compiled into the interpreter" in reported
+
+
+def test_the_builtin_exclusion_is_read_from_the_interpreter_not_written_down():
+    """A PROPERTY of the process, not a list somebody has to maintain.
+
+    Enumerated names are the pattern five earlier revisions of `process_facts`
+    were each defeated through, so this one is derived.
+    """
+    import sys
+
+    from scripts.utils.canopus_nullstub import BUILTIN_MODULE_NAMES
+
+    assert frozenset(sys.builtin_module_names) == BUILTIN_MODULE_NAMES
+    assert "sys" in BUILTIN_MODULE_NAMES
+
+
+def test_sparing_the_builtins_does_not_spare_ordinary_stdlib_or_first_party():
+    """The exclusion is as narrow as its reason.
+
+    `os`, `re` and `pathlib` are pure Python and carry no interpreter
+    machinery, so a contract that leans on one of them is still measured. Only
+    C compiled into the interpreter is spared, and no first-party code under
+    test can live in there.
+    """
+    from scripts.utils.canopus_nullstub import _expand_claims
+
+    assert _expand_claims({"os"}) == {"os"}
+    assert _expand_claims({"pathlib"}) == {"pathlib"}
+    assert _expand_claims({"scripts.utils.brandnew_absent"}) == {
+        "scripts.utils.brandnew_absent"}
+
+
+def test_a_builtin_named_only_as_a_child_of_a_first_party_name_is_still_claimed():
+    """The exclusion keys on the FIRST component, not on any component.
+
+    A first-party module that happens to be called `scripts.utils.time` is
+    ordinary code under test, and sparing it because `time` is a built-in would
+    be an exclusion far wider than its reason.
+    """
+    from scripts.utils.canopus_nullstub import _expand_claims
+
+    assert "scripts.utils.time" in _expand_claims({"scripts.utils.time"})

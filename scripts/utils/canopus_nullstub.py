@@ -69,6 +69,30 @@ STUB_NAME_SEPARATOR = ","
 # parent forwards exactly the lines that start with it; see `_report` below.
 NULLSTUB_STDERR_MARKER = "canopus-nullstub:"
 
+# Modules compiled into the interpreter, which this plugin never claims. Read
+# from the running interpreter rather than written down, so it is a PROPERTY of
+# the process and not a list somebody has to maintain: enumerated names are the
+# pattern five earlier revisions of `process_facts` were each defeated through.
+#
+# The reason is measured, not defensive. `_supply_absent_attributes` writes a
+# module-level `__getattr__` onto a live module so its ABSENT names read as
+# stubs, and `sys` is a live module the interpreter itself introspects.
+# `traceback.TracebackException` reads `sys.tracebacklimit` through `getattr`
+# with a default, gets a Stub instead of the AttributeError it is written
+# against, and dies on `limit < 0` with "'<' not supported between instances of
+# 'Stub' and 'int'". The child then reports NO test at all, and the parent
+# correctly refuses the whole contract as unmeasurable. Measured on a contract
+# whose only sin was `import sys` at module scope, which is an entirely ordinary
+# thing for a contract to write.
+#
+# The cost, stated rather than hidden: a test whose ONLY dependency is a
+# built-in module reads the same under both value sets and is therefore labelled
+# VACUOUS. That is a false accusation, never an escape, and a false accusation
+# is the direction this instrument is allowed to err in. A built-in module is C
+# compiled into the interpreter, so no first-party code under test can live
+# inside one, and nothing a contract exists to judge is hidden by sparing it.
+BUILTIN_MODULE_NAMES = frozenset(sys.builtin_module_names)
+
 # Every channel differs between the two sets. A channel they agreed on could not
 # separate a vacuous test from one that reads it.
 STUB_VALUES = {
@@ -441,6 +465,19 @@ def _expand_claims(names):
     claimed = set()
     for name in names:
         parts = name.split(".")
+        if parts[0] in BUILTIN_MODULE_NAMES:
+            # Dropped HERE rather than in the finder, so the one exclusion covers
+            # both surfaces that consult a claim: `_NamedFinder.find_spec`, and
+            # the `pytest_configure` loop that supplies absent attributes onto
+            # modules already in `sys.modules`. The second is the one that
+            # actually broke the apparatus, and a fix applied only to the first
+            # would have left it broken while looking closed -- the exact
+            # one-of-two-surfaces defect the wire 3.1 review found at a task
+            # seam. See BUILTIN_MODULE_NAMES for the measurement.
+            _report(f"not claiming {name}: {parts[0]} is compiled into the "
+                    f"interpreter, and stubbing it takes the measurement "
+                    f"apparatus down with it")
+            continue
         for index in range(1, len(parts) + 1):
             prefix = ".".join(parts[:index])
             if prefix == name:

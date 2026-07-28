@@ -1191,3 +1191,49 @@ def test_clean_imports_teardown_undoes_the_mutation_it_records(tmp_path, monkeyp
             leak_walk_fixture.NOT_THERE_YET  # noqa: B018 - the access is the assertion
     finally:
         del sys.modules["leak_walk_fixture"]
+
+
+def test_the_child_splits_the_claim_set_on_the_shared_separator(
+    clean_imports, monkeypatch
+):
+    """The child's half of the wire format, read from the constant it publishes.
+
+    The parent joins the claim set on `STUB_NAME_SEPARATOR` and the child splits
+    on it, so the two are one rule. Written here as a literal `","` on the
+    child's side and imported on the parent's, a change to either would be
+    caught only by luck, and the failure is silent in the dangerous direction:
+    the child claims nothing, both runs agree on a red the vacuity rule never
+    fires over, and the suite stays green.
+    """
+    from scripts.utils.canopus_nullstub import (
+        MODULES_VAR,
+        STUB_NAME_SEPARATOR,
+        _NamedFinder,
+        pytest_configure,
+    )
+
+    monkeypatch.setenv(
+        MODULES_VAR,
+        STUB_NAME_SEPARATOR.join(["alfa_split_fixture", "bravo_split_fixture"]),
+    )
+    pytest_configure(config=None)
+    installed = sys.meta_path[0]
+
+    assert isinstance(installed, _NamedFinder)
+    assert installed.find_spec("alfa_split_fixture") is not None
+    assert installed.find_spec("bravo_split_fixture") is not None
+
+
+def test_the_childs_diagnostic_carries_the_shared_marker(capsys):
+    """The marker is the child's format too, and the parent greps for it.
+
+    `run_pytest_report` forwards only the child's stderr lines that START with
+    this marker, so a marker spelled differently on the two sides drops the one
+    line that explains a swallowed exception, and a first-party module that blows
+    up on import reaches the operator as a bare vacuity refusal.
+    """
+    from scripts.utils.canopus_nullstub import NULLSTUB_STDERR_MARKER, _report
+
+    _report("resolving ghost_fixture raised RuntimeError(); stubbing it instead")
+
+    assert capsys.readouterr().err.startswith(NULLSTUB_STDERR_MARKER)

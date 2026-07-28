@@ -50,6 +50,22 @@ from types import ModuleType
 MODULES_VAR = "CANOPUS_AST_MODULES"
 VALUES_VAR = "CANOPUS_STUB_VALUES"
 
+# The wire format between the parent and this child, defined HERE because this
+# side is the one that has to parse it, and imported by the parent rather than
+# spelled again there. Two definitions of one rule are a rename on one side away
+# from a child that claims nothing, two runs that agree on a red the vacuity rule
+# never fires over, and a suite that stays green while the verdict is silently
+# always empty. That is the same argument that already makes the parent import
+# MODULES_VAR from here, and it applies verbatim to both of these.
+#
+# The one character the claim set is joined on, and the one character a claim may
+# therefore not contain. A comma cannot appear in an importable dotted name, so
+# the parent drops any collected string carrying it rather than escaping it.
+STUB_NAME_SEPARATOR = ","
+# What this plugin prefixes its own diagnostics with, on the child's stderr. The
+# parent forwards exactly the lines that start with it; see `_report` below.
+NULLSTUB_STDERR_MARKER = "canopus-nullstub:"
+
 # Every channel differs between the two sets. A channel they agreed on could not
 # separate a vacuous test from one that reads it.
 STUB_VALUES = {
@@ -167,7 +183,7 @@ def _report(message: str) -> None:
     the alternative reading of a stubbed name stays visible in the run that made
     the decision.
     """
-    sys.stderr.write(f"canopus-nullstub: {message}\n")
+    sys.stderr.write(f"{NULLSTUB_STDERR_MARKER} {message}\n")
 
 
 def _supply_absent_attributes(module):
@@ -455,7 +471,9 @@ def pytest_configure(config):
     that has already bound names from it.
     """
     names = [
-        name for name in os.environ.get(MODULES_VAR, "").split(",") if name
+        name
+        for name in os.environ.get(MODULES_VAR, "").split(STUB_NAME_SEPARATOR)
+        if name
     ]
     if not names:
         return

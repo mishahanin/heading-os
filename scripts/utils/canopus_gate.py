@@ -46,6 +46,7 @@ from scripts.utils.canopus_freeze import (
     write_attestation,
 )
 from scripts.utils.canopus_git import AnchorResolution, resolve_anchor
+from scripts.utils.canopus_tree import tree_state
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW
 
 
@@ -675,6 +676,12 @@ class AttestationRecorder:
         # own list describes the controller and nothing else.
         # None stands for a worker whose description failed; see merge_worker.
         self.worker_plugins: list[list[str] | None] = []
+        # The tree sample taken at collection, once per session. Sampled at
+        # collection rather than at __init__ time, because __init__ can run
+        # before pytest has even started, and sampled once rather than on every
+        # call because it is the FINISH sample that gets compared against it --
+        # taking a fresh one on every read would compare the tree to itself.
+        self.tree_at_start: dict | None = None
 
     def _rel(self, candidate) -> str | None:
         """Root-relative POSIX path, or None when it lies outside the tree."""
@@ -703,7 +710,14 @@ class AttestationRecorder:
         Fires in a plain run and inside each xdist worker. The xdist CONTROLLER
         never reaches it: collection happens in the workers, and the controller's
         session.items stays empty. seed_from_ids below is the controller's route.
+
+        The tree's START sample is taken here, unconditionally and before the
+        no-freeze early return below: it is the sample `finish`'s later one is
+        compared AGAINST, and it has to exist even on a session this recorder
+        goes on to decide has no freeze to attest.
         """
+        if self.tree_at_start is None:
+            self.tree_at_start = self._tree()
         frozen = self._frozen_names(session.config)
         if frozen is None:
             return
@@ -722,7 +736,20 @@ class AttestationRecorder:
         "collected nothing" for every frozen file and can never attest. The ids
         arrive post-deselection, which is why workers ship their deselection
         counts back separately.
+
+        Also the controller's ONLY collection-time hook under xdist -- `collect`
+        above never fires there, since collection happens in the workers and the
+        controller's own `session.items` stays empty. So the tree's START sample
+        is taken here too, unconditionally and before the tally guard below, for
+        the same reason `collect` takes it before ITS early return: without it
+        the controller's `finish` had a live finish sample and no start sample to
+        compare it against, and `build_attestation` refused every `-n auto` run
+        on that ground alone. Measured, not assumed: a plain `-n auto` run over
+        this suite read NOT ATTESTED with exactly that reason before this line
+        existed.
         """
+        if self.tree_at_start is None:
+            self.tree_at_start = self._tree()
         if self.frozen is not None:
             return
         frozen = self._frozen_names(config)
@@ -846,6 +873,21 @@ class AttestationRecorder:
             print(f"canopus: could not describe the process: {exc}", file=sys.stderr)
             return None
 
+    def _tree(self):
+        """The working tree's state, or None, never a raise.
+
+        The same posture `_describe` takes and for the same reason: this runs
+        inside a pytest hook, and a raise there takes the session's exit code
+        with it. A failure is named on stderr and reported as None, which
+        `build_attestation` refuses.
+        """
+        try:
+            return tree_state(self.root)
+        except Exception as exc:  # noqa: BLE001 - a raise here fails the session
+            print(f"canopus: could not describe the tree this run ran against: "
+                  f"{exc}", file=sys.stderr)
+            return None
+
     def _dump_plugins(self, config) -> bool:
         """Write the plugin identities to CANOPUS_PLUGIN_DUMP. True when asked.
 
@@ -946,5 +988,7 @@ class AttestationRecorder:
             baseline=self.baseline,
             process=process,
             plugin_baseline=self.plugin_baseline,
+            tree_at_start=self.tree_at_start,
+            tree_at_finish=self._tree(),
         ))
         return True

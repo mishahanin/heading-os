@@ -294,8 +294,20 @@ class _Report:
 
 
 @pytest.fixture
-def frozen_engine(tmp_path):
-    """A throwaway tree with one frozen test file, wired as the hooks' root."""
+def frozen_engine(tmp_path, monkeypatch):
+    """A throwaway tree with one frozen test file, wired as the hooks' root.
+
+    `tmp_path` is a plain pytest scratch directory, not a git working copy, so
+    `tree_state(tmp_path)` genuinely answers None here -- this fixture is not
+    exercising tree behaviour, the same reason `_build` above hands every
+    tally-focused record a CLEAN_TREE rather than a real one. Patched at the
+    `canopus_gate` module level, the same name `collect`/`finish` read, so every
+    test that goes through the recorder's hooks (rather than through `_build`)
+    gets a usable tree without describing git.
+    """
+    import scripts.utils.canopus_gate as cg
+
+    monkeypatch.setattr(cg, "tree_state", lambda root: dict(CLEAN_TREE))
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
     target = tests_dir / "test_frozen.py"
@@ -313,6 +325,48 @@ def frozen_engine(tmp_path):
 
 def _session(tmp_path, target, **options):
     return _Session(_Config(["test_*.py"], **options), [_Item(target)])
+
+
+def test_the_recorder_samples_the_tree_at_collection(tmp_path, monkeypatch):
+    """At collection rather than at finish, because the sample taken at finish
+    is the one being checked AGAINST."""
+    import scripts.utils.canopus_gate as cg
+
+    monkeypatch.setattr(cg, "tree_state", lambda root: dict(CLEAN_TREE))
+    recorder = AttestationRecorder(tmp_path)
+    assert recorder.tree_at_start is None
+    recorder.collect(_Session(_Config(["test_*.py"]), []))
+    assert recorder.tree_at_start == CLEAN_TREE
+
+
+def test_seed_from_ids_also_samples_the_tree_at_collection(tmp_path, monkeypatch):
+    """The xdist CONTROLLER's only collection-time hook: `collect` never fires
+    there, because collection happens in the workers and the controller's own
+    `session.items` stays empty. Without this, a plain `-n auto` run had a live
+    FINISH sample and no START sample to compare it against, and every such run
+    read NOT ATTESTED on that ground alone -- measured, not assumed, on this
+    repository's own suite."""
+    import scripts.utils.canopus_gate as cg
+
+    monkeypatch.setattr(cg, "tree_state", lambda root: dict(CLEAN_TREE))
+    recorder = AttestationRecorder(tmp_path)
+    assert recorder.tree_at_start is None
+    recorder.seed_from_ids(_Config(["test_*.py"]), [])
+    assert recorder.tree_at_start == CLEAN_TREE
+
+
+def test_a_tree_state_that_raises_never_takes_the_session_down(tmp_path, monkeypatch, capsys):
+    """`collect` and `finish` run inside pytest hooks; a raise there takes the
+    session's exit code with it."""
+    import scripts.utils.canopus_gate as cg
+
+    def _boom(root):
+        raise RuntimeError("no")
+
+    monkeypatch.setattr(cg, "tree_state", _boom)
+    recorder = AttestationRecorder(tmp_path)
+    assert recorder._tree() is None
+    assert "could not describe the tree" in capsys.readouterr().err
 
 
 def test_a_complete_run_attests(frozen_engine):

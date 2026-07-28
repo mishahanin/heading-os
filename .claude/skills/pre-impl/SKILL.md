@@ -246,6 +246,7 @@ The moment the operator approves, run `approve`:
       --contract tests/contract/{YYYY-MM-DD}-{slug}/ \
       --content scripts/utils/canopus_freeze.py \
       --content scripts/utils/canopus_gate.py \
+      --content scripts/utils/canopus_tree.py \
       --content scripts/utils/canopus_git.py \
       --content scripts/utils/atomic.py \
       --content scripts/utils/colors.py \
@@ -261,7 +262,7 @@ scripts/canopus.py freeze --label ... --contract ...`, same flags), which takes
 the lock. Confirm with `python scripts/canopus.py verify`: LOCK HELD and
 APPROVED.
 
-Eight files, not four, because the gate's own import tail is inside the
+Nine files, not four, because the gate's own import tail is inside the
 guarantee. `freeze` refuses a contract that is not red for a reason that means
 something, and a root the COMMITTED artifact contradicts. Both refusals, with
 their exceptions, are in `references/canopus-gate.md` — read it before the first

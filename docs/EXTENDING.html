@@ -1062,6 +1062,82 @@ operator reads before approving, instead of leaving the environment variable and
 the untracked directory invisible to everyone. Route A is closed at the gate;
 route B is reported and not prevented, and reporting is worth what an operator
 who reads the page makes it worth.</p>
+<h3 id="what-wire-32-binds-the-record-to-and-what-perishes-it">What wire 3.2 binds the record to, and what perishes it</h3>
+<p>Every axis above binds an attestation to the FROZEN bytes and to the
+interpreter that ran them. Neither binds it to the CODE UNDER TEST, which is
+by design not frozen, so before wire 3.2 a green record survived breaking the
+implementation, and survived breaking it and running nothing at all — measured
+on a scratch tree, not theorised. <code>scripts/utils/canopus_tree.tree_state(root)</code>
+closes that: <code>{"recipe", "head", "dirty"}</code>, where <code>head</code> is <code>git rev-parse
+HEAD</code> and <code>dirty</code> maps every path <code>git status --porcelain=v1
+--untracked-files=all -z</code> reports — changed, added, deleted, or untracked — to
+the sha256 of its current bytes (or to <code>None</code> for a path that is gone).
+<code>AttestationRecorder</code> samples it TWICE: once at <code>collect</code> (session collection,
+not process start) and once at <code>finish</code>. Both samples are required; either
+missing refuses the record the same way a missing <code>process</code> block already
+does, and a tree that moved BETWEEN the two samples — the bytes on disk at
+finish are not the bytes that were imported — refuses it too, naming the path
+that moved.</p>
+<p>What perishes an ATTESTED record, all measured against a live scratch tree:
+editing any tracked file, adding an untracked file (the reason
+<code>--untracked-files=all</code> is load-bearing: default porcelain collapses a new
+directory to <code>newdir/</code> with no hash, so a new module dropped into a new
+package would not move the state), deleting a file, and committing — a commit
+changes nothing on disk and everything about what <code>head</code> IS, so a state
+watching only dirty paths would call a commit no change. A module a test body
+deletes from <code>sys.modules</code> before the session ends still perishes the record,
+which is the grave of the design this replaced: an earlier version recorded
+the files the run IMPORTED, and <code>tests/test_alert_no_import_cycle.py</code> deletes
+every module whose name matches a pattern, including its own, so a file that
+ran was already absent from the recorded set at session finish. The tree does
+not care what an interpreter remembers.</p>
+<p>What does NOT perish it — the ceiling, stated here rather than left to be
+discovered as a false green:</p>
+<ul>
+<li><strong>A local record is evidence rather than proof.</strong> It lives on the machine
+  that produced it; anyone with write access to that disk can hand-edit
+  <code>.canopus/attest.json</code> directly, including writing a <code>tree</code> block that
+  already matches the live git state.</li>
+<li><strong>Gitignored files are outside the state.</strong> <code>tree_state</code> is defined
+  relative to git, not to the filesystem — a walk cannot know what is
+  ignored, and a state that carried <code>.venv</code> and every build artifact would be
+  permanently red. <code>.canopus/</code> is itself gitignored, so this cuts both ways:
+  a change to a gitignored file the run reads does not perish the record, and
+  neither does an edit to <code>attest.json</code> itself.</li>
+<li><strong>A root that is not a git working copy cannot attest at all.</strong>
+  <code>tree_state</code> answers <code>None</code> for it — <code>git rev-parse HEAD</code>, <code>--show-toplevel</code>
+  and <code>status</code> all fail closed on a non-repository — and <code>build_attestation</code>
+  refuses on that ground before any other axis is even checked.</li>
+<li><strong>The sampling window opens at collection, not at process start.</strong> Whatever
+  ran before pytest began collecting is unobserved, the same gap the process
+  descriptor already has for whatever configured the interpreter before the
+  recorder existed. A file edited and then reverted inside the window between
+  the two samples leaves no trace either: two equal samples read as no drift,
+  whether or not the file moved in between.</li>
+</ul>
+<p><code>verify</code> and <code>pack</code> recompute <code>tree_state</code> fresh on every call and compare it
+against the record&rsquo;s own — never against itself — so the ATTESTED banner is
+live relative to each invocation, not a value cached at record time. Named on
+the banner itself: <code>ATTESTED  N frozen tests passed, ..., bound to
+&lt;head[:12]&gt;+&lt;count&gt; dirty</code>, so the page states which tree the sign-off is
+actually about. Measured on a scratch tree with the freeze held over
+<code>tests/contract/demo/</code>:</p>
+<div class="highlight"><pre><span></span><code>$ python scripts/canopus.py verify
+LOCK HELD  ...
+ATTESTED  1 frozen tests passed, none deselected, at 2026-07-28T..., bound to 32ac97685b5d+0 dirty
+$ echo &quot;y = 1&quot; &gt; newpkg/mod.py   # a new, untracked, unfrozen file anywhere in the tree
+$ python scripts/canopus.py verify
+LOSS OF LOCK
+  added    newpkg/
+NOT ATTESTED  the attestation was recorded against a different root hash
+  reason   a path appeared since the attesting run: newpkg/mod.py
+</code></pre></div>
+<p>Both axes fire together here because the new top-level entry moves the
+composition guard&rsquo;s root directory listing (the LOCK axis) at the same time
+it moves the tree state (the ATTESTATION axis); <code>attestation_state</code> answers
+with one reason at a time, so <code>_print_attestation</code> names the tree&rsquo;s half
+too when the chosen reason was the root&rsquo;s, from the record&rsquo;s own stored
+tree rather than re-deriving what already qualified it.</p>
 <h3 id="what-wire-23-leaves-open">What wire 2.3 leaves open</h3>
 <p>Every item below was measured or reproduced during the slice rather than
 assumed, and they run from the ceiling of the design downward. None of them is
@@ -1132,7 +1208,10 @@ Measured with a green record in place, a poisoned run under each variable left
 the record&rsquo;s own timestamp unchanged and <code>verify</code> still printing <code>ATTESTED</code>.
 Neither is scrubbed by <code>child_env</code>, which strips <code>PYTEST_</code> and nothing else. Both
 exist for the contract runner, which must not overwrite a real gate run&rsquo;s record
-with a probe&rsquo;s partial tally, and both are one <code>export</code> away from an operator.</p>
+with a probe&rsquo;s partial tally, and both are one <code>export</code> away from an operator.
+<strong>Measured true for wire 2.3; wire 3.2 below changes what &ldquo;stands untouched&rdquo;
+means</strong>, because the record these variables leave in place is now re-checked
+against the live tree on every read rather than trusted at face value.</p>
 <p><strong>The root hash now depends on a measured property of the machine.</strong> <code>approve</code>
 and <code>freeze</code> each run the contract and capture the <code>dist:</code> set that run loaded,
 and that set is in the root-hash payload. So a dependency installed between the
@@ -1210,7 +1289,7 @@ prints <code>1 skipped</code> and exits 5, while the same command on
 <code>tests/test_run_tests_runner.py</code> prints ZERO bytes and exits 0. A run that prints
 nothing is indistinguishable from one that never happened, and inside the frozen
 contract the pattern cannot be fixed at all until the contract is retired.</p>
-<p><strong>Freeze the enforcers, all eight of them.</strong> A freeze that omits them protects the
+<p><strong>Freeze the enforcers, all nine of them.</strong> A freeze that omits them protects the
 contract while leaving the thing that checks the contract editable.</p>
 <table>
 <thead>
@@ -1227,6 +1306,10 @@ contract while leaving the thing that checks the contract editable.</p>
 <tr>
 <td><code>scripts/utils/canopus_gate.py</code></td>
 <td>the check pytest and the runner call</td>
+</tr>
+<tr>
+<td><code>scripts/utils/canopus_tree.py</code></td>
+<td>samples the working tree the recorder binds an attestation to, so an editable sampler is an editable perishability check</td>
 </tr>
 <tr>
 <td><code>scripts/utils/canopus_git.py</code></td>

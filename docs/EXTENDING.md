@@ -905,6 +905,89 @@ the untracked directory invisible to everyone. Route A is closed at the gate;
 route B is reported and not prevented, and reporting is worth what an operator
 who reads the page makes it worth.
 
+### What wire 3.2 binds the record to, and what perishes it
+
+Every axis above binds an attestation to the FROZEN bytes and to the
+interpreter that ran them. Neither binds it to the CODE UNDER TEST, which is
+by design not frozen, so before wire 3.2 a green record survived breaking the
+implementation, and survived breaking it and running nothing at all — measured
+on a scratch tree, not theorised. `scripts/utils/canopus_tree.tree_state(root)`
+closes that: `{"recipe", "head", "dirty"}`, where `head` is `git rev-parse
+HEAD` and `dirty` maps every path `git status --porcelain=v1
+--untracked-files=all -z` reports — changed, added, deleted, or untracked — to
+the sha256 of its current bytes (or to `None` for a path that is gone).
+`AttestationRecorder` samples it TWICE: once at `collect` (session collection,
+not process start) and once at `finish`. Both samples are required; either
+missing refuses the record the same way a missing `process` block already
+does, and a tree that moved BETWEEN the two samples — the bytes on disk at
+finish are not the bytes that were imported — refuses it too, naming the path
+that moved.
+
+What perishes an ATTESTED record, all measured against a live scratch tree:
+editing any tracked file, adding an untracked file (the reason
+`--untracked-files=all` is load-bearing: default porcelain collapses a new
+directory to `newdir/` with no hash, so a new module dropped into a new
+package would not move the state), deleting a file, and committing — a commit
+changes nothing on disk and everything about what `head` IS, so a state
+watching only dirty paths would call a commit no change. A module a test body
+deletes from `sys.modules` before the session ends still perishes the record,
+which is the grave of the design this replaced: an earlier version recorded
+the files the run IMPORTED, and `tests/test_alert_no_import_cycle.py` deletes
+every module whose name matches a pattern, including its own, so a file that
+ran was already absent from the recorded set at session finish. The tree does
+not care what an interpreter remembers.
+
+What does NOT perish it — the ceiling, stated here rather than left to be
+discovered as a false green:
+
+- **A local record is evidence rather than proof.** It lives on the machine
+  that produced it; anyone with write access to that disk can hand-edit
+  `.canopus/attest.json` directly, including writing a `tree` block that
+  already matches the live git state.
+- **Gitignored files are outside the state.** `tree_state` is defined
+  relative to git, not to the filesystem — a walk cannot know what is
+  ignored, and a state that carried `.venv` and every build artifact would be
+  permanently red. `.canopus/` is itself gitignored, so this cuts both ways:
+  a change to a gitignored file the run reads does not perish the record, and
+  neither does an edit to `attest.json` itself.
+- **A root that is not a git working copy cannot attest at all.**
+  `tree_state` answers `None` for it — `git rev-parse HEAD`, `--show-toplevel`
+  and `status` all fail closed on a non-repository — and `build_attestation`
+  refuses on that ground before any other axis is even checked.
+- **The sampling window opens at collection, not at process start.** Whatever
+  ran before pytest began collecting is unobserved, the same gap the process
+  descriptor already has for whatever configured the interpreter before the
+  recorder existed. A file edited and then reverted inside the window between
+  the two samples leaves no trace either: two equal samples read as no drift,
+  whether or not the file moved in between.
+
+`verify` and `pack` recompute `tree_state` fresh on every call and compare it
+against the record's own — never against itself — so the ATTESTED banner is
+live relative to each invocation, not a value cached at record time. Named on
+the banner itself: `ATTESTED  N frozen tests passed, ..., bound to
+<head[:12]>+<count> dirty`, so the page states which tree the sign-off is
+actually about. Measured on a scratch tree with the freeze held over
+`tests/contract/demo/`:
+
+```
+$ python scripts/canopus.py verify
+LOCK HELD  ...
+ATTESTED  1 frozen tests passed, none deselected, at 2026-07-28T..., bound to 32ac97685b5d+0 dirty
+$ echo "y = 1" > newpkg/mod.py   # a new, untracked, unfrozen file anywhere in the tree
+$ python scripts/canopus.py verify
+LOSS OF LOCK
+  added    newpkg/
+NOT ATTESTED  the attestation was recorded against a different root hash
+  reason   a path appeared since the attesting run: newpkg/mod.py
+```
+
+Both axes fire together here because the new top-level entry moves the
+composition guard's root directory listing (the LOCK axis) at the same time
+it moves the tree state (the ATTESTATION axis); `attestation_state` answers
+with one reason at a time, so `_print_attestation` names the tree's half
+too when the chosen reason was the root's, from the record's own stored
+tree rather than re-deriving what already qualified it.
+
 ### What wire 2.3 leaves open
 
 Every item below was measured or reproduced during the slice rather than
@@ -987,6 +1070,9 @@ the record's own timestamp unchanged and `verify` still printing `ATTESTED`.
 Neither is scrubbed by `child_env`, which strips `PYTEST_` and nothing else. Both
 exist for the contract runner, which must not overwrite a real gate run's record
 with a probe's partial tally, and both are one `export` away from an operator.
+**Measured true for wire 2.3; wire 3.2 below changes what "stands untouched"
+means**, because the record these variables leave in place is now re-checked
+against the live tree on every read rather than trusted at face value.
 
 **The root hash now depends on a measured property of the machine.** `approve`
 and `freeze` each run the contract and capture the `dist:` set that run loaded,
@@ -1074,13 +1160,14 @@ prints `1 skipped` and exits 5, while the same command on
 nothing is indistinguishable from one that never happened, and inside the frozen
 contract the pattern cannot be fixed at all until the contract is retired.
 
-**Freeze the enforcers, all eight of them.** A freeze that omits them protects the
+**Freeze the enforcers, all nine of them.** A freeze that omits them protects the
 contract while leaving the thing that checks the contract editable.
 
 | File | Why it is in the set |
 |---|---|
 | `scripts/utils/canopus_freeze.py` | hashes the manifest and answers "did it move" |
 | `scripts/utils/canopus_gate.py` | the check pytest and the runner call |
+| `scripts/utils/canopus_tree.py` | samples the working tree the recorder binds an attestation to, so an editable sampler is an editable perishability check |
 | `scripts/utils/canopus_git.py` | resolves the anchor, so it decides `LOCK HELD` against `LOSS OF LOCK`; a decider outside the freeze is the same hole closed for the write path |
 | `scripts/run-tests.py` | one of the two places the gate fires |
 | `tests/conftest.py` | the other, at pytest session start |

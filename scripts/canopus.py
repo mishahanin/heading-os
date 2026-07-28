@@ -97,6 +97,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     read_attestation,
     read_freeze,
     read_ledger,
+    tree_drift,
     unreleased_freeze,
     validate_anchor_path,
     verify_manifest,
@@ -254,7 +255,8 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
     own missing record.
     """
     record = read_attestation(root)
-    state, reason = attestation_state(record, recomputed_root, tree_state(root))
+    current_tree = tree_state(root)
+    state, reason = attestation_state(record, recomputed_root, current_tree)
     if state == ATTESTED:
         counts = [
             entry for entry in (record.get("frozen_tests") or {}).values()
@@ -263,9 +265,15 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
         passed = sum(entry.get("passed", 0) for entry in counts)
         skipped = sum(entry.get("skipped", 0) for entry in counts)
         tail = f", {skipped} skipped" if skipped else ""
+        # What the record is BOUND to, named on the one line an operator reads
+        # to sign off: a local ATTESTED record is evidence about a specific
+        # tree, not a timeless fact about the code.
+        tree = record.get("tree") or {}
+        bound = (f", bound to {tree['head'][:12]}+{len(tree.get('dirty') or {})} dirty"
+                 if tree.get("head") else "")
         print(f"{GREEN}{BOLD}{ATTESTED}{RESET}  {passed} frozen tests passed, none "
               f"deselected, at "
-              f"{record.get('attested_at') or 'an unrecorded time'}{tail}")
+              f"{record.get('attested_at') or 'an unrecorded time'}{tail}{bound}")
         return
     print(f"{YELLOW}{BOLD}{NOT_ATTESTED}{RESET}  {reason}")
     listed = (record or {}).get("reasons")
@@ -279,6 +287,22 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
             # that does not say so reads as the whole story.
             print(f"  reason   ... and {len(listed) - 5} more, in "
                   f"{FREEZE_DIRNAME}/{ATTEST_FILENAME}")
+    if record and reason in (
+        "the attestation was recorded against a different root hash",
+        "the attestation was written by a different recipe",
+    ):
+        # `attestation_state` answers with ONE reason, and the root/recipe axis
+        # it names here short-circuits before it ever compares the tree -- so a
+        # root that moved AND a tree that moved (the ordinary case: a new file
+        # anywhere in the tree moves both) would otherwise report only the
+        # root's verdict and never name the path. Both are real and both
+        # perish the record; this names the tree's half too, from the record's
+        # own stored tree rather than re-deriving what already qualified it.
+        moved = tree_drift(record.get("tree"), current_tree)
+        for line in moved[:5]:
+            print(f"  reason   {line}")
+        if len(moved) > 5:
+            print(f"  reason   ... and {len(moved) - 5} more, not named here")
 
 
 def _print_approval(resolution: AnchorResolution) -> None:
@@ -1052,9 +1076,25 @@ def cmd_pack(args) -> int:
     print(f"\n{BOLD}not covered{RESET}")
     print("  Mutation testing has not run; the contract is proven to be red "
           "before the code existed, not proven to be strong.")
-    print("  .canopus/ is gitignored, so this ledger is evidence against an EDIT, "
-          "not against deleting the directory.")
-    print("  Staleness is a snapshot taken now, not a continuous property.")
+    print("  A local record is evidence rather than proof: it lives on the "
+          "machine that produced it, and anyone with write access to that "
+          "disk can hand-edit it.")
+    print("  .canopus/ is itself gitignored, so an edit inside it -- including "
+          "hand-writing a tree block into attest.json that already matches the "
+          "live git state -- is invisible to the tree check the same way any "
+          "other gitignored edit is; only the append-only ledger's own "
+          "reasoning catches a doctored freeze.json, and nothing here catches "
+          "a doctored attest.json.")
+    print("  Gitignored files anywhere in the tree are outside the state this "
+          "check examines: tree_state is defined relative to git, not to the "
+          "filesystem, so an edit to one does not perish the record.")
+    print("  A root that is not a git working copy cannot attest at all: "
+          "tree_state answers None for it, and every run over it refuses on "
+          "that ground before any other axis is even checked.")
+    print("  The tree is sampled twice, at collection and at finish. The "
+          "sampling window opens at collection, not at process start, so "
+          "whatever ran before pytest began collecting is unobserved, and a "
+          "file edited and reverted inside the window leaves no trace either.")
     print("  The plugin comparison is by top-level module NAME. A same-named "
           "plugin from another distribution passes: measured, a hostile anyio "
           "earlier on PYTHONPATH takes a red contract to this page's greenest "
@@ -1064,8 +1104,11 @@ def cmd_pack(args) -> int:
     print("  Whatever configured the interpreter BEFORE the recorder existed is "
           "unobserved: PYTHONPATH, a .pth file, sitecustomize. Only PYTEST_ "
           "names are recorded.")
-    print("  CANOPUS_NO_ATTEST and CANOPUS_PLUGIN_DUMP each suppress the record "
-          "entirely, leaving any earlier ATTESTED record standing untouched.")
+    print("  CANOPUS_NO_ATTEST and CANOPUS_PLUGIN_DUMP each suppress WRITING a "
+          "new record; they do not preserve an earlier one. An earlier ATTESTED "
+          "record is re-checked against the CURRENT tree on every read, so it "
+          "perishes the moment the tree the probe run needed to dirty moves, "
+          "with or without a new write.")
     return 0
 
 

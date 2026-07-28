@@ -1735,15 +1735,15 @@ def test_one_xfail_test_does_not_buy_a_vacuous_contract_a_freeze(
     assert not (tree / ".canopus" / "freeze.json").exists()
 
 
-def test_freeze_says_so_when_vacuity_could_not_be_measured(tree, anchor, capsys):
-    """The narrowing bypass, reported rather than refused.
+def test_freeze_refuses_the_from_none_bypass(tree, anchor, capsys):
+    """The bypass this slice closes, at the CLI seam.
 
-    `from None` suppresses the chained ModuleNotFoundError, so the report names
-    no absent module, nothing is stubbed, and the refusal cannot fire over a
-    contract every test of which asserts nothing. This freeze is TAKEN, because
-    a red contract naming no absent module is also the ordinary shape of tests
-    failing on assertions against code that already exists. What it must not do
-    is stay silent about having measured nothing.
+    This replaces test_freeze_says_so_when_vacuity_could_not_be_measured, which
+    asserted the freeze was TAKEN here and only reported having measured nothing.
+    That was true of the revision that read the child's failure text to decide
+    what to stub: `from None` erased the text. The stub set comes from the AST
+    now, so the contract's one test passes under both stubs, earns the vacuity
+    label, and the freeze is refused.
     """
     directory = tree / "tests" / "contract" / "slice"
     directory.mkdir(parents=True)
@@ -1757,9 +1757,115 @@ def test_freeze_says_so_when_vacuity_could_not_be_measured(tree, anchor, capsys)
     )
 
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "asserts nothing" in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_freeze_refuses_when_the_vacuity_probe_cannot_run(
+    tree, anchor, monkeypatch, capsys,
+):
+    """A measurement that could not happen is a refusal, not a pass."""
+    from scripts.utils.canopus_contract import ContractError
+
+    def _explode(*args, **kwargs):
+        raise ContractError("pytest wrote no JUnit report")
+
+    monkeypatch.setattr(canopus, "run_null_stub", _explode)
+    _write_contract(tree, red=True)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+    assert "could not be measured" in capsys.readouterr().err
+    assert not (tree / ".canopus" / "freeze.json").exists()
+
+
+def test_probe_refuses_when_the_vacuity_probe_cannot_run(
+    tree, monkeypatch, capsys,
+):
+    """The same unmeasurable state on the surface the operator reads.
+
+    `probe` runs the stub session unconditionally, so it meets this failure
+    first. Two things have to hold and only one of them is the message. The
+    per-test table reads `vacuous` twenty lines below the call and
+    `vacuity_refusal` reads it again at the end, so an except branch that only
+    printed left both reading an UNBOUND name and killed the command with an
+    `UnboundLocalError` on exactly the failure it was added to report. An empty
+    `vacuous` must also never be weighed as a verdict: a real `cases` set against
+    an empty one finds no subset and returns [], which is the silent "measured,
+    and nothing was vacuous" reading this refusal exists to remove.
+    """
+    from scripts.utils.canopus_contract import ContractError
+
+    def _explode(*args, **kwargs):
+        raise ContractError("pytest wrote no JUnit report")
+
+    monkeypatch.setattr(canopus, "run_null_stub", _explode)
+    _write_vacuous_contract(tree)
+
+    assert _run(["probe", "tests/contract/slice"], tree) == 1
+    out = capsys.readouterr().out
+    assert "could not be measured" in out
+    # The table still rendered: the failure is reported, not raised through it.
+    assert "test_vacuous" in out
+
+
+# ============================================================
+# The probe is weighed against the population the caller measured
+# ============================================================
+
+def _population_spy(monkeypatch) -> list[dict]:
+    """Capture the keyword arguments every `run_null_stub` call was given.
+
+    Asserted at the CALL rather than by reading the source, because
+    `expected_population` carries a default: a caller that stops passing it
+    raises nothing, fails no type check, and silently sends `run_null_stub` off
+    to run its OWN unstubbed baseline. The probe's lost-test guard then measures
+    one pytest session while the caller applies the verdict to another, and
+    nothing holds the two populations equal.
+    """
+    seen: list[dict] = []
+
+    def _spy(paths, root, **kwargs):
+        seen.append(kwargs)
+        return set()
+
+    monkeypatch.setattr(canopus, "run_null_stub", _spy)
+    return seen
+
+
+_REAL_POPULATION = [
+    ("tests/contract/slice/test_contract.py", "test_a", "failure"),
+    ("tests/contract/slice/test_contract.py", "test_b", "passed"),
+]
+
+
+def test_freeze_hands_the_probe_the_real_runs_population(tree, anchor, monkeypatch):
+    """The freeze seam passes its OWN run's triples, not counts and not a shrug.
+
+    The green `test_b` is in the expected value on purpose: per-file counts and
+    the red-only subset both collapse it, so an assertion over the full triples
+    is what tells the three apart.
+    """
+    seen = _population_spy(monkeypatch)
+    _write_contract(tree)   # test_a asserts False, test_b passes
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
                  "--contract", "tests/contract/slice"], tree) == 0
-    assert "NOT measured" in capsys.readouterr().out
-    assert (tree / ".canopus" / "freeze.json").exists()
+
+    assert len(seen) == 1
+    assert sorted(seen[0]["expected_population"]) == _REAL_POPULATION
+
+
+def test_probe_hands_the_probe_the_real_runs_population(tree, monkeypatch):
+    """The same pin on the other call site; two seams, two chances to forget."""
+    seen = _population_spy(monkeypatch)
+    _write_contract(tree)
+
+    assert _run(["probe", "tests/contract/slice"], tree) == 0
+
+    assert len(seen) == 1
+    assert sorted(seen[0]["expected_population"]) == _REAL_POPULATION
 
 
 def test_the_null_stub_does_not_run_once_the_contract_is_already_refused(
@@ -1777,6 +1883,42 @@ def test_the_null_stub_does_not_run_once_the_contract_is_already_refused(
         "from absent_thing import answer\n\n\n"
         "def test_a():\n    assert answer() == 42\n"
     )
+    calls = []
+
+    def _record(*args, **kwargs):
+        calls.append(args)
+        return set()
+
+    monkeypatch.setattr(canopus, "run_null_stub", _record)
+
+    assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
+                 "--contract", "tests/contract/slice"], tree) == 1
+
+    assert calls == []
+    assert "collected nothing" in capsys.readouterr().err
+
+
+def test_the_null_stub_does_not_run_when_a_RED_contract_is_already_refused(
+    tree, anchor, monkeypatch, capsys,
+):
+    """The half of that skip the single-file case cannot reach.
+
+    The sibling above refuses a contract that is not red at all, so `red` alone
+    would have skipped the session too and the `not reasons` half of the
+    condition is never weighed. Two files separate them: one collects nothing and
+    earns the refusal, the other is genuinely red. Only `not reasons` stops the
+    session here, and it is a whole pytest run — three, now — spent on a verdict
+    that cannot change an exit code already earned.
+    """
+    directory = tree / "tests" / "contract" / "slice"
+    directory.mkdir(parents=True)
+    # Module-scope import: this file collects nothing and earns the refusal.
+    (directory / "test_broken.py").write_text(
+        "from absent_thing import answer\n\n\n"
+        "def test_a():\n    assert answer() == 42\n"
+    )
+    # And this one is red, so the contract as a whole is.
+    (directory / "test_red.py").write_text("def test_b():\n    assert False\n")
     calls = []
 
     def _record(*args, **kwargs):
@@ -2439,7 +2581,7 @@ def test_contract_satisfied_skips_the_null_stub_session(tree, anchor, monkeypatc
     """
     calls: list[tuple] = []
 
-    def _spy(paths, root, modules, **kwargs):
+    def _spy(paths, root, **kwargs):
         calls.append((tuple(paths), root))
         return set()
 

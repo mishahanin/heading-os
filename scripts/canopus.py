@@ -58,7 +58,6 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     RED_OUTCOMES,
     ContractError,
     contract_files,
-    missing_modules,
     parse_failure_modes,
     parse_junit,
     read_plugin_dump,
@@ -66,7 +65,6 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     run_null_stub,
     run_pytest_report,
     vacuity_refusal,
-    vacuity_unmeasured,
 )
 from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_MISSING,
@@ -457,7 +455,6 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             # temporary directory is gone by the time it returns.
             plugins = read_plugin_dump(dump)
         counts, outcomes = parse_junit(xml_text)
-        modules = missing_modules(xml_text)
         satisfied = _satisfied_reason(args)
         red = any(outcome in RED_OUTCOMES for _rel, _name, outcome in outcomes)
         if getattr(args, "contract_satisfied", "") and not satisfied:
@@ -482,29 +479,43 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
                   f"never in question")
         reasons = refusal_reasons(counts, outcomes, expected,
                                   green_ok=bool(satisfied))
-        # The null stub is a WHOLE second pytest session, and it is skipped
-        # whenever its answer cannot change this one. Two states qualify, and
-        # the second is the state `--contract-satisfied` exists for. With a
-        # refusal already earned, a vacuity verdict can only add to it. With no
-        # RED test in the set, `vacuity_refusal` weighs an empty `cases` and
-        # returns [] by construction, so the session is spent to be discarded a
-        # line later. `probe` still runs it unconditionally: there the verdict
-        # is the output rather than an input to a refusal.
+        # The null stub is TWO whole pytest sessions, one per stub value set, and
+        # they are skipped whenever their answer cannot change this one. Two
+        # states qualify, and the second is the state `--contract-satisfied`
+        # exists for. With a refusal already earned, a vacuity verdict can only
+        # add to it. With no RED test in the set, `vacuity_refusal` weighs an
+        # empty `cases` and returns [] by construction, so the sessions are spent
+        # to be discarded a line later. `probe` still runs them unconditionally:
+        # there the verdict is the output rather than an input to a refusal.
         if not reasons and red:
-            reasons.extend(
-                vacuity_refusal(outcomes, run_null_stub(contracts, root, modules))
-            )
+            # `expected_population` is the REAL run's triples, read off the very
+            # report this function already parsed, and passing it is not an
+            # optimisation. Omitted, `run_null_stub` runs its OWN unstubbed
+            # baseline and checks its lost-test guard against THAT population
+            # while the verdict is applied to the outcomes above: two pytest
+            # sessions, with nothing holding them equal. Measured on review, a
+            # module-scope counter in a contract file made the two disagree and
+            # froze a wholly vacuous contract through the gap. The parameter
+            # carries a default, so a caller that forgets fails silently.
+            try:
+                vacuous = run_null_stub(
+                    contracts, root, expected_population=outcomes
+                )
+            except ContractError as exc:
+                # A measurement that could not happen is a refusal, not a pass.
+                # The alternative reading — say so and freeze anyway — is what
+                # this slice removes: the operator cannot act on a sentence
+                # printed beside an exit 0.
+                reasons.append(
+                    f"the contract's vacuity could not be measured: {exc}"
+                )
+            else:
+                reasons.extend(vacuity_refusal(outcomes, vacuous))
         if reasons:
             print("canopus: the contract was refused:", file=sys.stderr)
             for reason in reasons:
                 print(f"  {reason}", file=sys.stderr)
             return (None, "", False)
-        # Said out loud, on the way to a successful approve or freeze. The
-        # refusal above cannot fire when nothing was stubbed, and an operator
-        # who is not told so reads that silence as "measured, nothing vacuous".
-        unmeasured = vacuity_unmeasured(outcomes, modules)
-        if unmeasured:
-            print(f"{YELLOW}vacuity{RESET}  {unmeasured}")
         if satisfied and not red:
             # The waiver actually fired here, so the reason is on the surface as
             # well as in the ledger. A refusal that was overridden silently is
@@ -858,16 +869,19 @@ def cmd_probe(args) -> int:
     implementation exists, and which are red for no better reason than the code
     being absent. Those are the ones to question.
 
-    This command runs pytest over the contract TWICE, once for real and once
-    with every absent module mocked, and the second run is what buys the vacuity
-    proof. Nothing can be shared across the two processes. The contract is a
-    handful of files, so the cost is seconds, but an operator wondering why this
-    takes longer than it used to should find the answer written down.
+    This command runs pytest over the contract THREE times: once for real, and
+    then twice more with the contract's OWN imports stubbed, each stub carrying a
+    DIFFERENT set of values. Two stub runs rather than one is what buys the
+    vacuity proof: a test whose outcome does not move when the stubbed value
+    moves cannot be reading that value. Nothing can be shared across the
+    processes. The contract is a handful of files, so the cost is seconds, but an
+    operator wondering why this takes longer than it used to should find the
+    answer written down.
 
-    `approve` and `freeze` run the same pair when `--contract` names the set,
-    with one difference: they skip the second run once the first has already
-    earned a refusal, because a contract that collected nothing cannot be saved
-    by a vacuity verdict and should not pay for one.
+    `approve` and `freeze` run the same set when `--contract` names it, with one
+    difference: they skip the stub runs once the first has already earned a
+    refusal, because a contract that collected nothing cannot be saved by a
+    vacuity verdict and should not pay for one.
     """
     root = _resolve_root(args)
     paths = [_under_root(p, root) for p in args.paths]
@@ -877,8 +891,19 @@ def cmd_probe(args) -> int:
         return 1
     xml_text = run_pytest_report(paths, root)
     counts, outcomes = parse_junit(xml_text)
-    modules = missing_modules(xml_text)
-    vacuous = run_null_stub(paths, root, modules)
+    # BOUND before the call, on every path, because the table twenty lines down
+    # reads `(case_rel, name) in vacuous` and `vacuity_refusal` reads it again at
+    # the end. An except branch that only printed left both reading an unbound
+    # name, so `probe` died with an UnboundLocalError on exactly the failure the
+    # branch was added to report.
+    vacuous: set[tuple[str, str]] = set()
+    probe_failed = ""
+    try:
+        # See `_probe_contract`: the real run's triples, so the probe's lost-test
+        # guard and this command's verdict weigh ONE population.
+        vacuous = run_null_stub(paths, root, expected_population=outcomes)
+    except ContractError as exc:
+        probe_failed = f"the contract's vacuity could not be measured: {exc}"
     modes = parse_failure_modes(xml_text)
     for rel in expected:
         print(f"{BOLD}{rel}{RESET}  {counts.get(rel, 0)} collected")
@@ -918,11 +943,17 @@ def cmd_probe(args) -> int:
                     else f"  {modes.get((case_rel, name), 'other')}")
             note = "  did not run, so it proves nothing" if outcome == "skipped" else ""
             print(f"  {colour}{outcome:8}{RESET} {name}{mode}{note}")
-    unmeasured = vacuity_unmeasured(outcomes, modules)
-    if unmeasured:
-        print(f"{YELLOW}vacuity{RESET}  {unmeasured}")
     reasons = refusal_reasons(counts, outcomes, expected)
-    reasons.extend(vacuity_refusal(outcomes, vacuous))
+    if probe_failed:
+        reasons.append(probe_failed)
+    else:
+        # The `else` is load-bearing rather than tidy. `vacuous` is empty when the
+        # probe did not run, so `vacuity_refusal` would weigh a real `cases` set
+        # against an empty one, find no subset, and return [] — the silent
+        # "measured, and nothing was vacuous" reading this refusal exists to
+        # remove. It answers [] either way today, so the guard is what stops a
+        # later change to that function from reading an empty set as a verdict.
+        reasons.extend(vacuity_refusal(outcomes, vacuous))
     for reason in reasons:
         print(f"{YELLOW}would be refused:{RESET} {reason}")
     return 1 if reasons else 0

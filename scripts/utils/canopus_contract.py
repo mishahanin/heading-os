@@ -891,38 +891,14 @@ def run_null_stub(
     return unproved_each[0] & unproved_each[1]
 
 
-def vacuity_unmeasured(
-    outcomes: Sequence[tuple[str, str, str]], modules: Iterable[str]
-) -> str:
-    """One sentence when the vacuity instrument did not run, or "" when it did.
-
-    A red contract that names NO absent module leaves `run_null_stub` with
-    nothing to stub, so it returns an empty set, `vacuity_refusal` finds no
-    vacuous test, and the freeze proceeds. Two very different worlds reach that
-    same silence: a contract genuinely failing on assertions against code that
-    already exists, and a contract that hid its absent module from the report
-    (see `missing_modules` above, `from None`). This function does not tell them
-    apart, and it does not try.
-
-    It is deliberately NOT a refusal. Tests failing on assertions against
-    existing code are a legitimate, ordinary contract, and refusing there would
-    make the tool something builders route around. What it removes is the
-    silence: a measurement that did not happen is reported as one, rather than
-    read as a measurement that came back clean.
-    """
-    if not any(outcome in RED_OUTCOMES for _rel, _name, outcome in outcomes):
-        return ""
-    if sorted(set(modules)):
-        return ""
-    return (
-        "vacuity was NOT measured: the contract is red but its report names no "
-        "absent module, so no mock could stand in for one and no test could be "
-        "proved to assert nothing. That is not the same as measuring vacuity "
-        "and finding none. Ordinary when the contract fails on assertions "
-        "against code that already exists; also what a suppressed exception "
-        "chain (`raise ... from None` around the import) looks like."
-    )
-
+# One advisory used to stand here, and it is DELETED rather than left unused. It
+# said "the contract is red and its report names no absent module, so nothing
+# could be stubbed", reading that name set off the reader of the child's failure
+# text that this module no longer carries either. The stub set comes from the
+# contract's own import AST now, which `from None` cannot erase, so the state
+# that sentence described is unreachable. The states that ARE unmeasurable raise
+# `ContractError` out of `run_null_stub`, and the callers turn those into
+# refusals rather than a note printed beside an exit 0.
 
 _IMPORT_MARKERS = ("ModuleNotFoundError", "ImportError")
 

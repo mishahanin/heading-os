@@ -525,6 +525,33 @@ def test_run_null_stub_separates_a_vacuous_test_from_a_real_one(tmp_path):
     assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_weak")}
 
 
+def test_run_null_stub_stubs_a_wholly_absent_dotted_import(tmp_path):
+    """Python resolves the PARENT first, so a claim on the full name is not enough.
+
+    Measured: a finder claiming `brandnew.pkg` alone is never consulted, because
+    `brandnew` resolves to nothing and the import dies there. The test then stays
+    red for its original reason and is never labelled, which is an ESCAPE rather
+    than a false accusation.
+
+    Promoted here when the wire 3.1 contract was retired. Prefix expansion and
+    the plugin's call to it are each pinned in tests/test_canopus_nullstub.py,
+    but this is the only case that drives the whole shape through `run_null_stub`
+    rather than resting on the two halves agreeing.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    from brandnew.pkg import thing\n"
+        "    assert thing() is not None\n",
+        encoding="utf-8",
+    )
+
+    assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_a")}
+
+
 def test_a_skipped_test_is_not_proved_to_assert_anything(tmp_path):
     """Not proved is not proved innocent, and a skip is the cheapest bypass.
 

@@ -40,6 +40,7 @@ from scripts.utils.canopus_nullstub import (
     NULLSTUB_STDERR_MARKER,
     STUB_NAME_SEPARATOR,
     VALUES_VAR,
+    _expand_claims,
 )
 
 DEFAULT_PATTERNS = ("test_*.py",)
@@ -388,6 +389,22 @@ def run_pytest_report(
     stops the child session writing an attestation over the real one: `probe` can
     legitimately run while a freeze is held.
 
+    `--import-mode=importlib` is then restored EXPLICITLY, because `-o addopts=`
+    deletes the repository's pin along with the coverage flags it was aimed at,
+    and this child must read the contract in the same import mode the gate does.
+    Every Canopus slice writes its contract to
+    `tests/contract/{date}-{slug}/test_contract.py`, so the convention
+    GUARANTEES a basename collision between slices, which is exactly the class
+    pyproject.toml pins importlib to remove. Measured under the inherited
+    default: a contract spanning two slice directories collected one of its two
+    files, the other was silently dropped from the report, and the builder was
+    told to move imports that were already inside the test body. Not an escape,
+    because all three children of one verdict carry the same flags and every
+    guard compares like with like; the cost is a false diagnosis, and a gate
+    that misdiagnoses is one the operator learns to route around. The flag is
+    spelled here rather than left to `addopts` so the probe's mode is a property
+    of this command instead of a property of whatever config it inherits.
+
     `-o junit_family=xunit1` is LOAD-BEARING, not a style choice. pytest defaults
     to `junit_family=xunit2`, whose schema permits only name, classname, time,
     assertions and status on a testcase, so `file` and `line` are filtered out.
@@ -440,6 +457,7 @@ def run_pytest_report(
             sys.executable, "-m", "pytest", *rels,
             "--junit-xml", str(report),
             "-o", "addopts=",
+            "--import-mode=importlib",
             "-o", "junit_family=xunit1",
             "--continue-on-collection-errors",
             "-p", "no:cacheprovider",
@@ -779,15 +797,40 @@ def run_null_stub(
     # A stub standing in for the contract's OWN package would poison collection
     # silently. A stub lands in sys.modules and is returned by every later
     # import_module even after the finder is gone, because sys.modules is read
-    # before sys.meta_path; under --import-mode=importlib pytest builds each
-    # collected module's parent packages through exactly that path. `__path__` is
+    # before sys.meta_path; under `--import-mode=importlib` pytest builds each
+    # collected module's parent packages through exactly that path, and that is
+    # the mode the probe child runs in, pinned on its own command line in
+    # `run_pytest_report` rather than inherited from a config it neutralises.
+    # (The blocker was originally measured by FORCING the flag onto a child that
+    # then inherited whatever mode its config carried; it now describes the
+    # running probe.) `__path__` is
     # refused, but `__getattr__` answers everything else, so the damage is
     # invisible rather than mock-shaped. This repository's `pythonpath = ["."]`
     # makes `tests` resolve, so the prefix filter never claims it and the case
     # cannot arise today; it arises under a different rootdir, so the refusal is
     # written now rather than left as a property of one config file.
+    #
+    # Intersected against the EXPANDED claim set, not the literal one, and that
+    # is the difference between a guard and a decoration. Prefix expansion
+    # happens in the child, so a contract importing `<own_top>.helper` spells no
+    # literal `<own_top>` at all while the child claims it as an unresolvable
+    # prefix and stands a stub in for the contract's own package: exactly the
+    # different-rootdir case the paragraph above says this refusal was written
+    # for, and the one shape the literal intersection could not see.
+    #
+    # `_expand_claims` rather than a syntactic walk over every dotted prefix,
+    # because the child's rule is what has to be predicted here and it
+    # deliberately leaves a prefix that RESOLVES TO A PACKAGE to `PathFinder`.
+    # A syntactic walk would refuse a contract for a stub the child never
+    # installs. The cost of borrowing the child's own function is named: it
+    # resolves names in THIS process, so an ancestor package's `__init__` runs
+    # here too (its own handler reports and claims on a raise), and it resolves
+    # under the parent's `sys.path` rather than the child's extra PYTHONPATH
+    # entries, so a name importable only from the contract root reads as
+    # unresolvable and is claimed. Both push toward claiming more, which can
+    # only refuse a contract, never wave one through.
     own_packages = {rel.split("/", 1)[0] for rel in files if "/" in rel}
-    collision = own_packages & set(modules)
+    collision = own_packages & _expand_claims(modules)
     if collision:
         raise ContractError(
             "the contract imports a name that is also a package prefix of its own "

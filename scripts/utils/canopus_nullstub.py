@@ -33,9 +33,12 @@ Why the name set comes from the AST. An earlier revision read it from the child'
 failure text, which the contract author writes, so `raise AssertionError(...) from
 None` inside the ImportError handler erased the evidence. A later one answered
 EVERY otherwise-failing import, which broke pytest's own
-`importlib.import_module(parent)` under `--import-mode=importlib`. The AST is what
-the interpreter executes: it cannot be suppressed by the handler, and it names
-nothing the contract did not write.
+`importlib.import_module(parent)` under `--import-mode=importlib`. That blocker
+was measured by FORCING importlib on a probe child that then inherited whatever
+import mode its config carried; the probe now pins the flag on its own command
+line, so it is a hazard of the mode this plugin actually runs in rather than of a
+mode it could be put into. The AST is what the interpreter executes: it cannot be
+suppressed by the handler, and it names nothing the contract did not write.
 """
 from __future__ import annotations
 
@@ -262,8 +265,11 @@ class _NamedFinder(MetaPathFinder):
     INSERTED at the front, because it must claim a named module before
     PathFinder resolves it unwrapped. It is safe there only because the claim is
     narrow: an earlier revision answered every otherwise-failing import and made
-    a stub the parent package of the collected test module, under the
-    `--import-mode=importlib` this repository pins.
+    a stub the parent package of the collected test module. That was measured
+    under `--import-mode=importlib`, which this repository pins in
+    `pyproject.toml` for the gate and which `canopus_contract.run_pytest_report`
+    now pins explicitly on the probe child's own command line, so it is the mode
+    this finder runs in and not merely one it could be run in.
 
     The re-entrancy set is load-bearing. `find_spec` consults sys.meta_path,
     which reaches this finder again for the same name; without the guard the
@@ -436,17 +442,20 @@ def _expand_claims(names):
 class _Installation:
     """Exactly what one `pytest_configure` did, so its own teardown can undo it.
 
-    Two things now need undoing rather than one: the finder on `sys.meta_path`,
-    and the attribute suppliers written onto modules that were already imported.
-    Recording them together keeps teardown an inverse of install rather than a
-    filter over whatever the process happens to be carrying.
+    Three things now need undoing rather than one: the finder on `sys.meta_path`,
+    the attribute suppliers written onto modules that were already imported, and
+    the empty `__path__` given to an already-imported PLAIN module that has to
+    carry a claimed child. Recording them together keeps teardown an inverse of
+    install rather than a filter over whatever the process happens to be
+    carrying.
     """
 
-    __slots__ = ("finder", "supplied")
+    __slots__ = ("finder", "supplied", "pathed")
 
     def __init__(self, finder):
         self.finder = finder
         self.supplied = []
+        self.pathed = []
 
 
 # Last in, first out, so a nested probe undoes its own installation and not the
@@ -469,6 +478,26 @@ def pytest_configure(config):
     Live modules are supplied in place, never evicted and never reloaded: a
     reload would re-run first-party module-level code in the middle of a session
     that has already bound names from it.
+
+    A live PLAIN module that has to carry a claimed child is also given an empty
+    `__path__`, which is the same fix `_NamedFinder._must_be_a_package` makes on
+    the other surface, applied here because a module already in `sys.modules`
+    never reaches the finder at all. Without it, `from plain.child import thing`
+    resolves the parent out of `sys.modules`, reads no `__path__`, and raises
+    `ModuleNotFoundError: ... is not a package` BEFORE `sys.meta_path` is
+    consulted for the child. Measured through the CLI: the test then stayed red
+    for its original reason under both value sets, the vacuity rule never fired,
+    and a contract asserting nothing would have been frozen with no refusal, no
+    diagnostic line and no unknown-vacuity stamp. The identical assertion behind
+    an ABSENT parent was correctly refused, so the two shapes disagreed on one
+    accident of import order.
+
+    The `__path__` is EMPTY rather than the module's own directory, and never
+    overwrites one the module already has. An empty list sends every name below
+    it to `sys.meta_path`, where the finder answers the claim; a live PACKAGE
+    already carries real search locations, and replacing them would hide the
+    modules ALREADY WRITTEN below it behind stubs, which is the fail-open
+    `_stub_spec` refuses on the finder's side.
     """
     names = [
         name
@@ -485,6 +514,10 @@ def pytest_configure(config):
             continue
         existing, supply = _supply_absent_attributes(module)
         installation.supplied.append((module, existing, supply))
+        if finder._must_be_a_package(name) and not hasattr(module, "__path__"):
+            search_path: list[str] = []
+            module.__path__ = search_path
+            installation.pathed.append((module, search_path))
     _INSTALLED.append(installation)
 
 
@@ -502,6 +535,12 @@ def pytest_unconfigure(config):
     observable depends on it today, but a module mutated in place outlives any
     process boundary reasoning, and a supplier somebody else has since replaced
     is left alone rather than clobbered.
+
+    The empty `__path__` given to a live plain module is taken back on the same
+    rule, and by IDENTITY for the same reason: a plain module left carrying one
+    is a plain module the rest of the session treats as a package, and a
+    `__path__` somebody else has since written is not this installation's to
+    remove.
     """
     if not _INSTALLED:
         return
@@ -509,6 +548,9 @@ def pytest_unconfigure(config):
     sys.meta_path[:] = [
         finder for finder in sys.meta_path if finder is not installation.finder
     ]
+    for module, search_path in reversed(installation.pathed):
+        if module.__dict__.get("__path__") is search_path:
+            del module.__path__
     for module, existing, supply in reversed(installation.supplied):
         if module.__dict__.get("__getattr__") is not supply:
             continue

@@ -2207,3 +2207,85 @@ def test_contract_imports_refuses_a_file_it_cannot_read(tmp_path, monkeypatch):
 
     with pytest.raises(ContractError, match="could not be parsed"):
         contract_imports([contract], tmp_path)
+
+
+def test_two_slices_sharing_one_basename_are_both_collected(tmp_path):
+    """The probe child must run in the import mode the repository pins.
+
+    Every Canopus slice writes its contract to
+    `tests/contract/{date}-{slug}/test_contract.py`, so two slices collide on
+    module basename under pytest's default prepend mode; `pyproject.toml` pins
+    `--import-mode=importlib` precisely to remove that class. `-o addopts=`
+    neutralises the repository's addopts wholesale, which took the pin with it,
+    so the probe child ran in a DIFFERENT import mode from the gate.
+
+    It was never an escape, because all three children carry the same flags and
+    every guard compares like with like. The cost was a false diagnosis:
+    measured on this exact shape, the second slice was silently dropped from the
+    report and the builder was told to move imports that were already inside the
+    test body, advice that cannot work on a collision it does not describe.
+    """
+    from scripts.utils.canopus_contract import parse_junit, run_pytest_report
+
+    _write(tmp_path, "c/slice-a/test_contract.py",
+           "def test_slice_a():\n"
+           "    from ghost_a import build\n"
+           "    assert build().name == 'a'\n")
+    _write(tmp_path, "c/slice-b/test_contract.py",
+           "def test_slice_b():\n"
+           "    from ghost_b import build\n"
+           "    assert build().name == 'b'\n")
+
+    counts, outcomes = parse_junit(run_pytest_report([tmp_path / "c"], tmp_path))
+
+    assert counts == {
+        "c/slice-a/test_contract.py": 1,
+        "c/slice-b/test_contract.py": 1,
+    }
+    assert {name for _rel, name, _outcome in outcomes} == {
+        "test_slice_a", "test_slice_b",
+    }
+
+
+def test_the_own_package_guard_sees_a_prefix_the_contract_never_spelled(tmp_path):
+    """The collision guard must weigh the claims the CHILD makes, not the literals.
+
+    Prefix expansion happens in the child, so a contract importing
+    `<own_top>.helper` contributes no literal `<own_top>` for the guard to
+    intersect, while the child claims `<own_top>` as an unresolvable prefix and
+    stands a stub in for the contract's own package. That is precisely the
+    rootdir the guard's own comment says it was written for, and it was the one
+    case the literal intersection could not see.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    contract = _one_import_contract(
+        tmp_path,
+        "def test_a():\n    from c.helper import build\n    assert build()\n",
+    )
+
+    with pytest.raises(ContractError, match="package prefix of its own"):
+        run_null_stub([contract], tmp_path)
+
+
+def test_the_own_package_guard_leaves_a_prefix_that_really_resolves_alone(tmp_path):
+    """A prefix the child would NOT claim must not earn a refusal here either.
+
+    `_expand_claims` deliberately leaves a prefix that resolves to a real package
+    to `PathFinder`, so nothing stands in for it and the contract's own files are
+    collected for real. Expanding the guard's input SYNTACTICALLY, over every
+    dotted prefix rather than over the unresolvable ones, would refuse this
+    contract for a stub the child never installs.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = tmp_path / "scripts"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    from scripts.utils.absent_thing import build\n"
+        "    assert build().name == 'x'\n",
+        encoding="utf-8",
+    )
+
+    assert run_null_stub([contract], tmp_path) == set()

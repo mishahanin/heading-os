@@ -1237,3 +1237,129 @@ def test_the_childs_diagnostic_carries_the_shared_marker(capsys):
     _report("resolving ghost_fixture raised RuntimeError(); stubbing it instead")
 
     assert capsys.readouterr().err.startswith(NULLSTUB_STDERR_MARKER)
+
+
+# The test below crosses BOTH surfaces that stand a stub in for absent code in
+# one run, which is the crossing whose absence let a measured escape through:
+# every existing test drives either the finder or the already-imported supply
+# loop, never a claim that needs both at once.
+
+
+def test_an_already_imported_plain_module_can_still_carry_a_claimed_child(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The parent-`__path__` escape, on the surface that never got the fix.
+
+    `_NamedFinder.find_spec` answers a claimed plain module with a PACKAGE stub
+    so `from plain.child import thing` reaches `sys.meta_path` at all. A module
+    ALREADY in `sys.modules` when the plugin arms never reaches the finder: it is
+    supplied in place, keeps its real values, and still has no `__path__`, so
+    Python reads the parent out of `sys.modules`, finds no `__path__`, and raises
+    `ModuleNotFoundError: ... is not a package` before the finder is consulted
+    for the child. Measured through the CLI before the fix, on a contract whose
+    one test asserted nothing behind an already-imported plain parent: no
+    refusal, no vacuity label, and the freeze would have proceeded, while the
+    identical assertion behind an ABSENT parent was correctly refused.
+
+    The three assertions are the three halves this crossing needs: the child
+    resolves through the finder, the live parent keeps its OWN real value
+    (never evicted, never reloaded), and the absent attribute is supplied.
+    """
+    from scripts.utils.canopus_nullstub import (
+        MODULES_VAR,
+        VALUES_VAR,
+        pytest_configure,
+    )
+
+    (tmp_path / "crossing_fixture.py").write_text("EXISTS = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(VALUES_VAR, "B")
+
+    import crossing_fixture
+
+    monkeypatch.setenv(MODULES_VAR, "crossing_fixture.child")
+    pytest_configure(config=None)
+
+    from crossing_fixture.child import thing
+
+    assert len(thing()) == 7
+    assert crossing_fixture.EXISTS == 1
+    assert len(crossing_fixture.NOT_THERE_YET) == 7
+
+
+def test_unconfigure_takes_back_the_path_it_gave_a_live_plain_module(
+    clean_imports, tmp_path, monkeypatch
+):
+    """A `__path__` written onto a live module outlives the probe unless undone.
+
+    The supply loop mutates a module the process already holds, so teardown is an
+    obligation rather than tidiness: a plain module left carrying `__path__` is a
+    plain module the rest of the session treats as a package, and every later
+    `from it.anything import x` fails somewhere else entirely. Removed by
+    IDENTITY, like the attribute supplier beside it, so a `__path__` somebody
+    else has since written is left alone rather than clobbered.
+    """
+    from scripts.utils.canopus_nullstub import (
+        MODULES_VAR,
+        VALUES_VAR,
+        pytest_configure,
+        pytest_unconfigure,
+    )
+
+    (tmp_path / "pathback_fixture.py").write_text("EXISTS = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(VALUES_VAR, "B")
+
+    import pathback_fixture
+
+    monkeypatch.setenv(MODULES_VAR, "pathback_fixture.child")
+    pytest_configure(config=None)
+
+    assert pathback_fixture.__path__ == []
+
+    pytest_unconfigure(config=None)
+
+    assert pathback_fixture.EXISTS == 1
+    with pytest.raises(AttributeError):
+        pathback_fixture.__path__  # noqa: B018 - the access is the assertion
+
+
+def test_a_live_package_keeps_the_path_it_already_had(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The supply loop must give a `__path__` only to a module that lacks one.
+
+    A claimed package that is already imported carries a real
+    `__path__`, and overwriting it with an empty list would hide every module
+    ALREADY WRITTEN below it behind a stub - the same fail-open `_stub_spec`
+    refuses on the finder's side, arriving through the other door.
+    """
+    from scripts.utils.canopus_nullstub import (
+        MODULES_VAR,
+        VALUES_VAR,
+        pytest_configure,
+        pytest_unconfigure,
+    )
+
+    package = tmp_path / "livepkg_fixture"
+    package.mkdir()
+    (package / "__init__.py").write_text("EXISTS = 1\n", encoding="utf-8")
+    (package / "real.py").write_text("VALUE = 3\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(VALUES_VAR, "B")
+
+    import livepkg_fixture
+
+    original = list(livepkg_fixture.__path__)
+    monkeypatch.setenv(MODULES_VAR, "livepkg_fixture.absent")
+    pytest_configure(config=None)
+
+    assert list(livepkg_fixture.__path__) == original
+
+    from livepkg_fixture.real import VALUE
+
+    assert VALUE == 3
+
+    pytest_unconfigure(config=None)
+
+    assert list(livepkg_fixture.__path__) == original

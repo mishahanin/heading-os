@@ -1124,7 +1124,20 @@ discovered as a false green:</p>
   ignored, and a state that carried <code>.venv</code> and every build artifact would be
   permanently red. <code>.canopus/</code> is itself gitignored, so this cuts both ways:
   a change to a gitignored file the run reads does not perish the record, and
-  neither does an edit to <code>attest.json</code> itself.</li>
+  neither does an edit to <code>attest.json</code> itself. <code>.git/info/exclude</code> and
+  <code>core.excludesFile</code> exclude the same way a committed <code>.gitignore</code> does, and
+  are themselves outside the state for the identical reason — an edit to
+  either does not perish a record either, and neither is itself tracked, so
+  there is no committed copy to diff against.</li>
+<li><strong>A submodule&rsquo;s content is outside the tree state.</strong> A submodule reports as
+  a single path, and that path hashes to <code>None</code> — it is a directory, not a
+  file — whether it is clean or dirty. <code>tree_state</code> sees only that the
+  submodule IS dirty, never what it now contains: a second, different edit
+  inside it moves nothing, so an alternate implementation can be swapped into
+  a submodule after the record is taken and the record still applies.
+  Measured: two different edits inside a submodule, <code>tree_drift</code> reports <code>[]</code>
+  for the second. Hashing submodule content is a mechanism change this fix
+  does not make; this is a disclosure of the existing limit.</li>
 <li><strong>A root that is not a git working copy cannot attest at all.</strong>
   <code>tree_state</code> answers <code>None</code> for it — <code>git rev-parse HEAD</code>, <code>--show-toplevel</code>
   and <code>status</code> all fail closed on a non-repository — and <code>build_attestation</code>

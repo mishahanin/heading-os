@@ -798,6 +798,15 @@ def test_pack_reports_all_three_axes_and_the_uncovered_list(tree, anchor, capsys
     # for its renderer calls the renderer directly, so deleting that line left
     # all of them green while the operator saw nothing.
     assert "interpreter" in out
+    # The two disclosure surfaces -- this page and docs/EXTENDING.md -- diverged
+    # once already: a fix applied to one and not its twin. Pinned here so a
+    # future edit to either cannot silently reopen the gap: the operator signs
+    # off from THIS page, so every item docs/EXTENDING.md discloses has to be
+    # named here too, not only there.
+    assert ".git/info/exclude" in out
+    assert "assume-unchanged and skip-worktree" in out
+    assert "always a false positive, never a false negative" in out
+    assert "submodule" in out and "hashes to None" in out
 
 
 def test_pack_never_raises_on_damaged_state(tree, anchor, capsys):

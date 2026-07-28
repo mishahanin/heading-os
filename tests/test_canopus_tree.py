@@ -391,3 +391,113 @@ def test_tree_state_answers_none_when_the_toplevel_is_empty(tmp_path, monkeypatc
     monkeypatch.setattr(canopus_tree, "git_output", fake_git_output)
 
     assert canopus_tree.tree_state(tmp_path) is None
+
+
+def test_a_flagged_symlink_pointing_outside_the_repo_costs_only_its_own_path(
+    repo, tmp_path_factory,
+):
+    """A tracked, flagged symlink pointing OUTSIDE the repository used to make
+    `.relative_to(toplevel)` raise inside the flagged-path loop, and the whole
+    function answered None for it -- fail-closed, but total: ONE symlink
+    disabled the tool for the WHOLE repository. Reproduced exactly as
+    measured: an assume-unchanged symlink pointing at a file outside the repo,
+    sitting beside an ordinary tracked-file edit elsewhere in the tree. The
+    edit is real; before this closed, the collapse hid it completely.
+    """
+    from scripts.utils.canopus_tree import tree_state
+
+    outside = tmp_path_factory.mktemp("outside") / "target.txt"
+    outside.write_text("external\n", encoding="utf-8")
+    (repo / "escape.py").symlink_to(outside)
+    _git(repo, "add", "escape.py")
+    _git(repo, "commit", "-q", "-m", "add symlink")
+    _git(repo, "update-index", "--assume-unchanged", "escape.py")
+
+    (repo / "kept.py").write_text("x = 2\n", encoding="utf-8")  # ordinary edit
+    state = tree_state(repo)
+
+    assert state is not None, "one flagged symlink must not disable the whole tree"
+    assert "kept.py" in state["dirty"], "the real edit elsewhere must still be visible"
+
+
+def test_a_flagged_in_repo_symlink_keeps_its_own_reported_name(repo):
+    """`(resolved_root / rel).resolve()` used to follow the symlink itself
+    while computing the dirty-dict KEY, so a flagged alias was recorded under
+    its TARGET's name rather than its own -- `alias.py` -> `real.py` hashed
+    under the key `real.py`, silently merging two distinct tracked paths into
+    one dirty entry and losing the alias's own identity from the record.
+    """
+    from scripts.utils.canopus_tree import tree_state
+
+    (repo / "real.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "alias.py").symlink_to(repo / "real.py")
+    _git(repo, "add", "real.py", "alias.py")
+    _git(repo, "commit", "-q", "-m", "add alias")
+    _git(repo, "update-index", "--assume-unchanged", "alias.py")
+
+    dirty = tree_state(repo)["dirty"]
+    assert "alias.py" in dirty, "the flagged path must be keyed by its own name"
+    assert "real.py" not in dirty, "real.py was never edited or flagged itself"
+
+
+@pytest.fixture
+def repo_with_submodule(tmp_path: Path) -> Path:
+    """An outer repo with a local submodule `sub`, both initialised offline.
+
+    `-c protocol.file.allow=always` is passed per-call rather than set
+    globally: git 2.38+ refuses a local submodule clone by default
+    (CVE-2022-39253), and this suite must not touch the operator's global git
+    config to work around that.
+    """
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    _git(inner, "init", "-q")
+    _git(inner, "config", "user.email", "builder@example.invalid")
+    _git(inner, "config", "user.name", "Builder")
+    (inner / "f.py").write_text("v = 1\n", encoding="utf-8")
+    _git(inner, "add", "f.py")
+    _git(inner, "commit", "-q", "-m", "inner first")
+
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    _git(outer, "init", "-q")
+    _git(outer, "config", "user.email", "builder@example.invalid")
+    _git(outer, "config", "user.name", "Builder")
+    _git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q",
+        str(inner), "sub")
+    _git(outer, "commit", "-q", "-m", "add submodule")
+    return outer
+
+
+def test_a_submodules_second_different_edit_produces_no_further_drift(
+    repo_with_submodule,
+):
+    """Pins the disclosed limit rather than approving of it: a submodule
+    reports as ONE path, and that path hashes to None -- it is a directory,
+    not a file -- whether clean or dirty. `tree_state` sees only that the
+    submodule IS dirty, never WHAT it now contains, so a second, different
+    edit inside it moves nothing an attestation can perish on: an alternate
+    implementation could be swapped into the submodule after a record is
+    taken, and the record would still apply. This is NOT a bug this slice
+    fixes -- hashing submodule content would be a mechanism change, not a
+    disclosure fix, and this suite does not make it; the test exists so the
+    limit cannot silently regress into something worse, and so it cannot
+    silently go undisclosed either.
+    """
+    from scripts.utils.canopus_freeze import tree_drift
+    from scripts.utils.canopus_tree import tree_state
+
+    outer = repo_with_submodule
+    (outer / "sub" / "f.py").write_text("v = 2\n", encoding="utf-8")
+    first = tree_state(outer)
+    assert first["dirty"].get("sub") is None, (
+        "a dirty submodule hashes to None: it is a directory, not a file"
+    )
+
+    (outer / "sub" / "f.py").write_text("v = 3\n", encoding="utf-8")
+    second = tree_state(outer)
+
+    assert tree_drift(first, second) == [], (
+        "the documented ceiling: a SECOND, DIFFERENT edit inside a dirty "
+        "submodule produces no further drift at all"
+    )

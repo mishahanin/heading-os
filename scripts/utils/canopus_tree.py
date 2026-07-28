@@ -194,17 +194,40 @@ def tree_state(root: Path) -> Optional[dict]:
     if flagged is None:
         return None
     resolved_root = Path(root).resolve()
+    try:
+        # ONE computation, for *root* itself against *toplevel* -- a fact
+        # about the repository this function was asked about, not about any
+        # single flagged path. git just answered --show-toplevel and -C root
+        # from the same invocation of the same repository, so this is not
+        # expected to fire in practice. Refused as the whole state (matching
+        # the fail-closed posture the rest of this function already takes)
+        # rather than skipped in case it ever does: a root this function
+        # cannot place is exactly the gap the merge below exists to close,
+        # and dropping it silently would reopen it.
+        offset = resolved_root.relative_to(toplevel)
+    except ValueError:
+        return None
     for rel in flagged:
-        try:
-            key = (resolved_root / rel).resolve().relative_to(toplevel).as_posix()
-        except ValueError:
-            # git just answered --show-toplevel and -C root from the same
-            # invocation of the same repository, so this is not expected to
-            # fire in practice. Refused rather than skipped in case it ever
-            # does: a flagged path this function cannot place is exactly the
-            # gap the merge above exists to close, and dropping it silently
-            # would reopen it.
-            return None
+        # Purely lexical: *offset* and *rel* are joined as path STRINGS,
+        # never touching the filesystem, so this can never follow a symlink
+        # that IS *rel*. The previous form -- `(resolved_root / rel)
+        # .resolve()` -- resolved every component of the joined path,
+        # including the final one, so a tracked, flagged symlink `alias.py`
+        # pointing at `real.py` inside the same repo was recorded under the
+        # key `real.py` instead of `alias.py`, and one pointing OUTSIDE the
+        # repository resolved outside `toplevel` entirely: `.relative_to`
+        # then raised, and the whole function returned None -- one flagged
+        # symlink cost the ENTIRE tree state, for every path in the
+        # repository, not just its own. Reproduced: a tracked,
+        # assume-unchanged symlink pointing outside the repo, sitting beside
+        # an ordinary tracked-file edit elsewhere in the tree -- the edit was
+        # real, and the collapse hid it completely.
+        #
+        # A path this function cannot read now costs only ITS OWN key, the
+        # same gap a deleted or unreadable path already gets two blocks up:
+        # recorded as None under the key GIT reported, never dropped and
+        # never let to sink the whole read.
+        key = (offset / rel).as_posix()
         if key in dirty:
             continue  # already hashed above, identically, by the status loop
         try:

@@ -1102,8 +1102,22 @@ def cmd_pack(args) -> int:
           "reasoning catches a doctored freeze.json, and nothing here catches "
           "a doctored attest.json.")
     print("  Gitignored files anywhere in the tree are outside the state this "
-          "check examines: tree_state is defined relative to git, not to the "
-          "filesystem, so an edit to one does not perish the record.")
+          "check examines -- including .git/info/exclude and "
+          "core.excludesFile, which exclude the same way a committed "
+          "gitignore does but are themselves untracked -- tree_state is "
+          "defined relative to git, not to the filesystem, so an edit to "
+          "one does not perish the record.")
+    print("  Git's index bits -- assume-unchanged and skip-worktree -- are "
+          "read directly (git ls-files -v), bypassing git status, so an "
+          "edit to a flagged path still perishes the record. Flipping "
+          "either bit with no content change is itself read as drift: the "
+          "path enters or leaves the state on the FLAG alone, not the "
+          "bytes -- always a false positive, never a false negative.")
+    print("  A submodule's content is outside the tree state: it hashes to "
+          "None, being a directory rather than a file, so the state sees "
+          "only that the submodule is dirty, never what it now contains. A "
+          "second, different edit inside it reads as no further drift at "
+          "all.")
     print("  A root that is not a git working copy cannot attest at all: "
           "tree_state answers None for it, and every run over it refuses on "
           "that ground. Not FIRST, though: build_attestation checks the "

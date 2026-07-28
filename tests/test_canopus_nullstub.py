@@ -168,10 +168,14 @@ def clean_imports():
 
     The ledger is the third half, added when `pytest_configure` started
     supplying absent attributes on modules that were ALREADY imported. Those
-    modules are mutated in place, so the record of what to give back has to be
-    reset with everything else; a test that configures and never unconfigures
-    would otherwise leave an entry a later test's `pytest_unconfigure` would
-    pop.
+    modules are mutated in place, so resetting the ledger record alone is not
+    enough: a test that configures and never unconfigures would leave the
+    mutation itself standing on any module the `sys.modules` diff below does
+    not delete (every module that was already imported before the test ran),
+    leaking a supplied `__getattr__` into every later test in the run. So
+    before the ledger is reset, each entry the test added is torn down through
+    `pytest_unconfigure` itself - the same call the test's own teardown would
+    make - and only then is the ledger snapshot restored underneath it.
     """
     from scripts.utils import canopus_nullstub
 
@@ -179,6 +183,8 @@ def clean_imports():
     saved_modules = dict(sys.modules)
     saved_installed = list(canopus_nullstub._INSTALLED)
     yield
+    while len(canopus_nullstub._INSTALLED) > len(saved_installed):
+        canopus_nullstub.pytest_unconfigure(config=None)
     canopus_nullstub._INSTALLED[:] = saved_installed
     sys.meta_path[:] = saved_meta_path
     for name in set(sys.modules) - set(saved_modules):
@@ -331,12 +337,26 @@ def test_the_plugin_installs_nothing_when_unconfigured(clean_imports, monkeypatc
 
     The plugin is passed with `-p` by the probe alone, but a plugin that arms
     itself on import would arm itself in any session that ever names it.
+
+    Also covers `pytest_unconfigure` on a session that never configured:
+    pytest always calls `pytest_unconfigure` at session end, even one that
+    returned early here, so dropping its `if not _INSTALLED: return` guard
+    makes `.pop()` raise `IndexError` on the empty ledger - a pytest
+    INTERNALERROR that takes the whole session down.
     """
-    from scripts.utils.canopus_nullstub import MODULES_VAR, pytest_configure
+    from scripts.utils.canopus_nullstub import (
+        MODULES_VAR,
+        pytest_configure,
+        pytest_unconfigure,
+    )
 
     monkeypatch.delenv(MODULES_VAR, raising=False)
     before = list(sys.meta_path)
     pytest_configure(config=None)
+
+    assert sys.meta_path == before
+
+    pytest_unconfigure(config=None)  # must survive an empty ledger
 
     assert sys.meta_path == before
 
@@ -928,3 +948,246 @@ def test_a_wrapped_module_refuses_dunder_attributes(
         wrapdunder_fixture.__path__  # noqa: B018 - the access is the assertion
     with pytest.raises(AttributeError):
         wrapdunder_fixture.__all__  # noqa: B018 - the access is the assertion
+
+
+# The tests below were added by round 2 of the fix, closing seven branches a
+# mutation run found correct today and unpinned: the already-imported-module
+# walk narrowed to the claim set, a claimed plain module's own real values
+# lost to a claimed sibling below it, survival of a non-module entry in
+# sys.modules, the dot boundary in `_must_be_a_package`, `pytest_unconfigure`
+# on a session that never configured, the two teardown promises in its
+# docstring, and the `clean_imports` fixture undoing the mutation its ledger
+# records rather than only the ledger itself.
+
+
+def test_pytest_configure_does_not_supply_a_module_outside_the_claim(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The already-imported-module walk must stay inside the claim set.
+
+    Deleting the `finder._claims(name)` half of its guard supplies EVERY
+    already-imported module, not only the claimed ones - the exact blast
+    radius of the design withdrawn at this module's own approval gate: any
+    contract test reading an absent attribute from a module the contract never
+    named would then pass under both value sets, and a good contract would be
+    refused wholesale.
+    """
+    from scripts.utils.canopus_nullstub import (
+        MODULES_VAR,
+        VALUES_VAR,
+        pytest_configure,
+    )
+
+    (tmp_path / "claimed_preexisting_fixture.py").write_text(
+        "EXISTS = 1\n", encoding="utf-8"
+    )
+    (tmp_path / "unclaimed_preexisting_fixture.py").write_text(
+        "EXISTS = 1\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(VALUES_VAR, "A")
+
+    import claimed_preexisting_fixture  # noqa: F401
+    import unclaimed_preexisting_fixture
+
+    monkeypatch.setenv(MODULES_VAR, "claimed_preexisting_fixture")
+    pytest_configure(config=None)
+
+    with pytest.raises(AttributeError):
+        unclaimed_preexisting_fixture.NOT_THERE_YET  # noqa: B018 - the access is the assertion
+
+
+def test_a_claimed_plain_module_with_a_claimed_child_loses_its_own_real_values(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The trade `_must_be_a_package` makes, pinned so it reads as a decision.
+
+    A claim set naming both `flatc_fixture` and `flatc_fixture.child` makes the
+    terminal plain module `flatc_fixture` become an empty package stub, so its
+    own real attribute reads a Stub rather than the module's actual value. This
+    is the documented cost of closing the parent-`__path__` escape: without it,
+    a contract that also imports a name below the plain module would stay red
+    for the wrong reason and never earn a vacuity verdict.
+    """
+    from scripts.utils.canopus_nullstub import (
+        VALUES_VAR,
+        Stub,
+        _NamedFinder,
+        _expand_claims,
+    )
+
+    (tmp_path / "flatc_fixture.py").write_text("CONST = 5\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(VALUES_VAR, "B")
+    claims = _expand_claims({"flatc_fixture.child"})
+
+    assert claims == {"flatc_fixture", "flatc_fixture.child"}
+
+    sys.meta_path.insert(0, _NamedFinder(claims))
+    import flatc_fixture
+
+    assert isinstance(flatc_fixture.CONST, Stub)
+
+
+def test_pytest_configure_survives_a_non_module_entry_in_sys_modules(
+    clean_imports, monkeypatch
+):
+    """`sys.modules` can hold entries that are not modules, `None` included.
+
+    Removing the `isinstance(module, ModuleType)` guard from the
+    already-imported-module walk crashes on `module.__dict__` for a `None`
+    entry, an `AttributeError` that turns `pytest_configure` into a pytest
+    INTERNALERROR - a probe child returning no test report at all, which is
+    worse than a wrong answer because the caller cannot tell it from a crash.
+    """
+    from scripts.utils.canopus_nullstub import MODULES_VAR, pytest_configure
+
+    sys.modules["nonemod_walk_fixture"] = None
+    monkeypatch.setenv(MODULES_VAR, "nonemod_walk_fixture")
+
+    pytest_configure(config=None)  # must not raise
+
+
+def test_a_name_that_merely_starts_with_a_claim_is_not_a_package_trigger(
+    clean_imports,
+):
+    """The dot boundary in `_must_be_a_package`, the twin of `_claims`'s own.
+
+    Comparing `name.startswith(fullname)` instead of
+    `name.startswith(f"{fullname}.")` would make a claim on
+    `boundary_pkg_fixture_sibling.child` also mark the unrelated
+    `boundary_pkg_fixture` as needing to become a package stub, purely because
+    the sibling's dotted name shares a CHARACTER prefix with it - no dot
+    follows `boundary_pkg_fixture` in the sibling's own name, so the two are
+    unrelated names, not parent and child.
+    """
+    from scripts.utils.canopus_nullstub import _NamedFinder
+
+    finder = _NamedFinder(
+        {"boundary_pkg_fixture", "boundary_pkg_fixture_sibling.child"}
+    )
+
+    assert finder._must_be_a_package("boundary_pkg_fixture") is False
+    assert finder._must_be_a_package("boundary_pkg_fixture_sibling") is True
+
+
+def test_unconfigure_restores_an_already_imported_modules_own_getattr(
+    clean_imports, tmp_path, monkeypatch
+):
+    """"Always delete `__getattr__` on teardown" survives every existing test.
+
+    Every test that already exercises the teardown restores a module whose
+    `existing` supplier was `None`, so deleting `module.__getattr__`
+    unconditionally looks identical to restoring it there. A live module
+    carrying its OWN PEP 562 `__getattr__` before the probe ever armed - a
+    lazy-import shim - must get exactly that function back, not have its
+    dynamic attribute surface erased outright.
+    """
+    from scripts.utils.canopus_nullstub import (
+        MODULES_VAR,
+        VALUES_VAR,
+        pytest_configure,
+        pytest_unconfigure,
+    )
+
+    (tmp_path / "pep562_walk_fixture.py").write_text(
+        "def __getattr__(name):\n"
+        "    if name == 'OWN':\n"
+        "        return 'own'\n"
+        "    raise AttributeError(name)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(VALUES_VAR, "B")
+
+    import pep562_walk_fixture
+
+    original_getattr = pep562_walk_fixture.__getattr__
+    monkeypatch.setenv(MODULES_VAR, "pep562_walk_fixture")
+    pytest_configure(config=None)
+
+    assert len(pep562_walk_fixture.NOT_THERE_YET) == 7  # the supplied stub is live
+
+    pytest_unconfigure(config=None)
+
+    assert pep562_walk_fixture.__getattr__ is original_getattr
+    assert pep562_walk_fixture.OWN == "own"
+
+
+def test_unconfigure_leaves_a_supplier_someone_else_replaced_alone(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The identity guard `if ... is not supply: continue`, unpinned until now.
+
+    If something else has since replaced this plugin's supplier on the module -
+    another tool reconfiguring its dynamic-attribute hook mid-session -
+    restoring whatever this plugin remembers would clobber state that is no
+    longer this plugin's to manage.
+    """
+    from scripts.utils.canopus_nullstub import (
+        MODULES_VAR,
+        VALUES_VAR,
+        pytest_configure,
+        pytest_unconfigure,
+    )
+
+    (tmp_path / "clobber_walk_fixture.py").write_text("EXISTS = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(VALUES_VAR, "B")
+
+    import clobber_walk_fixture
+
+    monkeypatch.setenv(MODULES_VAR, "clobber_walk_fixture")
+    pytest_configure(config=None)
+
+    def someone_elses_supplier(name):
+        if name == "REPLACED":
+            return "replaced"
+        raise AttributeError(name)
+
+    clobber_walk_fixture.__getattr__ = someone_elses_supplier
+
+    pytest_unconfigure(config=None)
+
+    assert clobber_walk_fixture.__getattr__ is someone_elses_supplier
+    assert clobber_walk_fixture.REPLACED == "replaced"
+
+
+def test_clean_imports_teardown_undoes_the_mutation_it_records(tmp_path, monkeypatch):
+    """The fixture restores the ledger; it must also undo what the ledger
+    records, not only reset the record of it.
+
+    Every OTHER configuring test claims a module written under `tmp_path`,
+    which the fixture's own `sys.modules` diff deletes outright on teardown, so
+    none of them exercises this path. This test needs a module that survives
+    that diff on purpose: one imported BEFORE the fixture's setup snapshot is
+    taken, so the diff sees it in both snapshots and never touches it. Driving
+    the fixture's generator by hand, rather than requesting it as a pytest
+    fixture, is what makes the assertion possible at all: the fixture's own
+    teardown otherwise runs after the test function returns, where nothing can
+    observe it.
+    """
+    from scripts.utils.canopus_nullstub import MODULES_VAR, VALUES_VAR, pytest_configure
+
+    (tmp_path / "leak_walk_fixture.py").write_text("EXISTS = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(VALUES_VAR, "B")
+
+    import leak_walk_fixture  # imported before the fixture's own snapshot
+
+    gen = clean_imports.__wrapped__()
+    next(gen)  # run the fixture's setup half
+    try:
+        monkeypatch.setenv(MODULES_VAR, "leak_walk_fixture")
+        pytest_configure(config=None)
+
+        assert len(leak_walk_fixture.NOT_THERE_YET) == 7  # the mutation is live
+    finally:
+        with pytest.raises(StopIteration):
+            next(gen)  # run the fixture's teardown half
+
+    try:
+        with pytest.raises(AttributeError):
+            leak_walk_fixture.NOT_THERE_YET  # noqa: B018 - the access is the assertion
+    finally:
+        del sys.modules["leak_walk_fixture"]

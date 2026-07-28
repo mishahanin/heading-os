@@ -281,6 +281,21 @@ class _NamedFinder(MetaPathFinder):
         cannot disagree. A claimed name with no claimed children is untouched by
         this: a contract importing a name FROM a real plain module wants that
         module's real values.
+
+        The trade this makes, named plainly: a claimed plain module that ALSO
+        has a claimed child loses its OWN real values, not only the child's
+        absent name. `_stub_spec` keeps a package stub's real search locations
+        when there are any, but a plain module has none to keep, so the
+        terminal module becomes an empty package stub and every one of its own
+        attributes reads a Stub too. Measured with claims `{flatc, flatc.child}`:
+        `flatc.CONST` reads a stub, not its real value. The direction is mostly
+        toward refusal - `assert CONST == 5` stays red under both value sets and
+        is not called vacuous - but `assert CONST == OTHER_CONST` then reads
+        stub against stub, True under both, and a genuine test is labelled
+        vacuous. Accepted because the alternative - wrapping the terminal
+        module instead of stubbing it - reopens the parent-`__path__` escape
+        this method exists to close, and a contract importing both a plain
+        module's own values and a name below it is the rarer shape.
         """
         prefix = f"{fullname}."
         return any(name.startswith(prefix) for name in self._names)

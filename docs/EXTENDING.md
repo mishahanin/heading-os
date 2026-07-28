@@ -210,11 +210,41 @@ and what is not covered.
 **Red is not the same as meaningful.** A contract can be red only because the
 module it imports does not exist yet, which says nothing about whether its tests
 assert anything. So `probe` always, and `approve` and `freeze` whenever
-`--contract` names the set, run the contract a second time with every absent
-module resolved to a mock. A test that was RED for real and PASSES that run is
-proved to assert nothing: its only failure was the absent import, and a mock
-satisfies any shape it was asked for. Only the red ones are weighed, because a
-test that was already green passes the mocked run too and proves nothing by it.
+`--contract` names the set, run the contract again with the modules the contract
+itself names resolved to a stand-in, TWICE, each run carrying a different set of
+values.
+
+The set of names comes from the contract's own AST, read over its test modules
+and its conftests: the `import` and `from ... import` statements the interpreter
+would execute, plus the literal string arguments of `import_module`,
+`__import__` and `importorskip`. One finder goes on the front of `sys.meta_path`
+and claims exactly those names, plus the prefixes of them that do not already
+resolve; every other import in the process is untouched. A claimed name that
+resolves for real is WRAPPED rather than replaced, keeping its own values and
+answering only the attributes it lacks. A claimed name that does not resolve
+becomes a stub. Modules already imported before the plugin arms are supplied in
+place, because an import that `sys.modules` answers never reaches a finder at
+all.
+
+Two runs rather than one is what buys the proof, and the second is not
+belt-and-braces. Under a single stand-in `assert len(result) == 0` passes and
+earns a vacuity label it did not deserve, and so do `assert key not in result`
+and `assert int(v) == 1`. The rule is differential instead: a test whose outcome
+does not MOVE when the stubbed value moves cannot be reading that value. Nine of
+nine assertions classify correctly that way; four are wrong under the
+single-stub rule, every one of them toward refusing a good contract, which is
+the direction that teaches a builder to route around the gate.
+
+A test is called vacuous when it was RED for real AND its outcome was invariant
+across both stub runs, which means passed, skipped, or errored under both.
+Skipped and errored are in that set on one rule: an outcome that does not move
+was not proved innocent. Otherwise `pytest.skip("not implemented yet")` at the
+top of a vacuous test is a one-line escape. An errored test is most often this
+probe's own stand-in reaching a caller that type-checks its argument, so the
+tool names those tests on stderr rather than leaving the reading to be guessed.
+Only red tests are weighed, because a test that was already green passes the
+stub runs too and proves nothing by it.
+
 Those tests print as `vacuous  <name>  asserts nothing`; every OTHER red test is
 labelled `import`, `assertion`, or `other` beside its outcome, and a vacuous one
 carries no mode label. A SKIPPED test is printed as `skipped`, never as vacuous:
@@ -226,9 +256,17 @@ warning `did not run, so it proves nothing` and the operator decides. A contract
 and a skipped or `xfail` test in the set does not buy it a freeze. Partial
 vacuity is printed and not refused, because "these three assert nothing" is a
 judgement for a human, and a test that legitimately asserts absence lands on
-that list. The cost is stated rather than hidden: those runs are two pytest
-sessions over the contract, and the second is what buys the proof (`approve` and
-`freeze` skip it once the first run has already earned a refusal).
+that list. The cost is stated rather than hidden: THREE pytest sessions per
+verdict, or two when the caller already holds the real run's population, and the
+timeout is per child, so the worst case is three times the value passed.
+`approve` and `freeze` skip the stub runs entirely once the first run has
+already earned a refusal.
+
+The stub plugin reports on the child's stderr, prefixed `canopus-nullstub:`, and
+those lines are forwarded to the operator. ONE underlying cause prints TWICE,
+once per stub run. That is the two runs each reporting, not a second fault, and
+deduplicating it would hide the more interesting case where only one of the two
+runs hit it.
 
 **A retake needs a named waiver, not a workaround.** The redness rule is right
 about a first freeze and wrong about the last one: once a slice has implemented
@@ -244,13 +282,13 @@ actually red the flag changes nothing and says so out loud, so it cannot quietly
 become a habit that hides redness.
 
 Be exact about the vacuity proof on that path, because the loose reading is the
-flattering one. The null stub weighs RED tests only, so on the wholly green
+flattering one. The probe weighs RED tests only, so on the wholly green
 contract the waiver exists for it has nothing to weigh and returns no verdict:
-`approve` and `freeze` therefore SKIP that second pytest session instead of
-spending a minute on an answer that cannot matter. A retake is not re-proved
+`approve` and `freeze` therefore SKIP both stub sessions instead of spending
+minutes on an answer that cannot matter. A retake is not re-proved
 non-vacuous; it inherits the proof the first freeze earned while the contract was
-red. `probe` still runs the stub unconditionally, because there the verdict is
-the output rather than an input to a refusal.
+red. `probe` still runs the stub sessions unconditionally, because there the
+verdict is the output rather than an input to a refusal.
 
 The reason prints at the surface, is recorded in the `.canopus/history.jsonl`
 entry for that `approve` or `freeze`, AND is written onto the anchor artifact by
@@ -285,17 +323,72 @@ reads the artifact sees the waiver and its stated reason, and nothing recomputes
 it or fails when it is edited. What the hash protects is the SET that was frozen,
 not the prose explaining why it was accepted.
 
-Say what the instrument cannot do. It learns which modules were absent by
-reading the failure text the contract's own tests produced, so a test that
-suppresses its exception chain (`raise AssertionError(...) from None` around the
-import) hides the absent module, nothing is stubbed, and no test can be proved
-vacuous. That direction is fail-open and the contract author controls it. What
-the commands do about it is refuse to stay quiet: when a contract is red but its
-report names no absent module at all, `probe`, `approve`, and `freeze` print
-`vacuity was NOT measured`, which is a different claim from measuring vacuity
-and finding none. It is not a refusal, because tests failing on assertions
-against code that already exists produce the same reading and are a perfectly
-ordinary contract.
+**Say what the instrument cannot do**, because a refusal read as "your test
+asserts nothing" is sometimes reading the wrong thing.
+
+The name set is read from the AST rather than from the failure text the tests
+produced, so `raise AssertionError(...) from None` around an import no longer
+erases the evidence: the import STATEMENT is there whether or not the author
+routes around its exception. What no static reader can see is a module name
+computed at run time, `import_module(name)` with `name` a variable. Two further
+spellings of a name that IS known at compile time are merely unread by this
+reader: an f-string and an explicit concatenation are each their own AST node
+rather than a string constant, so neither is collected (implicit adjacent
+concatenation IS, because the parser folds it into one constant first). Every
+one of those directions fails OPEN: never claimed, never stubbed, never proved
+vacuous.
+
+A claimed module that EXISTS and whose own body raises at import time is never
+stubbed, so its test stays red for its original reason and vacuity is not
+measured for it. A claimed PACKAGE whose `__init__` imports a module OUTSIDE the
+claim set that nobody has written yet is the same shape. So a refusal must never
+be read as "your test asserts nothing" on its own: the truth may be that the
+contract's own package does not import. The refusal text names that reading
+rather than asserting the one it cannot prove.
+
+Equality between two stubs is deliberately NOT a differential channel. `__eq__`
+returns True for any other stub whatever values either side carries, because
+whichever constant it returned would be the answer for every value the stub was
+built with, so there is nothing to vary it against. Making it differential would
+turn an honest refusal into an escape hatch: `assert thing() == thing()` would
+fail under one value set, never land in the intersection, and never be flagged.
+The cost is named below rather than hidden.
+
+When the contract's source names no module this probe could stand in for, when
+the two stub runs collect different tests, or when they lose a test the real run
+recorded red, the command REFUSES and says vacuity was NOT measured, which is a
+different claim from measuring vacuity and finding none. `probe` also stamps
+every red row `vacuity UNKNOWN, it was never measured`, so the operator who
+skims the table is told as well as the one who reads to the end.
+
+**What it costs a good contract, measured.** The number that decides whether a
+gate like this is worth having is how often it refuses honest work, so it was
+measured rather than argued. Three sources: this repository's own frozen
+contract; the four contracts retired by earlier slices, replayed with their
+subject renamed to a package that does not exist so the freeze-time condition is
+reproduced; and ten ordinary shapes written for the purpose (subject built in a
+local fixture and in a conftest fixture, parametrised, `tmp_path`, class-based,
+equality against a literal, membership in a container, `pytest.raises`, equality
+against a constant from the same module, and a fixture handing a stub to a
+stdlib parser).
+
+Of the four retired contracts, three were measurable and carried 52 red tests
+between them; the fourth collected nothing, because it imports its subject at
+module scope, which the authoring rule already forbids and `refusal_reasons`
+already names. Across those 52 red tests and the 11 items the ten shapes yield,
+FOUR were labelled vacuous, and all four assert something a reader can point at:
+a false-label rate of 4 in 63. They fall into exactly two families. One is
+`assert call(...) == CONSTANT` where both sides come from the absent module, so
+stub meets stub and the answer is True under both value sets. The other is a
+fixture that hands a stub to a stdlib call which type-checks its argument, which
+errors under both runs and is labelled on the same rule a skip is.
+
+No contract was refused: the refusal needs EVERY red test to be vacuous, and
+four labels spread across three contracts never reached it. So the false-REFUSAL
+rate over that corpus is 0 in 4, and the cost of the two families above is an
+argument at the table, not a lost freeze. The frozen contract in
+`tests/contract/` probes 20 of 20 green and is refused for the other reason, that
+nothing is red once the code exists, which is what `--contract-satisfied` is for.
 
 **Blinding the gate, measured before and after.**
 Wire 2.1 shipped one Critical open, and the account below is what a fixture

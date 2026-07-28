@@ -1633,6 +1633,40 @@ def test_a_wholly_vacuous_contract_is_refused():
     assert "asserts nothing" in reasons[0]
 
 
+def test_the_vacuity_refusal_names_the_other_readings():
+    """The refusal must not assert vacuity as the only explanation."""
+    from scripts.utils.canopus_contract import vacuity_refusal
+
+    reasons = vacuity_refusal(
+        [("c/test_one.py", "test_a", "failure")], {("c/test_one.py", "test_a")}
+    )
+
+    assert len(reasons) == 1
+    assert "asserts nothing" in reasons[0]
+    assert "not installed" in reasons[0]
+
+
+def test_the_vacuity_refusal_names_the_unmeasured_error_reading():
+    """The reading the stderr report names, said again where the verdict is.
+
+    A test that ERRORED under both stub runs is labelled vacuous by the rule
+    that an outcome invariant to the stub value was not proved innocent, and an
+    error is most often this probe's own stand-in reaching a caller that
+    type-checks its argument. When every entry in `vacuous` arrived that way the
+    bare sentence "the contract's redness asserts nothing" is false: it was not
+    measured. The refusal cannot tell those entries apart, so it names the
+    reading unconditionally instead of implying the one it cannot prove.
+    """
+    from scripts.utils.canopus_contract import vacuity_refusal
+
+    reasons = vacuity_refusal(
+        [("c/test_one.py", "test_a", "failure")], {("c/test_one.py", "test_a")}
+    )
+
+    assert "ERRORED" in reasons[0]
+    assert "not measured" in reasons[0]
+
+
 def test_partial_vacuity_is_reported_and_not_refused():
     """One red test that still asserts something is a contract worth freezing."""
     from scripts.utils.canopus_contract import vacuity_refusal

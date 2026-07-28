@@ -489,6 +489,14 @@ def run_pytest_report(
         # nothing to explain it. Scoped to the marker rather than echoing the
         # whole stream: an ordinary contract run loads no plugin, writes no such
         # line, and is unaffected.
+        #
+        # ONE CAUSE, TWICE ON THE STREAM, and that is expected rather than a
+        # second fault. This function forwards the stderr of the child it ran,
+        # and run_null_stub runs two stub children over the same claim set, so a
+        # name whose resolution raises reports once in each. Deduplicating here
+        # is not possible (this call sees one child) and deduplicating in the
+        # caller would hide the case where only ONE of the two runs hit it,
+        # which is the more interesting reading of the pair.
         for line in (proc.stderr or "").splitlines():
             if line.startswith(NULLSTUB_STDERR_MARKER):
                 print(line, file=sys.stderr)
@@ -711,8 +719,19 @@ def run_null_stub(
     One escape family stays open, by construction rather than by oversight: a
     claimed module that EXISTS and whose own body raises at import time is never
     stubbed, so its test stays red for its original reason and never enters the
-    intersection. The claim set is what the contract's AST named, and this is the
-    price of that. The child reports what it swallowed on stderr, and
+    intersection. A claimed PACKAGE whose `__init__` imports a module the
+    contract never named is the same shape, because the package resolves, the
+    wrapping loader runs its body, and the body raises. Both measured through
+    this function, and both returned an empty verdict. The neighbouring case
+    behaves differently and is worth telling apart: when that unwritten module
+    lies BELOW the claimed package it is already claimed by the prefix rule, so
+    it IS stubbed and its test is labelled, which was measured too.
+
+    So a refusal must never be read as "your test asserts nothing" on its own.
+    For this family vacuity was not measured at all, and the truth may be that
+    the contract's own package does not import; `vacuity_refusal` says so in the
+    text it returns. The claim set is what the contract's AST named, and this is
+    the price of that. The child reports what it swallowed on stderr, and
     run_pytest_report forwards it, so the operator has the thread to pull.
 
     `expected_population` is the REAL run's `(file, test, outcome)` triples, and
@@ -733,7 +752,9 @@ def run_null_stub(
     runs are then the same measurement a caller would have made, and the stub is
     the only difference this function reads.
 
-    TIMEOUT IS PER CHILD, so the worst case is three times the caller's value.
+    THE PRICE, stated so a caller can budget it: three pytest sessions per
+    verdict, or two when the caller supplies `expected_population`. TIMEOUT IS
+    PER CHILD, so the worst case is three times the caller's value.
     """
     modules = _passable_claims(contract_imports(paths, root))
     if not modules:
@@ -1053,6 +1074,28 @@ def vacuity_refusal(
     asserts absence lands on that list, and striking it off by eye is cheap;
     teaching the probe to tell the two apart is not.
 
+    THE TEXT NAMES THE OTHER READINGS, and that sentence is load-bearing rather
+    than a courtesy. The reader of this refusal is about to edit a test, and
+    three separate worlds arrive here wearing the same label.
+      * A module the contract named is stood in for whenever it does not
+        resolve, and "does not resolve" covers an unwritten implementation, an
+        extra that is not installed, and a first-party circular import that made
+        the resolution raise. The probe cannot separate them, and the direction
+        is toward refusal rather than acceptance, so it can only cost a correct
+        contract an argument, never wave a bad one through. An operator who is
+        not told will edit a correct test.
+      * A test that ERRORED under both stub runs is in `vacuous` on the rule
+        that an outcome invariant to the stub value was not proved innocent, and
+        an error is most often this probe's own stand-in reaching a caller that
+        type-checks its argument (`json.loads`, `Path`, `re.compile`,
+        `datetime.strptime`). When every entry arrived that way, "the contract's
+        redness asserts nothing" is FALSE: it was not measured. This function
+        receives outcomes from the REAL run and cannot tell which entries those
+        were, so it names the reading unconditionally instead of asserting the
+        one it cannot prove; `run_null_stub` lists the errored tests on stderr.
+    One string rather than a second list element, because the caller prints one
+    line per reason and a second element would read as a second defect.
+
     Only tests that were RED in the real run are weighed, and the filter is about
     EVIDENCE rather than leniency. The stub proves a test vacuous by making its
     absent import succeed; a test that PASSED for real never had a failing import
@@ -1090,6 +1133,13 @@ def vacuity_refusal(
         return [
             "every contract test that is red passes with the code under test "
             "mocked away, so the contract's redness asserts nothing: it measures "
-            "that the code is absent, not that the tests check anything"
+            "that the code is absent, not that the tests check anything. Before "
+            "editing a test, rule out the readings this probe cannot tell apart: "
+            "a module it named is stood in for whether the implementation is "
+            "unwritten, an extra is not installed, or a first-party circular "
+            "import made the resolution raise; and a test that ERRORED under "
+            "both stub runs is named here because its outcome did not move with "
+            "the stub value, which is not measured rather than proof that it "
+            "asserts nothing (the probe lists those tests on stderr)."
         ]
     return []

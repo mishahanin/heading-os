@@ -683,6 +683,122 @@ def test_contract_imports_ignores_a_relative_import(tmp_path):
     assert contract_imports([contract], tmp_path) == set()
 
 
+def test_contract_imports_ignores_a_dotted_relative_import(tmp_path):
+    """The other half of the guard, pinned separately from the bare form above.
+
+    `from . import sibling` has `module=None` AND `level=1`, so the surviving
+    `and node.module` half of the guard excludes it on its own -- deleting
+    `node.level == 0` alone still passes that test. `from .sibling import thing`
+    has `module='sibling'` and `level=1`: with only `node.module` guarding, that
+    reads as the absolute module `sibling`, a name no import statement in this
+    file can produce.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    from .sibling import thing\n"
+        "    assert thing\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == set()
+
+
+def test_contract_imports_sees_a_literal_importlib_dotted_call(tmp_path):
+    """`importlib.import_module("x")` names no `Import`/`ImportFrom` node at all.
+
+    A contract that reaches its code under test this way would otherwise be
+    invisible to the AST reader entirely, the same one-keyword escape this slice
+    exists to close, wearing a different costume.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import importlib\n"
+        "def test_a():\n"
+        "    mod = importlib.import_module('absent_thing')\n"
+        "    assert mod\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"importlib", "absent_thing"}
+
+
+def test_contract_imports_sees_a_literal_bare_import_module_call(tmp_path):
+    """The `ast.Name` callee shape: `from importlib import import_module`."""
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "from importlib import import_module\n"
+        "def test_a():\n"
+        "    mod = import_module('absent_thing')\n"
+        "    assert mod\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"importlib", "absent_thing"}
+
+
+def test_contract_imports_sees_a_literal_pytest_importorskip_call(tmp_path):
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import pytest\n"
+        "def test_a():\n"
+        "    pytest.importorskip('absent_thing')\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"pytest", "absent_thing"}
+
+
+def test_contract_imports_sees_a_literal_dunder_import_call(tmp_path):
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    mod = __import__('absent_thing')\n"
+        "    assert mod\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"absent_thing"}
+
+
+def test_contract_imports_ignores_a_non_literal_dynamic_import_argument(tmp_path):
+    """A name computed at run time is invisible to a static reader, by
+
+    construction. This pins that the reader adds nothing for the call itself
+    rather than guessing or raising -- only the ordinary `import importlib`
+    statement contributes.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import importlib\n"
+        "def test_a():\n"
+        "    name = 'absent_thing'\n"
+        "    mod = importlib.import_module(name)\n"
+        "    assert mod\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"importlib"}
+
+
 def test_contract_imports_refuses_a_file_it_cannot_parse(tmp_path):
     """A syntax error must not read as "this contract imports nothing".
 
@@ -690,13 +806,51 @@ def test_contract_imports_refuses_a_file_it_cannot_parse(tmp_path):
     reason, and the vacuity refusal cannot fire. Silence here is the same defect
     class this slice exists to remove.
     """
-    import pytest
-
     from scripts.utils.canopus_contract import ContractError, contract_imports
 
     contract = tmp_path / "c"
     contract.mkdir()
     (contract / "test_one.py").write_text("def test_a(:\n", encoding="utf-8")
 
-    with pytest.raises(ContractError):
+    with pytest.raises(ContractError, match="could not be parsed"):
+        contract_imports([contract], tmp_path)
+
+
+def test_contract_imports_refuses_a_file_that_is_not_valid_utf8(tmp_path):
+    """`Path.read_text(encoding="utf-8")` raises `UnicodeDecodeError` on bytes
+
+    that are not valid UTF-8, and that is a `ValueError`, not an `OSError` or a
+    `SyntaxError`. Uncaught, it would escape as a raw traceback instead of the
+    `ContractError` every other unreadable-contract path raises.
+    """
+    from scripts.utils.canopus_contract import ContractError, contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_bytes(b"\xe9\xe9\xe9\n")
+
+    with pytest.raises(ContractError, match="could not be parsed"):
+        contract_imports([contract], tmp_path)
+
+
+def test_contract_imports_refuses_a_file_it_cannot_read(tmp_path, monkeypatch):
+    """The `OSError` half of the handler, exercised deterministically.
+
+    Not via `chmod 000`: this suite may run as root, where chmod does not deny
+    read access, so the test would pass locally and lie in CI.
+    """
+    from scripts.utils.canopus_contract import ContractError, contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n    assert True\n", encoding="utf-8"
+    )
+
+    def _deny_read(self, *args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(Path, "read_text", _deny_read)
+
+    with pytest.raises(ContractError, match="could not be parsed"):
         contract_imports([contract], tmp_path)

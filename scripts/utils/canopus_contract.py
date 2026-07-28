@@ -71,28 +71,46 @@ def contract_files(
     return sorted(found)
 
 
+_DYNAMIC_IMPORT_CALLEES = ("import_module", "__import__", "importorskip")
+
+
 def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
     """Dotted module names the contract's own source imports.
 
     Read from the AST rather than from the child's failure text, and that is the
-    whole slice. `try/except ImportError` around the import erases the failure
-    MESSAGE, so the revision this replaces saw nothing to stub and the refusal
-    could not fire. It cannot erase the import STATEMENT, because the AST is what
-    the interpreter executes.
+    whole slice. `try/except ImportError` around a plain `import` or `from`
+    statement erases the failure MESSAGE, so the revision this replaces saw
+    nothing to stub and the refusal could not fire. It cannot erase the import
+    STATEMENT itself, because the AST is what the interpreter executes: the node
+    is there whether or not the author routes around its exception.
+
+    That guarantee holds only for `import` and `from ... import ...` statements.
+    It does NOT hold for a dynamic import whose module name is computed at run
+    time: `importlib.import_module(name)`, `__import__(name)`,
+    `pytest.importorskip(name)` with `name` a variable emit no `Import` or
+    `ImportFrom` node at all, and there is no literal string here to collect
+    either. That module is invisible to any static reader, this one included, and
+    this function fails OPEN on it: never stubbed, never proved vacuous. What IS
+    collected is the LITERAL-argument form of those same three calls, matched on
+    the bare callee name rather than on the resolved object. Matching by name
+    over-reports rather than under-reports (a shadowed local function named
+    `import_module` also gets picked up), and over-reporting is the safe
+    direction here, on the same "when in doubt, report the name" reasoning
+    `missing_modules` uses for its own widening direction.
 
     Relative imports are skipped: `from . import x` names no absolute module, and
     a name no import statement can produce is a claim that can only be wrong.
 
-    A file that will not parse raises rather than contributing nothing. An empty
-    set is indistinguishable from "this contract imports nothing", which stubs
-    nothing, which cannot refuse.
+    A file that will not parse, or cannot be read as UTF-8, raises rather than
+    contributing nothing. An empty set is indistinguishable from "this contract
+    imports nothing", which stubs nothing, which cannot refuse.
     """
     modules: set[str] = set()
     for rel in contract_files(paths, root):
         path = Path(root) / rel
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError) as exc:
+        except (OSError, SyntaxError, ValueError) as exc:
             raise ContractError(
                 f"the contract file {rel} could not be parsed, so the imports it "
                 f"names could not be read: {exc}"
@@ -103,6 +121,20 @@ def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
                     modules.add(node.module)
             elif isinstance(node, ast.Import):
                 modules.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name):
+                    callee = func.id
+                elif isinstance(func, ast.Attribute):
+                    callee = func.attr
+                else:
+                    callee = None
+                if callee in _DYNAMIC_IMPORT_CALLEES and node.args:
+                    first = node.args[0]
+                    if isinstance(first, ast.Constant) and isinstance(
+                        first.value, str
+                    ):
+                        modules.add(first.value)
     return modules
 
 

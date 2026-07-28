@@ -24,8 +24,21 @@ from pathlib import Path
 
 # Bootstrap path so we can import from scripts.utils.*
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils.workspace import get_workspace_root
-from scripts.utils.colors import BOLD, GREEN, GRAY, RED, RESET, YELLOW
+
+# Relaunch under .venv/bin/python before choosing an interpreter for pytest.
+# The pre-commit hook that calls this script declares `language: system` and
+# entry `python3 ...`, so sys.executable is whatever python3 is first on PATH
+# -- on macOS, Homebrew's, which has none of requirements.txt installed. Line
+# 44 below hands sys.executable straight to pytest, so the hook failed with
+# ModuleNotFoundError: No module named 'requests' (exit 4) regardless of the
+# staged change. Re-exec'ing here makes the interpreter the repo venv, the
+# same way ~20 other scripts in scripts/ do. Safe for pytest capture: this
+# relaunches the RUNNER, not pytest, which is spawned as a fresh subprocess.
+from scripts.utils.venv import ensure_venv  # noqa: E402
+
+ensure_venv()
+from scripts.utils.workspace import get_workspace_root  # noqa: E402
+from scripts.utils.colors import BOLD, GREEN, GRAY, RED, RESET, YELLOW  # noqa: E402
 
 WORKSPACE_ROOT = get_workspace_root()
 

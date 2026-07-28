@@ -25,8 +25,18 @@ sys.path.insert(0, str(WORKSPACE_ROOT))
 # pytest's capture layer. Work around by pretending to be non-Windows at
 # import time (skipping the branch), then restoring platform.
 # Subsequent imports get the cached module without re-running top-level code.
+#
+# The fake is applied ONLY on Windows, because it is not free elsewhere. While
+# sys.platform is a lie, the first sysconfig init in the process computes its
+# data-module name as _sysconfigdata_{abiflags}_{sys.platform}_{multiarch} --
+# on macOS that resolves to the non-existent _sysconfigdata__linux_darwin, and
+# sentinel.py's own `from zoneinfo import ZoneInfo` triggers exactly that init.
+# The result was ModuleNotFoundError at conftest import, i.e. every test under
+# tests/integration/ failing to collect on macOS. Linux needs no fake at all
+# (the branch is already skipped), so Windows is the only platform that does.
 _orig_platform = sys.platform
-sys.platform = "linux"
+if _orig_platform.startswith("win"):
+    sys.platform = "linux"
 try:
     import scripts.sentinel  # noqa: F401 - triggers module init
 finally:

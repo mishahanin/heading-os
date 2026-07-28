@@ -1897,7 +1897,19 @@ def tree_drift(recorded, current) -> list[str]:
             f"HEAD moved since the attesting run: {recorded['head']} to "
             f"{current['head']}")
     was, now = recorded["dirty"], current["dirty"]
-    for rel in sorted(set(was) | set(now)):
+    # `_usable_tree_state` checks that `dirty` IS a dict, never that its keys
+    # are strings -- `tree_state` only ever writes string keys, but this
+    # function's contract is "never raises" over whatever a hostile or
+    # hand-edited record carries, and a bare `sorted()` raises TypeError the
+    # moment `was` and `now` disagree on key TYPE (str here, int there: Python
+    # orders neither against the other, nor anything against None). The key
+    # below sorts by (type name, repr) instead, both of which are defined for
+    # every Python value, so the ordering is TOTAL and the walk proceeds. That
+    # is the chosen half of the two options: let the comparison run rather than
+    # drop the offending key, because a dropped key is a path that stops being
+    # compared, which is the same silent-narrowing failure `dirty[rel] = None`
+    # above refuses for a deleted path.
+    for rel in sorted(set(was) | set(now), key=lambda rel: (type(rel).__name__, repr(rel))):
         if rel not in now:
             reasons.append(f"a path the attesting run saw is no longer reported: {rel}")
         elif rel not in was:

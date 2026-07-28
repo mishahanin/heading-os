@@ -131,3 +131,60 @@ def test_a_path_with_a_space_survives_the_parser(repo):
 
     (repo / "a file.py").write_text("q = 1\n", encoding="utf-8")
     assert "a file.py" in tree_state(repo)["dirty"]
+
+
+def test_porcelain_paths_records_both_ends_of_a_copy():
+    """A copy entry ships the same two-field shape a rename does: the new path
+    then the old one. `_porcelain_paths` branches on `"R" in code or "C" in
+    code`, so this pins the "C" half of that condition directly -- getting real
+    git to emit a `C` status needs `--find-copies` plus a similarity threshold
+    git decides at runtime, which is not a reliable trigger to hang a
+    regression test on.
+    """
+    from scripts.utils.canopus_tree import _porcelain_paths
+
+    raw = "C  new.py\x00old.py\x00"
+    assert _porcelain_paths(raw) == ["new.py", "old.py"]
+
+
+def test_porcelain_paths_survives_an_embedded_newline():
+    """The -z form exists precisely so a path never needs escaping; a path
+    containing a literal newline is real content, not a field separator."""
+    from scripts.utils.canopus_tree import _porcelain_paths
+
+    raw = "?? weird\nname.py\x00"
+    assert _porcelain_paths(raw) == ["weird\nname.py"]
+
+
+def test_tree_state_through_a_subdirectory_hashes_against_the_toplevel(repo):
+    """Git porcelain paths are relative to the repository TOPLEVEL, never to
+    whatever directory git was invoked from -- git-status(1) documents that
+    explicitly for the porcelain format. Joining a porcelain path to a
+    non-toplevel `root` reads bytes from a path that does not exist, so every
+    entry hashes to None and two DIFFERENT tree states compare equal: a green
+    attestation surviving a change to the thing under test.
+
+    Reproduced exactly as measured: a repo with `pkg/a.py`, called through the
+    subdirectory `pkg` rather than the repo root, edited twice.
+    """
+    from scripts.utils.canopus_freeze import tree_drift
+    from scripts.utils.canopus_tree import tree_state
+
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "pkg/a.py")
+    _git(repo, "commit", "-q", "-m", "add pkg")
+
+    (pkg / "a.py").write_text("x = 2\n", encoding="utf-8")
+    before = tree_state(pkg)
+    assert before["dirty"].get("pkg/a.py") is not None, (
+        "the hash should be readable through the subdirectory root, not None"
+    )
+
+    (pkg / "a.py").write_text("x = 3\n", encoding="utf-8")
+    after = tree_state(pkg)
+
+    assert before["dirty"] != after["dirty"]
+    drift = tree_drift(before, after)
+    assert any("pkg/a.py" in reason for reason in drift)

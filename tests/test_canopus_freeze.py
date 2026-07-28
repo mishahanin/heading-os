@@ -1961,5 +1961,42 @@ def test_tree_drift_never_raises_on_a_hostile_state():
     good = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {}}
     for hostile in ({"recipe": "canopus-tree-v1", "head": 7, "dirty": {}},
                     {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": 7},
-                    {"recipe": "other", "head": "a" * 40, "dirty": {}}):
+                    {"recipe": "other", "head": "a" * 40, "dirty": {}},
+                    # Non-string keys inside an otherwise well-shaped `dirty`
+                    # map: `_usable_tree_state` checks the map IS a dict, never
+                    # that its keys are strings, so these reach the `sorted()`
+                    # walk. `sorted()` on a raw key set raises TypeError the
+                    # moment two keys disagree on type -- str vs int, or
+                    # anything vs None -- which is exactly the shape a
+                    # hand-edited or hostile record can carry even though
+                    # `tree_state` itself only ever writes string keys. Each
+                    # `dirty` map below mixes a string key with the hostile one
+                    # SO THE TYPE MISMATCH IS WITHIN ONE SIDE: `good`'s dirty is
+                    # `{}`, so a hostile side holding only one key type would
+                    # never actually cross-compare against a string and this
+                    # loop would pass even with the bug present.
+                    {"recipe": "canopus-tree-v1", "head": "a" * 40,
+                     "dirty": {1: "h" * 64, "x.py": "h" * 64}},
+                    {"recipe": "canopus-tree-v1", "head": "a" * 40,
+                     "dirty": {None: "h" * 64, "x.py": "h" * 64}},
+                    {"recipe": "canopus-tree-v1", "head": "a" * 40,
+                     "dirty": {(1, 2): "h" * 64, "x.py": "h" * 64}}):
         assert isinstance(tree_drift(hostile, good), list)
+
+
+def test_tree_drift_compares_across_a_type_mismatched_key_pair():
+    """The reproduction the reviewer ran: one side's `dirty` map keyed by an
+    int, the other's by a string. `sorted(set(was) | set(now))` raises
+    TypeError comparing `str` against `int`, which violates this function's
+    "Never raises" contract and the constraint that every reporting surface
+    calls it through `attestation_state`.
+    """
+    from scripts.utils.canopus_freeze import tree_drift
+
+    was = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {1: "h"}}
+    now = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {"x.py": "h"}}
+
+    result = tree_drift(was, now)
+
+    assert isinstance(result, list)
+    assert result != []

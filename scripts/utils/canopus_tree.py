@@ -69,6 +69,16 @@ def tree_state(root: Path) -> Optional[dict]:
     the file inside it changed. A new module dropped into a new package is
     exactly the shape a builder reaches for.
 
+    Porcelain paths are relative to the repository TOPLEVEL, never to *root*:
+    `git status --porcelain=v1` documents that explicitly, unlike the long
+    format's cwd-relative paths. When *root* is a subdirectory of the
+    repository, joining a porcelain path to *root* reads bytes from a path that
+    does not exist, so every entry hashes to None and two different tree states
+    compare equal -- a green attestation surviving a change to the thing under
+    test. Measured, not theorised: `tree_state(repo / "pkg")` after two
+    successive edits to `pkg/a.py` returned `{"pkg/a.py": None}` both times.
+    So every path is hashed against the resolved toplevel, not *root*.
+
     None rather than an exception, and None rather than an empty state: this is
     read from the recorder at session finish, where a raise takes the session's
     exit code with it, and `build_attestation` reads None as "this run could not
@@ -78,6 +88,16 @@ def tree_state(root: Path) -> Optional[dict]:
     head = git_output(root, "rev-parse", "HEAD")
     if head is None:
         return None
+    top = git_output(root, "rev-parse", "--show-toplevel")
+    if top is None or not top.strip():
+        # Empty output on exit 0 is git's "not really a repository" case --
+        # canopus_git.repo_identity guards the identical call the same way,
+        # because `Path("")` is `Path(".")`, and joining porcelain paths onto
+        # that would silently hash whatever the PROCESS happens to sit in
+        # instead of refusing. Answered as None, the same posture `head` and
+        # `status` already take a few lines either side of this one.
+        return None
+    toplevel = Path(top.strip())
     status = git_output(root, "status", "--porcelain=v1",
                         "--untracked-files=all", "-z")
     if status is None:
@@ -85,7 +105,7 @@ def tree_state(root: Path) -> Optional[dict]:
     dirty: dict = {}
     for rel in _porcelain_paths(status):
         try:
-            dirty[rel] = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+            dirty[rel] = hashlib.sha256((toplevel / rel).read_bytes()).hexdigest()
         except (OSError, ValueError):
             # A deleted path, an unreadable one, and a directory all land here.
             # None is a recorded GAP rather than a dropped entry: dropping it

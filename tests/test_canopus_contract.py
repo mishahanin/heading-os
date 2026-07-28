@@ -620,3 +620,83 @@ def test_parse_failure_modes_refuses_a_doctype():
             '<!DOCTYPE testsuite [<!ENTITY a "aaa">]>\n'
             '<testsuite><testcase file="c/test_one.py" name="test_a"/></testsuite>'
         )
+
+
+def test_contract_imports_sees_an_import_hidden_in_a_try_block(tmp_path):
+    """The whole point: `from None` erases the MESSAGE, never the STATEMENT.
+
+    The AST is what the interpreter executes, so an import cannot be hidden from
+    it by anything the author writes in the handler.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    try:\n"
+        "        from absent_thing import answer\n"
+        "    except ImportError:\n"
+        "        raise AssertionError('nope') from None\n"
+        "    assert answer() is not None\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"absent_thing"}
+
+
+def test_contract_imports_reads_plain_and_dotted_imports(tmp_path):
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import sys\n"
+        "import a.b.c\n"
+        "from d.e import f\n"
+        "\n"
+        "def test_a():\n"
+        "    assert sys\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"sys", "a.b.c", "d.e"}
+
+
+def test_contract_imports_ignores_a_relative_import(tmp_path):
+    """A relative import names no absolute module, so there is nothing to claim.
+
+    Recording it as its bare `.module` text would make the finder claim a name no
+    import statement can produce, which is a claim that can only ever be wrong.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    from . import sibling\n"
+        "    assert sibling\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == set()
+
+
+def test_contract_imports_refuses_a_file_it_cannot_parse(tmp_path):
+    """A syntax error must not read as "this contract imports nothing".
+
+    An empty set means nothing is stubbed, every test stays red for its original
+    reason, and the vacuity refusal cannot fire. Silence here is the same defect
+    class this slice exists to remove.
+    """
+    import pytest
+
+    from scripts.utils.canopus_contract import ContractError, contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text("def test_a(:\n", encoding="utf-8")
+
+    with pytest.raises(ContractError):
+        contract_imports([contract], tmp_path)

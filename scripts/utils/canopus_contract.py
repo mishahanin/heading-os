@@ -17,6 +17,7 @@ frozen:
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -68,6 +69,41 @@ def contract_files(
                 continue
             found.add(candidate.resolve().relative_to(resolved_root).as_posix())
     return sorted(found)
+
+
+def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
+    """Dotted module names the contract's own source imports.
+
+    Read from the AST rather than from the child's failure text, and that is the
+    whole slice. `try/except ImportError` around the import erases the failure
+    MESSAGE, so the revision this replaces saw nothing to stub and the refusal
+    could not fire. It cannot erase the import STATEMENT, because the AST is what
+    the interpreter executes.
+
+    Relative imports are skipped: `from . import x` names no absolute module, and
+    a name no import statement can produce is a claim that can only be wrong.
+
+    A file that will not parse raises rather than contributing nothing. An empty
+    set is indistinguishable from "this contract imports nothing", which stubs
+    nothing, which cannot refuse.
+    """
+    modules: set[str] = set()
+    for rel in contract_files(paths, root):
+        path = Path(root) / rel
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError) as exc:
+            raise ContractError(
+                f"the contract file {rel} could not be parsed, so the imports it "
+                f"names could not be read: {exc}"
+            ) from exc
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    modules.add(node.module)
+            elif isinstance(node, ast.Import):
+                modules.update(alias.name for alias in node.names)
+    return modules
 
 
 def _outcome(case: ElementTree.Element) -> str:

@@ -57,6 +57,30 @@ class Stub:
 
     Dunder ATTRIBUTE access raises, so a stub cannot answer `__path__` and
     masquerade as a package.
+
+    Why `__eq__` does not read `_values`, deliberately. Every other dunder here
+    answers from the values dict, so it disagrees between the "A" and "B" sets
+    and can carry a differential verdict. `__eq__` is the one exception: it
+    returns `True` for any other `Stub` regardless of which values dict either
+    side carries, so `assert one_stub() == another_stub()` reads the same under
+    both sets. This is a choice, not an oversight, for four reasons.
+
+    First, equality between two stubs is not a thing this instrument can
+    measure. Whichever constant `__eq__` returns, that constant is the answer
+    for every value the stub was built with, so there is no value to vary it
+    against. Second, because the outcome does not move with the stubbed value,
+    a test built on it asserts nothing this instrument can see, and it is
+    counted vacuous, the same rule a skipped test follows: not proved is not
+    proved innocent. Third, making equality differential would turn that
+    honest refusal into an escape hatch. `assert thing() == thing()` would
+    then fail under one of the two value sets, never land in the intersection
+    both sets have to agree on, and never be flagged, which is exactly the
+    kind of one-line escape this whole mechanism exists to close. Fourth, the
+    cost is named rather than hidden: a builder whose contract test asserts an
+    equivalence between two absent-code results, `assert normalise("a") ==
+    normalise("A")`, sees that one test counted vacuous. Vacuity is judged per
+    test, so a contract that also carries real assertions is unaffected; only
+    a contract whose every red test takes this shape is refused.
     """
 
     __slots__ = ("_values",)

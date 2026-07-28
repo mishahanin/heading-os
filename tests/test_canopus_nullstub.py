@@ -53,6 +53,22 @@ def test_a_stub_refuses_dunder_attributes():
         stub.__path__  # noqa: B018 - the access itself is the assertion
 
 
+def test_a_stub_has_no_dict_because_slots_is_pinned():
+    """`__slots__` is what makes this refusal true, not `__getattr__`.
+
+    Normal attribute lookup resolves `__dict__` before `__getattr__` is ever
+    consulted, so the dunder guard above cannot protect this one. Only
+    `__slots__ = ("_values",)` keeps `stub.__dict__` from existing at all; drop
+    it and the stub starts exposing `{'_values': ...}` to anything that
+    introspects it.
+    """
+    from scripts.utils.canopus_nullstub import Stub
+
+    stub = Stub({"len": 0, "int": 1, "bool": True, "contains": False, "item": "a"})
+
+    assert not hasattr(stub, "__dict__")
+
+
 # The three tests above are the brief's exact corpus. The four below are added
 # during this task's own mutation-matrix pass: the brief's tests never exercise
 # `__getitem__`, `__iter__`, `__eq__`, `__hash__`, `__str__`, or `__repr__`, so a
@@ -72,6 +88,20 @@ def test_stub_equality_is_only_to_another_stub():
     assert stub == other
     assert stub != 42
     assert stub != "a"
+
+
+def test_stub_equality_is_not_a_differential_channel():
+    """Equality must agree under both value sets, on purpose: a differential
+    `__eq__` would let `assert thing() == thing()` escape vacuity detection
+    instead of being counted vacuous like every other value-less assertion.
+    """
+    from scripts.utils.canopus_nullstub import STUB_VALUES, Stub
+
+    stub_a = Stub(STUB_VALUES["A"])
+    stub_b = Stub(STUB_VALUES["B"])
+
+    assert stub_a == stub_b
+    assert stub_b == stub_a
 
 
 def test_stub_getitem_and_iter_carry_the_same_values():

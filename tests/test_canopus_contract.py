@@ -830,6 +830,34 @@ def test_contract_imports_sees_a_keyword_importorskip_call(tmp_path):
     assert contract_imports([contract], tmp_path) == {"pytest", "absent_thing"}
 
 
+def test_contract_imports_sees_every_keyword_not_just_the_first(tmp_path):
+    """A collection loop stopping after one candidate would still pass every
+    other test in this file, because none of them puts a second string
+    constant ahead of the module name in the same call.
+
+    `minversion` sorts before `modname` in `pytest.importorskip`'s signature,
+    so a keyword-argument value list built as `[kw.value for kw in
+    node.keywords]` puts `'1.0'` first and `'absent_thing'` second. A loop
+    truncated to `candidates[:1]` collects `'1.0'` and drops the module name
+    entirely, the exact escape `pytest.importorskip(minversion='1.0',
+    modname='absent_thing')` opens in real code.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import pytest\n"
+        "def test_a():\n"
+        "    pytest.importorskip(minversion='1.0', modname='absent_thing')\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {
+        "pytest", "1.0", "absent_thing",
+    }
+
+
 def test_contract_imports_ignores_a_non_string_literal_dynamic_import_argument(
     tmp_path,
 ):

@@ -95,10 +95,17 @@ def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
     so neither contributes a string this function can read. A third spelling of
     the same idea, implicit adjacent concatenation (`"absent" "_thing"`), is
     different: the parser folds it into one `ast.Constant` before this function
-    ever walks the tree, so that spelling IS collected. All three of the missed
-    forms are invisible to any static reader, this one included, and this
-    function fails OPEN on them: never stubbed, never proved vacuous. What IS
-    collected is every `str` `ast.Constant` found among the positional
+    ever walks the tree, so that spelling IS collected. These missed forms,
+    among others, are unread by this function, and it fails OPEN on them:
+    never stubbed, never proved vacuous. Only the run-time-computed name
+    (`import_module(name)` with `name` a variable) is invisible to ANY
+    static reader; the other two are merely unread by this one, which reads
+    literal strings only. A callee that is neither a bare name nor a plain
+    attribute access, such as `registry["fn"]("absent_thing")` or a call built
+    through `getattr`, is skipped outright: `func` matches neither
+    `ast.Name` nor `ast.Attribute`, so `callee` is `None` and the call's
+    arguments are never inspected at all. What IS collected is every `str`
+    `ast.Constant` found among the positional
     arguments and the keyword-argument values of those same three calls,
     matched on the bare callee name rather than on the resolved object.
     Matching by name over-reports rather than under-reports (a shadowed local

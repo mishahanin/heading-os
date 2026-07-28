@@ -20,6 +20,15 @@ earns a label it did not deserve. The differential rule got nine of nine
 assertions right where the single-stub rule got four wrong, every one of them
 toward refusing a good contract.
 
+Why the claim is applied twice, on two surfaces. A finder on `sys.meta_path`
+only ever sees imports that REACH it, and an import of a module already in
+`sys.modules` short-circuits there. Measured in this repository, the root
+conftest imports `scripts.utils.venv` at module level and initial conftests load
+before a `-p` plugin's `pytest_configure`, so a contract naming that module was
+claimed, never stubbed, and stayed red for its original reason under both value
+sets. Both runs agreeing "red" never fires the vacuity rule, so `pytest_configure`
+also supplies the modules already imported, in place.
+
 Why the name set comes from the AST. An earlier revision read it from the child's
 failure text, which the contract author writes, so `raise AssertionError(...) from
 None` inside the ImportError handler erased the evidence. A later one answered
@@ -30,6 +39,7 @@ nothing the contract did not write.
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 from importlib.abc import Loader, MetaPathFinder
@@ -148,6 +158,47 @@ def _stub_attribute(name: str):
     return Stub(_values())
 
 
+def _report(message: str) -> None:
+    """Say on stderr what was swallowed, so no handler here is silent.
+
+    Two handlers below treat "resolving this name blew up" as "this name does
+    not resolve", which is the safe over-claim direction but is also exactly the
+    shape of a defect that hides. The probe child's stderr reaches the caller, so
+    the alternative reading of a stubbed name stays visible in the run that made
+    the decision.
+    """
+    sys.stderr.write(f"canopus-nullstub: {message}\n")
+
+
+def _supply_absent_attributes(module):
+    """Answer the names a real module lacks with a stub, keeping the ones it has.
+
+    Used from two places that must behave identically: the wrapping loader, for a
+    module this probe imported, and `pytest_configure`, for a module that was
+    already in `sys.modules` before the plugin armed. One implementation, because
+    two would drift and only one of them is covered by any given test.
+
+    A module's own PEP 562 `__getattr__` still answers first and the stub catches
+    only what it declines, so a real dynamic attribute is never replaced.
+
+    Returns the pair `(existing, supply)`: what was there before, and what was
+    installed. `pytest_unconfigure` needs both to give a live module its own
+    surface back, and to leave alone one that somebody else has since rewritten.
+    """
+    existing = module.__dict__.get("__getattr__")
+
+    def supply(name, _existing=existing):
+        if _existing is not None:
+            try:
+                return _existing(name)
+            except AttributeError:
+                pass
+        return _stub_attribute(name)
+
+    module.__getattr__ = supply
+    return existing, supply
+
+
 class _StubLoader(Loader):
     """Builds a module whose every non-dunder attribute is a Stub."""
 
@@ -186,17 +237,7 @@ class _WrapLoader(Loader):
 
     def exec_module(self, module):
         self._real.exec_module(module)
-        existing = module.__dict__.get("__getattr__")
-
-        def supply(name, _existing=existing):
-            if _existing is not None:
-                try:
-                    return _existing(name)
-                except AttributeError:
-                    pass
-            return _stub_attribute(name)
-
-        module.__getattr__ = supply
+        _supply_absent_attributes(module)
 
 
 class _NamedFinder(MetaPathFinder):
@@ -223,27 +264,90 @@ class _NamedFinder(MetaPathFinder):
             for name in self._names
         )
 
+    def _must_be_a_package(self, fullname: str) -> bool:
+        """True when the claim set names something BELOW this name.
+
+        The builder splitting `scripts/utils/foo.py` into a package
+        `scripts/utils/foo/` writes `from scripts.utils.foo.api import build`
+        while `foo` is still a plain module on disk. Python raises on the
+        parent's missing `__path__` BEFORE `sys.meta_path` is consulted for the
+        child, so the finder is never asked about `api` at all and the test stays
+        red for its original reason: the escape this instrument exists to close.
+        Claiming the prefix in `_expand_claims` is only half of it, measured; the
+        real module still resolves here and would be wrapped, and the wrapped
+        module is still not a package. This is the other half.
+
+        Derived from the claim set rather than passed in, so the two halves
+        cannot disagree. A claimed name with no claimed children is untouched by
+        this: a contract importing a name FROM a real plain module wants that
+        module's real values.
+        """
+        prefix = f"{fullname}."
+        return any(name.startswith(prefix) for name in self._names)
+
+    def _stub_spec(self, fullname: str, real) -> ModuleSpec:
+        """A package stub, carrying real search locations when there are any.
+
+        A PEP 420 namespace package resolves to a spec whose loader is None and
+        whose `submodule_search_locations` is a real directory list. Dropping
+        those locations for an empty `__path__` replaces every ALREADY-WRITTEN
+        module below it with a stub, and `assert helper.CONST == helper.CONST`
+        then reads stub against stub: True under both value sets, a genuine test
+        labelled vacuous, a good contract refused. Keeping them lets the real
+        children resolve while the absent ones still reach this finder.
+        """
+        spec = ModuleSpec(fullname, _StubLoader(), is_package=True)
+        locations = None if real is None else real.submodule_search_locations
+        if locations:
+            spec.submodule_search_locations = list(locations)
+        return spec
+
     def find_spec(self, fullname, path=None, target=None):
+        """Resolve a claimed name, stubbing anything that will not resolve.
+
+        On an exception from the resolution the decision is deliberate: STUB and
+        report, never propagate. `importlib.util.find_spec` EXECUTES the ancestor
+        packages' `__init__.py`, so arbitrary first-party code runs inside this
+        call and can raise anything. Letting it out turns one contract's defect
+        into a crash in whatever import triggered the lookup, and a probe child
+        that dies returns no report at all, which the caller cannot tell from any
+        other crash. Stubbing keeps the claim, and a claim can only ever refuse a
+        contract, never wave one through. That asymmetry is the whole argument:
+        an unclaimed name leaves the test red for its original reason and the
+        vacuity rule silently cannot fire.
+
+        A first-party CIRCULAR import arrives by the same door: `find_spec` on a
+        submodule reads the parent's `__path__`, and a parent still being
+        initialised has none. That genuine defect is stubbed and its test can
+        earn a vacuity label. The direction is toward REFUSAL, and the refusal
+        text names the alternative readings.
+        """
         if fullname in self._busy or not self._claims(fullname):
             return None
         self._busy.add(fullname)
         try:
             real = find_spec(fullname)
-        except (ImportError, AttributeError, ValueError):
-            # The name does not resolve, which is the stub case below. A
-            # first-party CIRCULAR import reaches here too: find_spec on a
-            # submodule reads the parent's __path__, and a parent still being
-            # initialised has none. That genuine defect is then stubbed and its
-            # test can earn a vacuity label. The direction is toward REFUSAL, so
-            # it cannot wave a bad contract through, and the refusal text names
-            # the alternative readings.
+        except Exception as exc:  # noqa: BLE001 - see the docstring; it is reported
+            _report(f"resolving {fullname} raised {exc!r}; stubbing it instead")
             real = None
         finally:
             self._busy.discard(fullname)
-        if real is None or real.loader is None:
-            return ModuleSpec(fullname, _StubLoader(), is_package=True)
-        real.loader = _WrapLoader(real.loader)
-        return real
+        if (
+            real is None
+            or real.loader is None
+            or (
+                real.submodule_search_locations is None
+                and self._must_be_a_package(fullname)
+            )
+        ):
+            return self._stub_spec(fullname, real)
+        # A fresh spec, never the one that was returned. For an ALREADY-IMPORTED
+        # module `importlib.util.find_spec` hands back `module.__spec__` itself,
+        # so assigning the wrapper onto it edits the live module's own spec and
+        # leaves it wrapped for the rest of the process, long after this probe.
+        wrapped = copy.copy(real)
+        wrapped.loader = _WrapLoader(real.loader)
+        return wrapped
 
 
 def _expand_claims(names):
@@ -256,12 +360,26 @@ def _expand_claims(names):
     escapes the verdict entirely. Claiming both names made the same import
     succeed.
 
-    A prefix that RESOLVES is deliberately NOT claimed: `PathFinder` handles it,
-    and claiming it would wrap a real package for nothing. Measured on this
-    repository, `brandnew.pkg.mod` expands to all three levels while
-    `scripts.utils.canopus_contract` claims only the full name, leaving `scripts`
-    and `scripts.utils` untouched. This is what stops the previous design's blast
-    radius returning through the prefix door.
+    A prefix that RESOLVES TO A PACKAGE is deliberately NOT claimed: `PathFinder`
+    handles it, and claiming it would wrap a real package for nothing. Measured
+    on this repository, `brandnew.pkg.mod` expands to all three levels while a
+    dotted name under `scripts.utils` claims only the full name, leaving
+    `scripts` and `scripts.utils` untouched. This is what stops the previous
+    design's blast radius returning through the prefix door.
+
+    A prefix that resolves to a plain MODULE counts as not resolving, and is
+    claimed. It cannot carry a child: measured, `from plain_d.child import thing`
+    dies on `'plain_d' is not a package` before `sys.meta_path` is reached, so
+    the finder is never asked about the child and the test stays red for its
+    original reason. That is the builder splitting one module into a package, and
+    it is the severe direction, because a name the finder fails to claim means
+    the vacuity refusal silently cannot fire. `_NamedFinder._must_be_a_package`
+    is the other half of this fix; neither half moves the import alone.
+
+    An exception is treated the same way, and reported. `find_spec` EXECUTES the
+    ancestor packages' `__init__.py`, so a `RuntimeError` from real first-party
+    code reaches here; unhandled it takes `pytest_configure` down, and a pytest
+    INTERNALERROR is a probe child that returns no test report at all.
 
     Resolution happens here, once, BEFORE the finder is installed. Doing it inside
     `find_spec` would re-enter the finder being constructed.
@@ -275,31 +393,93 @@ def _expand_claims(names):
                 claimed.add(prefix)
                 continue
             try:
-                resolves = find_spec(prefix) is not None
-            except (ImportError, AttributeError, ValueError):
-                resolves = False
-            if not resolves:
+                spec = find_spec(prefix)
+            except Exception as exc:  # noqa: BLE001 - reported, and claimed below
+                _report(f"resolving the prefix {prefix} raised {exc!r}; claiming it")
+                spec = None
+            if spec is None or spec.submodule_search_locations is None:
                 claimed.add(prefix)
     return claimed
 
 
+class _Installation:
+    """Exactly what one `pytest_configure` did, so its own teardown can undo it.
+
+    Two things now need undoing rather than one: the finder on `sys.meta_path`,
+    and the attribute suppliers written onto modules that were already imported.
+    Recording them together keeps teardown an inverse of install rather than a
+    filter over whatever the process happens to be carrying.
+    """
+
+    __slots__ = ("finder", "supplied")
+
+    def __init__(self, finder):
+        self.finder = finder
+        self.supplied = []
+
+
+# Last in, first out, so a nested probe undoes its own installation and not the
+# outer one's. A single slot could not tell the two apart.
+_INSTALLED: list[_Installation] = []
+
+
 def pytest_configure(config):
-    """Install the finder, or do nothing when unconfigured."""
+    """Install the finder, supply the modules already imported, or do nothing.
+
+    The second half is not decoration. The finder only ever sees imports that
+    reach `sys.meta_path`, and an import of a module already in `sys.modules`
+    short-circuits there, so a perfectly good claim is never consulted. Measured
+    on this repository: the root conftest imports `scripts.utils.venv` at module
+    level and initial conftests load BEFORE a `-p` plugin's `pytest_configure`,
+    so a contract naming that module stayed red for its original reason under
+    BOTH value sets. Both runs agreeing "red" is the reading that never fires the
+    vacuity rule, and a contract asserting nothing would have been frozen.
+
+    Live modules are supplied in place, never evicted and never reloaded: a
+    reload would re-run first-party module-level code in the middle of a session
+    that has already bound names from it.
+    """
     names = [
         name for name in os.environ.get(MODULES_VAR, "").split(",") if name
     ]
-    if names:
-        sys.meta_path.insert(0, _NamedFinder(_expand_claims(names)))
+    if not names:
+        return
+    finder = _NamedFinder(_expand_claims(names))
+    sys.meta_path.insert(0, finder)
+    installation = _Installation(finder)
+    for name, module in list(sys.modules.items()):
+        if not isinstance(module, ModuleType) or not finder._claims(name):
+            continue
+        existing, supply = _supply_absent_attributes(module)
+        installation.supplied.append((module, existing, supply))
+    _INSTALLED.append(installation)
 
 
 def pytest_unconfigure(config):
-    """Take the finder back out at session end.
+    """Take back exactly what this plugin's own configure put in place.
 
-    The probe child exits straight after, so nothing observable depends on this
-    today. It is here so "the finder is removed cleanly" is a property of the
-    code rather than of the process boundary.
+    By IDENTITY, not by type. Filtering every `_NamedFinder` off `sys.meta_path`
+    reads as correct in a probe child that installs exactly one, and disarms the
+    OTHER session's finder the moment there are two: a second registration, or a
+    nested in-process probe. Every claimed import then resolves for real, which
+    is the under-claim direction and silent.
+
+    The live modules are given their own surface back for the same reason the
+    finder is removed: the probe child exits straight after and nothing
+    observable depends on it today, but a module mutated in place outlives any
+    process boundary reasoning, and a supplier somebody else has since replaced
+    is left alone rather than clobbered.
     """
+    if not _INSTALLED:
+        return
+    installation = _INSTALLED.pop()
     sys.meta_path[:] = [
-        finder for finder in sys.meta_path
-        if not isinstance(finder, _NamedFinder)
+        finder for finder in sys.meta_path if finder is not installation.finder
     ]
+    for module, existing, supply in reversed(installation.supplied):
+        if module.__dict__.get("__getattr__") is not supply:
+            continue
+        if existing is None:
+            del module.__getattr__
+        else:
+            module.__getattr__ = existing

@@ -580,6 +580,22 @@ _ROOT_LEVEL_PASSING_REPORT = (
     '</testsuite></testsuites>'
 )
 _EMPTY_REPORT = '<testsuites><testsuite></testsuite></testsuites>'
+_TWO_TEST_RED_REPORT = (
+    '<testsuites><testsuite>'
+    '<testcase classname="c.test_one" name="test_a" file="c/test_one.py" '
+    'time="0.0"><failure message="assert 0">t</failure></testcase>'
+    '<testcase classname="c.test_one" name="test_b" file="c/test_one.py" '
+    'time="0.0"><failure message="assert 0">t</failure></testcase>'
+    '</testsuite></testsuites>'
+)
+_TWO_FILE_RED_REPORT = (
+    '<testsuites><testsuite>'
+    '<testcase classname="c.test_one" name="test_a" file="c/test_one.py" '
+    'time="0.0"><failure message="assert 0">t</failure></testcase>'
+    '<testcase classname="c.test_two" name="test_b" file="c/test_two.py" '
+    'time="0.0"><failure message="assert 0">t</failure></testcase>'
+    '</testsuite></testsuites>'
+)
 _ERROR_REPORT = (
     '<testsuites><testsuite>'
     '<testcase classname="c.test_one" name="test_a" file="c/test_one.py" time="0.0">'
@@ -598,20 +614,31 @@ _ERROR_BESIDE_A_GREEN_REPORT = (
 )
 
 
-def _capture_probe_env(monkeypatch, reports=None):
-    """Stand in for the child and hand back the environments it was given.
+def _capture_probe_env(monkeypatch, reports=None, baseline=None):
+    """Stand in for the child and hand back the STUB environments it was given.
 
-    The two runs are what this task's verdict is made of, so the parent half of
-    the handshake is worth reading directly rather than only through a child
+    The two stub runs are what this task's verdict is made of, so the parent half
+    of the handshake is worth reading directly rather than only through a child
     that would have to be believed.
+
+    Three children now, not two: with no `expected_population` supplied the probe
+    runs its own unstubbed BASELINE first, and that run is the only witness to
+    which tests were supposed to be there. It is told apart from the stub runs by
+    the one thing that distinguishes them at the seam, an `extra_env` carrying
+    the stub handshake, and it is served *baseline* and kept out of `seen` so
+    every caller below still reads `seen[0]` as the first STUB run.
     """
     from scripts.utils import canopus_contract
 
     seen: list[dict] = []
     bodies = list(reports or [_ONE_PASSING_REPORT, _ONE_PASSING_REPORT])
+    real = baseline if baseline is not None else _ONE_PASSING_REPORT
 
     def _fake(paths, root, **kwargs):
-        seen.append(dict(kwargs.get("extra_env") or {}))
+        extra_env = dict(kwargs.get("extra_env") or {})
+        if not extra_env:
+            return real
+        seen.append(extra_env)
         return bodies[len(seen) - 1]
 
     monkeypatch.setattr(canopus_contract, "run_pytest_report", _fake)
@@ -916,16 +943,15 @@ def test_a_contract_file_lost_to_both_stub_runs_is_refused(tmp_path, monkeypatch
     nothing: the probe returned one vacuous pair, `vacuity_refusal` returned
     nothing, and the contract froze.
 
-    It can only ever fire on the escape. `refusal_reasons` already refuses any
-    file that collected nothing in the REAL run, and the freeze path runs this
-    probe only when no refusal reason fired, so a file present here is a file the
-    real run measured.
+    It can only ever fire on the escape, and the baseline is what proves that
+    rather than an argument about which caller ran the probe: the file is refused
+    because the REAL run collected a test in it and the stub runs collected none.
     """
     from scripts.utils.canopus_contract import ContractError, run_null_stub
 
     contract = _one_import_contract(tmp_path)
     _write(tmp_path, "c/test_two.py", "def test_b():\n    import absent_thing\n")
-    _capture_probe_env(monkeypatch)
+    _capture_probe_env(monkeypatch, baseline=_TWO_FILE_RED_REPORT)
 
     with pytest.raises(ContractError, match="c/test_two.py"):
         run_null_stub([contract], tmp_path)
@@ -1074,7 +1100,9 @@ def test_the_real_population_is_optional(tmp_path, monkeypatch):
     assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_a")}
 
 
-def test_an_errored_test_under_the_stub_is_not_acquitted(tmp_path, monkeypatch):
+def test_an_errored_test_under_the_stub_is_named_and_not_acquitted(
+    tmp_path, monkeypatch
+):
     """`error` is not innocence, and the acquittal was a measured escape.
 
     Measured on a contract whose two tests both assert nothing and share a
@@ -1083,55 +1111,290 @@ def test_an_errored_test_under_the_stub_is_not_acquitted(tmp_path, monkeypatch):
     was in neither the passed nor the skipped set, the intersection came back
     empty, and the wholly-vacuous refusal never fired. The identical contract
     spelled with `pytest.skip` was refused.
+
+    The answer is the per-test label the skip case already gets, not a refusal of
+    the whole contract: an outcome invariant to the stub value was not proved
+    innocent, and that is a statement about ONE test.
     """
-    from scripts.utils.canopus_contract import ContractError, run_null_stub
+    from scripts.utils.canopus_contract import run_null_stub
 
     contract = _one_import_contract(tmp_path)
     _capture_probe_env(monkeypatch, [_ERROR_REPORT, _ERROR_REPORT])
 
-    with pytest.raises(ContractError, match="c/test_one.py::test_a"):
-        run_null_stub([contract], tmp_path)
+    assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_a")}
 
 
-def test_an_errored_test_under_the_stub_is_not_stamped_vacuous(tmp_path, monkeypatch):
-    """The other direction, and the reason the answer is a refusal not a label.
+def test_an_errored_test_does_not_cost_its_neighbours_their_verdict(
+    tmp_path, monkeypatch
+):
+    """The cost the refusal charged, and the reason it was reversed.
 
-    Counting an errored test vacuous would be a FALSE ACCUSATION manufactured by
-    the instrument itself: the error is most often this probe's own stub meeting
-    a stdlib API that type-checks its argument, which says nothing about what the
-    test asserts. So the refusal says the measurement did not happen, rather than
-    the verdict saying the test asserts nothing, and the surviving passing test
-    is not handed back as a verdict either.
+    Refusing the whole contract for one errored test threw away the verdict on
+    every honest test beside it. Measured on four ordinary fixture shapes
+    (`json.loads`, `Path(...) / x`, `re.compile`, `datetime.strptime`), all four
+    refused, three of them fully honest contracts. Here the errored test is
+    named and the green one beside it is not, so a contract carrying a test that
+    asserts something is unaffected.
     """
-    from scripts.utils.canopus_contract import ContractError, run_null_stub
+    from scripts.utils.canopus_contract import run_null_stub
 
     contract = _one_import_contract(tmp_path)
     _capture_probe_env(
         monkeypatch, [_ERROR_BESIDE_A_GREEN_REPORT, _ERROR_BESIDE_A_GREEN_REPORT]
     )
 
-    with pytest.raises(ContractError) as raised:
-        run_null_stub([contract], tmp_path)
-
-    assert "NOT measured" in str(raised.value)
-    assert "c/test_one.py::test_a" in str(raised.value)
-    assert "asserts nothing" not in str(raised.value)
+    assert run_null_stub([contract], tmp_path) == {
+        ("c/test_one.py", "test_a"), ("c/test_one.py", "test_b"),
+    }
 
 
-def test_an_error_in_only_one_stub_run_is_still_unmeasured(tmp_path, monkeypatch):
+def test_the_errored_tests_are_reported_on_stderr(tmp_path, monkeypatch, capsys):
+    """The instrument names its own contribution, or the label is unreadable.
+
+    An error under the stub is most often this probe's stand-in meeting a library
+    that type-checks its argument, so an operator reading a vacuity refusal has to
+    be able to tell which entries came from the instrument rather than from their
+    contract. Silence here turns a manufactured accusation into an unexplained
+    one.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = _one_import_contract(tmp_path)
+    _capture_probe_env(monkeypatch, [_ERROR_REPORT, _ERROR_REPORT])
+
+    run_null_stub([contract], tmp_path)
+
+    err = capsys.readouterr().err
+    assert "c/test_one.py::test_a" in err
+    assert "ERRORED" in err
+
+
+def test_an_error_in_only_one_stub_run_is_still_not_proved_innocent(
+    tmp_path, monkeypatch
+):
     """One instrument reading out of two is not half a measurement.
 
-    The verdict is "the outcome did not change when the values changed", and an
-    errored run has no outcome to compare, so a single errored run leaves the
-    differential undefined for that test.
+    An errored run has no outcome to compare, so the differential is undefined
+    for that test, and undefined is not innocent. It is named on the same rule
+    that already governs a test skipped in one run and passing in the other, and
+    the stderr report above is what makes the instrument's hand visible.
     """
-    from scripts.utils.canopus_contract import ContractError, run_null_stub
+    from scripts.utils.canopus_contract import run_null_stub
 
     contract = _one_import_contract(tmp_path)
     _capture_probe_env(monkeypatch, [_ONE_PASSING_REPORT, _ERROR_REPORT])
 
-    with pytest.raises(ContractError, match="NOT measured"):
+    assert run_null_stub([contract], tmp_path) == {("c/test_one.py", "test_a")}
+
+
+def test_a_healthy_fixture_that_errors_under_the_stub_keeps_the_contract(tmp_path):
+    """The measured false accusation, against a real child rather than a fake.
+
+    `json.loads(RAW)` in a fixture is ordinary pytest and the authoring rule
+    permits it, so the stub reaching `json.loads` errors the test through no
+    fault of the contract. Before this change that ERROR refused the whole
+    contract, including the honest test beside it, and a gate that refuses this
+    shape is one an operator routes around.
+    """
+    from scripts.utils.canopus_contract import run_null_stub, vacuity_refusal
+
+    _write(tmp_path, "present.py", "def answer():\n    return 1\n")
+    _write(
+        tmp_path, "c/test_one.py",
+        "import json\n"
+        "import pytest\n\n\n"
+        "@pytest.fixture\n"
+        "def subject():\n"
+        "    from absent_thing import RAW\n"
+        "    return json.loads(RAW)\n\n\n"
+        "def test_errors_in_its_fixture(subject):\n"
+        "    assert subject['k'] == 3\n\n\n"
+        "def test_asserts_a_real_value():\n"
+        "    from present import answer\n"
+        "    assert answer() == 42\n",
+    )
+
+    vacuous = run_null_stub([tmp_path / "c"], tmp_path)
+
+    assert ("c/test_one.py", "test_asserts_a_real_value") not in vacuous
+    outcomes = [
+        ("c/test_one.py", "test_errors_in_its_fixture", "error"),
+        ("c/test_one.py", "test_asserts_a_real_value", "failure"),
+    ]
+    assert vacuity_refusal(outcomes, vacuous) == []
+
+
+def test_a_file_that_lost_only_some_of_its_tests_is_refused(tmp_path):
+    """The measured escape the presence test could not see.
+
+    A file that loses only SOME of its tests keeps its key in both stub runs'
+    per-file counts, so a guard asking whether the file is PRESENT sees nothing.
+    Measured, one file and two tests, both vacuous: the real run collected 2 and
+    both were red, the stub runs collected 1, the verdict named one pair,
+    `vacuity_refusal` found `cases` outside `vacuous`, and the contract froze.
+
+    The channel is a module-scope comparison between two attributes of a stubbed
+    module, which the stub answers the same way under both value sets, so the
+    `if` guarding the second test flips and that test is never defined.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    _write(tmp_path, "realmod.py", "X = 1\nY = 2\n")
+    _write(
+        tmp_path, "c/test_one.py",
+        "import realmod\n"
+        "HIDDEN = (realmod.X == realmod.Y)\n\n\n"
+        "def test_one():\n"
+        "    from realmod.child import thing\n"
+        "    assert thing() == thing()\n\n\n"
+        "if not HIDDEN:\n"
+        "    def test_two():\n"
+        "        from realmod.child import other\n"
+        "        assert other() == other()\n",
+    )
+
+    with pytest.raises(ContractError, match="c/test_one.py"):
+        run_null_stub([tmp_path / "c"], tmp_path)
+
+
+def test_the_lost_test_refusal_names_it_rather_than_asking_if_the_key_is_there(
+    tmp_path, monkeypatch
+):
+    """The same finding at the seam, and the message carries the per-file tally.
+
+    A file's KEY in the stub counts is satisfied by one surviving test. The real
+    run's own population is the only thing that knows which tests were supposed
+    to be there, which is why the probe now runs its own baseline when the caller
+    supplies none, and the counts beside the names are what point at the
+    module-scope statement that lost them.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_null_stub
+
+    contract = _one_import_contract(
+        tmp_path,
+        "def test_a():\n    import absent_thing\n\n\n"
+        "def test_b():\n    import absent_thing\n",
+    )
+    _capture_probe_env(monkeypatch, baseline=_TWO_TEST_RED_REPORT)
+
+    with pytest.raises(ContractError, match="c/test_one.py"):
         run_null_stub([contract], tmp_path)
+
+
+def test_a_file_the_real_run_also_lost_is_not_blamed_on_the_stub(tmp_path):
+    """The refusal must not state something false, or abort the wrong command.
+
+    `probe` calls this function unconditionally, before any table is printed, so
+    a file the REAL run never collected reached the operator as "the real run
+    collected it, so the stub is what lost it" and took the whole per-file table
+    down with it. `refusal_reasons` owns that file and diagnoses it correctly;
+    this probe must leave it alone.
+    """
+    from scripts.utils.canopus_contract import run_null_stub
+
+    _write(tmp_path, "c/test_one.py",
+           "def test_a():\n"
+           "    from absent_thing import answer\n"
+           "    assert answer() is not None\n")
+    _write(tmp_path, "c/test_two.py",
+           "raise RuntimeError('this module blows up at import')\n")
+
+    assert run_null_stub([tmp_path / "c"], tmp_path) == {
+        ("c/test_one.py", "test_a"),
+    }
+
+
+def test_two_test_classes_in_one_file_do_not_collide(tmp_path):
+    """xunit1 puts the bare METHOD name in `name`, and the class in `classname`.
+
+    Measured: `TestVacuous.test_x` (vacuous) and `TestHonest.test_x` (a real
+    assertion) collapsed to one `(file, name)` pair, which landed in the vacuous
+    set from one and in the case list from the other, so `cases <= vacuous` held
+    and the whole contract was refused. `class TestRead` beside `class TestWrite`
+    is not an adversarial shape.
+    """
+    from scripts.utils.canopus_contract import (
+        run_contract, run_null_stub, vacuity_refusal,
+    )
+
+    _write(tmp_path, "present.py", "def answer():\n    return 1\n")
+    _write(
+        tmp_path, "c/test_one.py",
+        "class TestVacuous:\n"
+        "    def test_x(self):\n"
+        "        from absent_thing import answer\n"
+        "        assert answer() is not None\n\n\n"
+        "class TestHonest:\n"
+        "    def test_x(self):\n"
+        "        from present import answer\n"
+        "        assert answer() == 42\n",
+    )
+
+    _counts, outcomes = run_contract([tmp_path / "c"], tmp_path)
+    vacuous = run_null_stub([tmp_path / "c"], tmp_path)
+
+    assert vacuous == {("c/test_one.py", "TestVacuous.test_x")}
+    assert vacuity_refusal(outcomes, vacuous) == []
+
+
+def test_a_module_level_function_keeps_its_bare_name(tmp_path):
+    """The qualification must not widen a name the frozen contract asserts.
+
+    For a module-level function xunit1's `classname` is the MODULE path, so
+    there is no class to qualify with and the name stays exactly `test_a`.
+    Qualifying unconditionally would rewrite every id the frozen contract pins.
+    """
+    from scripts.utils.canopus_contract import run_contract
+
+    _write(tmp_path, "c/test_one.py", "def test_a():\n    assert False\n")
+
+    _counts, outcomes = run_contract([tmp_path / "c"], tmp_path)
+
+    assert outcomes == [("c/test_one.py", "test_a", "failure")]
+
+
+def test_a_nested_test_class_carries_its_whole_chain(tmp_path):
+    """Two classes deep is still one name, and the chain is what keeps it unique.
+
+    Truncating to the innermost class would collapse `TestA.TestInner.test_x` and
+    `TestB.TestInner.test_x`, which is the same defect one level down.
+    """
+    from scripts.utils.canopus_contract import run_contract
+
+    _write(
+        tmp_path, "c/test_one.py",
+        "class TestOuter:\n"
+        "    class TestInner:\n"
+        "        def test_x(self):\n"
+        "            assert False\n",
+    )
+
+    _counts, outcomes = run_contract([tmp_path / "c"], tmp_path)
+
+    assert outcomes == [
+        ("c/test_one.py", "TestOuter.TestInner.test_x", "failure"),
+    ]
+
+
+def test_failure_modes_key_on_the_same_qualified_name(tmp_path):
+    """One key space, or the two readers of one report cannot be joined.
+
+    The CLI looks a test's failure mode up by the id the outcome list carries, so
+    a `parse_junit` that qualifies a method name and a `parse_failure_modes` that
+    does not would miss on every method and print no mode at all.
+    """
+    from scripts.utils.canopus_contract import parse_failure_modes, run_pytest_report
+
+    _write(
+        tmp_path, "c/test_one.py",
+        "class TestThing:\n"
+        "    def test_x(self):\n"
+        "        assert 1 == 2\n",
+    )
+
+    modes = parse_failure_modes(run_pytest_report([tmp_path / "c"], tmp_path))
+
+    assert modes == {("c/test_one.py", "TestThing.test_x"): "assertion"}
 
 
 def test_a_collected_name_carrying_a_nul_byte_is_dropped_and_reported(
@@ -1189,12 +1452,16 @@ def test_the_separator_and_the_marker_are_defined_once_in_the_plugin():
     assert "NULLSTUB_STDERR_MARKER = " not in source
 
 
-def test_the_callers_timeout_reaches_both_probe_children(tmp_path, monkeypatch):
+def test_the_callers_timeout_reaches_every_probe_child(tmp_path, monkeypatch):
     """Nothing pinned this, and the fallback happens to be the same default.
 
     Drop the forwarding and every other test still passes, because
     `run_pytest_report`'s own default is 900 too. A caller asking for 61 seconds
     would silently get 900, and the probe is the slowest thing this tool runs.
+
+    THREE children, and the number is the honest statement of the cost: the
+    timeout is per child, so a caller asking for 61 seconds is asking for a
+    worst case of 183.
     """
     from scripts.utils import canopus_contract
     from scripts.utils.canopus_contract import run_null_stub
@@ -1210,7 +1477,7 @@ def test_the_callers_timeout_reaches_both_probe_children(tmp_path, monkeypatch):
 
     run_null_stub([contract], tmp_path, timeout=61)
 
-    assert seen == [61, 61]
+    assert seen == [61, 61, 61]
 
 
 def test_a_wholly_vacuous_contract_is_refused():

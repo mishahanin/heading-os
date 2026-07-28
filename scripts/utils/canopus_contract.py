@@ -210,6 +210,42 @@ def _is_collection_failure(case: ElementTree.Element) -> bool:
     return error is not None and error.get("message") == "collection failure"
 
 
+def _qualified_name(rel: str, classname: str, name: str) -> str:
+    """The test's name, carrying its class chain when it has one.
+
+    A report entry identifies a test by `(file, name)` everywhere in this module,
+    and under xunit1 `name` is the BARE method name with the class held separately
+    in `classname`. Measured: `class TestVacuous: def test_x` and `class
+    TestHonest: def test_x` in one file both arrive as `test_x`, collapse to one
+    pair, and the pair then lands in the vacuous set from the first and in the
+    case list from the second, so `cases <= vacuous` holds and a contract with one
+    honest test is refused whole. `class TestRead` beside `class TestWrite` is not
+    an adversarial shape.
+
+    The tuple is not widened, because the frozen contract asserts two-tuples such
+    as `{("c/test_one.py", "test_a")}`. The NAME is qualified instead, and only
+    when the classname says there is a class to qualify with. For a module-level
+    function xunit1 writes the MODULE's dotted path as the classname, so `test_a`
+    in `c/test_one.py` arrives as `classname="c.test_one"`, which matches the
+    path exactly and leaves the name alone; a method in `TestVacuous` arrives as
+    `classname="c.test_one.TestVacuous"`, and the tail becomes the prefix. The
+    WHOLE tail, not its last segment: `TestA.TestInner.test_x` and
+    `TestB.TestInner.test_x` are the same collision one level down.
+
+    Anything that does not begin with the module's own dotted path is left alone
+    rather than guessed at. A synthetic module-level entry carries no classname at
+    all, and a rootdir this function cannot reconstruct the dotted path under
+    would otherwise have its names rewritten on a coincidence.
+    """
+    if not classname:
+        return name
+    module = Path(rel).with_suffix("").as_posix().replace("/", ".")
+    prefix = module + "."
+    if classname.startswith(prefix):
+        return f"{classname[len(prefix):]}.{name}"
+    return name
+
+
 def _parse_report(xml_text: str) -> ElementTree.Element:
     """The one XML entry point: refuse a DOCTYPE, wrap a parse failure.
 
@@ -255,6 +291,10 @@ def parse_junit(xml_text: str) -> tuple[dict[str, int], list[tuple[str, str, str
 
     A DOCTYPE is refused before parsing, in the shared `_parse_report` entry
     point above, and the reasoning lives there.
+
+    A test method's name carries its class chain, per `_qualified_name` above:
+    two classes in one file may hold a method of the same name, and the bare name
+    collapses them into one identity.
     """
     counts: dict[str, int] = {}
     outcomes: list[tuple[str, str, str]] = []
@@ -265,7 +305,10 @@ def parse_junit(xml_text: str) -> tuple[dict[str, int], list[tuple[str, str, str
             continue
         rel = Path(rel).as_posix()
         counts[rel] = counts.get(rel, 0) + 1
-        outcomes.append((rel, case.get("name") or "", _outcome(case)))
+        name = _qualified_name(
+            rel, case.get("classname") or "", case.get("name") or ""
+        )
+        outcomes.append((rel, name, _outcome(case)))
     return counts, outcomes
 
 
@@ -571,6 +614,21 @@ def _passable_claims(collected: set[str]) -> list[str]:
     return passable
 
 
+def _counts_by_file(outcomes: Sequence[tuple[str, str, str]]) -> dict[str, int]:
+    """How many items each file yielded, read off the per-test outcomes.
+
+    `parse_junit` appends an outcome and bumps a count in the same loop
+    iteration, so this is equal to the counts it returns; deriving it here lets
+    the probe treat a caller-supplied population and its own baseline run
+    identically, instead of carrying counts for one and inferring them for the
+    other.
+    """
+    counts: dict[str, int] = {}
+    for rel, _name, _outcome_token in outcomes:
+        counts[rel] = counts.get(rel, 0) + 1
+    return counts
+
+
 def run_null_stub(
     paths: Sequence[Path],
     root: Path,
@@ -605,12 +663,24 @@ def run_null_stub(
     run_pytest_report forwards it, so the operator has the thread to pull.
 
     `expected_population` is the REAL run's `(file, test, outcome)` triples, and
-    it is optional only so the documented two-argument call keeps working. Every
-    other guard below reads the two stub runs against EACH OTHER, and two runs
-    truncated the same way agree; the real run is the only witness to which tests
-    were supposed to be there at all. Supply it. Without it this function cannot
-    tell a test that was measured and found honest from a test the stub runs
-    never collected, and the quiet answer to the second is an acquittal.
+    it is optional because the documented two-argument call must keep working AND
+    must keep the guards below armed. Every other guard here reads the two stub
+    runs against EACH OTHER, and two runs truncated the same way agree; the real
+    run is the only witness to which tests were supposed to be there at all. So
+    when the caller supplies none, this function RUNS ONE: an unstubbed baseline
+    over the same paths, whose population and per-file counts are then the real
+    ones. That is a third pytest session per verdict, which is the cost the plan
+    budgeted rather than a new one, and the alternative is a two-argument call
+    whose guards are silently off.
+
+    That baseline is `run_contract` over the same paths, which is exactly what a
+    caller supplying `expected_population` ran to obtain it, so supplying it and
+    omitting it produce the same verdict rather than two dialects of one probe.
+    It deliberately does NOT carry the stub runs' PYTHONPATH additions: the two
+    runs are then the same measurement a caller would have made, and the stub is
+    the only difference this function reads.
+
+    TIMEOUT IS PER CHILD, so the worst case is three times the caller's value.
     """
     modules = _passable_claims(contract_imports(paths, root))
     if not modules:
@@ -645,6 +715,19 @@ def run_null_stub(
              os.environ.get("PYTHONPATH", "")]
         ).rstrip(os.pathsep),
     }
+    # The REAL run, which is what every guard below is measured against. Taken
+    # after the collision refusal above, so the cheap refusal still costs nothing,
+    # and before the stub runs, so a contract that cannot be measured at all is
+    # not measured twice under a stub first.
+    if expected_population is None:
+        _real_counts, real_outcomes = run_contract(paths, root, timeout=timeout)
+    else:
+        real_outcomes = list(expected_population)
+    # Derived from the outcomes in BOTH cases rather than taken from parse_junit
+    # in one and derived in the other. parse_junit appends an outcome and bumps a
+    # count in the same loop iteration, so the two are equal by construction, and
+    # one expression here is one thing to keep true instead of two.
+    real_counts = _counts_by_file(real_outcomes)
     populations = []
     unproved_each = []
     counts_each = []
@@ -659,9 +742,9 @@ def run_null_stub(
         counts, outcomes = parse_junit(xml_text)
         counts_each.append(counts)
         populations.append({(rel, name) for rel, name, _o in outcomes})
-        # An ERRORED test is neither vacuous nor innocent, and this set is what
-        # refuses it below rather than letting it fall through either way. The
-        # reasoning is at that refusal.
+        # Kept only to REPORT the instrument's own hand on stderr below. It
+        # decides nothing: an errored test is labelled by the unproved rule that
+        # follows, exactly like a skipped one.
         errored_each.append(
             {(rel, name) for rel, name, outcome in outcomes if outcome == "error"}
         )
@@ -672,9 +755,36 @@ def run_null_stub(
         # one-call bypass, cheaper than the `from None` this slice closes, and it
         # is a recurrence: wire 2.3 already found that a skipped test is never in
         # the vacuous set. A test that did not run was not proved innocent.
+        #
+        # `error` is in this set for the same reason, and it is a REVERSAL of the
+        # previous revision, which refused the whole contract on any errored test.
+        # Review measured that refusal against five realistic contract shapes and
+        # it fired on four, three of them fully honest: a fixture calling
+        # `json.loads(RAW)`, `Path(ROOT) / "x"`, `re.compile(PATTERN)`, or
+        # `datetime.strptime(STAMP, ...)` errors the moment the stub reaches a
+        # library that type-checks its argument. Building the subject in a fixture
+        # is ordinary pytest and the authoring rule permits it, so a blanket
+        # refusal lands squarely on it, and a gate that refuses that is one the
+        # operator routes around, after which the gate proves nothing while
+        # looking as though it does.
+        #
+        # The three answers, and why this one:
+        #   * ACQUIT an errored test and the escape is arithmetic: a contract of
+        #     one vacuous test that passes and one vacuous test that errors is not
+        #     WHOLLY vacuous by the caller's subset test, so it freezes.
+        #   * REFUSE the contract and one fixture touching a stdlib API costs a
+        #     good multi-test contract everything.
+        #   * NAME IT PER TEST and the cost is that one test's innocence, on the
+        #     rule the skip case already settles: an outcome invariant to the stub
+        #     value was not proved innocent. A contract carrying any test that
+        #     asserts something is unaffected, because that test is not in this
+        #     set.
+        # An error in ONE run beside a pass in the other is named too, which is
+        # the same over-reach the skip rule already carries, and the stderr report
+        # below is what keeps it visible rather than silent.
         unproved_each.append(
             {(rel, name) for rel, name, outcome in outcomes
-             if outcome in ("passed", "skipped")}
+             if outcome in ("passed", "skipped", "error")}
         )
     # An intersection is only evidence over one population. Two runs that
     # collected different tests were never compared, and two that collected
@@ -696,78 +806,87 @@ def run_null_stub(
             "either way: vacuity was NOT measured, which is not the same claim "
             "as measured and found absent"
         )
-    # A contract file that vanished from BOTH stub runs. The guard above compares
-    # the two runs with each other, and two runs that lost the same file agree,
-    # so it sees nothing; this compares them with the contract. Measured: a file
-    # carrying a module-scope reference to a real module's real value stops
-    # collecting the moment the contract also names a child of that module,
-    # because the finder then has to stub the plain module WHOLE. Both stub runs
-    # lost it, both agreed, and a two-file contract whose every test asserts
-    # nothing froze.
+    # What the stub runs LOST relative to the real run. The guard above compares
+    # the two stub runs with each other, and two runs that lost the same thing
+    # agree, so it sees nothing; this compares them with the run that knows what
+    # was supposed to be there.
     #
-    # It cannot misfire on the freeze path. `refusal_reasons` already refuses any
-    # file that collected nothing in the REAL run, and the freeze runs this probe
-    # only when no refusal reason fired, so every file here is one the real run
-    # measured. If it fires, the stub is what lost the file.
-    lost = [rel for rel in files if any(rel not in counts for counts in counts_each)]
+    # It is one guard rather than a file-level one and a test-level one, and the
+    # merge is the point. The revision this replaces asked whether a contract file
+    # still had a KEY in the stub runs' per-file counts, which one surviving test
+    # satisfies. Built and measured, one file and two tests, both vacuous: a
+    # module-scope `HIDDEN = (mod.X == mod.Y)` guarding the second test's `def` is
+    # answered the same way under BOTH stub value sets, so the stub runs collected
+    # 1 where the real run collected 2, the two stub runs agreed with each other,
+    # the exit code was 1, no test errored, the verdict named one pair, the
+    # caller's subset test failed, and the contract FROZE.
+    #
+    # The comparison is over the real run's RED tests BY NAME, not over raw
+    # per-file counts, and the two differ in exactly two places.
+    #   * A red test lost while the file's COUNT holds. Measured: a file that
+    #     skips at MODULE level under the stub is recorded by xunit1 as ONE
+    #     synthetic testcase named after the module, so the count is unchanged and
+    #     only the names show the loss. A count comparison is blind there.
+    #   * A GREEN test lost. Only RED tests are weighed, the same evidence rule
+    #     the rest of this probe follows: a test that PASSED for real never had an
+    #     absent import for the stub to resolve, so nothing vacuous can hide in
+    #     its absence, and refusing on it would be an accusation the instrument
+    #     manufactured. A raw count comparison cannot tell which colour it lost,
+    #     so it would refuse there too.
+    # Counts are still what the operator is TOLD, because "2 became 1" is the
+    # sentence that points at the module-scope statement.
+    #
+    # A file the REAL run also lost is not the stub's doing and cannot appear
+    # here: it recorded no red test for that file, so there is nothing to miss.
+    # `refusal_reasons` owns that file and diagnoses it correctly. Blaming the
+    # stub for it states something false, and on `probe`, which calls this
+    # function unconditionally before any table is printed, it aborted the whole
+    # command and handed the operator the wrong cause.
+    lost = sorted(
+        f"{rel}::{name}"
+        for rel, name, outcome in real_outcomes
+        if outcome in RED_OUTCOMES and (rel, name) not in populations[0]
+    )
     if lost:
+        shrank = sorted(
+            f"{rel} (the real run collected {real_counts[rel]}, the stub runs "
+            + " and ".join(str(counts.get(rel, 0)) for counts in counts_each)
+            + ")"
+            for rel in {rel for rel, _name, _o in real_outcomes}
+            if any(counts.get(rel, 0) != real_counts[rel] for counts in counts_each)
+        )
         raise ContractError(
-            "a contract file collected nothing under the stub, so vacuity was "
-            "NOT measured for any test in it: " + ", ".join(lost) + ". The real "
-            "run collected it, so the stub is what lost it: most often a "
-            "module-scope statement reading a value from a module the contract "
-            "also names a child of, which this probe must stub whole. Move that "
-            "statement inside the test body."
-        )
-    if expected_population is not None:
-        # The per-file guard above is not the whole of it, and this is the half
-        # it cannot reach. Measured: under the stub the lost file skipped at
-        # MODULE level, which xunit1 records as ONE synthetic testcase named
-        # after the module, so the file still counted one item and the per-file
-        # guard passed. The verdict then carried ('c/test_lost.py',
-        # 'c.test_lost'), which is not a test at all and would be printed to the
-        # operator as a vacuous test id that does not exist.
-        #
-        # Only RED tests are weighed, the same evidence rule the rest of this
-        # probe follows: a test that PASSED for real never had an absent import
-        # for the stub to resolve, so its absence here proves nothing.
-        unmeasured = sorted(
-            f"{rel}::{name}"
-            for rel, name, outcome in expected_population
-            if outcome in RED_OUTCOMES and (rel, name) not in populations[0]
-        )
-        if unmeasured:
-            raise ContractError(
-                "vacuity was NOT measured for tests the real run recorded red, "
-                "because the stub runs never collected them: "
-                + ", ".join(unmeasured)
-                + ". Not measured is not proved innocent, and an intersection "
-                "computed over the survivors reads exactly like a clean verdict."
+            "vacuity was NOT measured for tests the real run recorded red, "
+            "because the stub runs never collected them: "
+            + ", ".join(lost)
+            + ". Not measured is not proved innocent, and an intersection "
+            "computed over the survivors reads exactly like a clean verdict."
+            + (
+                " The stub is what lost them, and the per-file tally says where: "
+                + ", ".join(shrank)
+                + ". Most often a module-scope statement reads a value from a "
+                "module the contract also names a child of, which this probe must "
+                "stub whole; move that statement inside the test body."
+                if shrank else ""
             )
-    # An `error` under the stub is neither vacuous nor innocent, and this is a
-    # decision rather than an omission. The instrument did not measure the test:
-    # the error is most often this probe's OWN stub meeting a stdlib API that
-    # type-checks its argument (`open(CONFIG['path'])` with CONFIG stubbed), so
-    # counting it vacuous would be a false accusation manufactured here, and a
-    # false accusation teaches the operator to route around the gate. Leaving it
-    # acquitted is worse: measured, a wholly vacuous contract whose two tests
-    # shared such a fixture errored under both runs, `error` was in neither the
-    # passed nor the skipped set, the intersection came back empty, and the
-    # contract froze. The identical contract spelled with `pytest.skip` WAS
-    # refused. So it is refused as unmeasurable, the same posture the population
-    # guards above take, and the operator is told which tests and why.
+        )
+    # The instrument's own contribution, said out loud. An errored test is named
+    # vacuous by the unproved rule above, and an error is most often this probe's
+    # stub meeting a library that type-checks its argument rather than anything
+    # the contract did, so an operator reading a vacuity refusal has to be able to
+    # see which entries came from the instrument. Reported, never refused: the
+    # reversal that made this a label is argued at that rule.
     errored = sorted(
         f"{rel}::{name}" for rel, name in errored_each[0] | errored_each[1]
     )
     if errored:
-        raise ContractError(
-            "vacuity was NOT measured for tests that ERRORED under the stub, so "
-            "they are neither proved vacuous nor proved to assert anything: "
-            + ", ".join(errored)
-            + ". An error is usually the stub itself reaching a caller that "
-            "type-checks it, so it says nothing about what the test asserts. "
-            "Narrow the fixture, or take the value the stub cannot stand in for "
-            "inside the test body."
+        print(
+            "canopus: these contract tests ERRORED under the stub rather than "
+            "passing or failing, so they are named vacuous on the rule that an "
+            "outcome invariant to the stub value was not proved innocent, and an "
+            "error is often this probe's own stand-in reaching a caller that "
+            "type-checks it: " + ", ".join(errored),
+            file=sys.stderr,
         )
     return unproved_each[0] & unproved_each[1]
 
@@ -839,6 +958,13 @@ def parse_failure_modes(xml_text: str) -> dict[tuple[str, str], str]:
         name = case.get("name")
         if not rel or not name:
             continue
+        # The same key space `parse_junit` builds, through the same helper. A
+        # caller looks a mode up by the id the outcome list carries, so a reader
+        # that qualified a method name and one that did not would miss on every
+        # method and print no mode at all.
+        name = _qualified_name(
+            Path(rel).as_posix(), case.get("classname") or "", name
+        )
         for child in case:
             if child.tag not in ("failure", "error"):
                 continue

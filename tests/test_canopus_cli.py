@@ -807,6 +807,16 @@ def test_pack_reports_all_three_axes_and_the_uncovered_list(tree, anchor, capsys
     assert "assume-unchanged and skip-worktree" in out
     assert "always a false positive, never a false negative" in out
     assert "submodule" in out and "hashes to None" in out
+    # Promoted from the wire 3.2 frozen contract when that contract retired.
+    # These three say what the ATTESTED line above is WORTH, and the operator
+    # signs off from this page: the record is a local gitignored file anyone
+    # who can write it can forge (evidence, not proof), ignored files are
+    # outside the tree state entirely, and a root that is not a git working
+    # copy can never reach ATTESTED at all. Nothing else in the suite pins
+    # them, so deleting any one of the three would go unnoticed here.
+    assert "evidence rather than proof" in out
+    assert "outside the state" in out
+    assert "is not a git working" in out
 
 
 def test_pack_never_raises_on_damaged_state(tree, anchor, capsys):

@@ -2097,3 +2097,21 @@ def test_tree_drift_accounts_for_a_dropped_non_string_key():
 
     assert result != [], "the vanished int key must not be silently dropped"
     assert any("1" in reason for reason in result)
+
+
+def test_the_drift_comparison_reads_no_disk_and_runs_no_git():
+    """Promoted from the wire 3.2 frozen contract when that contract retired.
+
+    `canopus_freeze` is the module the gate imports at EVERY pytest session
+    start, and its import tail is stdlib plus `scripts.utils.atomic`. Its half
+    of the tree feature is a pure comparison of two structures; the git half
+    lives in `canopus_tree`, which the gate imports lazily. Reaching for
+    `subprocess` or `git_output` here would put a git call on every session
+    start of every suite in the workspace, and no other test says so.
+    """
+    import scripts.utils.canopus_freeze as cf
+
+    assert not hasattr(cf, "subprocess")
+    assert not hasattr(cf, "git_output")
+    clean = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {}}
+    assert cf.tree_drift(dict(clean), dict(clean)) == []

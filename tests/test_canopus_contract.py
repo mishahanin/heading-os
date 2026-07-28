@@ -687,7 +687,7 @@ def test_contract_imports_ignores_a_dotted_relative_import(tmp_path):
     """The other half of the guard, pinned separately from the bare form above.
 
     `from . import sibling` has `module=None` AND `level=1`, so the surviving
-    `and node.module` half of the guard excludes it on its own -- deleting
+    `and node.module` half of the guard excludes it on its own: deleting
     `node.level == 0` alone still passes that test. `from .sibling import thing`
     has `module='sibling'` and `level=1`: with only `node.module` guarding, that
     reads as the absolute module `sibling`, a name no import statement in this
@@ -776,12 +776,91 @@ def test_contract_imports_sees_a_literal_dunder_import_call(tmp_path):
     assert contract_imports([contract], tmp_path) == {"absent_thing"}
 
 
-def test_contract_imports_ignores_a_non_literal_dynamic_import_argument(tmp_path):
-    """A name computed at run time is invisible to a static reader, by
+def test_contract_imports_sees_a_keyword_importlib_dotted_call(tmp_path):
+    """`importlib.import_module(name="x")` is a second spelling, not a synonym.
 
-    construction. This pins that the reader adds nothing for the call itself
-    rather than guessing or raising -- only the ordinary `import importlib`
-    statement contributes.
+    The call-branch's own guard used to be `node.args`, so a literal string
+    reachable only through a keyword slipped past it with nothing collected,
+    the exact one-line escape G1 exists to close.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import importlib\n"
+        "def test_a():\n"
+        "    mod = importlib.import_module(name='absent_thing')\n"
+        "    assert mod\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"importlib", "absent_thing"}
+
+
+def test_contract_imports_sees_a_keyword_dunder_import_call(tmp_path):
+    """The `__import__` keyword spelling: `__import__(name="x")`."""
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    mod = __import__(name='absent_thing')\n"
+        "    assert mod\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"absent_thing"}
+
+
+def test_contract_imports_sees_a_keyword_importorskip_call(tmp_path):
+    """The `pytest.importorskip` keyword spelling: `modname="x"`."""
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import pytest\n"
+        "def test_a():\n"
+        "    pytest.importorskip(modname='absent_thing')\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == {"pytest", "absent_thing"}
+
+
+def test_contract_imports_ignores_a_non_string_literal_dynamic_import_argument(
+    tmp_path,
+):
+    """A non-string constant must not enter the returned set at all.
+
+    `isinstance(value_node.value, str)` is the guard this pins. Delete it and
+    `__import__(1)` puts the integer 1 into the set, which is fine here but
+    breaks a caller that does `",".join(sorted(modules))` with a raw
+    `TypeError` instead of the `ContractError` every other bad-input path in
+    this module raises.
+    """
+    from scripts.utils.canopus_contract import contract_imports
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "def test_a():\n"
+        "    mod = __import__(1)\n"
+        "    assert mod\n",
+        encoding="utf-8",
+    )
+
+    assert contract_imports([contract], tmp_path) == set()
+
+
+def test_contract_imports_ignores_a_non_literal_dynamic_import_argument(tmp_path):
+    """A name computed at run time is invisible to a static reader, by construction.
+
+    This pins that the reader adds nothing for the call itself rather than
+    guessing or raising: only the ordinary `import importlib` statement
+    contributes.
     """
     from scripts.utils.canopus_contract import contract_imports
 
@@ -817,9 +896,9 @@ def test_contract_imports_refuses_a_file_it_cannot_parse(tmp_path):
 
 
 def test_contract_imports_refuses_a_file_that_is_not_valid_utf8(tmp_path):
-    """`Path.read_text(encoding="utf-8")` raises `UnicodeDecodeError` on bytes
+    """`Path.read_text(encoding="utf-8")` raises `UnicodeDecodeError` on bad bytes.
 
-    that are not valid UTF-8, and that is a `ValueError`, not an `OSError` or a
+    Bytes that are not valid UTF-8 raise a `ValueError`, not an `OSError` or a
     `SyntaxError`. Uncaught, it would escape as a raw traceback instead of the
     `ContractError` every other unreadable-contract path raises.
     """

@@ -89,14 +89,22 @@ def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
     time: `importlib.import_module(name)`, `__import__(name)`,
     `pytest.importorskip(name)` with `name` a variable emit no `Import` or
     `ImportFrom` node at all, and there is no literal string here to collect
-    either. That module is invisible to any static reader, this one included, and
-    this function fails OPEN on it: never stubbed, never proved vacuous. What IS
-    collected is the LITERAL-argument form of those same three calls, matched on
-    the bare callee name rather than on the resolved object. Matching by name
-    over-reports rather than under-reports (a shadowed local function named
-    `import_module` also gets picked up), and over-reporting is the safe
-    direction here, on the same "when in doubt, report the name" reasoning
-    `missing_modules` uses for its own widening direction.
+    either. Nor does it hold for two other spellings of a name that IS known at
+    compile time: an f-string (`f"absent_thing"`) and a concatenation
+    (`"absent" + "_thing"`) are each their own AST node, not an `ast.Constant`,
+    so neither contributes a string this function can read. A third spelling of
+    the same idea, implicit adjacent concatenation (`"absent" "_thing"`), is
+    different: the parser folds it into one `ast.Constant` before this function
+    ever walks the tree, so that spelling IS collected. All three of the missed
+    forms are invisible to any static reader, this one included, and this
+    function fails OPEN on them: never stubbed, never proved vacuous. What IS
+    collected is every `str` `ast.Constant` found among the positional
+    arguments and the keyword-argument values of those same three calls,
+    matched on the bare callee name rather than on the resolved object.
+    Matching by name over-reports rather than under-reports (a shadowed local
+    function named `import_module` also gets picked up), and over-reporting is
+    the safe direction here, on the same "when in doubt, report the name"
+    reasoning `missing_modules` uses for its own widening direction.
 
     Relative imports are skipped: `from . import x` names no absolute module, and
     a name no import statement can produce is a claim that can only be wrong.
@@ -129,12 +137,15 @@ def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
                     callee = func.attr
                 else:
                     callee = None
-                if callee in _DYNAMIC_IMPORT_CALLEES and node.args:
-                    first = node.args[0]
-                    if isinstance(first, ast.Constant) and isinstance(
-                        first.value, str
-                    ):
-                        modules.add(first.value)
+                if callee in _DYNAMIC_IMPORT_CALLEES:
+                    candidates = list(node.args) + [
+                        kw.value for kw in node.keywords
+                    ]
+                    for value_node in candidates:
+                        if isinstance(value_node, ast.Constant) and isinstance(
+                            value_node.value, str
+                        ):
+                            modules.add(value_node.value)
     return modules
 
 

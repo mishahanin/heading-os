@@ -111,6 +111,7 @@ from scripts.utils.canopus_git import (  # noqa: E402
     resolve_anchor,
     resolve_anchor_waiver,
 )
+from scripts.utils.canopus_tree import tree_state  # noqa: E402
 from scripts.utils.canopus_pack import (  # noqa: E402
     commits_outside,
     diff_stat,
@@ -253,7 +254,7 @@ def _print_attestation(root: Path, recomputed_root: str) -> None:
     own missing record.
     """
     record = read_attestation(root)
-    state, reason = attestation_state(record, recomputed_root)
+    state, reason = attestation_state(record, recomputed_root, tree_state(root))
     if state == ATTESTED:
         counts = [
             entry for entry in (record.get("frozen_tests") or {}).values()
@@ -992,7 +993,7 @@ def cmd_pack(args) -> int:
     record = read_attestation(root)
     # _print_attestation below already renders the state; only the reason string
     # is needed again, for the staleness section.
-    _state, reason = attestation_state(record, report["recomputed_root"])
+    _state, reason = attestation_state(record, report["recomputed_root"], tree_state(root))
 
     _print_root(report["recomputed_root"], manifest)
     colour = {LOCK_HELD: GREEN, LOCK_UNCONFIRMED: YELLOW}.get(state, RED)

@@ -1583,12 +1583,13 @@ def unreleased_freeze(entries: Sequence[dict]) -> Optional[dict]:
 # what proved unreliable.
 
 ATTEST_FILENAME = "attest.json"
-# v2 from wire 2.3: the record now carries a `process` block and is refused when
-# the plugin set differs from the one the freeze captured. A v1 record reads NOT
-# ATTESTED through the recipe check in `attestation_state` below, which is the
-# fail-closed direction and needs no migration: a record written before the
-# comparison existed cannot testify about a comparison it never made.
-ATTEST_RECIPE = "canopus-attest-v2"
+# v3 from wire 3.2: the record now carries a `tree` key describing the whole
+# working copy at finish, not just the frozen bytes, and is refused when it
+# cannot be described or when it moved between start and finish. A v2 record
+# reads NOT ATTESTED through the recipe check in `attestation_state` below,
+# which is the fail-closed direction and needs no migration: a record written
+# before the tree was captured cannot testify about a comparison it never made.
+ATTEST_RECIPE = "canopus-attest-v3"
 ATTESTED = "ATTESTED"
 NOT_ATTESTED = "NOT ATTESTED"
 # The recipe `canopus_tree.tree_state` stamps into its own state dict. Kept
@@ -1644,6 +1645,8 @@ def build_attestation(
     baseline: Optional[dict] = None,
     process: Optional[dict] = None,
     plugin_baseline: Optional[Iterable[str]] = None,
+    tree_at_start: Optional[dict] = None,
+    tree_at_finish: Optional[dict] = None,
 ) -> dict:
     """Assemble the record written at session finish. Pure: no disk, no pytest.
 
@@ -1777,6 +1780,17 @@ def build_attestation(
                     f"xdist worker {index} loaded a different plugin set than the "
                     f"freeze recorded: {sorted(set(worker) ^ baseline_plugins)}"
                 )
+    if not _usable_tree_state(tree_at_finish) or not _usable_tree_state(tree_at_start):
+        # An attestation binds to the frozen bytes and to nothing else, and the
+        # code under test is by design NOT frozen. Without this, breaking the
+        # implementation and running nothing at all left `verify` reading
+        # ATTESTED: measured, on a scratch tree, before any of this was argued.
+        reasons.append(
+            "this run recorded no usable description of the tree it ran "
+            "against, so this record cannot perish when the code moves")
+    else:
+        for moved in tree_drift(tree_at_start, tree_at_finish)[:5]:
+            reasons.append(f"the tree changed while the run was in progress: {moved}")
     if exit_status != 0:
         reasons.append(f"pytest exited {exit_status}")
 
@@ -1789,6 +1803,7 @@ def build_attestation(
         "attested_at": attested_at,
         "frozen_tests": {rel: dict(counts) for rel, counts in sorted(frozen_tests.items())},
         "process": process,
+        "tree": tree_at_finish if _usable_tree_state(tree_at_finish) else None,
     }
 
 
@@ -1847,13 +1862,20 @@ def write_attestation(root: Path, attestation: dict) -> None:
 
 
 def attestation_state(
-    attestation: Optional[dict], recomputed_root: str
+    attestation: Optional[dict], recomputed_root: str, current_tree
 ) -> Tuple[str, str]:
     """The second indicator axis, as (state, reason). Never raises.
 
-    Binding the record to the recomputed root is what makes it perishable: edit
-    any frozen file after a green run and the root moves, so the attestation
-    stops applying without anyone having to remember to delete it.
+    Two things make the record perishable, and they perish on different events.
+    The recomputed root covers the FROZEN bytes. The tree state covers
+    everything else in the working copy, which is where the code under test
+    lives. The second is the one that matters day to day: without it, a green
+    record survived breaking the implementation, and survived breaking it and
+    running nothing at all.
+
+    `current_tree` is required rather than defaulted. A default would let a
+    caller that forgot it skip the comparison and print green, which is the
+    fail-open shape this check exists to close.
     """
     if not isinstance(attestation, dict) or not attestation:
         return NOT_ATTESTED, "no run has attested this freeze yet"
@@ -1863,6 +1885,10 @@ def attestation_state(
         return NOT_ATTESTED, "the attestation was recorded against a different root hash"
     if not attestation.get("attested"):
         return NOT_ATTESTED, "the attesting run did not qualify"
+    drift = tree_drift(attestation.get("tree"), current_tree)
+    if drift:
+        tail = f" (and {len(drift) - 1} more)" if len(drift) > 1 else ""
+        return NOT_ATTESTED, f"{drift[0]}{tail}"
     return ATTESTED, ""
 
 

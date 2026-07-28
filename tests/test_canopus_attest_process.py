@@ -534,6 +534,9 @@ def _facts(**overrides):
     return facts
 
 
+_CLEAN_TREE = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {}}
+
+
 def _record(process, plugin_baseline=BASELINE):
     from scripts.utils.canopus_freeze import build_attestation
 
@@ -543,7 +546,8 @@ def _record(process, plugin_baseline=BASELINE):
             "collected": 2, "passed": 2, "skipped": 0, "failed": 0, "deselected": 0}},
         exit_status=0, attested_at="2026-07-27T00:00:00+00:00",
         baseline={"tests/contract/s/test_a.py": 2},
-        process=process, plugin_baseline=plugin_baseline)
+        process=process, plugin_baseline=plugin_baseline,
+        tree_at_start=dict(_CLEAN_TREE), tree_at_finish=dict(_CLEAN_TREE))
 
 
 def test_an_honest_run_still_attests():
@@ -607,8 +611,9 @@ def test_a_missing_process_block_reads_as_damage():
 def test_the_recipe_moved_so_old_records_stop_applying():
     from scripts.utils.canopus_freeze import ATTEST_RECIPE, attestation_state, NOT_ATTESTED
 
-    assert ATTEST_RECIPE == "canopus-attest-v2"
+    assert ATTEST_RECIPE == "canopus-attest-v3"
     state, reason = attestation_state(
-        {"recipe": "canopus-attest-v1", "root": "d" * 64, "attested": True}, "d" * 64)
+        {"recipe": "canopus-attest-v1", "root": "d" * 64, "attested": True}, "d" * 64,
+        _CLEAN_TREE)
     assert state == NOT_ATTESTED
     assert "recipe" in reason

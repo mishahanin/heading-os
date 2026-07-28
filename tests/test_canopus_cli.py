@@ -432,7 +432,15 @@ def test_verify_anchor_override_that_does_not_exist_is_refused(tree, anchor, tmp
 
 def _attest(tree, root_digest, *, qualified=True, deselected=0, passed=3, skipped=0):
     from scripts.utils import canopus_freeze as cf
+    from scripts.utils.canopus_tree import tree_state
 
+    # None on a `tree` with no git identity, which is every caller of this
+    # helper except the two tests that give it one (see `_git_init_tree`): the
+    # record then carries no usable tree state and refuses on that ground too,
+    # same as an unrecorded process block already does. Passed for BOTH start
+    # and finish, because nothing in this synthetic setup runs a build between
+    # the two samples.
+    current_tree = tree_state(tree)
     record = cf.build_attestation(
         root_digest=root_digest,
         frozen_tests={"tests/test_alpha.py": {
@@ -449,12 +457,37 @@ def _attest(tree, root_digest, *, qualified=True, deselected=0, passed=3, skippe
                  "intree_plugins": [], "other_plugins": [], "option_plugins": [],
                  "env_configured": [], "launcher": "bare", "workers": []},
         plugin_baseline=["dist:xdist"],
+        tree_at_start=current_tree,
+        tree_at_finish=current_tree,
     )
     cf.write_attestation(tree, record)
     return record
 
 
+def _git_init_tree(tree: Path) -> None:
+    """Give *tree* its own git identity, with `.canopus/` ignored like the real repo.
+
+    `tree_state` is defined relative to git, and most of this file's `tree`
+    fixture instances have no git identity at all -- deliberately, since they
+    are not exercising the recorder. The two tests that need a genuine ATTESTED
+    state through the CLI need `tree_state(tree)` to answer the same way at
+    record time and at verify time, and the identity is what makes that
+    possible. `.canopus/` is ignored for the same reason the real engine repo
+    ignores it: without that, the freeze and attestation files this test writes
+    would show up as newly dirty between the two reads and the record would
+    perish on its own bookkeeping.
+    """
+    (tree / ".gitignore").write_text(".canopus/\n", encoding="utf-8")
+    for argv in (["init", "-q", "-b", "main"],
+                 ["config", "user.email", "builder@example.invalid"],
+                 ["config", "user.name", "Builder"],
+                 ["add", "-A"],
+                 ["commit", "-q", "-m", "seed"]):
+        _git(tree, *argv)
+
+
 def test_verify_reports_attested_when_the_run_matches(tree, anchor, capsys):
+    _git_init_tree(tree)
     _freeze(tree, anchor)
     root = _root_of(tree)
     anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")
@@ -518,6 +551,7 @@ def test_loss_of_lock_still_shows_the_attestation_axis(tree, anchor, capsys):
 
 
 def test_status_carries_the_attestation_line(tree, anchor, capsys):
+    _git_init_tree(tree)
     _freeze(tree, anchor)
     root = _root_of(tree)
     anchor.write_text(f"# gate\n\ncanopus-anchor: {root}\n")

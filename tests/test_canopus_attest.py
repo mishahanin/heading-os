@@ -29,6 +29,13 @@ def _tests(**counts):
 PLUGINS = {"dist:xdist": "/venv/xdist/plugin.py"}
 PLUGIN_BASELINE = ["dist:xdist"]
 
+# A tree that describes nothing moved, shared by every record these tests
+# build that is not itself about tree behaviour. From wire 3.2 a record with
+# no usable tree state refuses, the same way a record with no process block
+# already did, so a test about counters or plugins has to describe a tree it
+# is not asking a question about.
+CLEAN_TREE = {"recipe": cf.TREE_RECIPE, "head": "a" * 40, "dirty": {}}
+
 
 def _process(**overrides):
     facts = {"plugins": dict(PLUGINS), "intree_plugins": [], "other_plugins": [],
@@ -39,7 +46,10 @@ def _process(**overrides):
 
 
 def _build(frozen_tests, *, exit_status=0, root="a" * 64, **overrides):
-    kwargs = {"process": _process(), "plugin_baseline": PLUGIN_BASELINE}
+    kwargs = {
+        "process": _process(), "plugin_baseline": PLUGIN_BASELINE,
+        "tree_at_start": dict(CLEAN_TREE), "tree_at_finish": dict(CLEAN_TREE),
+    }
     kwargs.update(overrides)
     return cf.build_attestation(
         root_digest=root,
@@ -129,22 +139,22 @@ def test_skips_are_counted_and_do_not_void_attestation():
 
 def test_state_is_attested_only_on_an_exact_root_match():
     record = _build({"tests/test_alpha.py": _tests()})
-    state, reason = cf.attestation_state(record, "a" * 64)
+    state, reason = cf.attestation_state(record, "a" * 64, CLEAN_TREE)
     assert state == cf.ATTESTED
     assert reason == ""
-    state, reason = cf.attestation_state(record, "b" * 64)
+    state, reason = cf.attestation_state(record, "b" * 64, CLEAN_TREE)
     assert state == cf.NOT_ATTESTED
     assert "different root" in reason
 
 
 def test_state_handles_absent_unknown_and_unqualified_records():
-    assert cf.attestation_state(None, "a" * 64)[0] == cf.NOT_ATTESTED
-    assert cf.attestation_state({}, "a" * 64)[0] == cf.NOT_ATTESTED
-    assert cf.attestation_state("not a record", "a" * 64)[0] == cf.NOT_ATTESTED
+    assert cf.attestation_state(None, "a" * 64, CLEAN_TREE)[0] == cf.NOT_ATTESTED
+    assert cf.attestation_state({}, "a" * 64, CLEAN_TREE)[0] == cf.NOT_ATTESTED
+    assert cf.attestation_state("not a record", "a" * 64, CLEAN_TREE)[0] == cf.NOT_ATTESTED
     unknown = {"recipe": "other", "root": "a" * 64, "attested": True}
-    assert cf.attestation_state(unknown, "a" * 64)[0] == cf.NOT_ATTESTED
+    assert cf.attestation_state(unknown, "a" * 64, CLEAN_TREE)[0] == cf.NOT_ATTESTED
     unqualified = _build({"tests/test_alpha.py": _tests()}, exit_status=1)
-    assert cf.attestation_state(unqualified, "a" * 64)[0] == cf.NOT_ATTESTED
+    assert cf.attestation_state(unqualified, "a" * 64, CLEAN_TREE)[0] == cf.NOT_ATTESTED
 
 
 def test_round_trip_through_disk(tmp_path):
@@ -318,7 +328,7 @@ def test_a_complete_run_attests(frozen_engine):
     assert record["frozen_tests"]["tests/test_frozen.py"] == {
         "collected": 1, "passed": 1, "failed": 0, "skipped": 0, "deselected": 0,
     }
-    assert cf.attestation_state(record, manifest["root"])[0] == cf.ATTESTED
+    assert cf.attestation_state(record, manifest["root"], CLEAN_TREE)[0] == cf.ATTESTED
 
 
 def test_deselection_is_tallied_from_the_hook(frozen_engine):
@@ -843,6 +853,7 @@ def test_a_full_run_attests_against_the_baseline():
         attested_at="2026-07-25T00:00:00+00:00",
         baseline={"tests/contract/s/test_a.py": 7},
         process=_process(), plugin_baseline=PLUGIN_BASELINE,
+        tree_at_start=dict(CLEAN_TREE), tree_at_finish=dict(CLEAN_TREE),
     )
 
     assert record["attested"] is True
@@ -859,6 +870,110 @@ def test_a_frozen_test_file_with_no_baseline_behaves_as_in_wire_1():
         attested_at="2026-07-25T00:00:00+00:00",
         baseline={},
         process=_process(), plugin_baseline=PLUGIN_BASELINE,
+        tree_at_start=dict(CLEAN_TREE), tree_at_finish=dict(CLEAN_TREE),
     )
 
     assert record["attested"] is True
+
+
+# ============================================================
+# wire 3.2: the record carries the tree it ran against
+# ============================================================
+
+
+def _green_kwargs(**overrides):
+    kwargs = {
+        "root_digest": "a" * 64,
+        "frozen_tests": {"tests/contract/x/test_a.py": {
+            "collected": 1, "passed": 1, "failed": 0, "skipped": 0, "deselected": 0}},
+        "exit_status": 0,
+        "attested_at": "2026-07-28T00:00:00+00:00",
+        "baseline": {"tests/contract/x/test_a.py": 1},
+        "process": {"plugins": ["dist:pytest"]},
+        "plugin_baseline": ["dist:pytest"],
+        "tree_at_start": dict(CLEAN_TREE),
+        "tree_at_finish": dict(CLEAN_TREE),
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_build_attestation_records_the_tree_it_finished_against():
+    from scripts.utils.canopus_freeze import build_attestation
+
+    record = build_attestation(**_green_kwargs())
+    assert record["attested"] is True
+    assert record["tree"] == CLEAN_TREE
+
+
+def test_a_record_with_no_tree_state_is_refused():
+    """A record that cannot perish is worse than no record: it reads green forever."""
+    from scripts.utils.canopus_freeze import build_attestation
+
+    for absent in (None, {}, "not a state"):
+        assert build_attestation(**_green_kwargs(
+            tree_at_finish=absent))["attested"] is False
+        assert build_attestation(**_green_kwargs(
+            tree_at_start=absent))["attested"] is False
+
+
+def test_a_tree_that_moved_during_the_run_refuses_the_record():
+    """The bytes hashed at finish are not the bytes that were imported. Two
+    samples are what turn that from an assumption into a check."""
+    from scripts.utils.canopus_freeze import build_attestation
+
+    moved = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+             "dirty": {"scripts/thing.py": "b" * 64}}
+    record = build_attestation(**_green_kwargs(tree_at_finish=moved))
+    assert record["attested"] is False
+    assert any("while the run was in progress" in r for r in record["reasons"])
+    assert any("scripts/thing.py" in r for r in record["reasons"])
+
+
+def test_attestation_state_perishes_when_the_tree_moved_since(tmp_path):
+    import scripts.utils.canopus_freeze as cf
+
+    record = cf.build_attestation(**_green_kwargs())
+    assert cf.attestation_state(record, "a" * 64, CLEAN_TREE)[0] == cf.ATTESTED
+
+    moved = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+             "dirty": {"scripts/thing.py": "b" * 64}}
+    state, reason = cf.attestation_state(record, "a" * 64, moved)
+    assert state == cf.NOT_ATTESTED
+    assert "scripts/thing.py" in reason
+
+
+def test_attestation_state_refuses_when_the_tree_cannot_be_described_now():
+    """A root that is not a git working copy reaches here as None, and None must
+    not read as "nothing changed"."""
+    import scripts.utils.canopus_freeze as cf
+
+    record = cf.build_attestation(**_green_kwargs())
+    assert cf.attestation_state(record, "a" * 64, None)[0] == cf.NOT_ATTESTED
+
+
+def test_attestation_state_has_no_current_tree_default():
+    import pytest
+
+    from scripts.utils.canopus_freeze import attestation_state
+
+    with pytest.raises(TypeError):
+        attestation_state({"recipe": "x"}, "a" * 64)
+
+
+def test_a_record_from_the_previous_recipe_is_refused():
+    import scripts.utils.canopus_freeze as cf
+
+    stale = {"recipe": "canopus-attest-v2", "root": "a" * 64, "attested": True,
+             "frozen_tests": {}, "reasons": []}
+    assert cf.attestation_state(stale, "a" * 64, CLEAN_TREE)[0] == cf.NOT_ATTESTED
+
+
+def test_attestation_state_names_how_many_more_paths_moved():
+    import scripts.utils.canopus_freeze as cf
+
+    record = cf.build_attestation(**_green_kwargs())
+    moved = {"recipe": "canopus-tree-v1", "head": "a" * 40,
+             "dirty": {"a.py": "b" * 64, "b.py": "c" * 64}}
+    _state, reason = cf.attestation_state(record, "a" * 64, moved)
+    assert "1 more" in reason

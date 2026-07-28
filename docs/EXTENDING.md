@@ -341,7 +341,13 @@ vacuous.
 A claimed module that EXISTS and whose own body raises at import time is never
 stubbed, so its test stays red for its original reason and vacuity is not
 measured for it. A claimed PACKAGE whose `__init__` imports a module OUTSIDE the
-claim set that nobody has written yet is the same shape. So a refusal must never
+claim set that nobody has written yet is the same shape. So is any module on the
+import chain AHEAD of the claim, claimed or not: the prefix rule deliberately
+leaves a resolving ancestor to the ordinary finder, so an ancestor that raises,
+or calls `sys.exit`, stops the import before the claimed name is ever reached.
+And `probe` stamps vacuity UNKNOWN only when the whole probe failed, never per
+row, so a red row whose claim was never stubbed reads exactly like one that was
+measured and found honest. So a refusal must never
 be read as "your test asserts nothing" on its own: the truth may be that the
 contract's own package does not import. The refusal text names that reading
 rather than asserting the one it cannot prove.

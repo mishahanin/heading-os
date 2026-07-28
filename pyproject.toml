@@ -71,6 +71,12 @@ documents = [
 media = [
     "youtube-transcript-api==1.2.4",
     "yt-dlp==2026.7.4",
+    # Local speech-to-text (scripts/transcribe-media.py). CTranslate2 backend, so
+    # it pulls NO torch - the heavy transitives are ctranslate2 + av, and
+    # onnxruntime is already in the graph via magika. Runs fully on-machine, so
+    # audio never leaves the laptop; that is the whole reason it is a dependency
+    # rather than a cloud API call. MIT, as is ctranslate2.
+    "faster-whisper==1.2.1",
 ]
 dashboard = [
     "fastapi==0.140.7",

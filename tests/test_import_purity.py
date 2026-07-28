@@ -41,6 +41,10 @@ BLOCKED = {
     "openai", "google", "firecrawl", "youtube_transcript_api", "pptx", "docx",
     "openpyxl", "xlsxwriter", "markitdown", "mammoth", "markdownify",
     "onnxruntime", "magika",
+    # Local speech-to-text (the `media` extra). ctranslate2 and av are
+    # faster-whisper transitives, absent in a core clone just like xlsxwriter,
+    # so core code must not import them either.
+    "faster_whisper", "ctranslate2", "av",
 }
 
 # F-2.1 debt is fully paid down: BASELINE is empty. Every script under scan

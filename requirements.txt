@@ -25,6 +25,8 @@ apscheduler==3.11.3
     # via heading-os-engine
 attrs==26.1.0
     # via aiohttp
+av==18.0.0
+    # via faster-whisper
 backoff==2.2.1
     # via langfuse
 beautifulsoup4==4.15.0
@@ -47,6 +49,7 @@ charset-normalizer==3.4.9
     #   requests
 click==8.4.2
     # via
+    #   huggingface-hub
     #   magika
     #   uvicorn
 cobble==0.1.4
@@ -64,6 +67,8 @@ cryptography==49.0.0
     #   pdfminer-six
     #   pyspnego
     #   requests-ntlm
+ctranslate2==4.8.1
+    # via faster-whisper
 defusedxml==0.7.1
     # via
     #   exchangelib
@@ -87,6 +92,10 @@ exchangelib==5.6.0
     # via heading-os-engine
 fastapi==0.140.7
     # via heading-os-engine
+faster-whisper==1.2.1
+    # via heading-os-engine
+filelock==3.32.0
+    # via huggingface-hub
 firecrawl-py==4.33.1
     # via heading-os-engine
 flatbuffers==25.12.19
@@ -95,6 +104,8 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
+fsspec==2026.6.0
+    # via huggingface-hub
 google-api-core==2.33.0
     # via google-api-python-client
 google-api-python-client==2.198.0
@@ -124,6 +135,8 @@ h11==0.16.0
     # via
     #   httpcore
     #   uvicorn
+hf-xet==1.5.2 ; platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'
+    # via huggingface-hub
 httpcore==1.0.9
     # via httpx
 httplib2==0.32.0
@@ -137,8 +150,13 @@ httpx==0.28.1
     #   anthropic
     #   firecrawl-py
     #   heading-os-engine
+    #   huggingface-hub
     #   langfuse
     #   openai
+huggingface-hub==1.25.1
+    # via
+    #   faster-whisper
+    #   tokenizers
 humanfriendly==10.0
     # via coloredlogs
 idna==3.18
@@ -191,6 +209,7 @@ nest-asyncio==1.6.0
     # via firecrawl-py
 numpy==2.4.6
     # via
+    #   ctranslate2
     #   heading-os-engine
     #   magika
     #   onnxruntime
@@ -202,7 +221,9 @@ oauthlib==3.3.1
 olefile==0.47
     # via markitdown
 onnxruntime==1.20.1
-    # via magika
+    # via
+    #   faster-whisper
+    #   magika
 openai==2.48.0
     # via heading-os-engine
 openpyxl==3.1.5
@@ -231,6 +252,7 @@ opentelemetry-semantic-conventions==0.65b0
     # via opentelemetry-sdk
 packaging==26.2
     # via
+    #   huggingface-hub
     #   langfuse
     #   onnxruntime
 pandas==3.0.5
@@ -311,7 +333,9 @@ python-pptx==1.0.2
     #   markitdown
 pyyaml==6.0.3
     # via
+    #   ctranslate2
     #   heading-os-engine
+    #   huggingface-hub
     #   pymdown-extensions
     #   uvicorn
 requests==2.34.2
@@ -333,6 +357,8 @@ requests-oauthlib==2.0.0
     #   google-auth-oauthlib
 rsa==4.9.1
     # via telethon
+setuptools==83.0.0
+    # via ctranslate2
 six==1.17.0
     # via
     #   markdownify
@@ -351,8 +377,13 @@ sympy==1.14.0
     # via onnxruntime
 telethon==1.44.0
     # via heading-os-engine
+tokenizers==0.23.1
+    # via faster-whisper
 tqdm==4.70.0
-    # via openai
+    # via
+    #   faster-whisper
+    #   huggingface-hub
+    #   openai
 typing-extensions==4.16.0
     # via
     #   aiohttp
@@ -361,6 +392,7 @@ typing-extensions==4.16.0
     #   anyio
     #   beautifulsoup4
     #   fastapi
+    #   huggingface-hub
     #   openai
     #   opentelemetry-api
     #   opentelemetry-exporter-otlp-proto-http

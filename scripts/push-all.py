@@ -5,17 +5,29 @@ The two-part topology has two git repos:
   - ENGINE: the workspace root clone (.heading-os)         -> origin/main
   - DATA  : the data overlay (get_data_root(), .heading-os-data) -> origin/main
 
-This is the standing "always push both" routine. For each repo it:
+This is the standing "always push both" routine. The DATA overlay goes FIRST: the
+engine's pre-push hook runs the full suite inside the push, and data is the only
+half that cannot be reconstructed. For each repo it:
   1. runs a pre-push secret scan and refuses to push if a tracked file looks
      like a credential (.env, .session, cookies.json, .sessions/);
   2. asserts the rebuildable index (.memory-index/) is not tracked;
   3. commits staged changes (git add -A) unless --no-commit;
-  4. pushes origin main using GH_TOKEN from the engine .env;
-  5. verifies the branch is level with origin/main (ahead/behind == 0 0) --
+  4. checks the push PRECONDITIONS: the branch is main, and for an engine push
+     the pre-push suite gate is armed;
+  5. pushes origin main using GH_TOKEN from the engine .env AND verifies the
+     branch is level with origin/main (ahead/behind == 0 0) as one step --
      a bare `git push` can report success yet leave the ref behind, so the
      ahead/behind check is the real gate.
 
-Exits non-zero on the first failure so callers (and /backup) can stop.
+Exit codes:
+  0     everything that exists was pushed.
+  3     everything that COULD be pushed was; at least one repo was skipped for a
+        named reason (a branch that is not main, an unarmed engine test gate).
+        Each skipped repo is still committed locally, so nothing is lost.
+  1, 2  a failure that stops the run: a security refusal, an absent push token, a
+        misconfigured data root, or a push that ran and did not verify.
+
+A refusal about ONE repository never cancels another. See RepoNotPushable.
 
 Note: the one-time initial bulk import of the data overlay was pushed in
 size-bounded batches because a single multi-GB push over a slow link is dropped

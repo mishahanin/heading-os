@@ -363,7 +363,10 @@ uv run python scripts/push-all.py --dry-run  # preview; change nothing
 
 `push-all.py` detects your workspace type. On a managed workspace it pushes the data
 overlay only and never touches the read-only engine. On a solo workspace it pushes
-your repo(s) directly.
+your repo(s) directly, data overlay first. A repository it cannot push right now (say
+it is on a feature branch) is committed locally and reported as skipped rather than
+aborting the run, so a refusal about one repository never costs you the backup of the
+other.
 
 > **Outbound is always human-gated.** Email and messages are drafted and shown to you
 > first. Nothing sends to the outside world autonomously.
@@ -426,6 +429,7 @@ the engine, stop — see the troubleshooting table.
 | "No marketplaces configured" | `claude plugin marketplace add anthropics/claude-plugins-official` first. |
 | `get_data_root()` prints a path under `…/examples` | Data sibling not found. Set `HEADING_OS_DATA=/abs/path/.heading-os-data` in `.env`. |
 | `push-all.py`: "data overlay resolves to the engine clone" | Sibling not found — set `HEADING_OS_DATA` and retry. |
+| `push-all.py` exits `3` and prints "Partial" | One repository was not pushed, for the reason printed beside its name. This is not a failed backup: everything else went, and the skipped repo is committed locally. Resolve the reason (usually: merge your branch into `main`) and run it again. |
 | Backup pushed into the engine and got a 403 | On a managed workspace the engine is read-only — the 403 is the safety net. Your identity `type` is likely not `exec-workspace`; fix it (§6), then back up again. |
 | `git pull --ff-only` says "divergent" | `git log origin/main..HEAD` must be empty. If a local commit misrouted data, relocate it into the overlay first. `git reset --hard origin/main` only after confirming files are safe in the overlay. |
 | Multi-line paste mangles (`^[[200~`) | Bracketed-paste artifact. Paste commands one physical line at a time, or join with `&&` / `;`. |

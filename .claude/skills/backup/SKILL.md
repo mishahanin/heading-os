@@ -56,10 +56,24 @@ python scripts/push-all.py --dry-run    # show what would happen, change nothing
 
 It reads `GH_TOKEN` from the engine `.env`, refuses to push any tracked
 secret-like file (`.env`, `.session`, `cookies.json`, `.sessions/`), and never
-pushes `.memory-index/` (gitignored, rebuildable). Prefer this over the manual
+pushes `.memory-index/` (gitignored, rebuildable). The DATA overlay is pushed
+FIRST, because the engine's pre-push hook runs the full suite inside the push and
+data is the only half that cannot be reconstructed. Prefer this over the manual
 git steps below whenever the data overlay exists (`get_data_root()` differs
 from the engine root). The manual steps remain the path for exec workspaces and
 the pre-cutover single-repo case.
+
+**Exit `3` means the backup was PARTIAL, not failed.** Report it that way. The
+repositories named beside "Partial" were not pushed, for the reason printed next to
+each; everything else was pushed and verified. Every skipped repository is still
+committed locally, so nothing is lost. Tell the operator which repository was
+skipped, quote the reason, and give the remedy: usually merge the branch into `main`
+and run the command again, or `python scripts/install-git-hooks.py` for an unarmed
+engine test gate. Do NOT re-run the command hoping for a different answer, and do NOT
+report a partial backup as either a success or a failure. Exit `1` and `2` are real
+failures that stopped the run (a security refusal, an absent `GH_TOKEN`, a
+misconfigured data root, a push that ran and did not verify); exit `0` means
+everything went.
 
 ## Exec workspaces: also `push-all.py`
 

@@ -450,7 +450,10 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
 </code></pre></div>
 <p><code>push-all.py</code> detects your workspace type. On a managed workspace it pushes the data
 overlay only and never touches the read-only engine. On a solo workspace it pushes
-your repo(s) directly.</p>
+your repo(s) directly, data overlay first. A repository it cannot push right now (say
+it is on a feature branch) is committed locally and reported as skipped rather than
+aborting the run, so a refusal about one repository never costs you the backup of the
+other.</p>
 <blockquote>
 <p><strong>Outbound is always human-gated.</strong> Email and messages are drafted and shown to you
 first. Nothing sends to the outside world autonomously.</p>
@@ -550,6 +553,10 @@ the engine, stop — see the troubleshooting table.</p>
 <tr>
 <td><code>push-all.py</code>: &ldquo;data overlay resolves to the engine clone&rdquo;</td>
 <td>Sibling not found — set <code>HEADING_OS_DATA</code> and retry.</td>
+</tr>
+<tr>
+<td><code>push-all.py</code> exits <code>3</code> and prints &ldquo;Partial&rdquo;</td>
+<td>One repository was not pushed, for the reason printed beside its name. This is not a failed backup: everything else went, and the skipped repo is committed locally. Resolve the reason (usually: merge your branch into <code>main</code>) and run it again.</td>
 </tr>
 <tr>
 <td>Backup pushed into the engine and got a 403</td>

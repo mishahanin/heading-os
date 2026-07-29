@@ -84,6 +84,11 @@ operations.
      (`git -C <root> status`) before syncing; /sync will not force or merge."
    - push-all secret-scan refusal: "A tracked file looks like it holds a secret -
      move it to `.env` and retry; never pass `--no-verify`."
+   - push-all exit `3`: NOT a failure - at least one repository was skipped (a branch
+     that is not `main`, an unarmed engine test gate) and every skipped repo is still
+     committed locally. Read its headline: `Partial: N of M` means the rest pushed and
+     verified; `NOTHING PUSHED: all M` means no new off-machine copy exists. Report
+     the shape, name the repo, quote the reason. Full guidance: `/backup` SKILL.md.
    - Git auth: "GH_TOKEN missing or expired - check the engine `.env`."
 
 ## Never

@@ -555,8 +555,12 @@ the engine, stop — see the troubleshooting table.</p>
 <td>Sibling not found — set <code>HEADING_OS_DATA</code> and retry.</td>
 </tr>
 <tr>
-<td><code>push-all.py</code> exits <code>3</code> and prints &ldquo;Partial&rdquo;</td>
+<td><code>push-all.py</code> exits <code>3</code> and prints &ldquo;Partial: N of M&rdquo;</td>
 <td>One repository was not pushed, for the reason printed beside its name. This is not a failed backup: everything else went, and the skipped repo is committed locally. Resolve the reason (usually: merge your branch into <code>main</code>) and run it again.</td>
+</tr>
+<tr>
+<td><code>push-all.py</code> exits <code>3</code> and prints &ldquo;NOTHING PUSHED&rdquo;</td>
+<td>Every repository it tried was skipped, so there is no new off-machine copy — treat it as a backup that did not happen. Your work is committed locally. Resolve the reason beside each name (usually: merge your branch into <code>main</code>) and run it again. A one-repository workspace (managed, or pre-cutover) can only ever produce this shape.</td>
 </tr>
 <tr>
 <td>Backup pushed into the engine and got a 403</td>

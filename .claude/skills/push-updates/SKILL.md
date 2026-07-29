@@ -195,6 +195,8 @@ x-heading-routing:
 2. Check if CRM contacts were modified (any changes in `crm/contacts/`):
    - If yes, they ride the data repo: `python scripts/push-all.py` commits and
      pushes the data overlay (which holds `crm/contacts/`) to its private origin.
+     Exit `3` is a skip, not a failure: read its headline (`Partial: N of M` vs
+     `NOTHING PUSHED: all M`) and report that shape per `/backup` SKILL.md.
    - `aggregate-crm.py` (next step) reads each exec's data repo directly.
 3. Optionally refresh CRM aggregation: `python scripts/aggregate-crm.py` (if crm-central exists)
 4. Refresh CRM aggregation (if crm-central exists):

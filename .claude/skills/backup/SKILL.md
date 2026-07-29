@@ -63,17 +63,28 @@ git steps below whenever the data overlay exists (`get_data_root()` differs
 from the engine root). The manual steps remain the path for exec workspaces and
 the pre-cutover single-repo case.
 
-**Exit `3` means the backup was PARTIAL, not failed.** Report it that way. The
-repositories named beside "Partial" were not pushed, for the reason printed next to
-each; everything else was pushed and verified. Every skipped repository is still
-committed locally, so nothing is lost. Tell the operator which repository was
-skipped, quote the reason, and give the remedy: usually merge the branch into `main`
-and run the command again, or `python scripts/install-git-hooks.py` for an unarmed
-engine test gate. Do NOT re-run the command hoping for a different answer, and do NOT
-report a partial backup as either a success or a failure. Exit `1` and `2` are real
-failures that stopped the run (a security refusal, an absent `GH_TOKEN`, a
-misconfigured data root, a push that ran and did not verify); exit `0` means
-everything went.
+**Exit `3` means at least one repository was skipped. Read the HEADLINE, not the
+code, because it has two shapes and they mean opposite things to the operator.**
+
+- **`Partial: N of M repo(s) not pushed.`** — the backup was partial, not failed.
+  Report it that way. The repositories named below the headline were not pushed, for
+  the reason printed next to each; everything else was pushed and verified.
+- **`NOTHING PUSHED: all M repo(s) skipped.`** — nothing reached a remote and there
+  is NO new off-machine copy. Never report this as a partial success. The exec and
+  pre-cutover single-repo modes push one repository, so exit `3` there is always this
+  shape.
+
+In both shapes every skipped repository is still committed locally, so nothing is
+lost. Tell the operator which repository was skipped, quote the reason, and give the
+remedy: usually merge the branch into `main` and run the command again, or
+`python scripts/install-git-hooks.py` for an unarmed engine test gate. Do NOT re-run
+the command hoping for a different answer.
+
+Exit `1` and `2` are real failures that stopped the run (a security refusal, an
+absent `GH_TOKEN`, a misconfigured data root, a push that ran and did not verify).
+Because the DATA overlay is pushed first, a failure at the ENGINE can still leave
+DATA pushed and verified — read the per-repository lines above the failure before
+telling the operator nothing was backed up. Exit `0` means everything went.
 
 ## Exec workspaces: also `push-all.py`
 

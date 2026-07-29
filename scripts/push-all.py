@@ -23,7 +23,11 @@ Exit codes:
   0     everything that exists was pushed.
   3     everything that COULD be pushed was; at least one repo was skipped for a
         named reason (a branch that is not main, an unarmed engine test gate).
-        Each skipped repo is still committed locally, so nothing is lost.
+        Each skipped repo is still committed locally, so nothing is lost. Read the
+        headline, not the code: "Partial" means some repo did push, while "NOTHING
+        PUSHED" means every repo was skipped and this run produced no off-machine
+        copy at all. The exec and pre-cutover modes push one repo, so exit 3 there
+        is always the second shape.
   1, 2  a failure that stops the run: a security refusal, an absent push token, a
         misconfigured data root, or a push that ran and did not verify.
 
@@ -379,16 +383,32 @@ def _attempt(skipped: list[tuple[str, str]], name: str, *args, **kwargs) -> None
         skipped.append((name, str(exc)))
 
 
-def _report_skips(skipped: list[tuple[str, str]], args) -> None:
+def _report_skips(skipped: list[tuple[str, str]], args, attempted: int) -> None:
     """Print the closing summary for a partial run and exit 3. Never returns.
 
     Shared by both call paths -- the two-repo/pre-cutover block and the exec
     short-circuit -- because a second copy of this text is a second place for the
     reassurance below to drift out of step with the flags it is a claim about.
+
+    *attempted* is how many repositories this mode tries to push, and the headline
+    branches on it because exit 3 has two shapes, not one. The exec and pre-cutover
+    modes push exactly ONE repository, so a skip there is a backup that pushed
+    NOTHING -- and the word "partial" over a run that pushed nothing is a false
+    success claim about the only irreplaceable half of the workspace, which is the
+    harm this command exists to prevent. Two of the three modes can produce no other
+    shape.
     """
-    print(f"\n{YELLOW}{BOLD}Partial: {len(skipped)} repo(s) not pushed.{RESET}")
+    all_skipped = len(skipped) == attempted
+    if all_skipped:
+        print(f"\n{RED}{BOLD}NOTHING PUSHED: all {attempted} repo(s) skipped.{RESET}")
+    else:
+        print(f"\n{YELLOW}{BOLD}Partial: {len(skipped)} of {attempted} repo(s) "
+              f"not pushed.{RESET}")
     for name, reason in skipped:
         print(f"  {YELLOW}{name}{RESET}  {reason}")
+    # "Everything that could be pushed was" is dropped when nothing was pushed: it
+    # is true but reads as reassurance, and there is nothing to be reassured about.
+    went = "" if all_skipped else "Everything that could be pushed was. "
     # The reassurance is CONDITIONAL, because it is a claim about the disk and it
     # is false in two of the three modes. Under --dry-run nothing was committed
     # (step 3 only printed what it would do), and under --no-commit nothing was
@@ -399,11 +419,11 @@ def _report_skips(skipped: list[tuple[str, str]], args) -> None:
     if args.dry_run:
         print(f"{GRAY}Nothing was written: this was a dry run.{RESET}")
     elif args.no_commit:
-        print(f"{GRAY}Everything that could be pushed was. --no-commit was "
-              f"passed, so any working-tree changes above are still uncommitted.{RESET}")
+        print(f"{GRAY}{went}--no-commit was passed, so any working-tree changes "
+              f"above are still uncommitted.{RESET}")
     else:
-        print(f"{GRAY}Everything that could be pushed was. Nothing was lost: each "
-              f"repo above is committed locally.{RESET}")
+        print(f"{GRAY}{went}Nothing was lost: each repo above is committed "
+              f"locally.{RESET}")
     sys.exit(3)
 
 
@@ -450,13 +470,16 @@ def main() -> None:
         _attempt(exec_skipped, "DATA", data, message, not args.no_commit, args.dry_run,
                  push_env)
         if exec_skipped:
-            _report_skips(exec_skipped, args)
+            # attempted=1: this mode has one repository, so a skip here means the
+            # backup pushed nothing at all and must not read as "partial".
+            _report_skips(exec_skipped, args, 1)
         print(f"\n{GREEN}{BOLD}Data overlay pushed.{RESET}" if not args.dry_run
               else f"\n{YELLOW}dry-run complete.{RESET}")
         return
 
     data = get_data_root()
     skipped: list[tuple[str, str]] = []
+    attempted = 1 if data == engine else 2
     if data == engine:
         # Pre-cutover single repo: data files are legitimately tracked here, so the
         # engine-clean gate would flag everything. Do not arm it in this mode.
@@ -488,7 +511,7 @@ def main() -> None:
                  push_env, is_engine=True, data_root=data, test_gate=True)
 
     if skipped:
-        _report_skips(skipped, args)
+        _report_skips(skipped, args, attempted)
 
     print(f"\n{GREEN}{BOLD}Both repos pushed.{RESET}" if not args.dry_run else f"\n{YELLOW}dry-run complete.{RESET}")
 

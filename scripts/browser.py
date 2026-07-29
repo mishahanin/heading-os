@@ -110,6 +110,9 @@ COMET_PROFILE_FOLDER = "Default"  # display name "ClaudeCode" lives in this fold
 DEFAULT_PORT = 9222
 LOCK_FILE = get_outputs_dir() / "browser" / "browser-cdp.json"
 _LEGACY_LOCK_FILE = get_outputs_dir() / "browser" / "comet-cdp.json"
+# Browser stdout/stderr goes here instead of the caller's streams. Truncated on
+# every launch, so it holds the current session only and cannot grow unbounded.
+LAUNCH_LOG = get_outputs_dir() / "browser" / "browser-launch.log"
 
 
 def _active_lock_file() -> Optional[Path]:
@@ -255,8 +258,19 @@ def launch_comet(
         cmd.append(initial_url)
 
     _log(f"Launching: {' '.join(cmd)}")
-    proc = subprocess.Popen(cmd)
-    _log(f"{browser} PID: {proc.pid}", GREEN)
+    # Detach the browser's standard streams from the caller's. A browser that
+    # inherits them holds the caller's stdout for its ENTIRE lifetime, so a
+    # pipeline never reaches EOF: on 2026-07-28 a
+    # `browser.py launch ... 2>&1 | tail -20` shell stayed alive 12.5 hours
+    # after `timeout 90` had already killed python, because /usr/bin/brave-browser
+    # is a shell wrapper whose `cat` helpers keep that write end open long after
+    # the launcher itself exits. Writing to a file gives the child its own fds.
+    LAUNCH_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(LAUNCH_LOG, "wb") as log:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log
+        )
+    _log(f"{browser} PID: {proc.pid} (output -> {LAUNCH_LOG})", GREEN)
 
     deadline = time.time() + wait_timeout
     while time.time() < deadline and not _cdp_ready(port):

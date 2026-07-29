@@ -351,6 +351,50 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
         sys.exit(1)
 
 
+def _attempt(skipped: list[tuple[str, str]], name: str, *args, **kwargs) -> None:
+    """Push one repo. Record a per-repository refusal; let everything else fly.
+
+    ONLY RepoNotPushable is absorbed. A sys.exit from any security refusal (the
+    content scan, the engine clean scan, the engine content scan, a secret-like
+    tracked filename) raises SystemExit, which is NOT an Exception subclass and is
+    therefore not caught here even by accident. That is the invariant this helper
+    exists to hold: unbypassable walls stay unbypassable.
+    """
+    try:
+        push_repo(name, *args, **kwargs)
+    except RepoNotPushable as exc:
+        print(f"{YELLOW}SKIPPED {name}{RESET} {exc}")
+        skipped.append((name, str(exc)))
+
+
+def _report_skips(skipped: list[tuple[str, str]], args) -> None:
+    """Print the closing summary for a partial run and exit 3. Never returns.
+
+    Shared by both call paths -- the two-repo/pre-cutover block and the exec
+    short-circuit -- because a second copy of this text is a second place for the
+    reassurance below to drift out of step with the flags it is a claim about.
+    """
+    print(f"\n{YELLOW}{BOLD}Partial: {len(skipped)} repo(s) not pushed.{RESET}")
+    for name, reason in skipped:
+        print(f"  {YELLOW}{name}{RESET}  {reason}")
+    # The reassurance is CONDITIONAL, because it is a claim about the disk and it
+    # is false in two of the three modes. Under --dry-run nothing was committed
+    # (step 3 only printed what it would do), and under --no-commit nothing was
+    # committed either. A dry run is also the newly reachable skip path -- the
+    # branch check moved above the dry-run return so that it reports -- so an
+    # unconditional "committed locally" would be wrong precisely where this
+    # change added the message.
+    if args.dry_run:
+        print(f"{GRAY}Nothing was written: this was a dry run.{RESET}")
+    elif args.no_commit:
+        print(f"{GRAY}Everything that could be pushed was. --no-commit was "
+              f"passed, so any working-tree changes above are still uncommitted.{RESET}")
+    else:
+        print(f"{GRAY}Everything that could be pushed was. Nothing was lost: each "
+              f"repo above is committed locally.{RESET}")
+    sys.exit(3)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Push both HEADING OS repos to their private remotes.")
     ap.add_argument("-m", "--message", help="commit message (default: dated backup message)")
@@ -386,28 +430,53 @@ def main() -> None:
             sys.exit(2)
         print(f"{YELLOW}Exec workspace — pushing the data overlay only; the engine "
               f"clone is pull-only.{RESET}")
-        push_repo("DATA", data, message, not args.no_commit, args.dry_run, push_env)
+        # No test_gate: an exec's engine clone is pull-only, so this path never
+        # pushes the engine and has no suite gate to require. The success line
+        # below must not print over a skip -- a backup that says "Data overlay
+        # pushed." after pushing nothing is worse than one that fails loudly.
+        exec_skipped: list[tuple[str, str]] = []
+        _attempt(exec_skipped, "DATA", data, message, not args.no_commit, args.dry_run,
+                 push_env)
+        if exec_skipped:
+            _report_skips(exec_skipped, args)
         print(f"\n{GREEN}{BOLD}Data overlay pushed.{RESET}" if not args.dry_run
               else f"\n{YELLOW}dry-run complete.{RESET}")
         return
 
     data = get_data_root()
-    # Single authoritative gate: the engine's pre-push hook runs the regression
-    # suite during the actual push. We do not run it a second time here -- we only
-    # refuse to push if it is not armed, so the gate cannot be silently skipped.
-    if not args.dry_run and not _pre_push_gate_armed(engine):
-        print(f"{RED}REFUSING TO PUSH — engine pre-push test gate is not installed.{RESET}")
-        print(f"{GRAY}Arm it once with: python scripts/install-git-hooks.py{RESET}")
-        sys.exit(2)
+    skipped: list[tuple[str, str]] = []
     if data == engine:
         # Pre-cutover single repo: data files are legitimately tracked here, so the
         # engine-clean gate would flag everything. Do not arm it in this mode.
+        #
+        # test_gate=True even so, and that is the point of the flag being separate
+        # from is_engine. This mode pushes the ENGINE clone, to the engine remote,
+        # whose pre-push hook is the single authoritative suite gate. The check used
+        # to sit above this branch in main() and so covered this call; keying it on
+        # is_engine would have dropped it here while looking like a pure move.
         print(f"{YELLOW}Data root == engine root (pre-cutover/single repo). Pushing one repo.{RESET}")
-        push_repo("repo", engine, message, not args.no_commit, args.dry_run, push_env)
+        _attempt(skipped, "repo", engine, message, not args.no_commit, args.dry_run,
+                 push_env, test_gate=True)
     else:
-        push_repo("ENGINE", engine, message, not args.no_commit, args.dry_run, push_env,
-                  is_engine=True, data_root=data)
-        push_repo("DATA", data, message, not args.no_commit, args.dry_run, push_env)
+        # DATA FIRST, and the reason is measured rather than aesthetic: the
+        # engine's pre-push hook runs the full regression suite inside the push
+        # and took 320 seconds on the machine this was written on. The data
+        # overlay is the only half that cannot be reconstructed, so it does not
+        # queue behind a several-minute gate that may fail, stall, or be
+        # interrupted.
+        #
+        # This costs nothing in safety, which is worth saying because the phrase
+        # "stop the world" invites the opposite conclusion. Each scan protects the
+        # repository it runs on: the engine scans look for a problem in the
+        # ENGINE's files, while the DATA overlay runs its own content_scan over
+        # its own files and legitimately carries private content. No engine
+        # refusal carries any information about whether DATA is safe to push.
+        _attempt(skipped, "DATA", data, message, not args.no_commit, args.dry_run, push_env)
+        _attempt(skipped, "ENGINE", engine, message, not args.no_commit, args.dry_run,
+                 push_env, is_engine=True, data_root=data, test_gate=True)
+
+    if skipped:
+        _report_skips(skipped, args)
 
     print(f"\n{GREEN}{BOLD}Both repos pushed.{RESET}" if not args.dry_run else f"\n{YELLOW}dry-run complete.{RESET}")
 

@@ -74,6 +74,34 @@ SECRET_TRACKED = re.compile(
 SCANNER = Path(__file__).resolve().parent / "secret-scanner.py"
 
 
+class RepoNotPushable(Exception):
+    """This repository cannot be pushed right now. Says nothing about the others.
+
+    The distinction this type exists to make is the whole point of the change that
+    introduced it. push-all.py had ten sys.exit sites and they were two different
+    statements wearing one uniform:
+
+      - STOP THE WORLD: a secret in content, a data-class artifact in the engine
+        clone, a real-entity token in an engine-routed file, a secret-like tracked
+        filename, an absent push token, a misconfigured data root. Something is
+        wrong that the operator must see before anything leaves the machine.
+      - THIS REPO CANNOT BE PUSHED: a branch that is not main, an engine whose
+        pre-push gate is not armed. These say nothing whatever about the other
+        repository.
+
+    Treating the second kind as the first meant that whenever the engine clone sat
+    on a feature branch, the process died at the engine and the DATA overlay was
+    never pushed at all. The engine sits on a feature branch during every slice of
+    work by construction, so the backup was declining to back up the only
+    irreplaceable half of the workspace for the duration of every slice. Measured
+    twice in one session on 2026-07-29 and hand-worked-around both times.
+
+    Raise this for a per-repository refusal. Keep sys.exit for the other kind. A
+    new gate's author has to choose, and the choice is visible at the call site
+    rather than resting on a convention nobody reads.
+    """
+
+
 def _push_delta_files(repo: Path) -> set[str]:
     """Files about to be pushed: the committed-but-unpushed delta plus staged and
     unstaged tracked edits (or all tracked files when origin/main is absent)."""
@@ -215,7 +243,8 @@ def gh_token() -> str | None:
 
 
 def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: bool,
-              push_env: dict, is_engine: bool = False, data_root: Path | None = None) -> None:
+              push_env: dict, is_engine: bool = False, data_root: Path | None = None,
+              test_gate: bool = False) -> None:
     """Commit + push one repo to origin/main, then verify ahead/behind == 0 0."""
     print(f"\n{BOLD}{CYAN}== {name}: {repo} =={RESET}")
 
@@ -264,16 +293,49 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     # 3.5 content secret scan over everything about to be pushed (unbypassable)
     content_scan(repo)
 
+    # 4. per-repository push preconditions.
+    #
+    # BOTH raises sit here, AFTER the commit above, and that position is the
+    # decision rather than an accident: a repo that cannot be pushed still gets
+    # its local commit, so work in progress is never lost to a refusal about
+    # where it can go. Raising before step 3 would have been tidier and would
+    # have thrown the work away.
+    #
+    # They also sit ABOVE the dry-run return, which they did not before. The
+    # branch check used to be below it, so a dry run reported no skip at all:
+    # it hid the one thing this whole change exists to surface. Evaluating a
+    # precondition writes nothing, so a dry run can afford to be honest.
+    branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
+    if branch != "main":
+        raise RepoNotPushable(
+            f"branch is '{branch}', expected 'main'. Merge it and push from main."
+        )
+    # Keyed on test_gate, NOT on is_engine, and the difference is load-bearing.
+    # The single authoritative test gate is the engine's pre-push hook, which runs
+    # the suite on EVERY push to the engine and not just on this path, so an
+    # un-provisioned clone must not be able to push past it. A fresh clone starts
+    # unarmed, because git does not share .git/hooks.
+    #
+    # It moved here from main() in the same change that introduced
+    # RepoNotPushable: it is a precondition of pushing TO THE ENGINE REMOTE, never
+    # of running the program, and while it lived in main() an unarmed hook
+    # cancelled the DATA backup too. But main() checked it ABOVE the single-repo
+    # branch, so it covered the pre-cutover mode as well -- and that mode pushes
+    # this same engine clone with is_engine deliberately OFF, because its data
+    # files are tracked legitimately there and engine_clean_scan would flag all of
+    # them. Keying this raise on is_engine would therefore have narrowed a check
+    # from two modes to one while looking like a pure move. Hence two flags.
+    if test_gate and not _pre_push_gate_armed(repo):
+        raise RepoNotPushable(
+            "the engine pre-push test gate is not installed, so a push would skip "
+            "the suite. Arm it once with: python scripts/install-git-hooks.py"
+        )
+
     if dry_run:
         print(f"{YELLOW}[dry-run]{RESET} would push origin main")
         return
 
-    # 4. push
-    branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
-    if branch != "main":
-        print(f"{RED}REFUSING TO PUSH — branch is '{branch}', expected 'main'.{RESET}")
-        sys.exit(2)
-    # 4+5. supervised push + verify ahead/behind == 0 0 in one primitive.
+    # 5. supervised push + verify ahead/behind == 0 0 in one primitive.
     # The watchdog bounds the push by inactivity (no output AND no CPU), never by
     # a wall-clock guess, so the engine's pre-push test gate is never clipped; the
     # ahead/behind == 0 0 postcondition is checked without an unbounded fetch on

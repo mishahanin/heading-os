@@ -111,6 +111,81 @@ def _push_url(repo, remote: str = "origin") -> Optional[str]:
     return out.stdout.strip() or None
 
 
+def _engine_push_urls(engine) -> set:
+    """Every normalized push URL the ENGINE clone has, under any remote name.
+
+    Deliberately not `_push_url(engine, remote)`. The caller's remote NAME says
+    nothing about what the engine calls its own remotes, and safe-push takes that
+    name from the command line. Reading all of them means Check A compares
+    identities rather than labels.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(engine), "remote"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.debug("engine remotes unreadable: %s", exc)
+        return set()
+    if out.returncode != 0:
+        return set()
+    urls = set()
+    for name in out.stdout.split():
+        url = _push_url(engine, name)
+        if url:
+            urls.add(_normalize_remote_url(url))
+    return urls
+
+
+def remote_objection(repo, *, token: Optional[str] = None,
+                     remote: str = "origin") -> Optional[str]:
+    """Why *repo* must not be pushed to its current remote, or None.
+
+    Pure: it reads git config and may read the GitHub API, and it changes
+    nothing. Every segregation layer in this workspace answers "does this TREE
+    carry the wrong content". This answers the other half, "does this REMOTE
+    accept the wrong content", which nothing asked before.
+
+    The engine is exempt: it is expected to point at the public engine
+    repository, and that is the whole reason the question is interesting for
+    everything else.
+    """
+    repo = Path(repo)
+    if _is_split_engine(repo):
+        return None
+    try:
+        engine = get_workspace_root().resolve()
+        data = get_data_root().resolve()
+    except Exception as exc:
+        # Fail open, but never silently. Check A is the leg the design calls the
+        # hard guarantee BECAUSE it is offline and therefore always available,
+        # and this is the one branch where that is not true. _is_split_engine
+        # answers False on the same condition, so a repository arriving here with
+        # unreadable roots is neither exempted nor checked. Say so out loud
+        # rather than returning a clean "no objection" that reads like a pass.
+        logger.debug("remote wall: workspace roots unreadable: %s", exc)
+        print(f"WARNING: could not resolve the workspace roots, so the offline "
+              f"remote check did not run for {Path(repo).name}. Reason: {exc}")
+        return None
+    if data == engine:
+        # Pre-cutover single repository: one repo, one remote, nothing to
+        # compare. Comparing it to itself would refuse every backup.
+        return None
+
+    url = _push_url(repo, remote)
+    if url is None:
+        # No such remote. `git push` will fail on its own and say so better.
+        return None
+    here = _normalize_remote_url(url)
+
+    if here in _engine_push_urls(engine):
+        return (f"{repo.name} pushes to the ENGINE remote ({here}), which is the "
+                f"public code repository. Refusing: this would publish private "
+                f"content.")
+
+    return None
+
+
 def load_gh_token() -> Optional[str]:
     """Return GH_TOKEN from the engine ``.env`` (the git pushgh source of truth)."""
     env_path = get_workspace_root() / ".env"
@@ -195,6 +270,24 @@ def supervised_push(
                 "tail": "\n".join(flagged),
                 "flagged": flagged,
             }
+
+    # Remote-identity wall (the same chokepoint, the other end of the push).
+    # The block above asks whether this TREE carries the wrong content. This
+    # asks whether this REMOTE accepts it. The token is resolved from whatever
+    # the caller already had: push-all passes GH_TOKEN inside env rather than
+    # as the token argument.
+    objection = remote_objection(
+        repo, remote=remote,
+        token=token or (env or {}).get("GH_TOKEN") or load_gh_token(),
+    )
+    if objection:
+        return {
+            "state": "failed",
+            "reason": objection,
+            "elapsed_s": 0.0,
+            "exit_code": None,
+            "tail": "",
+        }
 
     run_env = dict(env) if env is not None else None
     cmd = ["git", "-C", str(repo)]

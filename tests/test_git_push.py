@@ -171,3 +171,130 @@ def test_push_url_honours_pushurl_because_that_is_where_a_push_goes(tmp_path):
 def test_push_url_is_none_when_the_remote_does_not_exist(tmp_path):
     _remote, work = _make_repo(tmp_path)
     assert git_push._push_url(work, "upstream") is None
+
+
+# ============================================================
+# Remote identity: Check A, offline and unconditional
+# ============================================================
+
+def _pose_as_split(monkeypatch, engine: Path, data: Path):
+    """Make the workspace look like the split topology: engine here, data there."""
+    monkeypatch.setattr(git_push, "get_workspace_root", lambda: engine)
+    monkeypatch.setattr(git_push, "get_data_root", lambda: data)
+
+
+def test_a_data_repo_aimed_at_the_engine_remote_is_refused(monkeypatch, tmp_path):
+    """The worst outcome this workspace can produce, refused offline.
+
+    Nothing else stands in the way: content_scan catches secrets only, the
+    engine clean scan does not run on DATA by design, and the existing wall
+    identifies the local directory rather than where it is aimed.
+    """
+    engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "set-url", "origin", str(engine_remote)], data)
+
+    reason = git_push.remote_objection(data)
+    assert reason is not None
+    assert "ENGINE remote" in reason
+
+
+def test_the_refusal_names_the_repository_and_the_remote(monkeypatch, tmp_path):
+    engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "set-url", "origin", str(engine_remote)], data)
+
+    reason = git_push.remote_objection(data)
+    assert data.name in reason
+    assert git_push._normalize_remote_url(str(engine_remote)) in reason
+
+
+def test_check_a_holds_across_url_form(monkeypatch, tmp_path):
+    """Same repository, different spelling. Identity is not string equality."""
+    _engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "set-url", "origin",
+          "https://github.com/Owner/Repo.git"], engine)
+    _git(["remote", "set-url", "origin",
+          "git@github.com:owner/repo"], data)
+
+    assert git_push.remote_objection(data) is not None
+
+
+def test_the_engine_pushing_to_its_own_remote_is_not_refused(monkeypatch, tmp_path):
+    """The engine is EXPECTED to point at the public engine repository."""
+    _engine_remote, engine = _make_repo(tmp_path / "e")
+    _pose_as_split(monkeypatch, engine, tmp_path / "d")
+
+    assert git_push.remote_objection(engine) is None
+
+
+def test_a_pre_cutover_single_repo_is_not_refused(monkeypatch, tmp_path):
+    """With one repository there is one remote and nothing to compare it to.
+    Comparing it to itself would refuse every backup on such a workspace."""
+    _remote, work = _make_repo(tmp_path)
+    _pose_as_split(monkeypatch, work, work)
+
+    assert git_push.remote_objection(work) is None
+
+
+def test_a_repo_with_no_such_remote_raises_no_objection(monkeypatch, tmp_path):
+    """git push will fail on its own; that is not this wall's refusal to make.
+    This also keeps every existing push_repo test green, since those build
+    repositories with no remote at all."""
+    _engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+
+    assert git_push.remote_objection(data, remote="upstream") is None
+
+
+def test_check_a_ignores_what_the_caller_named_its_remote(monkeypatch, tmp_path):
+    """The engine's push URLs are the engine's property, not the caller's.
+
+    safe-push takes --remote from the command line and hands it straight to
+    supervised_push. If the engine side were looked up under that same name, a
+    data overlay whose remote is called anything but 'origin' would slip past
+    Check A entirely.
+    """
+    engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "add", "gh", str(engine_remote)], data)
+
+    assert git_push.remote_objection(data, remote="gh") is not None
+
+
+def test_check_a_reads_every_engine_remote_not_just_origin(monkeypatch, tmp_path):
+    """An engine that pushes under a second remote name is still the engine."""
+    _engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "add", "upstream", "https://github.com/owner/pub.git"], engine)
+    _git(["remote", "set-url", "origin", "https://github.com/owner/pub.git"], data)
+
+    assert git_push.remote_objection(data) is not None
+
+
+def test_supervised_push_refuses_a_data_repo_aimed_at_the_engine_remote(
+        monkeypatch, tmp_path):
+    """The chokepoint copy. push-all is not the only caller, so a check placed
+    only there would protect one path and leave the primitive open."""
+    engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "set-url", "origin", str(engine_remote)], data)
+
+    v = supervised_push(data, branch="main", stall_window=15)
+    assert v["state"] == "failed", v
+    assert "ENGINE remote" in v["reason"]
+    assert v["exit_code"] is None  # synthetic verdict, no push subprocess ran
+    # It refused WITHOUT pushing: the engine's bare remote never received main.
+    no_main = subprocess.run(
+        ["git", "-C", str(engine_remote), "show-ref", "--verify", "refs/heads/main"],
+        capture_output=True,
+    )
+    assert no_main.returncode != 0

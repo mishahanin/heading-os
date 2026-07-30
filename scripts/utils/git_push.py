@@ -21,13 +21,16 @@ Auth is flexible so each caller keeps its existing credential model:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Optional
+from urllib.error import HTTPError, URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -41,6 +44,21 @@ _CRED_HELPER = '!f(){ echo username=x-access-token; echo "password=$GH_PUSH_TOKE
 logger = logging.getLogger(__name__)
 
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+# Visibility answers for the life of the process. A real push-all run asks the
+# same question twice per repository (the precondition and then the chokepoint),
+# and each miss can cost a network timeout on the one command that must not be
+# slow. A cache miss is also what gates the warning below, so one mechanism
+# serves both.
+#
+# The key carries whether the lookup was authenticated, and that is not a detail:
+# an unauthenticated probe of a private repository gets a 404, which is stored as
+# "cannot answer". create-data-repo calls supervised_push with neither token= nor
+# env=, so the chokepoint resolves its token through load_gh_token() while other
+# callers pass one explicitly. Keying on the URL alone would let one tokenless
+# answer poison every later tokened lookup in the same process and quietly hold
+# the wall at its weaker reading.
+_VIS_CACHE: dict[tuple[str, bool], Optional[str]] = {}
 
 
 def _is_split_engine(repo: Path) -> bool:
@@ -109,6 +127,51 @@ def _push_url(repo, remote: str = "origin") -> Optional[str]:
     if out.returncode != 0:
         return None
     return out.stdout.strip() or None
+
+
+def _gh_visibility(normalized: str, *, token: Optional[str] = None) -> Optional[str]:
+    """GitHub's own answer for ``host/owner/repo``, or None when it cannot answer.
+
+    None is returned for every unanswerable case without distinction: no token,
+    a network error, a 404 on a repository this token cannot see, a rate limit,
+    or a host that is not GitHub. None of those carries information about
+    whether the repository is private, so none of them is a refusal.
+    """
+    host, _, path = normalized.partition("/")
+    if host != "github.com" or path.count("/") != 1:
+        return None
+    req = urllib.request.Request(  # noqa: S310 - https literal, host pinned
+        f"https://api.github.com/repos/{path}",
+        headers={"User-Agent": "heading-os-remote-wall",
+                 "Accept": "application/vnd.github+json"},
+    )
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 - https literal
+            data = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        logger.debug("remote wall: HTTP %s for %s", exc.code, normalized)
+        return None
+    except (URLError, OSError) as exc:
+        logger.debug("remote wall: network error for %s: %s", normalized, exc)
+        return None
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        logger.debug("remote wall: bad JSON for %s: %s", normalized, exc)
+        return None
+    visibility = data.get("visibility")
+    return visibility if visibility in ("public", "private", "internal") else None
+
+
+def _visibility_cached(normalized: str,
+                       token: Optional[str]) -> tuple[Optional[str], bool]:
+    """(visibility, was_freshly_looked_up) for ``normalized``."""
+    key = (normalized, bool(token))
+    if key in _VIS_CACHE:
+        return _VIS_CACHE[key], False
+    visibility = _gh_visibility(normalized, token=token)
+    _VIS_CACHE[key] = visibility
+    return visibility, True
 
 
 def _engine_push_urls(engine) -> set:
@@ -192,6 +255,23 @@ def remote_objection(repo, *, token: Optional[str] = None,
                 f"public code repository. Refusing: this would publish private "
                 f"content.")
 
+    visibility, fresh = _visibility_cached(here, token)
+    if visibility == "public":
+        return (f"{repo.name} pushes to {here}, which GitHub reports as PUBLIC. "
+                f"Refusing: only the engine may push to a public repository.")
+    if visibility is None and fresh and here.partition("/")[0] == "github.com":
+        # Fail open, loudly. Check A carries the hard guarantee precisely
+        # because it is offline and therefore always available; Check B raises
+        # the ceiling when it can and says so when it cannot.
+        #
+        # Scoped to github.com hosts on purpose. A non-GitHub remote is not a
+        # lookup that failed, it is a question GitHub was never asked, and a
+        # warning that fires on every local bare remote and every self-hosted
+        # host is noise the operator learns to scroll past. That would cost the
+        # warning its meaning on the one occasion it matters, which is a GitHub
+        # remote whose visibility genuinely could not be read.
+        print(f"WARNING: could not verify the visibility of {here}. "
+              f"Pushing on the offline check alone.")
     return None
 
 

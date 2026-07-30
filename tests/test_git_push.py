@@ -339,3 +339,142 @@ def test_supervised_push_refuses_a_data_repo_aimed_at_the_engine_remote(
         capture_output=True,
     )
     assert no_main.returncode != 0
+
+
+# ============================================================
+# Remote identity: Check B, the property itself
+# ============================================================
+
+@pytest.fixture(autouse=True)
+def _clear_visibility_cache():
+    """The cache lives for the process, so it must not live across tests."""
+    git_push._VIS_CACHE.clear()
+    yield
+    git_push._VIS_CACHE.clear()
+
+
+def _aimed_at(monkeypatch, tmp_path, url: str):
+    """A DATA overlay in a split topology, pointed at *url*."""
+    _engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "set-url", "origin", url], data)
+    return data
+
+
+def test_a_repo_on_a_public_remote_is_refused(monkeypatch, tmp_path):
+    data = _aimed_at(monkeypatch, tmp_path,
+                     "https://github.com/owner/somewhere-public.git")
+    monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: "public")
+
+    reason = git_push.remote_objection(data)
+    assert reason is not None
+    assert "PUBLIC" in reason
+    assert "github.com/owner/somewhere-public" in reason
+
+
+def test_a_repo_on_a_private_remote_is_permitted(monkeypatch, tmp_path):
+    data = _aimed_at(monkeypatch, tmp_path,
+                     "https://github.com/owner/somewhere-private.git")
+    monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: "private")
+
+    assert git_push.remote_objection(data) is None
+
+
+def test_a_visibility_that_cannot_be_answered_warns_and_permits(
+        monkeypatch, tmp_path, capsys):
+    """The one fail-open decision in this wall, and it is deliberate. An
+    unreachable API carries no information about whether the overlay is private,
+    and refusing the backup would trade a leak risk for a data-loss risk on the
+    command whose whole job is the off-machine copy."""
+    data = _aimed_at(monkeypatch, tmp_path,
+                     "https://github.com/owner/somewhere-unknown.git")
+    monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: None)
+
+    assert git_push.remote_objection(data) is None
+    out = capsys.readouterr().out
+    assert "could not verify" in out
+    assert "github.com/owner/somewhere-unknown" in out
+
+
+def test_the_cannot_answer_warning_prints_once_per_remote(
+        monkeypatch, tmp_path, capsys):
+    """A real push-all run evaluates the precondition and then reaches the
+    chokepoint, so an unguarded warning would print twice per repository."""
+    data = _aimed_at(monkeypatch, tmp_path,
+                     "https://github.com/owner/somewhere-unknown.git")
+    monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: None)
+
+    git_push.remote_objection(data)
+    git_push.remote_objection(data)
+    assert capsys.readouterr().out.count("could not verify") == 1
+
+
+def test_a_non_github_remote_is_not_warned_about(monkeypatch, tmp_path, capsys):
+    """Not a lookup that failed, a question GitHub was never asked.
+
+    Every local bare remote in this very file lands here. A warning on each of
+    them is noise, and noise is what costs the warning its meaning on the one
+    occasion it matters.
+    """
+    data = _aimed_at(monkeypatch, tmp_path, "https://gitlab.example/owner/repo.git")
+
+    assert git_push.remote_objection(data) is None
+    assert "could not verify" not in capsys.readouterr().out
+
+
+def test_the_visibility_cache_does_not_carry_a_tokenless_answer_into_a_tokened_one(
+        monkeypatch, tmp_path):
+    """A 404 without a token means 'cannot see it', never 'not private'.
+
+    create-data-repo calls supervised_push with neither token= nor env=, so the
+    chokepoint resolves one through load_gh_token() while other callers pass one
+    explicitly. One process can therefore ask both ways.
+    """
+    data = _aimed_at(monkeypatch, tmp_path,
+                     "https://github.com/owner/somewhere.git")
+    seen = []
+
+    def _fake(normalized, *, token=None):
+        seen.append(token)
+        return None if token is None else "public"
+
+    monkeypatch.setattr(git_push, "_gh_visibility", _fake)
+
+    assert git_push.remote_objection(data, token=None) is None
+    assert "PUBLIC" in git_push.remote_objection(data, token="t")
+    assert seen == [None, "t"]  # the tokened call was really made
+
+
+def test_no_objection_or_warning_ever_contains_userinfo(
+        monkeypatch, tmp_path, capsys):
+    """Written as an explicit not-in check against a recognisable sentinel
+    rather than a general regex, so it fails loudly if stripping regresses."""
+    data = _aimed_at(monkeypatch, tmp_path,
+                     _with_userinfo("https://github.com/owner/pub.git"))
+    monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: "public")
+
+    reason = git_push.remote_objection(data)
+    assert USERINFO_SENTINEL not in reason
+    assert USERINFO_SENTINEL not in capsys.readouterr().out
+
+
+def test_check_a_still_refuses_when_check_b_says_private(monkeypatch, tmp_path):
+    """A private engine remote is still the engine remote. Check A is not a
+    weaker form of Check B and must not be shadowed by it."""
+    engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "set-url", "origin", str(engine_remote)], data)
+    monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: "private")
+
+    assert "ENGINE remote" in git_push.remote_objection(data)
+
+
+def test_visibility_is_unanswerable_for_a_non_github_host():
+    assert git_push._gh_visibility("gitlab.com/owner/repo") is None
+
+
+def test_visibility_is_unanswerable_for_a_path_that_is_not_owner_repo():
+    assert git_push._gh_visibility("github.com/owner") is None
+    assert git_push._gh_visibility("github.com/owner/repo/extra") is None

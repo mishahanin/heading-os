@@ -568,7 +568,11 @@ the engine, stop — see the troubleshooting table.</p>
 </tr>
 <tr>
 <td><code>push-all.py</code> prints &ldquo;could not verify the visibility of &hellip;&rdquo; and continues</td>
-<td>The GitHub API could not answer (no network, a rate limit, or a repository the token cannot see). The offline check still ran and passed. This is a warning, not a failure. A tokenless run (for example <code>--dry-run</code> with no <code>GH_TOKEN</code>) prints nothing here: the question cannot be asked at all without a token, which is different from the answer coming back empty.</td>
+<td>The GitHub API could not answer (no network, a rate limit, or a repository the token cannot see). The offline check still ran and passed. This is a warning, not a failure. A tokenless run (for example <code>--dry-run</code> with no <code>GH_TOKEN</code>) prints nothing here: the question cannot be asked at all without a token, which is different from the answer coming back empty. It prints the <code>NOTE</code> line in the next row instead.</td>
+</tr>
+<tr>
+<td><code>push-all.py</code> prints &ldquo;NOTE: the remote wall reached its lower ceiling for &hellip;&rdquo; and continues</td>
+<td>The wall returned no objection on a repository it did not fully evaluate, and it is saying so rather than letting the silence read as a pass. It names which part did not run: the engine&rsquo;s own push remotes could not be read, the named remote does not resolve to a push URL, or GitHub was never asked about this remote. The last of those is what a tokenless run and a non-GitHub remote both produce, so it is the routine shape on <code>--dry-run</code> without <code>GH_TOKEN</code>. The offline comparison still ran. This is information, not a failure. Silence on a fully evaluated repository is the signal that everything was checked.</td>
 </tr>
 <tr>
 <td>Backup pushed into the engine and got a 403</td>

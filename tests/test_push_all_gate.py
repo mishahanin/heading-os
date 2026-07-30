@@ -94,3 +94,84 @@ def test_gate_not_armed_when_hook_missing(tmp_path):
 def test_gate_not_armed_when_hook_does_not_run_tests(tmp_path):
     repo = _make_hook(tmp_path, "#!/usr/bin/env bash\necho noop\n")
     assert push_all._pre_push_gate_armed(repo) is False
+
+
+# ============================================================
+# RepoNotPushable: a refusal about one repo, not about the run
+#
+# Promoted from tests/contract/2026-07-30-backup-per-repo-refusal/, the frozen
+# contract of the slice that introduced the type. These five were written before
+# RepoNotPushable existed and are unchanged apart from this banner.
+# ============================================================
+
+def _repo_on_branch(tmp_path, branch):
+    """A git repo with one commit, checked out on *branch*."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (["git", "init", "-q"],
+                 ["git", "config", "user.email", "builder@example.invalid"],
+                 ["git", "config", "user.name", "Builder"]):
+        push_all.run(args, repo)
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    push_all.run(["git", "add", "."], repo)
+    push_all.run(["git", "commit", "-q", "-m", "one"], repo)
+    if branch != "main":
+        push_all.run(["git", "checkout", "-q", "-b", branch], repo)
+    else:
+        push_all.run(["git", "branch", "-M", "main"], repo)
+    return repo
+
+
+def test_a_branch_that_is_not_main_raises_rather_than_exiting(tmp_path):
+    """sys.exit here is what silently cancelled the DATA backup. The type says
+    this repository cannot be pushed, never that the run must stop."""
+    repo = _repo_on_branch(tmp_path, "feat/x")
+
+    with pytest.raises(push_all.RepoNotPushable) as caught:
+        push_all.push_repo("R", repo, "m", False, False, {})
+    assert "feat/x" in str(caught.value)
+
+
+def test_the_branch_check_is_reached_under_dry_run(tmp_path):
+    """The dry-run return sat ABOVE the branch check, so a dry run reported no
+    skip at all. A dry run that hides the one thing this change surfaces lies."""
+    repo = _repo_on_branch(tmp_path, "feat/x")
+
+    with pytest.raises(push_all.RepoNotPushable):
+        push_all.push_repo("R", repo, "m", False, True, {})
+
+
+def test_an_unarmed_suite_gate_raises_and_names_its_installer(tmp_path):
+    repo = _repo_on_branch(tmp_path, "main")
+
+    with pytest.raises(push_all.RepoNotPushable) as caught:
+        push_all.push_repo("ENGINE", repo, "m", False, True, {},
+                           is_engine=True, test_gate=True)
+    assert "install-git-hooks" in str(caught.value)
+
+
+def test_the_suite_gate_is_keyed_on_test_gate_not_on_is_engine(tmp_path):
+    """The two flags are separate on purpose and this is the test that says why.
+
+    `is_engine` turns on the engine LEAK scans; `test_gate` turns on the suite
+    precondition. `main()` checked the suite gate ABOVE its single-repo branch,
+    so it covered the pre-cutover mode too, and that mode pushes this same
+    engine clone with `is_engine` deliberately OFF because its data files are
+    tracked legitimately there. One flag serving both would have narrowed a
+    security check from two modes to one while looking like a pure move.
+    """
+    repo = _repo_on_branch(tmp_path, "main")
+
+    assert push_all.push_repo("repo", repo, "m", False, True, {},
+                              is_engine=True) is None
+    with pytest.raises(push_all.RepoNotPushable):
+        push_all.push_repo("repo", repo, "m", False, True, {}, test_gate=True)
+
+
+def test_the_suite_gate_is_not_a_precondition_of_the_data_overlay(tmp_path):
+    """A do-not-break guard rather than new behaviour. The DATA overlay has no
+    pre-push gate and never needed one; requiring it there would refuse every
+    data backup on every machine."""
+    repo = _repo_on_branch(tmp_path, "main")
+
+    assert push_all.push_repo("DATA", repo, "m", False, True, {}) is None

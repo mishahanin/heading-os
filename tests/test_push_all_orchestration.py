@@ -184,3 +184,109 @@ def test_a_skipped_pre_cutover_repo_reports_that_nothing_was_pushed(
     out = capsys.readouterr().out
     assert "NOTHING PUSHED" in out
     assert "Both repos pushed." not in out
+
+
+# ============================================================
+# The two-repo mode: what main() attempts, in what order
+#
+# Promoted from tests/contract/2026-07-30-backup-per-repo-refusal/, the frozen
+# contract of the slice that introduced RepoNotPushable. Unchanged apart from
+# this banner and one adaptation: the contract's own `_code()` took no argument
+# and called main() itself, so each call below passes `push_all.main` to the
+# `_code(fn)` already defined above rather than carrying a second copy of it.
+# ============================================================
+
+def _wire(tmp_path, monkeypatch, behaviour):
+    """main() with both roots faked and push_repo recorded. Returns the call log.
+
+    Each entry is (name, kwargs), so a test can assert on order and on which
+    call sites carry test_gate without caring about paths.
+    """
+    engine = tmp_path / "engine"
+    data = tmp_path / "data"
+    engine.mkdir()
+    data.mkdir()
+    calls = []
+
+    def fake_push_repo(name, repo, message, do_commit, dry_run, push_env, **kw):
+        calls.append((name, kw))
+        if name in behaviour:
+            raise push_all.RepoNotPushable(behaviour[name])
+
+    monkeypatch.setattr(push_all, "push_repo", fake_push_repo)
+    monkeypatch.setattr(push_all, "get_workspace_root", lambda: engine)
+    monkeypatch.setattr(push_all, "get_data_root", lambda: data)
+    monkeypatch.setattr(push_all, "is_exec_workspace", lambda: False)
+    monkeypatch.setattr(push_all, "gh_token", lambda: "t")
+    monkeypatch.setattr("sys.argv", ["push-all.py"])
+    return calls
+
+
+def test_both_repositories_pushed_exits_zero(tmp_path, monkeypatch):
+    calls = _wire(tmp_path, monkeypatch, {})
+
+    assert _code(push_all.main) == 0
+    assert {name for name, _kw in calls} == {"ENGINE", "DATA"}
+
+
+def test_data_is_attempted_before_the_engine(tmp_path, monkeypatch):
+    """Measured, not aesthetic: the engine's pre-push hook runs the full suite
+    inside the push and took 320 seconds on the machine this was written on. The
+    data overlay is the only half that cannot be reconstructed, so it does not
+    queue behind a several-minute gate that may fail, stall, or be interrupted."""
+    calls = _wire(tmp_path, monkeypatch, {})
+    _code(push_all.main)
+
+    assert calls[0][0] == "DATA"
+
+
+def test_a_skipped_engine_does_not_stop_the_data_push(tmp_path, monkeypatch):
+    """THE defect the slice that wrote this test existed to close."""
+    calls = _wire(tmp_path, monkeypatch,
+                  {"ENGINE": "branch is 'feat/x', expected 'main'"})
+
+    assert _code(push_all.main) == 3
+    assert "DATA" in {name for name, _kw in calls}
+
+
+def test_the_summary_names_the_skipped_repo_and_the_reason(
+        tmp_path, monkeypatch, capsys):
+    _wire(tmp_path, monkeypatch, {"ENGINE": "branch is 'feat/x', expected 'main'"})
+    _code(push_all.main)
+
+    out = capsys.readouterr().out
+    assert "ENGINE" in out
+    assert "feat/x" in out
+
+
+def test_a_skipped_data_overlay_also_exits_three(tmp_path, monkeypatch):
+    """Symmetry is not decoration: the rule is about repositories, not about the
+    engine. A rule that only ever fires one way is a special case in disguise."""
+    _wire(tmp_path, monkeypatch, {"DATA": "branch is 'wip', expected 'main'"})
+
+    assert _code(push_all.main) == 3
+
+
+def test_the_suite_gate_is_required_at_both_engine_pushing_call_sites(
+        tmp_path, monkeypatch):
+    """The two-repo ENGINE call and the pre-cutover single-repo call both reach
+    the engine remote, so both must carry test_gate. Neither DATA call may."""
+    calls = _wire(tmp_path, monkeypatch, {})
+    _code(push_all.main)
+    by_name = dict(calls)
+
+    assert by_name["ENGINE"].get("test_gate") is True
+    assert "test_gate" not in by_name["DATA"]
+
+
+def test_a_stop_the_world_exit_is_never_absorbed(tmp_path, monkeypatch):
+    """RepoNotPushable is the ONLY thing main() catches. A SystemExit from a
+    security refusal has to travel, or the change that introduced the type would
+    have quietly converted every unbypassable wall into a skip."""
+    _wire(tmp_path, monkeypatch, {})
+
+    def exploding(name, *args, **kwargs):
+        raise SystemExit(2)
+
+    monkeypatch.setattr(push_all, "push_repo", exploding)
+    assert _code(push_all.main) == 2

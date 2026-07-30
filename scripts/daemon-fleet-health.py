@@ -269,27 +269,55 @@ def _verdict(
     beat_statuses = beat_statuses or []
     if not records and not beat_statuses:
         return ("No workspaces with heartbeat.json found.", GRAY)
-    counts: dict[str, int] = {}
+    # WORKSPACES and DAEMONS are two different kinds of thing, and summing them
+    # into one number reads as a count of workspaces. Measured misreading, not a
+    # hypothetical: "Fleet healthy: 3 workspace/daemon(s) ok." was read as three
+    # workspaces when it meant ONE workspace and TWO daemons. So each kind is
+    # counted separately and named separately below.
+    #
+    # The line also says "this machine only", because this script scans SIBLING
+    # DIRECTORIES of the workspace root. A separate host running its own daemons
+    # is invisible here, and the word "Fleet" on its own promises otherwise -- the
+    # more dangerous of the two misreadings, since it invites reading a green line
+    # as a statement about hosts it never looked at.
+    #
+    # The no-beats branch keeps its wording byte-identical, as this function's
+    # docstring promises and tests/test_fleet_health.py pins. That legacy line is
+    # only reached when no daemon beat exists at all.
+    ws_counts: dict[str, int] = {}
     for r in records:
         s = _classify(r, stale_threshold_s, ceo_version, expected_config_version)
-        counts[s] = counts.get(s, 0) + 1
+        ws_counts[s] = ws_counts.get(s, 0) + 1
+    dm_counts: dict[str, int] = {}
     for s in beat_statuses:
-        counts[s] = counts.get(s, 0) + 1
-    unit = "workspace/daemon" if beat_statuses else "workspace"
+        dm_counts[s] = dm_counts.get(s, 0) + 1
+    counts = dict(ws_counts)
+    for s, n in dm_counts.items():
+        counts[s] = counts.get(s, 0) + n
+
+    DRIFT = ("stale", "version-mismatch", "config-drift")
+
+    def _tally(statuses: tuple[str, ...]) -> str:
+        """"1 workspace, 2 daemons", or the legacy "N workspace(s)" with no beats."""
+        ws = sum(ws_counts.get(s, 0) for s in statuses)
+        if not beat_statuses:
+            return f"{ws} workspace(s)"
+        dm = sum(dm_counts.get(s, 0) for s in statuses)
+        parts = []
+        if ws:
+            parts.append(f"{ws} workspace" + ("s" if ws != 1 else ""))
+        if dm:
+            parts.append(f"{dm} daemon" + ("s" if dm != 1 else ""))
+        return ", ".join(parts) if parts else "0 workspaces"
+
+    scope = "" if not beat_statuses else " (this machine only)"
     if counts.get("error") or counts.get("missing"):
-        bad = counts.get("error", 0) + counts.get("missing", 0)
-        return (f"Fleet broken: {bad} {unit}(s) error or missing.", RED)
-    drift_count = (
-        counts.get("stale", 0)
-        + counts.get("version-mismatch", 0)
-        + counts.get("config-drift", 0)
-    )
-    if drift_count:
-        return (
-            f"Fleet drift: {drift_count} {unit}(s) stale, version-mismatch, or config-drift.",
-            YELLOW,
-        )
-    return (f"Fleet healthy: {counts.get('ok', 0)} {unit}(s) ok.", GREEN)
+        return (f"Fleet broken: {_tally(('error', 'missing'))} error or missing"
+                f"{scope}.", RED)
+    if any(counts.get(s) for s in DRIFT):
+        return (f"Fleet drift: {_tally(DRIFT)} stale, version-mismatch, or "
+                f"config-drift{scope}.", YELLOW)
+    return (f"Fleet healthy: {_tally(('ok',))} ok{scope}.", GREEN)
 
 
 def _print_grid(

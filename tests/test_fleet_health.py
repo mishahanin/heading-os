@@ -150,3 +150,48 @@ def test_no_beats_legacy_verdict_text(fh):
 def test_no_beats_legacy_exit_code(fh):
     records = [_ok_bridge_record()]
     assert fh._classify_fleet_exit_code(records, 120, None, None) == 0
+
+
+# ============================================================
+# The verdict must not sum two kinds of thing into one number
+# ============================================================
+
+def test_workspaces_and_daemons_are_counted_separately(fh):
+    """The misreading this pins: "3 workspace/daemon(s) ok" was read as three
+    workspaces when it meant one workspace and two daemons."""
+    text, color = fh._verdict([_ok_bridge_record()], 120, None, None,
+                              beat_statuses=["ok", "ok"])
+
+    assert text == "Fleet healthy: 1 workspace, 2 daemons ok (this machine only)."
+    assert color == fh.GREEN
+    assert "3" not in text
+
+
+def test_the_verdict_says_it_only_looked_at_this_machine(fh):
+    """This script scans sibling directories of the workspace root, so a separate
+    host running its own daemons is invisible to it. "Fleet" alone promises more
+    than it checked, which is the more dangerous of the two misreadings."""
+    text, _ = fh._verdict([_ok_bridge_record()], 120, None, None,
+                          beat_statuses=["ok"])
+
+    assert "this machine only" in text
+    assert text == "Fleet healthy: 1 workspace, 1 daemon ok (this machine only)."
+
+
+def test_a_drifting_daemon_names_the_daemon_not_a_workspace(fh):
+    text, color = fh._verdict([_ok_bridge_record()], 120, None, None,
+                              beat_statuses=["stale"])
+
+    assert text == ("Fleet drift: 1 daemon stale, version-mismatch, or "
+                    "config-drift (this machine only).")
+    assert color == fh.YELLOW
+    # the healthy workspace must NOT be counted into the drift tally
+    assert "1 workspace," not in text
+
+
+def test_a_broken_daemon_beside_a_healthy_workspace(fh):
+    text, color = fh._verdict([_ok_bridge_record()], 120, None, None,
+                              beat_statuses=["error"])
+
+    assert text == "Fleet broken: 1 daemon error or missing (this machine only)."
+    assert color == fh.RED

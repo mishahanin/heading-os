@@ -86,3 +86,48 @@ def test_no_remote_flow_is_local_only(tmp_path, monkeypatch):
     # No origin remote should have been created.
     origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=target, capture_output=True)
     assert origin.returncode != 0, "--no-remote must not wire an origin"
+
+
+class _Proc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _stub_run(origin_exists: bool):
+    """Stand in for cdr.run: the origin probe answers, `gh` always succeeds.
+
+    Argument-sensitive on purpose. create_remote asks whether origin is already
+    wired before it creates anything, and a stub that says yes short-circuits
+    past the very message under test.
+    """
+    def _run(args, cwd, check=True, capture=True):
+        if args[:3] == ["git", "remote", "get-url"]:
+            return _Proc(returncode=0 if origin_exists else 2,
+                         stdout="https://github.com/owner/repo.git\n")
+        return _Proc(returncode=0, stdout="created\n")
+    return _run
+
+
+def test_creating_a_public_repo_does_not_report_it_as_private(tmp_path, capsys,
+                                                              monkeypatch):
+    """The message claimed 'private' unconditionally, including under --public.
+    A false assurance about visibility is the exact harm the remote-identity
+    wall exists to prevent, one layer earlier."""
+    monkeypatch.setattr(cdr, "run", _stub_run(origin_exists=False))
+
+    assert cdr.create_remote(tmp_path, "owner", "repo",
+                             private=False, dry_run=False) == 0
+    out = capsys.readouterr().out
+    assert "private" not in out.lower()
+    assert "public" in out.lower()
+
+
+def test_creating_a_private_repo_still_says_private(tmp_path, capsys, monkeypatch):
+    """The other direction, so the fix cannot pass by dropping the word."""
+    monkeypatch.setattr(cdr, "run", _stub_run(origin_exists=False))
+
+    assert cdr.create_remote(tmp_path, "owner", "repo",
+                             private=True, dry_run=False) == 0
+    assert "private" in capsys.readouterr().out.lower()

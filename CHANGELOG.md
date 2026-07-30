@@ -6,6 +6,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **Remote-identity wall on every supervised push.** No repository other than the
+  engine may be pushed to the engine's push remote, or to a remote GitHub reports
+  as public. Two checks in `scripts/utils/git_push.py:remote_objection`: an
+  offline comparison of normalized push URLs that carries the hard guarantee, and
+  a GitHub visibility lookup that raises the ceiling when the network can answer
+  and warns without blocking when it cannot. Wired at `supervised_push` and as a
+  `push-all` precondition, the latter so `--dry-run` reports the refusal too.
+  Reach, stated honestly: six callers route through `supervised_push`; ten other
+  call sites push directly and are not covered, none of which pushes the data
+  overlay. Neither check validates that a repository points at the RIGHT private
+  remote, only that it does not point at the engine's or at a public one, and the
+  offline check itself fails open with a printed warning when the workspace roots
+  cannot be resolved.
+
+### Changed
+
+- **`create-data-repo.py --public` now creates a repository it cannot push to.**
+  The flag has always been documented as almost never what you want for a data
+  overlay; it is now refused rather than discouraged, because `first_push` routes
+  through `supervised_push` and a public remote is exactly what the new wall
+  exists to stop. The repository is still created and origin still wired, so the
+  failure is visible and recoverable rather than silent. Separately, the success
+  message printed "created private GitHub repo" unconditionally, so `--public`
+  produced a false assurance about the very property this release walls; it now
+  names the visibility it actually created.
+
 ### Fixed
 - **APScheduler jobs were being discarded for being late, and every health surface said the daemons were fine.** `misfire_grace_time` defaults to 1 second, so a job whose due moment slipped past that was DISCARDED rather than run late, leaving only a journal warning. Measured over the 24 hours to 2026-07-30 on one machine: the `sync-exchange` 1-minute heartbeat lost **1059 of 1440** runs, and its 2-hour Exchange mail and calendar sync ran **twice instead of twelve times**. Observed lateness ran from 24 seconds to 27 minutes, and the cause is tick latency rather than load, so this was the steady state and not an incident: a freshly restarted process had already dropped 12 runs inside 14 minutes. The silence was structural, because the heartbeat that would have accused the daemon was itself 74% dropped, so `systemctl` reported `active running` throughout. The fix is one shared `JOB_DEFAULTS` (`scripts/utils/scheduler_defaults.py`) passed to the four scheduler CONSTRUCTIONS rather than to the eleven `add_job` calls, because APScheduler fills a job's unset options from its scheduler's defaults, so a job registered later inherits the safe value without its author knowing the constant exists. That inheritance is the whole point: the correct value already existed in `scripts/bridge_daemon/scheduler.py` and did not travel to the five jobs `scripts/bridge-daemon.py` adds to that same scheduler object, two lines below a comment that diagnosed this exact bug. Only `misfire_grace_time` changes behaviour; `coalesce` and `max_instances` already match the library defaults and are stated so the pairing that makes `grace=None` safe reads in one place. A call site may still override any option, in both directions. `tests/test_scheduler_misfire_guard.py` walks the AST of `scripts/` and refuses any scheduler built without `job_defaults`, or with a `job_defaults` that omits `misfire_grace_time`; it was observed failing on all four sites before the edits landed. It checks construction, and `scripts/` only, and says so. **Operator-visible consequence:** the 2-hour Exchange sync now completes twelve times a day rather than twice, a sixfold increase in real work on that path that is the configuration finally being honoured.
 

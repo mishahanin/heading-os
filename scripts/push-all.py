@@ -12,8 +12,9 @@ half that cannot be reconstructed. For each repo it:
      like a credential (.env, .session, cookies.json, .sessions/);
   2. asserts the rebuildable index (.memory-index/) is not tracked;
   3. commits staged changes (git add -A) unless --no-commit;
-  4. checks the push PRECONDITIONS: the branch is main, and for an engine push
-     the pre-push suite gate is armed;
+  4. checks the push PRECONDITIONS: the remote is one this repository may push
+     to, the branch is main, and for an engine push the pre-push suite gate is
+     armed;
   5. pushes origin main using GH_TOKEN from the engine .env AND verifies the
      branch is level with origin/main (ahead/behind == 0 0) as one step --
      a bare `git push` can report success yet leave the ref behind, so the
@@ -28,8 +29,9 @@ Exit codes:
         PUSHED" means every repo was skipped and this run produced no off-machine
         copy at all. The exec and pre-cutover modes push one repo, so exit 3 there
         is always the second shape.
-  1, 2  a failure that stops the run: a security refusal, an absent push token, a
-        misconfigured data root, or a push that ran and did not verify.
+  1, 2  a failure that stops the run: a security refusal, a remote a repository
+        must not push to, an absent push token, a misconfigured data root, or a
+        push that ran and did not verify.
 
 A refusal about ONE repository never cancels another. See RepoNotPushable.
 
@@ -311,7 +313,7 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
 
     # 4. per-repository push preconditions.
     #
-    # BOTH raises sit here, AFTER the commit above, and that position is the
+    # Three refusals sit here, AFTER the commit above, and that position is the
     # decision rather than an accident: a repo that cannot be pushed still gets
     # its local commit, so work in progress is never lost to a refusal about
     # where it can go. Raising before step 3 would have been tidier and would
@@ -336,8 +338,14 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     objection = remote_objection(repo, token=push_env.get("GH_TOKEN"))
     if objection:
         print(f"{RED}REFUSING TO PUSH — {objection}{RESET}")
-        print(f"{GRAY}Check the remote with: "
+        # Both sides of the comparison, not just the pushing repository's remote:
+        # an operator who wired a convenience remote for the data repo onto the
+        # engine clone would otherwise see only a URL that is correct on its own
+        # and no way to see what it collided with.
+        print(f"{GRAY}Check this repo's remote with: "
               f"git -C {repo} remote get-url --push origin{RESET}")
+        print(f"{GRAY}Check the engine's remotes with: "
+              f"git -C {get_workspace_root()} remote -v{RESET}")
         sys.exit(2)
 
     branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()

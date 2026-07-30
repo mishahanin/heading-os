@@ -80,8 +80,18 @@ remedy: usually merge the branch into `main` and run the command again, or
 `python scripts/install-git-hooks.py` for an unarmed engine test gate. Do NOT re-run
 the command hoping for a different answer.
 
-Exit `1` and `2` are real failures that stopped the run (a security refusal, an
-absent `GH_TOKEN`, a misconfigured data root, a push that ran and did not verify).
+Exit `1` and `2` are real failures that stopped the run (a security refusal, a
+remote a repository must not push to, an absent `GH_TOKEN`, a misconfigured data
+root, a push that ran and did not verify).
+
+Exit `2` with "REFUSING TO PUSH" naming a remote is the newest of those and is
+different in kind from the others. It means a repository is aimed at a remote it
+must not push to: the engine's own remote, or a repository GitHub reports as
+public. Nothing was pushed, nothing was lost, and the whole run stops rather than
+continuing with the other repositories, because a wrong remote makes all of them
+suspect. Report the remote it names to Misha and do not retry until it is
+corrected.
+
 Because the DATA overlay is pushed first, a failure at the ENGINE can still leave
 DATA pushed and verified — read the per-repository lines above the failure before
 telling the operator nothing was backed up. Exit `0` means everything went.

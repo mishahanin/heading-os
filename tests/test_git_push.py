@@ -405,12 +405,16 @@ def test_a_visibility_that_cannot_be_answered_warns_and_permits(
     """The one fail-open decision in this wall, and it is deliberate. An
     unreachable API carries no information about whether the overlay is private,
     and refusing the backup would trade a leak risk for a data-loss risk on the
-    command whose whole job is the off-machine copy."""
+    command whose whole job is the off-machine copy.
+
+    Tokened on purpose: a tokenless cannot-answer is a question that was never
+    asked (see test_a_tokenless_cannot_answer_does_not_warn below), so this case
+    exercises the one that was actually asked and still came back empty."""
     data = _aimed_at(monkeypatch, tmp_path,
                      "https://github.com/owner/somewhere-unknown.git")
     monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: None)
 
-    assert git_push.remote_objection(data) is None
+    assert git_push.remote_objection(data, token="tok") is None
     out = capsys.readouterr().out
     assert "could not verify" in out
     assert "github.com/owner/somewhere-unknown" in out
@@ -424,9 +428,24 @@ def test_the_cannot_answer_warning_prints_once_per_remote(
                      "https://github.com/owner/somewhere-unknown.git")
     monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: None)
 
-    git_push.remote_objection(data)
-    git_push.remote_objection(data)
+    git_push.remote_objection(data, token="tok")
+    git_push.remote_objection(data, token="tok")
     assert capsys.readouterr().out.count("could not verify") == 1
+
+
+def test_a_tokenless_cannot_answer_does_not_warn(monkeypatch, tmp_path, capsys):
+    """A supported tokenless dry run must not warn on every invocation.
+
+    push-all.py --dry-run works with no GH_TOKEN, and a tokenless probe of a
+    private repository always 404s, which is a question that could not be
+    asked, not a lookup that failed, so it must not print the same warning a
+    genuinely failed tokened lookup does."""
+    data = _aimed_at(monkeypatch, tmp_path,
+                     "https://github.com/owner/somewhere-unknown.git")
+    monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: None)
+
+    assert git_push.remote_objection(data) is None
+    assert "could not verify" not in capsys.readouterr().out
 
 
 def test_a_non_github_remote_is_not_warned_about(monkeypatch, tmp_path, capsys):

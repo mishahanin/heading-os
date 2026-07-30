@@ -164,7 +164,7 @@ def _gh_visibility(normalized: str, *, token: Optional[str] = None) -> Optional[
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.debug("remote wall: bad JSON for %s: %s", normalized, exc)
         return None
-    except Exception as exc:  # noqa: BLE001 - the family, closed by shape
+    except Exception as exc:  # the family, closed by shape
         # The family, closed by shape rather than by enumeration. Three members
         # reached production one at a time: a non-dict body, an HTTPException,
         # and a UnicodeEncodeError from a non-ASCII repository name, which is a
@@ -285,7 +285,7 @@ def remote_objection(repo, *, token: Optional[str] = None,
     if visibility == "public":
         return (f"{repo.name} pushes to {here}, which GitHub reports as PUBLIC. "
                 f"Refusing: only the engine may push to a public repository.")
-    if visibility is None and fresh and here.partition("/")[0] == "github.com":
+    if visibility is None and fresh and token and here.partition("/")[0] == "github.com":
         # Fail open, loudly. Check A carries the hard guarantee precisely
         # because it is offline and therefore always available; Check B raises
         # the ceiling when it can and says so when it cannot.
@@ -296,6 +296,12 @@ def remote_objection(repo, *, token: Optional[str] = None,
         # host is noise the operator learns to scroll past. That would cost the
         # warning its meaning on the one occasion it matters, which is a GitHub
         # remote whose visibility genuinely could not be read.
+        #
+        # Also requires a token. `push-all.py --dry-run` is explicitly supported
+        # with no GH_TOKEN, and a tokenless probe of a private repository always
+        # 404s, which is not a lookup that failed but a question that could not
+        # be asked; warning on every tokenless dry run would teach the operator
+        # to scroll past the one warning that matters.
         print(f"WARNING: could not verify the visibility of {here}. "
               f"Pushing on the offline check alone.")
     return None

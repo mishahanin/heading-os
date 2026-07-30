@@ -563,6 +563,14 @@ the engine, stop — see the troubleshooting table.</p>
 <td>Every repository it tried was skipped, so there is no new off-machine copy — treat it as a backup that did not happen. Your work is committed locally. Resolve the reason beside each name (usually: merge your branch into <code>main</code>) and run it again. A one-repository workspace (managed, or pre-cutover) can only ever produce this shape.</td>
 </tr>
 <tr>
+<td><code>push-all.py</code> exits <code>2</code> and prints &ldquo;REFUSING TO PUSH&rdquo; naming a remote</td>
+<td>A repository other than the engine is aimed at the engine&rsquo;s remote, or at a repository GitHub reports as public. Nothing was pushed and nothing was lost. Check where it points with <code>git -C &lt;repo&gt; remote get-url --push origin</code> and correct it before running again. This refusal stops the whole run on purpose: a wrong remote makes every repository in the run suspect.</td>
+</tr>
+<tr>
+<td><code>push-all.py</code> prints &ldquo;could not verify the visibility of &hellip;&rdquo; and continues</td>
+<td>The GitHub API could not answer (no token, no network, a rate limit, or a repository the token cannot see). The offline check still ran and passed. This is a warning, not a failure.</td>
+</tr>
+<tr>
 <td>Backup pushed into the engine and got a 403</td>
 <td>On a managed workspace the engine is read-only — the 403 is the safety net. Your identity <code>type</code> is likely not <code>exec-workspace</code>; fix it (§6), then back up again.</td>
 </tr>

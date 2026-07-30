@@ -188,7 +188,8 @@ def create_remote(target: Path, owner: str | None, repo_name: str, private: bool
         sys.stderr.write(proc.stderr)
         print(f"{RED}gh repo create failed.{RESET} Is `gh` authenticated (`gh auth login`)?")
         return proc.returncode
-    print(f"{GREEN}created{RESET} private GitHub repo and wired origin: {slug}")
+    kind = "private" if private else "PUBLIC"
+    print(f"{GREEN}created{RESET} {kind} GitHub repo and wired origin: {slug}")
     return 0
 
 
@@ -228,7 +229,9 @@ def main() -> int:
     ap.add_argument("--owner", default=None,
                     help="GitHub owner/org (default: your authenticated gh account)")
     ap.add_argument("--public", action="store_true",
-                    help="create a PUBLIC repo (default is private — almost never what you want for data)")
+                    help="create a PUBLIC repo (default is private — almost never what you "
+                         "want for data). The first push will then be REFUSED by the "
+                         "remote-identity wall: only the engine may push to a public repo.")
     ap.add_argument("--no-remote", action="store_true",
                     help="local scaffold + git only; do not create a GitHub repo or push")
     ap.add_argument("--dry-run", action="store_true", help="show what would happen; make no changes")

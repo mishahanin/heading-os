@@ -63,7 +63,7 @@ ensure_venv()
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
 from scripts.utils.engine_guard import scan_engine_repo
-from scripts.utils.git_push import supervised_push
+from scripts.utils.git_push import remote_objection, supervised_push
 from scripts.utils.workspace import (
     get_default_tz,
     get_data_root,
@@ -321,6 +321,25 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     # branch check used to be below it, so a dry run reported no skip at all:
     # it hid the one thing this whole change exists to surface. Evaluating a
     # precondition writes nothing, so a dry run can afford to be honest.
+    # 4a. remote identity, and it runs FIRST inside this block on purpose.
+    #
+    # The two refusals below raise RepoNotPushable, which _attempt absorbs, so a
+    # repository on a feature branch never reaches any check placed after them.
+    # A misconfigured remote must not be maskable by a routine skip, so it is
+    # evaluated before either of them and stops the run outright.
+    #
+    # sys.exit(2) rather than RepoNotPushable, and the classification is the
+    # decision: a branch that is not main says THIS repository cannot be pushed
+    # and nothing about the others. A remote pointing somewhere it must not
+    # says the configuration is wrong, which makes every repository in the run
+    # suspect for the same reason.
+    objection = remote_objection(repo, token=push_env.get("GH_TOKEN"))
+    if objection:
+        print(f"{RED}REFUSING TO PUSH — {objection}{RESET}")
+        print(f"{GRAY}Check the remote with: "
+              f"git -C {repo} remote get-url --push origin{RESET}")
+        sys.exit(2)
+
     branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
     if branch != "main":
         raise RepoNotPushable(

@@ -175,3 +175,74 @@ def test_the_suite_gate_is_not_a_precondition_of_the_data_overlay(tmp_path):
     repo = _repo_on_branch(tmp_path, "main")
 
     assert push_all.push_repo("DATA", repo, "m", False, True, {}) is None
+
+
+# ============================================================
+# The remote-identity wall as a push-all precondition
+#
+# Stop-the-world, not per-repository. A refusal about a branch says this repo
+# cannot be pushed and nothing about the others. A misconfigured remote says
+# the configuration is wrong in a way the operator must see before anything
+# else leaves the machine, so every other repository in the run is suspect for
+# the same reason.
+# ============================================================
+
+def test_a_remote_objection_exits_2_rather_than_raising(tmp_path, monkeypatch, capsys):
+    repo = _repo_on_branch(tmp_path, "main")
+    monkeypatch.setattr(push_all, "remote_objection",
+                        lambda *a, **k: "R pushes to the ENGINE remote (x/y).")
+
+    with pytest.raises(SystemExit) as exc:
+        push_all.push_repo("R", repo, "m", False, False, {})
+    assert exc.value.code == 2
+    assert "ENGINE remote" in capsys.readouterr().out
+
+
+def test_the_remote_objection_is_not_a_reponotpushable(tmp_path, monkeypatch):
+    """_attempt absorbs RepoNotPushable and lets everything else fly. This
+    refusal must be in the second group, so the type is asserted directly."""
+    repo = _repo_on_branch(tmp_path, "main")
+    monkeypatch.setattr(push_all, "remote_objection", lambda *a, **k: "nope")
+
+    with pytest.raises(SystemExit):
+        push_all.push_repo("R", repo, "m", False, False, {})
+
+
+def test_a_remote_objection_beats_a_branch_skip(tmp_path, monkeypatch):
+    """Ordering, and it is a security decision rather than a style one. A repo
+    on a feature branch raises RepoNotPushable, which _attempt absorbs. If the
+    branch check ran first, a misconfigured remote on that repo would never be
+    reported at all."""
+    repo = _repo_on_branch(tmp_path, "feat/x")
+    monkeypatch.setattr(push_all, "remote_objection", lambda *a, **k: "nope")
+
+    with pytest.raises(SystemExit) as exc:
+        push_all.push_repo("R", repo, "m", False, False, {})
+    assert exc.value.code == 2
+
+
+def test_the_refusal_is_reported_under_dry_run_and_writes_nothing(
+        tmp_path, monkeypatch):
+    """A preview that hides a refusal lies. Evaluating a precondition writes
+    nothing, so a dry run can afford to be honest here too."""
+    repo = _repo_on_branch(tmp_path, "main")
+    before = push_all.run(["git", "rev-parse", "HEAD"], repo).stdout.strip()
+    (repo / "b.txt").write_text("b\n", encoding="utf-8")
+    monkeypatch.setattr(push_all, "remote_objection", lambda *a, **k: "nope")
+
+    with pytest.raises(SystemExit) as exc:
+        push_all.push_repo("R", repo, "m", True, True, {})
+    assert exc.value.code == 2
+    after = push_all.run(["git", "rev-parse", "HEAD"], repo).stdout.strip()
+    assert after == before  # no commit was made
+    assert (repo / "b.txt").exists()  # and the working tree is untouched
+
+
+def test_a_repo_with_no_remote_at_all_raises_no_objection(tmp_path):
+    """Every other test in this file builds a remoteless repo and expects the
+    old behaviour, so the real un-stubbed function must stay silent on one.
+    This asserts that directly rather than leaving it implicit."""
+    repo = _repo_on_branch(tmp_path, "main")
+
+    assert push_all.remote_objection(repo) is None
+    assert push_all.push_repo("DATA", repo, "m", False, True, {}) is None

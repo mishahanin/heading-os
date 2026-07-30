@@ -46,6 +46,26 @@ logger = logging.getLogger(__name__)
 
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 
+# GitHub answers pushes addressed to more than one hostname for the same
+# identity. `www.github.com` 301-redirects `info/refs?service=git-receive-pack`
+# to `github.com`, and git follows that redirect by default, so `git ls-remote`
+# and a real push both land on the repository named by `github.com`: it is
+# the same remote, not a different one. `ssh.github.com` is GitHub's own
+# documented port-443 workaround for networks that block outbound 22, and it is
+# the identical SSH endpoint. A narrow, explicit mapping rather than a general
+# "strip any subdomain" rule, because folding an unrelated host (a GitHub
+# Enterprise Server instance, say) onto github.com would be wrong in the other
+# direction. Before this mapping existed, Check A's set-membership test, Check
+# B's `host != "github.com"` guard, and the cannot-verify warning below all
+# keyed on this same literal host string, so an operator (or an attacker)
+# spelling the engine's remote either way defeated all three simultaneously
+# and the private overlay reached the public engine repository with no
+# objection at all.
+_GITHUB_HOST_ALIASES = {
+    "www.github.com": "github.com",
+    "ssh.github.com": "github.com",
+}
+
 # Visibility answers for the life of the process. A real push-all run asks the
 # same question twice per repository (the precondition and then the chokepoint),
 # and each miss can cost a network timeout on the one command that must not be
@@ -104,6 +124,7 @@ def _normalize_remote_url(url: str) -> str:
         # scp-style form where the colon separates host from path.
         if after and not after.isdigit():
             tail = f"{after}/{tail}" if tail else after
+    head = _GITHUB_HOST_ALIASES.get(head.lower(), head)
     path = tail.strip("/")
     if path.endswith(".git"):
         path = path[:-4]
@@ -276,7 +297,8 @@ def remote_objection(repo, *, token: Optional[str] = None,
     # and `git push` still gets to fail on its own.
     here = _normalize_remote_url(url if url is not None else remote)
 
-    if here in _engine_push_urls(engine):
+    engine_urls = _engine_push_urls(engine)
+    if here in engine_urls:
         return (f"{repo.name} pushes to the ENGINE remote ({here}), which is the "
                 f"public code repository. Refusing: this would publish private "
                 f"content.")
@@ -304,6 +326,33 @@ def remote_objection(repo, *, token: Optional[str] = None,
         # to scroll past the one warning that matters.
         print(f"WARNING: could not verify the visibility of {here}. "
               f"Pushing on the offline check alone.")
+    elif fresh:
+        # A separate signal for the other ways this function reaches "no
+        # objection" without either check having actually evaluated anything:
+        # the engine's own remotes were unreadable (Check A ran against an
+        # empty set), the repository being pushed has no resolvable push URL
+        # under `remote` (only its bare name was compared), or Check B's own
+        # guard never asked GitHub at all (a non-GitHub host, or a path that is
+        # not `owner/repo`). Each of these produces a clean "no objection"
+        # return that reads exactly like a pass on a repository the wall
+        # actually evaluated, and the case above already covers the one
+        # remaining "asked and failed" shape, so this is only the cases it
+        # does not. Gated on the same `fresh` flag as the warning above so a
+        # real push-all run (the precondition, then the chokepoint) prints
+        # this once per repository rather than twice.
+        parts = []
+        if not engine_urls:
+            parts.append("the engine's own push remotes could not be read")
+        if url is None:
+            parts.append(f"'{remote}' does not resolve to a push URL for "
+                          f"{repo.name}, so only its bare name was compared")
+        elif visibility is None:
+            parts.append("GitHub was not asked, or could not answer, whether "
+                          "this remote is public")
+        if parts:
+            print(f"NOTE: the remote wall reached its lower ceiling for "
+                  f"{repo.name} ({here}): {'; '.join(parts)}. Proceeding "
+                  f"without full confirmation.")
     return None
 
 
@@ -314,7 +363,14 @@ def load_gh_token() -> Optional[str]:
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.startswith("GH_TOKEN="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except OSError:
+    except (OSError, UnicodeDecodeError) as exc:
+        # A wall built to fail open must not carry a hard-crash path. This
+        # function's own token expression is evaluated eagerly by every
+        # `supervised_push` caller, including `promote-corporate`,
+        # `rollback-corporate`, `offboard-exec` and `create-data-repo`, none of
+        # which used to reach this read, and Check A never uses the token
+        # anyway, so a single non-UTF-8 byte in `.env` must not crash all four.
+        logger.debug("gh token unreadable: %s", exc)
         return None
     return None
 

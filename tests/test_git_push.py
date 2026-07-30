@@ -140,6 +140,8 @@ def _with_userinfo(url: str) -> str:
     "ssh://git@github.com/Owner/Repo.git",
     "https://github.com:443/Owner/Repo.git",
     _with_userinfo("https://github.com/Owner/Repo.git"),
+    "https://www.github.com/Owner/Repo.git",
+    "ssh://git@ssh.github.com:443/Owner/Repo.git",
 ])
 def test_every_url_form_of_one_repository_normalizes_equal(url):
     assert git_push._normalize_remote_url(url) == "github.com/owner/repo"
@@ -223,6 +225,25 @@ def test_check_a_holds_across_url_form(monkeypatch, tmp_path):
           "git@github.com:owner/repo"], data)
 
     assert git_push.remote_objection(data) is not None
+
+
+def test_check_a_catches_the_engine_remote_spelled_with_a_www_host(
+        monkeypatch, tmp_path):
+    """The reachable leak this slice's review found: `www.github.com`
+    301-redirects to `github.com` and git follows it by default, so a data
+    overlay whose origin is spelled this way names the exact same repository
+    as the engine's `github.com` remote, and must be refused just as surely."""
+    engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+    _git(["remote", "set-url", "origin",
+          "https://github.com/owner/repo.git"], engine)
+    _git(["remote", "set-url", "origin",
+          "https://www.github.com/owner/repo.git"], data)
+
+    reason = git_push.remote_objection(data)
+    assert reason is not None
+    assert "ENGINE remote" in reason
 
 
 def test_the_engine_pushing_to_its_own_remote_is_not_refused(monkeypatch, tmp_path):
@@ -580,3 +601,68 @@ def test_an_unanticipated_failure_fails_open(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", _surprise)
     assert git_push._gh_visibility("github.com/owner/repo") is None
+
+
+# ============================================================
+# Remote identity: the ceiling notice
+#
+# remote_objection() can return "no objection" without either check having
+# actually evaluated anything: an unreadable engine remote list, a
+# repository whose remote does not resolve to a URL, or a host/path Check B's
+# own guard never asks GitHub about. Each of those used to be silent, and a
+# silent "no objection" reads exactly like a clean pass. This section pins
+# that a signal fires on the degraded paths and stays off the happy one.
+# ============================================================
+
+def test_ceiling_notice_fires_for_a_non_github_forge_and_still_permits(
+        monkeypatch, tmp_path, capsys):
+    """Check B's own guard never asks GitHub about a non-GitHub host, so this
+    is a real "wall did not evaluate" case, not merely a lookup that failed.
+    The push is still permitted: this is a signal, not a new refusal."""
+    data = _aimed_at(monkeypatch, tmp_path, "https://gitlab.example/owner/repo.git")
+
+    reason = git_push.remote_objection(data)
+    assert reason is None
+    out = capsys.readouterr().out
+    assert "reached its lower ceiling" in out
+    assert "could not verify" not in out  # distinct from the Check-B-answered warning
+
+
+def test_ceiling_notice_prints_nothing_on_a_fully_evaluated_private_remote(
+        monkeypatch, tmp_path, capsys):
+    """The happy path: Check A ran against a non-empty engine set and Check B
+    answered. Neither the old warning nor the new notice belongs here."""
+    data = _aimed_at(monkeypatch, tmp_path,
+                     "https://github.com/owner/somewhere-private.git")
+    monkeypatch.setattr(git_push, "_gh_visibility", lambda *a, **k: "private")
+
+    assert git_push.remote_objection(data, token="tok") is None
+    assert capsys.readouterr().out == ""
+
+
+def test_ceiling_notice_prints_once_per_remote(monkeypatch, tmp_path, capsys):
+    """Same suppression mechanism as the cannot-verify warning: a real
+    push-all run asks twice (the precondition, then the chokepoint), and the
+    notice must not print twice for one repository."""
+    data = _aimed_at(monkeypatch, tmp_path, "https://gitlab.example/owner/repo.git")
+
+    git_push.remote_objection(data)
+    git_push.remote_objection(data)
+    assert capsys.readouterr().out.count("reached its lower ceiling") == 1
+
+
+# ============================================================
+# Token loading: must not crash a caller that never asked for the token
+# ============================================================
+
+def test_load_gh_token_returns_none_on_an_undecodable_env_file(tmp_path, monkeypatch):
+    """A wall built to fail open must not carry a hard-crash path. Check A
+    never uses the token, so a single non-UTF-8 byte in `.env` must not raise
+    out of `load_gh_token()` and crash the four callers (promote-corporate,
+    rollback-corporate, offboard-exec, create-data-repo) that reach this read
+    only because the chokepoint resolves it eagerly."""
+    env_path = tmp_path / ".env"
+    env_path.write_bytes(b"GH_TOKEN=abc\xffdef\n")
+    monkeypatch.setattr(git_push, "get_workspace_root", lambda: tmp_path)
+
+    assert git_push.load_gh_token() is None

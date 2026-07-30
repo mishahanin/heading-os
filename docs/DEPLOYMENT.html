@@ -568,7 +568,7 @@ the engine, stop — see the troubleshooting table.</p>
 </tr>
 <tr>
 <td><code>push-all.py</code> prints &ldquo;could not verify the visibility of &hellip;&rdquo; and continues</td>
-<td>The GitHub API could not answer (no token, no network, a rate limit, or a repository the token cannot see). The offline check still ran and passed. This is a warning, not a failure.</td>
+<td>The GitHub API could not answer (no network, a rate limit, or a repository the token cannot see). The offline check still ran and passed. This is a warning, not a failure. A tokenless run (for example <code>--dry-run</code> with no <code>GH_TOKEN</code>) prints nothing here: the question cannot be asked at all without a token, which is different from the answer coming back empty.</td>
 </tr>
 <tr>
 <td>Backup pushed into the engine and got a 403</td>

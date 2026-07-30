@@ -130,6 +130,7 @@ rules:
   "reference/misha-voice.md": private                  # CEO personal voice IP + "what Misha never says"
   "reference/exec-voice.md": private               # exec personal voice IP (generic name; real exec voice files route here)
   "reference/search-domains.md": private               # CEO research-targeting config: names the priority regions + curated regional news domains; engine ships a generic example
+  "reference/jurisdiction-compliance.md": private       # supplier jurisdiction restrictions overlaid on the LIVE pipeline (named deals/counterparties) — CEO-only; the underlying checklist itself is corporate in datastore/operations/legal/export-control/
   "c.bat": private                             # CEO machine-local launcher; not needed in the engine clone
   "reference/email-signature.html": private    # CEO's real signature: personal phone (reveals geo) + contact; engine ships an example at cutover
   # (Odin cadence timer/installer/templates were ceo-only private until the CEO

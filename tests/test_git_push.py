@@ -252,6 +252,47 @@ def test_a_repo_with_no_such_remote_raises_no_objection(monkeypatch, tmp_path):
     assert git_push.remote_objection(data, remote="upstream") is None
 
 
+def test_a_url_handed_in_as_the_remote_is_checked_too(monkeypatch, tmp_path):
+    """`git push <url> <branch>` needs no configured remote, and safe-push takes
+    --remote as a free-form string. An earlier version read an unresolvable
+    remote name as proof that nothing could be pushed, and the overlay reached
+    the engine's remote with every wall silent."""
+    engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+
+    reason = git_push.remote_objection(data, remote=str(engine_remote))
+    assert reason is not None
+    assert git_push._normalize_remote_url(str(engine_remote)) in reason
+
+
+def test_the_chokepoint_refuses_a_url_handed_in_as_the_remote(monkeypatch, tmp_path):
+    """The reviewer's reproduction, pinned. Before the fix this pushed."""
+    engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+
+    verdict = supervised_push(data, remote=str(engine_remote), branch="main",
+                              stall_window=15)
+    assert verdict["state"] == "failed", verdict
+    has_main = subprocess.run(
+        ["git", "-C", str(engine_remote), "show-ref", "--verify",
+         "refs/heads/main"],
+        capture_output=True,
+    )
+    assert has_main.returncode != 0, "the overlay reached the engine remote"
+
+
+def test_an_unconfigured_remote_name_is_still_no_objection(monkeypatch, tmp_path):
+    """The fall-through must not turn a typo into a refusal. A bare word cannot
+    collide with a host/owner/repo URL, so git push keeps the right to fail."""
+    _engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+
+    assert git_push.remote_objection(data, remote="no-such-remote") is None
+
+
 def test_check_a_ignores_what_the_caller_named_its_remote(monkeypatch, tmp_path):
     """The engine's push URLs are the engine's property, not the caller's.
 

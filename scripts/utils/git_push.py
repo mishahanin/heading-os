@@ -173,10 +173,19 @@ def remote_objection(repo, *, token: Optional[str] = None,
         return None
 
     url = _push_url(repo, remote)
-    if url is None:
-        # No such remote. `git push` will fail on its own and say so better.
-        return None
-    here = _normalize_remote_url(url)
+    # `remote` may itself BE a location rather than the name of a configured
+    # one: `git push <url> <branch>` is valid git and needs no remote at all,
+    # so an unconfigured NAME is not evidence that nothing can be pushed. An
+    # earlier version returned no objection here on the reasoning that git
+    # would fail on its own, and it does not. Measured on 2026-07-30:
+    # safe-push --remote <the engine push URL> published the overlay to the
+    # engine remote with every wall silent, and the only complaint came
+    # afterwards from the ahead/behind postcondition.
+    #
+    # A plain remote name normalizes to a bare word, which matches no
+    # host/owner/repo URL, so an unconfigured name still raises no objection
+    # and `git push` still gets to fail on its own.
+    here = _normalize_remote_url(url if url is not None else remote)
 
     if here in _engine_push_urls(engine):
         return (f"{repo.name} pushes to the ENGINE remote ({here}), which is the "

@@ -12,9 +12,21 @@ Source is parsed, never imported: importing a daemon module runs its top-level
 side effects, and the invariant is a property of the source text anyway.
 
 Reach, stated so a future reader is not misled. This checks CONSTRUCTION, and it
-walks scripts/ only. A scheduler built correctly and then mutated at runtime, one
-whose defaults are assembled dynamically, or a daemon that lands outside
-scripts/, passes here while behaving differently. No such site exists today.
+walks scripts/ only. These shapes pass here while behaving differently, and none
+of them exists in the tree today:
+
+  - a scheduler built correctly and then mutated at runtime;
+  - defaults assembled dynamically, so the keyword's value is a call or a spread
+    rather than a name or a dict literal;
+  - the class bound to a local variable first (``Cls = BackgroundScheduler`` then
+    ``Cls()``), which needs dataflow rather than syntax to resolve and is pinned
+    as a known limit by test_a_class_held_in_a_variable_is_a_known_blind_spot;
+  - a daemon that lands outside ``scripts/``.
+
+An ALIASED import (``import BackgroundScheduler as BS`` then ``BS()``) used to
+evade this guard and no longer does: aliases are resolved per file from the
+apscheduler import statements. That hole was found by attacking the guard after
+it was written, which is the only way this kind of hole is ever found.
 """
 import ast
 from pathlib import Path
@@ -66,10 +78,28 @@ def scheduler_objection(node: ast.Call) -> str | None:
     return None
 
 
+def _watched_names(tree: ast.AST) -> frozenset[str]:
+    """Scheduler class names as THIS file refers to them, aliases included.
+
+    `from apscheduler.schedulers.background import BackgroundScheduler as BS`
+    makes `BS()` a scheduler construction, and matching the canonical name alone
+    would let it through. Measured: it did.
+    """
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("apscheduler"):
+            for alias in node.names:
+                if alias.name in SCHEDULER_NAMES:
+                    aliases.add(alias.asname or alias.name)
+    return SCHEDULER_NAMES | aliases
+
+
 def scheduler_constructions(src: str, filename: str = "<synthetic>"):
     """(lineno, objection) for every scheduler construction in `src`."""
-    for node in ast.walk(ast.parse(src, filename=filename)):
-        if isinstance(node, ast.Call) and _called_name(node) in SCHEDULER_NAMES:
+    tree = ast.parse(src, filename=filename)
+    watched = _watched_names(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _called_name(node) in watched:
             yield node.lineno, scheduler_objection(node)
 
 
@@ -114,6 +144,38 @@ def test_every_scheduler_class_is_watched_not_only_the_two_in_use():
 
 def test_a_module_qualified_construction_is_watched():
     assert _objections("s = apscheduler.BackgroundScheduler()\n")
+
+
+def test_an_aliased_import_is_watched_under_its_alias():
+    """Found by attacking the guard after writing it: this evaded the first
+    version, which matched the canonical class name only."""
+    src = ("from apscheduler.schedulers.background import BackgroundScheduler as BS\n"
+           "s = BS()\n")
+    objections = _objections(src)
+    assert len(objections) == 1
+    assert "without job_defaults" in objections[0]
+
+
+def test_an_aliased_import_carrying_the_constant_is_accepted():
+    src = ("from apscheduler.schedulers.asyncio import AsyncIOScheduler as Sched\n"
+           "s = Sched(job_defaults=JOB_DEFAULTS)\n")
+    assert _objections(src) == []
+
+
+def test_an_alias_of_something_else_is_not_watched():
+    """The alias resolution must not turn any renamed import into a scheduler."""
+    src = ("from mylib import Thing as BackgroundSchedulerish\n"
+           "s = BackgroundSchedulerish()\n")
+    assert _objections(src) == []
+
+
+def test_a_class_held_in_a_variable_is_a_known_blind_spot():
+    """Pinned rather than pretended away. Resolving this needs dataflow, not
+    syntax. The module docstring names it; this test makes the limit measurable,
+    so a future author who closes it has to change this assertion deliberately
+    instead of discovering the gap in production.
+    """
+    assert _objections("Cls = BackgroundScheduler\ns = Cls()\n") == []
 
 
 def test_an_unrelated_call_is_not_flagged():

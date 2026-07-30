@@ -141,14 +141,14 @@ def _gh_visibility(normalized: str, *, token: Optional[str] = None) -> Optional[
     host, _, path = normalized.partition("/")
     if host != "github.com" or path.count("/") != 1:
         return None
-    req = urllib.request.Request(  # noqa: S310 - https literal, host pinned
-        f"https://api.github.com/repos/{path}",
-        headers={"User-Agent": "heading-os-remote-wall",
-                 "Accept": "application/vnd.github+json"},
-    )
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
     try:
+        req = urllib.request.Request(  # noqa: S310 - https literal, host pinned
+            f"https://api.github.com/repos/{path}",
+            headers={"User-Agent": "heading-os-remote-wall",
+                     "Accept": "application/vnd.github+json"},
+        )
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 - https literal
             data = json.loads(resp.read().decode("utf-8"))
     except HTTPError as exc:
@@ -163,6 +163,19 @@ def _gh_visibility(normalized: str, *, token: Optional[str] = None) -> Optional[
         return None
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.debug("remote wall: bad JSON for %s: %s", normalized, exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 - the family, closed by shape
+        # The family, closed by shape rather than by enumeration. Three members
+        # reached production one at a time: a non-dict body, an HTTPException,
+        # and a UnicodeEncodeError from a non-ASCII repository name, which is a
+        # ValueError and matched nothing. Each aborted push-all with a traceback,
+        # and DATA is attempted first, so nothing at all was pushed.
+        #
+        # Not knowing the visibility is the case this function exists to fail
+        # open on, so ANY failure to determine it means the same thing: return
+        # None and let the offline check carry the decision. Logged, never
+        # swallowed silently.
+        logger.debug("remote wall: visibility unreadable for %s: %s", normalized, exc)
         return None
     if not isinstance(data, dict):
         # A 200 whose body is null, a list, or a scalar decodes without error and

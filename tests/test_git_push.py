@@ -539,3 +539,25 @@ def test_a_bad_status_line_fails_open(monkeypatch, tmp_path):
 
     monkeypatch.setattr(urllib.request, "urlopen", _bad)
     assert git_push._gh_visibility("github.com/owner/repo") is None
+
+
+def test_a_non_ascii_repository_name_fails_open(monkeypatch):
+    """UnicodeEncodeError is a ValueError, so it matched no clause and escaped.
+    It is raised from inside putrequest, after the socket has connected, so the
+    trigger is a working connection plus one accented character or a soft hyphen
+    in a repository name. It aborted the whole backup."""
+    def _encode_error(*_a, **_k):
+        raise UnicodeEncodeError("ascii", "п", 0, 1, "ordinal not in range")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _encode_error)
+    assert git_push._gh_visibility("github.com/owner/пример") is None
+
+
+def test_an_unanticipated_failure_fails_open(monkeypatch):
+    """The point of the catch-all: the next member of the family must permit the
+    push rather than abort the backup, without anyone having to name it first."""
+    def _surprise(*_a, **_k):
+        raise RuntimeError("something nobody enumerated")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _surprise)
+    assert git_push._gh_visibility("github.com/owner/repo") is None

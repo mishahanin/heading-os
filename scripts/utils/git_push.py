@@ -21,7 +21,9 @@ Auth is flexible so each caller keeps its existing credential model:
 """
 from __future__ import annotations
 
+import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +37,10 @@ from scripts.utils.workspace import get_data_root, get_workspace_root
 
 # Echoes the token from the child env (NOT argv) into git's credential protocol.
 _CRED_HELPER = '!f(){ echo username=x-access-token; echo "password=$GH_PUSH_TOKEN"; }; f'
+
+logger = logging.getLogger(__name__)
+
+_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 
 
 def _is_split_engine(repo: Path) -> bool:
@@ -51,6 +57,58 @@ def _is_split_engine(repo: Path) -> bool:
     except Exception:
         return False
     return data != engine and repo.resolve() == engine
+
+
+def _normalize_remote_url(url: str) -> str:
+    """Canonical ``host/owner/repo`` for a git remote URL, in any form it takes.
+
+    Two URLs naming the same repository must compare equal, so scheme, userinfo,
+    port, a ``.git`` suffix, a trailing slash and case are all removed. GitHub
+    treats host and owner/repo case-insensitively, so lowercasing is safe.
+
+    Stripping userinfo happens HERE, before any comparison, so that no reason
+    string, warning or log line downstream can carry a token that a remote
+    legitimately embeds for authentication. A wall whose refusal message leaks
+    the credential it was protecting is worse than no wall.
+    """
+    s = url.strip()
+    scheme = _SCHEME_RE.match(s)
+    if scheme:
+        s = s[scheme.end():]
+    head, _sep, tail = s.partition("/")
+    if "@" in head:
+        head = head.rsplit("@", 1)[1]
+    if ":" in head:
+        host, _, after = head.partition(":")
+        head = host
+        # A numeric tail is a port and carries no identity. Anything else is the
+        # scp-style form where the colon separates host from path.
+        if after and not after.isdigit():
+            tail = f"{after}/{tail}" if tail else after
+    path = tail.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    return f"{head}/{path}".rstrip("/").lower()
+
+
+def _push_url(repo, remote: str = "origin") -> Optional[str]:
+    """The URL git would actually PUSH ``repo`` to, or None.
+
+    ``--push`` is load-bearing: a remote may carry a ``pushurl`` that differs
+    from its fetch URL, and the question this wall asks is where a push lands,
+    not where a fetch came from.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "remote", "get-url", "--push", remote],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.debug("push url unreadable for %s: %s", repo, exc)
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
 
 
 def load_gh_token() -> Optional[str]:

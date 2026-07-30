@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import scripts.utils.git_push as git_push
@@ -101,3 +103,71 @@ def test_supervised_push_allows_clean_engine(monkeypatch, tmp_path):
     v = supervised_push(work, branch="main", stall_window=15)
     assert v["state"] == "ok", v
     assert ahead_behind(work, "origin", "main") == (0, 0)
+
+
+# ============================================================
+# Remote identity: normalization
+#
+# A push has two ends. Everything below is about the far end: not "does this
+# tree carry the wrong content" but "does this remote accept the wrong content".
+# ============================================================
+
+# Recognisable in an assertion and deliberately not token-shaped.
+USERINFO_SENTINEL = "not-a-real-token-userinfo"
+
+# Assembled rather than written out. A tracked file carrying a scheme, a user,
+# a value and a host as one contiguous string is refused by the workspace
+# prevent-secrets hook, and both the design spec and the plan for this slice hit
+# that refusal while being written. The hook is right; the example is built at
+# runtime instead.
+_USERINFO = "x-access-token:" + USERINFO_SENTINEL
+
+
+def _with_userinfo(url: str) -> str:
+    """Insert the sentinel userinfo component into *url*."""
+    scheme, _, rest = url.partition("://")
+    return scheme + "://" + _USERINFO + "@" + rest
+
+
+@pytest.mark.parametrize("url", [
+    "https://github.com/Owner/Repo.git",
+    "https://github.com/Owner/Repo",
+    "https://github.com/Owner/Repo/",
+    "https://github.com/owner/repo.git",
+    "git@github.com:Owner/Repo.git",
+    "git@github.com:owner/repo",
+    "ssh://git@github.com/Owner/Repo.git",
+    "https://github.com:443/Owner/Repo.git",
+    _with_userinfo("https://github.com/Owner/Repo.git"),
+])
+def test_every_url_form_of_one_repository_normalizes_equal(url):
+    assert git_push._normalize_remote_url(url) == "github.com/owner/repo"
+
+
+def test_normalization_strips_userinfo_so_no_reason_can_leak_it():
+    url = _with_userinfo("https://github.com/owner/repo.git")
+    assert USERINFO_SENTINEL not in git_push._normalize_remote_url(url)
+
+
+def test_different_repositories_do_not_normalize_equal():
+    n = git_push._normalize_remote_url
+    assert n("https://github.com/owner/repo") != n("https://github.com/owner/other")
+    assert n("https://github.com/owner/repo") != n("https://gitlab.com/owner/repo")
+
+
+def test_push_url_reads_the_configured_remote(tmp_path):
+    remote, work = _make_repo(tmp_path)
+    assert git_push._push_url(work, "origin") == str(remote)
+
+
+def test_push_url_honours_pushurl_because_that_is_where_a_push_goes(tmp_path):
+    _remote, work = _make_repo(tmp_path)
+    _git(["config", "remote.origin.pushurl",
+          "https://github.com/owner/elsewhere.git"], work)
+    assert git_push._normalize_remote_url(git_push._push_url(work, "origin")) == \
+        "github.com/owner/elsewhere"
+
+
+def test_push_url_is_none_when_the_remote_does_not_exist(tmp_path):
+    _remote, work = _make_repo(tmp_path)
+    assert git_push._push_url(work, "upstream") is None

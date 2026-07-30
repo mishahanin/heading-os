@@ -247,6 +247,17 @@ class StateManager: ...
 
 Make reboot survival an explicit Constraint + Validation item in any plan that adds a timer, and verify after install: `systemctl --user is-enabled <name>.timer` = `enabled`, `loginctl show-user "$USER"` shows `Linger=yes`, and the rendered `~/.config/systemd/user/<name>.timer` contains `Persistent=true`. Timer/service templates live in `scripts/templates/systemd/` and carry no geographic literal -- timezone via the `{{TZ}}` substitution token the installer fills from `HEADING_OS_TZ`.
 
+**In-process APScheduler jobs MUST NOT be dropped for lateness.** The reboot rule above governs OS-level timers. Its in-process sibling governs jobs inside a daemon: APScheduler's `misfire_grace_time` defaults to 1 second, so a job whose due moment slips past that is DISCARDED with only a journal warning. Measured on 2026-07-30 before this rule existed, a 2-hour Exchange sync ran twice in twenty four hours instead of twelve times while systemd reported the daemon healthy, and a 1-minute heartbeat lost 1059 of 1440 runs. Tick latency, not load, is the cause.
+
+Construct every scheduler with the shared defaults, never per job:
+
+```python
+from scripts.utils.scheduler_defaults import JOB_DEFAULTS
+scheduler = AsyncIOScheduler(timezone=get_default_tz(), job_defaults=JOB_DEFAULTS)
+```
+
+Passing the options to `add_job` instead is what failed the first time: the safe values sat on one `add_job` call in `scripts/bridge_daemon/scheduler.py` while the five jobs `scripts/bridge-daemon.py` adds to that same scheduler silently kept the 1 second default, two lines below a comment that diagnosed the bug. A scheduler-level default is inherited by jobs registered later, by authors who never read this rule; a per-job argument is not. `tests/test_scheduler_misfire_guard.py` fails any scheduler under `scripts/` built without `job_defaults`, or with a `job_defaults` that omits `misfire_grace_time`.
+
 ## Reference File Standards
 
 Every file in `reference/` must include:

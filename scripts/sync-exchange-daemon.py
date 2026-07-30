@@ -37,6 +37,7 @@ sys.path.insert(0, str(WORKSPACE))
 
 from scripts.utils import daemon_heartbeat  # noqa: E402
 from scripts.utils import trace  # noqa: E402
+from scripts.utils.scheduler_defaults import JOB_DEFAULTS  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_env  # noqa: E402
 
@@ -181,7 +182,8 @@ async def _run_daemon(logger: logging.Logger) -> None:
     load_env()
     dispatcher = JobDispatcher(logger)
 
-    scheduler = AsyncIOScheduler(timezone=get_default_tz())
+    scheduler = AsyncIOScheduler(timezone=get_default_tz(),
+                                 job_defaults=JOB_DEFAULTS)
     for name, spec in JOB_SPECS.items():
         trigger = IntervalTrigger(hours=spec["interval_hours"], timezone=get_default_tz())
         kwargs = dict(

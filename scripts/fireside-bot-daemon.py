@@ -34,6 +34,7 @@ sys.path.insert(0, str(WORKSPACE))
 
 from scripts.utils import daemon_heartbeat  # noqa: E402
 from scripts.utils import trace  # noqa: E402
+from scripts.utils.scheduler_defaults import JOB_DEFAULTS  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_env  # noqa: E402
 
@@ -224,7 +225,8 @@ async def _run_daemon(logger: logging.Logger) -> None:
     # rejects getUpdates with 409 Conflict while a webhook is registered.
     webhook_enabled = os.environ.get("FIRESIDE_WEBHOOK_ENABLED", "").lower() in ("1", "true", "yes")
 
-    scheduler = AsyncIOScheduler(timezone=get_default_tz())
+    scheduler = AsyncIOScheduler(timezone=get_default_tz(),
+                                 job_defaults=JOB_DEFAULTS)
     for name, spec in JOB_SPECS.items():
         if name == "poll" and webhook_enabled:
             logger.info("webhook mode: skipping poll cron job")

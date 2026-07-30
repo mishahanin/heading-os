@@ -808,7 +808,10 @@ async def _run_daemon(logger: logging.Logger, skill_filter: str | None,
     from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-not-found]
     from apscheduler.triggers.interval import IntervalTrigger  # type: ignore[import-not-found]
 
-    scheduler = AsyncIOScheduler(timezone=get_default_tz())
+    from scripts.utils.scheduler_defaults import JOB_DEFAULTS
+
+    scheduler = AsyncIOScheduler(timezone=get_default_tz(),
+                                 job_defaults=JOB_DEFAULTS)
 
     def _job():
         try:

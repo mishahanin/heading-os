@@ -9,6 +9,7 @@ Run: python3 -m pytest tests/test_git_push.py
 """
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -353,6 +354,24 @@ def _clear_visibility_cache():
     git_push._VIS_CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_network(monkeypatch):
+    """No test in this file may reach the real GitHub API.
+
+    The property held only by construction: every Check B test patches
+    _gh_visibility and the rest return at a host or path guard. A future test
+    pointing a repository at a github.com URL without patching would issue a
+    REAL authenticated request, because the chokepoint resolves a token through
+    load_gh_token(), which reads the operator's own .env. Enforce it instead.
+    """
+    def _refuse(*_args, **_kwargs):
+        raise AssertionError(
+            "a test tried to open a real network connection; patch "
+            "_gh_visibility instead")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _refuse)
+
+
 def _aimed_at(monkeypatch, tmp_path, url: str):
     """A DATA overlay in a split topology, pointed at *url*."""
     _engine_remote, engine = _make_repo(tmp_path / "e")
@@ -478,3 +497,45 @@ def test_visibility_is_unanswerable_for_a_non_github_host():
 def test_visibility_is_unanswerable_for_a_path_that_is_not_owner_repo():
     assert git_push._gh_visibility("github.com/owner") is None
     assert git_push._gh_visibility("github.com/owner/repo/extra") is None
+
+
+@pytest.mark.parametrize("body", ["null", "[]", '"a string"', "17"])
+def test_a_json_body_that_is_not_an_object_fails_open(monkeypatch, tmp_path, body):
+    """A 200 from an intercepting proxy must not abort the backup. Escaping here
+    killed the whole run, and DATA is pushed first, so nothing was pushed."""
+
+    class _Resp:
+        def read(self):
+            return body.encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _Resp())
+    assert git_push._gh_visibility("github.com/owner/repo") is None
+
+
+def test_a_truncated_response_fails_open(monkeypatch, tmp_path):
+    """IncompleteRead is an HTTPException, not an OSError, so it matched no
+    clause and escaped. A flaky uplink must not abort a backup."""
+    import http.client
+
+    def _truncated(*_a, **_k):
+        raise http.client.IncompleteRead(b"partial")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _truncated)
+    assert git_push._gh_visibility("github.com/owner/repo") is None
+
+
+def test_a_bad_status_line_fails_open(monkeypatch, tmp_path):
+    """BadStatusLine comes out of getresponse(), which urllib does not wrap."""
+    import http.client
+
+    def _bad(*_a, **_k):
+        raise http.client.BadStatusLine("garbage")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _bad)
+    assert git_push._gh_visibility("github.com/owner/repo") is None

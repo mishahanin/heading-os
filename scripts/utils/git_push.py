@@ -21,6 +21,7 @@ Auth is flexible so each caller keeps its existing credential model:
 """
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -153,11 +154,23 @@ def _gh_visibility(normalized: str, *, token: Optional[str] = None) -> Optional[
     except HTTPError as exc:
         logger.debug("remote wall: HTTP %s for %s", exc.code, normalized)
         return None
-    except (URLError, OSError) as exc:
+    except (URLError, OSError, http.client.HTTPException) as exc:
+        # HTTPException is neither URLError nor OSError. IncompleteRead comes out
+        # of resp.read() on a truncated body, and BadStatusLine comes out of
+        # getresponse(), which urllib does not wrap. A flaky uplink is an ordinary
+        # event and must not abort a backup.
         logger.debug("remote wall: network error for %s: %s", normalized, exc)
         return None
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.debug("remote wall: bad JSON for %s: %s", normalized, exc)
+        return None
+    if not isinstance(data, dict):
+        # A 200 whose body is null, a list, or a scalar decodes without error and
+        # then has no .get. An intercepting proxy answering for api.github.com is
+        # enough to produce it. Escaping here would abort the whole backup, and
+        # DATA is attempted first, so nothing at all would be pushed. Not
+        # knowing the visibility is exactly the case this function fails open on.
+        logger.debug("remote wall: non-object body for %s", normalized)
         return None
     visibility = data.get("visibility")
     return visibility if visibility in ("public", "private", "internal") else None

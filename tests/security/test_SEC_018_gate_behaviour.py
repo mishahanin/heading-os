@@ -268,21 +268,31 @@ def test_the_gate_lets_ordinary_content_through():
 # every environment name the hook reads is extracted from its own text and the
 # whole sample sweep is re-run with each one set.
 #
-# Honest bound: this kills a rebind gated on truthiness, which is the shape
-# measured. A rebind gated on a specific VALUE (`== "production"`) reads a name
-# this finds but a value it does not guess, and would survive. Widening the
+# The extractor is the weak link, and it was weaker than this comment admitted.
+# Anchoring on the literal `os.` missed `import os as _o; _o.environ.get(...)`,
+# and matching only the two call forms missed `"NAME" in os.environ`. Both are
+# truthiness-gated, which is exactly the shape this claims to kill, and both
+# shipped 61 of 61 green with the gate off when a reviewer wrote them on
+# 2026-07-31. So the binding name is now any identifier and the membership
+# operator is modelled too.
+#
+# Honest bound, and it is narrower than it looks: a rebind gated on a specific
+# VALUE (`== "production"`) reads a name this finds but a value it does not
+# guess, and would survive. Measured and confirmed still true. Widening the
 # swept values is cheap if that ever shows up.
 # ---------------------------------------------------------------------------
 
 _ENV_NAME_RE = re.compile(
-    r"""os\.(?:environ\.get|getenv)\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']"""
-    r"""|os\.environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\]"""
+    r"""\w+\.(?:environ\.get|getenv)\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']"""
+    r"""|\w+\.environ\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\]"""
+    r"""|["']([A-Za-z_][A-Za-z0-9_]*)["']\s+(?:not\s+)?in\s+\w+\.environ"""
 )
 
 
 def _env_names_read_by_the_hook() -> list:
     source = _HOOK_UNDER_TEST.read_text(encoding="utf-8")
-    names = {m.group(1) or m.group(2) for m in _ENV_NAME_RE.finditer(source)}
+    names = {m.group(1) or m.group(2) or m.group(3)
+             for m in _ENV_NAME_RE.finditer(source)}
     return sorted(names)
 
 

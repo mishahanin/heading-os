@@ -89,11 +89,26 @@ SECRET_PATTERNS = [
 # The run before "://" is now BOUNDED to {0,31}. A URI scheme is short by
 # definition (RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ), and the
 # longest registered scheme is nowhere near 32), and a match starting inside a
-# longer run still fires because the engine also tries later start positions.
-# Measured on an unbroken 400,000-character run: unbounded did not finish inside
-# two minutes, bounded takes 0.035s. Verdicts were differenced across every
-# tracked file in BOTH repositories, 5,067 files and 1,194,834 lines: ZERO
-# disagreements. The bound is a performance fix, not a coverage change.
+# longer run usually still fires because the engine also tries later start
+# positions. Measured on an unbroken 400,000-character run: unbounded did not
+# finish inside two minutes, bounded takes 0.035s. Verdicts were differenced
+# across every tracked file in BOTH repositories, 5,067 files and 1,194,834
+# lines: ZERO disagreements.
+#
+# ONE CLASS IS GENUINELY LOST, and saying "not a coverage change" here was
+# wrong. The first character class is [a-zA-Z] while the run is [a-zA-Z0-9+.-],
+# so a later start position must land on an ASCII LETTER. When 32 or more
+# consecutive characters drawn from [0-9+.-] sit immediately before "://" and
+# the nearest letter is further back than that, there is no legal later start
+# and the match is gone. Measured shape, described rather than written out
+# because writing it out is a credential-shaped literal the gate refuses: a
+# hyphenated word, then thirty-six digits, then a scheme separator and an
+# ordinary userinfo pair. Bounded returns no match where unbounded returned one.
+# Every ordinary scheme is
+# unaffected, which is why the 5,067-file differential is silent, and no
+# realistic file was found with this shape. It is written down because a wall's
+# comment claiming a stronger property than it holds is how the next author
+# decides not to re-check.
 #
 # The guard stays, because it is still free and still O(n) on needle-free text:
 #

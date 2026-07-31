@@ -158,12 +158,19 @@ SECRETS_ALLOW_HOOK_BASENAMES = {
 SECRETS_ALLOW_UTILS_BASENAMES = {
     "secret_patterns.py",
 }
-# Path-scoped allow: only honoured when the file lives inside scripts/.
+# WORKSPACE-EXACT allow, not a directory scope. `scripts/` is an ordinary
+# directory name, so a segment match would leave a decoy at
+# outputs/scratch/scripts/secret-scanner.py unscanned, which is a smaller
+# version of the basename-anywhere hole this file just closed. These are exact
+# repo-relative paths, matching the scanner's own SKIP_PATHS rather than
+# widening past it.
+#
 # secret-scanner.py has held ZERO re.compile calls since the vocabulary moved to
 # scripts/utils/secret_patterns.py, so "mirror of these patterns" stopped
-# describing it; it is kept, path-scoped, to match the scanner's own SKIP_PATHS.
-SECRETS_ALLOW_SCRIPTS_BASENAMES = {
-    "secret-scanner.py",
+# describing it; it is kept because the scanner skips it by path and the two
+# walls agreeing is worth more than removing an allowance that costs nothing.
+SECRETS_ALLOW_WORKSPACE_PATHS = {
+    "scripts/secret-scanner.py",
 }
 # Directory allow-list. Matched as path SEGMENTS, not raw substrings, so a
 # look-alike like `mytests/security/` or `my.sessions/` does NOT slip past the
@@ -187,6 +194,11 @@ def _under_dir(normalized: str, segment: str) -> bool:
     return normalized.startswith(segment) or ("/" + segment) in normalized
 
 
+def _is_workspace_file(normalized: str, rel: str) -> bool:
+    """True only for THIS workspace's own copy of `rel`, absolute or relative."""
+    return normalized == rel or normalized == (WORKSPACE / rel).as_posix()
+
+
 def _secrets_path_allowed(file_path: str) -> bool:
     # Normalize FIRST so a Windows-style backslash path resolves its basename
     # correctly even on Linux (os.path.basename does not split on "\" off Windows).
@@ -196,7 +208,7 @@ def _secrets_path_allowed(file_path: str) -> bool:
         return True
     if basename in SECRETS_ALLOW_UTILS_BASENAMES and _under_dir(normalized, "scripts/utils/"):
         return True
-    if basename in SECRETS_ALLOW_SCRIPTS_BASENAMES and _under_dir(normalized, "scripts/"):
+    if any(_is_workspace_file(normalized, rel) for rel in SECRETS_ALLOW_WORKSPACE_PATHS):
         return True
     # Exact .env basename set only — `.env` and dotted variants (`.env.local`,
     # `.env.production`), but NOT look-alikes like `.envil` or `.environment`.

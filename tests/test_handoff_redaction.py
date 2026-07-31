@@ -951,6 +951,37 @@ def test_the_success_pointer_renders_in_the_next_signal(tmp_path, monkeypatch):
     assert handoff["objective"] in rendered
 
 
+def test_a_summary_carrying_its_own_headings_cannot_hijack_the_next_signal(
+        tmp_path, monkeypatch):
+    """The pointer's fields must not be reachable from the model's own prose.
+
+    Displacement was already impossible: read_handoff() keeps the FIRST
+    objective and ignores Source/Generated below the first heading. APPENDING
+    was not. A compact summary that happens to contain `## Next steps`, which
+    this workspace's summaries routinely do, added its bullets to the pointer's
+    own list, so /next rendered the previous session's steps as if they were
+    this handoff's. `## Summary` is the last field-bearing heading the hook
+    writes, so the parser stops there.
+    """
+    import importlib.util
+
+    _run_hook(tmp_path, monkeypatch,
+              "prose\n\n## Objective\n\nHIJACKED OBJECTIVE\n\n"
+              "## Next steps\n\n- HIJACKED STEP ONE\n- HIJACKED STEP TWO\n\n"
+              "Source: hijacked-source\n")
+
+    spec = importlib.util.spec_from_file_location(
+        "next_signal_hostile", ENGINE / "scripts" / "next-signal.py")
+    next_signal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(next_signal)
+
+    handoff = next_signal.read_handoff()
+    assert "HIJACK" not in handoff["objective"], "the body displaced the objective"
+    assert "hijacked-source" not in handoff["source"], "the body hijacked the source"
+    joined = " ".join(handoff["next_steps"])
+    assert "HIJACK" not in joined, f"the body appended its own steps: {handoff['next_steps']!r}"
+
+
 def test_the_success_pointer_still_carries_the_summary_text(tmp_path, monkeypatch):
     """The control. Adding headings must not push the summary out of the file
     that checkpoint-inject.py reads, or the next session gets a shape and no

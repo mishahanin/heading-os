@@ -514,8 +514,14 @@ def test_the_prefilter_matches_at_runtime():
     ("mytests/security/planted.py", False),             # segment anchor
     ("tests/security/fixture.py", True),
     # scripts/secret-scanner.py -- the commit-time and push-time wall itself.
+    # Allowed WORKSPACE-EXACT, not by directory scope: `scripts/` is an ordinary
+    # directory name, so a segment match would leave a decoy under any nested
+    # scripts/ unscanned. The absolute form is covered by
+    # test_the_narrowed_allowances_still_cover_the_real_files, which uses the
+    # real workspace root; a foreign absolute root must NOT be allowed.
     ("scripts/secret-scanner.py", True),
-    ("/abs/root/scripts/secret-scanner.py", True),
+    ("/abs/root/scripts/secret-scanner.py", False),
+    ("outputs/scratch/scripts/secret-scanner.py", False),
     ("outputs/scratch/secret-scanner.py", False),
     ("knowledge/secret-scanner.py", False),
     ("myscripts/secret-scanner.py", False),             # segment anchor

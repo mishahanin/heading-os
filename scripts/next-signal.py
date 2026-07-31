@@ -82,6 +82,14 @@ def read_handoff() -> dict | None:
             out["generated"] = s.split(":", 1)[1].strip()
         elif s.startswith("## "):
             section = s[3:].strip().lower()
+            # `## Summary` is the last field-bearing heading the checkpoint hook
+            # writes, and everything below it is the model's own prose, which
+            # routinely carries its own `## Next steps`. Without this latch those
+            # bullets APPEND to the list above, so /next renders the previous
+            # session's steps as if they were this handoff's. Measured: a summary
+            # containing that heading produced four steps, two of them the body's.
+            if section == "summary":
+                break
         elif s and section == "objective" and not out["objective"]:
             out["objective"] = s
         elif s and section == "next steps" and (s[0].isdigit() or s.startswith(("-", "*"))):

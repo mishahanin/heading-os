@@ -246,3 +246,75 @@ def test_a_repo_with_no_remote_at_all_raises_no_objection(tmp_path):
 
     assert push_all.remote_objection(repo) is None
     assert push_all.push_repo("DATA", repo, "m", False, True, {}) is None
+
+
+# ============================================================
+# The composition: a REAL objection reaching a real exit code
+#
+# Promoted from tests/contract/2026-07-30-remote-identity-wall/, the frozen
+# contract of the slice that introduced the wall. Unchanged apart from this
+# banner. Every other refusal test above stubs remote_objection, so the two
+# legs -- an objection is produced, an objection becomes exit 2 -- are each
+# proved and their join is not. A wall wired to a consumer that never calls it
+# passes all of them and protects nothing. These two measure the join.
+# ============================================================
+
+def _split_repo_aimed_at_the_engine(monkeypatch, tmp_path):
+    """A DATA overlay whose origin is the ENGINE's bare remote, posed split.
+
+    The pose is patched on git_push because that is where the wall reads the
+    two roots from, and push_all imported the function itself rather than the
+    module, so the roots must be moved where the function looks for them.
+    """
+    import scripts.utils.git_push as git_push
+
+    def _make(base, label):
+        remote, work = base / "remote.git", base / label
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "init", "-b", "main", str(work)],
+                       check=True, capture_output=True)
+        _git(work, "config", "user.email", "builder@example.invalid")
+        _git(work, "config", "user.name", "Builder")
+        (work / "f.txt").write_text("x\n", encoding="utf-8")
+        _git(work, "add", "-A")
+        _git(work, "commit", "-m", "one")
+        _git(work, "remote", "add", "origin", str(remote))
+        return remote, work
+
+    engine_remote, engine = _make(tmp_path / "e", "engine")
+    _data_remote, data = _make(tmp_path / "d", "data-overlay")
+    monkeypatch.setattr(git_push, "get_workspace_root", lambda: engine)
+    monkeypatch.setattr(git_push, "get_data_root", lambda: data)
+    _git(data, "remote", "set-url", "origin", str(engine_remote))
+    return engine_remote, data
+
+
+def test_push_all_exits_2_on_a_real_objection_end_to_end(monkeypatch, tmp_path):
+    """dry_run is True on purpose: the refusal must be reported by a preview as
+    well, and evaluating a precondition writes nothing, so the honest preview
+    and the safe test are the same run."""
+    _engine_remote, data = _split_repo_aimed_at_the_engine(monkeypatch, tmp_path)
+
+    with pytest.raises(SystemExit) as caught:
+        push_all.push_repo("DATA", data, "m", False, True, {})
+    assert caught.value.code == 2
+
+
+def test_the_end_to_end_refusal_pushes_nothing(monkeypatch, tmp_path):
+    """Refuse, then push, is not a wall. The bare remote must stay empty.
+
+    The failing output of this test at freeze time was the defect itself:
+    "pushed & verified [0 0] in sync with origin/main". The overlay reached the
+    engine's remote in a sandbox.
+    """
+    engine_remote, data = _split_repo_aimed_at_the_engine(monkeypatch, tmp_path)
+
+    with pytest.raises(SystemExit):
+        push_all.push_repo("DATA", data, "m", False, False, {})
+    has_main = subprocess.run(
+        ["git", "-C", str(engine_remote), "show-ref", "--verify",
+         "refs/heads/main"],
+        capture_output=True,
+    )
+    assert has_main.returncode != 0

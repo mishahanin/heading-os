@@ -363,6 +363,28 @@ def test_supervised_push_refuses_a_data_repo_aimed_at_the_engine_remote(
     assert no_main.returncode != 0
 
 
+# Promoted from tests/contract/2026-07-30-remote-identity-wall/, the frozen
+# contract of the slice that introduced the wall. Unchanged apart from this
+# banner. Its sibling above proves the chokepoint refuses; nothing else in the
+# suite proved it still lets the correct case through under a split pose, and a
+# wall that fails the normal case is worse than no wall.
+def test_a_correctly_configured_repo_still_pushes(monkeypatch, tmp_path):
+    """The do-not-break term, asserted through the real push.
+
+    Through the push and not only through the predicate: the chokepoint is
+    where the wall is wired, and a wrong verdict SHAPE there would fail the
+    push while remote_objection itself looked fine.
+    """
+    _engine_remote, engine = _make_repo(tmp_path / "e")
+    _data_remote, data = _make_repo(tmp_path / "d")
+    _pose_as_split(monkeypatch, engine, data)
+
+    assert git_push.remote_objection(data) is None
+    verdict = supervised_push(data, branch="main", stall_window=15)
+    assert verdict["state"] == "ok", verdict
+    assert ahead_behind(data, "origin", "main") == (0, 0)
+
+
 # ============================================================
 # Remote identity: Check B, the property itself
 # ============================================================

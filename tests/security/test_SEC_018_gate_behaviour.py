@@ -40,6 +40,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -338,6 +339,38 @@ def test_no_absent_environment_variable_can_switch_the_gate_off(env_name):
             f"without {env_name} the block does not name {description!r}: "
             f"{decision.get('reason')!r}"
         )
+
+
+def test_the_gate_answers_a_large_write_inside_its_own_timeout():
+    """A blocking gate that does not answer in time does not block.
+
+    The PreToolUse hook is configured with a 30 second timeout in
+    .claude/settings.local.json, and a timed-out hook produces no decision,
+    which the harness reads as no objection. So an input the gate cannot finish
+    scanning is a BYPASS of the gate, reached by writing a large file rather
+    than by defeating any pattern.
+
+    Measured before the connection-string scheme run was bounded: an unbroken
+    run of scheme-legal characters cost 5.8s at 100 KB and grew quadratically,
+    so roughly 250 KB crossed the timeout. Unbounded did not finish 400 KB
+    inside two minutes; bounded answers it in milliseconds.
+
+    The budget here is deliberately far below the real 30 seconds. A regression
+    that reintroduces quadratic growth blows past 10 seconds long before it
+    reaches the timeout, and a test that only failed AT the timeout would let
+    the gate get slow enough to be flaky in production first.
+    """
+    pathological = "https://" + ("a" * 400_000)
+    started = time.perf_counter()
+    decision = _run_gate(_write_payload(pathological))
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 10.0, (
+        f"the gate took {elapsed:.1f}s on a 400 KB write; the configured "
+        f"PreToolUse timeout is 30s and a timed-out hook does not block")
+    # No credential in it, so the correct answer is to allow, promptly.
+    assert decision.get("decision") != "block", (
+        f"a run of ordinary characters was blocked: {decision!r}")
 
 
 def test_the_gate_still_refuses_with_every_pytest_marker_removed():

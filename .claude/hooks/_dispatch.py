@@ -102,7 +102,7 @@ SECRET_PATTERNS = [
     # JWT, PEM private keys, and credentialed connection strings (F-L3; mirror in secret-scanner.py)
     (re.compile(r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
     (re.compile(r'-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'), "PEM private key"),
-    (re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]*://(?!user:pass(?:word)?@|username:password@)[^:@\s/?]{2,}:[^:@\s/?]{2,}@'), "connection string with inline credentials"),
+    (re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]{0,31}://(?!user:pass(?:word)?@|username:password@)[^:@\s/?]{2,}:[^:@\s/?]{2,}@'), "connection string with inline credentials"),
     (re.compile(
         r'\*\*Password:\*\*\s+'
         r'(?!Stored|REDACTED|N/A|See |TBD|Change|Reset|Set |Use |Your )'

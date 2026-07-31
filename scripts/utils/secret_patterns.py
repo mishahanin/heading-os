@@ -45,7 +45,7 @@ SECRET_PATTERNS = [
     # JWT, PEM private keys, and credentialed connection strings (F-L3; mirror in _dispatch.py)
     (re.compile(r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
     (re.compile(r'-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'), "PEM private key"),
-    (re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]*://(?!user:pass(?:word)?@|username:password@)[^:@\s/?]{2,}:[^:@\s/?]{2,}@'), "connection string with inline credentials"),
+    (re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]{0,31}://(?!user:pass(?:word)?@|username:password@)[^:@\s/?]{2,}:[^:@\s/?]{2,}@'), "connection string with inline credentials"),
     # Markdown password fields with actual values (not placeholders)
     (re.compile(
         r'\*\*Password:\*\*\s+'
@@ -67,34 +67,38 @@ SECRET_PATTERNS = [
 # the quadratic start-position scan the regex engine performs otherwise.
 #
 # One entry, because one pattern was measured pathological at the pre-impl gate.
-# The connection-string pattern opens with [a-zA-Z][a-zA-Z0-9+.-]*:// , which
-# gives the engine no literal to anchor on, so it retries at every position:
+# The connection-string pattern opened with [a-zA-Z][a-zA-Z0-9+.-]*:// , giving
+# the engine no literal to anchor on, so it retried at every start position:
 #
 #     12,500 chars  0.14s      50,000 chars   1.79s
 #     25,000 chars  0.46s     100,000 chars   7.21s
 #                             200,000 chars  32.20s
 #
-# Doubling the input quadruples the time. The guard changes no verdict, and what
-# it buys depends entirely on whether the needle is present:
+# Doubling the input quadrupled the time. A possessive quantifier was tried and
+# REJECTED by measurement: 1.5x, still quadratic. The cost is the start-position
+# scan, not backtracking.
+#
+# THE GUARD ALONE WAS NOT ENOUGH, and saying otherwise here was wrong until
+# 2026-07-31. It skips the pattern only when "://" is ABSENT, and "://" appears
+# in essentially every real markdown file, so realistic input paid the quadratic
+# in full. That was LIVE: check_prevent_secrets in .claude/hooks/_dispatch.py
+# passes whole file content as ONE string, the PreToolUse timeout is 30 seconds,
+# and a timed-out hook returns no decision, which the harness reads as no
+# objection. The blocking secret gate failed OPEN on a large enough Write.
+#
+# The run before "://" is now BOUNDED to {0,31}. A URI scheme is short by
+# definition (RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ), and the
+# longest registered scheme is nowhere near 32), and a match starting inside a
+# longer run still fires because the engine also tries later start positions.
+# Measured on an unbroken 400,000-character run: unbounded did not finish inside
+# two minutes, bounded takes 0.035s. Verdicts were differenced across every
+# tracked file in BOTH repositories, 5,067 files and 1,194,834 lines: ZERO
+# disagreements. The bound is a performance fix, not a coverage change.
+#
+# The guard stays, because it is still free and still O(n) on needle-free text:
 #
 #   needle ABSENT   200,000 chars 0.00015s   1,000,000 chars 0.00068s
-#   needle PRESENT   12,500 chars 0.51s         50,000 chars 7.98s
-#                                             200,000 chars 39.79s
-#
-# So the guard protects only text carrying no "://" at all, and "://" appears in
-# essentially every real markdown file. On realistic input the quadratic cost is
-# still paid in full. It predates this module and fixing it is separate work;
-# what is written here is only what the guard actually does.
-#
-# This is LIVE today, not a hazard this slice introduces: check_prevent_secrets
-# in .claude/hooks/_dispatch.py passes whole file content as ONE string, so a
-# 200 KB Write already spends half a minute inside a blocking PreToolUse gate.
-# The scanner escapes it only by accident, because scan_file happens to iterate
-# line by line.
-#
-# A possessive quantifier was tried first and REJECTED by measurement: it gave
-# 1.5x and left the growth quadratic. The cost is the start-position scan, not
-# backtracking.
+#   needle PRESENT  400,000 chars 0.03477s   (bounded; unbounded did not finish)
 #
 # The other fifteen patterns open with a literal, so the engine already anchors
 # them and none needs an entry. Adding one that is not logically exact would

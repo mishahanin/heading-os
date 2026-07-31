@@ -117,7 +117,8 @@ SECRET_PATTERNS = [
         r'\s*=\s*'
         r'(?i:(?!'
         r'(?=[A-Za-z0-9_-]*(?:your|changeme|example|placeholder|redacted|dummy|x{3,}))'
-        r'[A-Za-z]+[0-9]{0,3}(?:[-_][A-Za-z]+[0-9]{0,3})*'
+        r'(?:[A-Za-z]+[0-9]{0,3}|[0-9]{1,4})'
+        r'(?:[-_](?:[A-Za-z]+[0-9]{0,3}|[0-9]{1,4}))*'
         r'(?![A-Za-z0-9!@#$%^&*_+=-])'
         r'))'
         r'[A-Za-z0-9!@#$%^&*_+=-]{8,}'
@@ -133,13 +134,21 @@ REQUIRED_SUBSTRING = {
     "connection string with inline credentials": "://",
 }
 
-# EVERY allowance below is PATH-SCOPED. There is deliberately no basename-wide
-# set any more: one existed until 2026-07-31 and allowed prevent-secrets.py,
-# secret-scanner.py and .env.example anywhere in EITHER repository, which was
-# measured against the live gate with a planted key in outputs/scratch/,
-# knowledge/ and crm/contacts/ — all three written successfully. The scanner
-# side (SKIP_PATHS in scripts/secret-scanner.py) already carried repo-relative
-# paths for the same three files; these sets are the hook's alignment with it.
+# Every allowance below is PATH-SCOPED, with ONE deliberate exception named
+# here rather than left for a reader to trip over: the `.env` / `.env.*` branch
+# in _secrets_path_allowed is basename-wide by design, because `git check-ignore`
+# confirms both repositories ignore those names at any depth, so such a file can
+# never be committed and never reaches a wall.
+#
+# For everything else there is deliberately no basename-wide set any more: one
+# existed until 2026-07-31 and allowed prevent-secrets.py, secret-scanner.py and
+# .env.example anywhere in EITHER repository, which was measured against the
+# live gate with a planted key in outputs/scratch/, knowledge/ and
+# crm/contacts/ — all three written successfully. The scanner side (SKIP_PATHS in
+# scripts/secret-scanner.py) already carried repo-relative paths for the same
+# three files; the WORKSPACE_PATHS set is the hook's alignment with it. The
+# directory set below has no scanner counterpart at all, so it is anchored on its
+# own terms.
 #
 # Every file below is allowed WORKSPACE-EXACT, never by containing directory.
 # `scripts/`, `.claude/hooks/` and `scripts/utils/` are all ordinary creatable
@@ -170,10 +179,19 @@ SECRETS_ALLOW_WORKSPACE_PATHS = {
     ".claude/hooks/_dispatch.py",
     ".claude/hooks/prevent-secrets.py",
 }
-# Directory allow-list. Matched as path SEGMENTS, not raw substrings, so a
-# look-alike like `mytests/security/` or `my.sessions/` does NOT slip past the
-# secret scan. Anchoring added 2026-06-09 audit (hooks finding — substring match
-# at SECRETS_ALLOW_PATHS bypassed the scan for any path merely CONTAINING the text).
+# Directory allow-list, anchored to THIS workspace's own directory, not to any
+# path that happens to contain the segment.
+#
+# Segment-anchoring alone was not enough, and this is the same hole one level up
+# from the basename set above. `tests/security/` and `.sessions/` are ordinary
+# creatable directory names, so while the old rule accepted any path merely
+# CONTAINING the segment, a decoy at outputs/scratch/tests/security/planted.py,
+# knowledge/tests/security/planted.md, outputs/scratch/.sessions/planted.json or
+# crm/contacts/.sessions/planted.md went unscanned. All four were measured
+# against the live gate and written successfully. The data-overlay case is the
+# live one: `git check-ignore` returns 1 for outputs/reports/tests/security/, so
+# such a decoy would be TRACKED, and unlike the basename hole the scanner's
+# SKIP_PATHS carries no counterpart for either directory at all.
 SECRETS_ALLOW_DIR_SEGMENTS = [
     ".sessions/",                      # OAuth tokens, Telegram sessions
     "tests/security/",                 # Security test fixtures
@@ -183,13 +201,15 @@ SECRETS_ALLOW_EXACT_PATHS = {
 }
 
 def _under_dir(normalized: str, segment: str) -> bool:
-    """True when `segment` is a segment-anchored directory prefix of the path.
+    """True only for THIS workspace's own `segment` directory, relative or absolute.
 
-    The segment must start at the path root or be preceded by a `/`, so
-    `tests/security/` matches `.../tests/security/x` but never
-    `.../mytests/security/x`.
+    Anchored at the workspace root, not merely at a `/`. A look-alike like
+    `mytests/security/x` was already excluded by the older segment anchoring;
+    what that anchoring still admitted was a REAL `tests/security/` nested
+    anywhere, e.g. outputs/scratch/tests/security/x.py. See the comment on
+    SECRETS_ALLOW_DIR_SEGMENTS for the measurement.
     """
-    return normalized.startswith(segment) or ("/" + segment) in normalized
+    return normalized.startswith((segment, WORKSPACE.as_posix() + "/" + segment))
 
 
 def _is_workspace_file(normalized: str, rel: str) -> bool:

@@ -106,12 +106,40 @@ def _run_scanner(scripts_dir, tmp_path, filename, content):
     "ExampleValue",
     "placeholder-secret",
     "redacted-value",
+    # A pure-digit token is word shape too. These are ordinary template values,
+    # and admitting them costs the guarantee nothing: every bypass sample stays
+    # flagged either way (measured 2026-07-31).
+    "placeholder-secret-1",
+    "dummy_value_123",
 ])
 def test_env_password_placeholder_not_flagged(scripts_dir, tmp_path, placeholder):
     """Placeholder values in .env-style password assignments must NOT be flagged."""
     content = f"{_ENV_KEY}={placeholder}\n"
     assert _run_scanner(scripts_dir, tmp_path, "placeholder.env", content) == 0, (
         f"placeholder {placeholder!r} should not be flagged as a secret"
+    )
+
+
+@pytest.mark.parametrize("placeholder", [
+    "changeme123!",     # trailing symbol
+    "CHANGEME-NOW!",    # trailing symbol
+    "your-P4ssw0rd",    # digits inside a word
+    "example_p4ss",     # digits inside a word
+])
+def test_a_placeholder_that_breaks_word_shape_is_an_accepted_false_positive(
+        scripts_dir, tmp_path, placeholder):
+    """Pinned so the next author changes this deliberately, not by accident.
+
+    The whole-value exclusion admits placeholder SHAPE, and these break it. Such
+    a value cannot be told apart from a real password, so flagging is the safe
+    direction — but it is a hard refusal at both the write gate and the push
+    wall, so the cost is recorded here rather than discovered by an operator
+    whose push stopped. Write template values in word shape.
+    """
+    content = f"{_ENV_KEY}={placeholder}\n"
+    assert _run_scanner(scripts_dir, tmp_path, "fp.env", content) == 1, (
+        f"{placeholder!r} is no longer flagged; if that was deliberate, update "
+        f"the residual-false-positive note in scripts/utils/secret_patterns.py"
     )
 
 
@@ -557,6 +585,16 @@ def test_the_prefilter_matches_at_runtime():
     (".env.local", True),
     (".env.production", True),
     (".envil", False),
+    # A REAL tests/security/ or .sessions/ nested anywhere is not this
+    # workspace's own. Segment anchoring alone admitted all four of these; each
+    # was measured against the live gate and written successfully, and in the
+    # data overlay `git check-ignore` returns 1 for such a path, so the decoy
+    # would be TRACKED. The scanner's SKIP_PATHS carries no counterpart for
+    # either directory, so nothing downstream compensated.
+    ("outputs/scratch/tests/security/planted.py", False),
+    ("knowledge/tests/security/planted.md", False),
+    ("outputs/scratch/.sessions/planted.json", False),
+    ("crm/contacts/.sessions/planted.md", False),
 ])
 def test_the_path_allowance_is_segment_anchored(rel_path, allowed):
     mod = _load_dispatch_module()

@@ -91,6 +91,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   pointer carried none of the headings its parser reads. It carries them now,
   and the parser stops at the summary heading so the model's own prose cannot
   append its steps to the pointer's.
+- **The placeholder exclusion tested how a value BEGAN, not what it was.** All
+  seven word alternatives were defeated identically: a value that merely started
+  with a marker was excluded whole, however long and however random its tail, so
+  a real password prefixed `xxx` passed the commit hook, the blocking PreToolUse
+  gate AND the push-time content scan, then landed in a public repository. The
+  exclusion now fires only when the value TAKEN WHOLE has placeholder shape.
+  Measured across both repositories before shipping: 5089 files, 1327584 lines,
+  0 new positives, 0 regressions. The residual false positive is recorded and
+  pinned by a test rather than left for an operator to meet as a stopped push: a
+  placeholder that breaks word shape (`changeme123!`, `your-P4ssw0rd`) is
+  flagged, because such a value cannot be told apart from a real password.
+- **The same decoy hole the basename allowances carried was still open one level
+  up, for directory segments.** A planted key was written successfully to
+  `outputs/scratch/tests/security/`, `knowledge/tests/security/`,
+  `outputs/scratch/.sessions/` and `crm/contacts/.sessions/`; in the data
+  overlay such a path is not gitignored, so the decoy would have been tracked,
+  and the scanner's `SKIP_PATHS` carries no counterpart for either directory.
+  Both directory allowances are anchored to this workspace's own root now.
 - **The credential patterns existed in two hand-maintained copies that had
   already drifted:** the environment-password entry carried a placeholder
   exclusion in `scripts/secret-scanner.py` and not in

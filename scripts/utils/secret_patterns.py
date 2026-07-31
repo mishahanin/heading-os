@@ -66,22 +66,34 @@ SECRET_PATTERNS = [
     # - or _, carrying a marker somewhere. A real password breaks that shape at
     # the first letter/digit mix inside a word, with or without punctuation.
     #
-    # Two things to inherit rather than rediscover:
+    # Three things to inherit rather than rediscover:
     #   - The old `<` alternative was inert and is gone. `<` is not in the value
     #     class, so a value starting with it never reached the exclusion at all.
-    #   - Residual bound, like the {0,31} bound above: a real password that is
-    #     itself word-shaped and carries a marker ("dummy-horse-battery-staple")
-    #     is still excluded. Strictly smaller than the old hole, which admitted
-    #     any tail whatsoever.
+    #   - Residual FALSE NEGATIVE, like the {0,31} bound above: a real password
+    #     that is itself word-shaped and carries a marker
+    #     ("dummy-horse-battery-staple") is still excluded. Strictly smaller than
+    #     the old hole, which admitted any tail whatsoever.
+    #   - Residual FALSE POSITIVE, the direction that actually reaches an
+    #     operator: a PLACEHOLDER that breaks word shape is now flagged, e.g.
+    #     "changeme123!" (trailing symbol) or "your-P4ssw0rd" (digits inside a
+    #     word). Such a value cannot be told apart from a real password, so
+    #     flagging is the safe direction, but it lands as a hard refusal at BOTH
+    #     the write gate and the push wall, and it composes with the same-day
+    #     removal of `.env.example`'s path exemption. If a template needs one of
+    #     these shapes, write the placeholder in word shape. A pure-digit token
+    #     IS word shape ("placeholder-secret-1", "dummy_value_123"): those are
+    #     ordinary template values and admitting them costs the guarantee
+    #     nothing, measured — all 14 bypass samples stay flagged either way.
     #
-    # Measured before shipping, across both repositories: 5087 files, 1327251
+    # Measured before shipping, across both repositories: 5089 files, 1327584
     # lines, 0 new positives, 0 regressions.
     (re.compile(
         r'(?:EXCHANGE_PASSWORD|DB_PASSWORD|SMTP_PASSWORD|AUTH_PASSWORD)'
         r'\s*=\s*'
         r'(?i:(?!'
         r'(?=[A-Za-z0-9_-]*(?:your|changeme|example|placeholder|redacted|dummy|x{3,}))'
-        r'[A-Za-z]+[0-9]{0,3}(?:[-_][A-Za-z]+[0-9]{0,3})*'
+        r'(?:[A-Za-z]+[0-9]{0,3}|[0-9]{1,4})'
+        r'(?:[-_](?:[A-Za-z]+[0-9]{0,3}|[0-9]{1,4}))*'
         r'(?![A-Za-z0-9!@#$%^&*_+=-])'
         r'))'
         r'[A-Za-z0-9!@#$%^&*_+=-]{8,}'

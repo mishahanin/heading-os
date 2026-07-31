@@ -29,16 +29,7 @@ WORKSPACE = Path(__file__).resolve().parent.parent.parent
 STATE_PATH = WORKSPACE / ".claude" / "state" / "checkpoint-state.json"
 
 
-SOFT_BODY_RU = """\
-Контекст использован примерно на {used:.0f}% (~{remaining:.0f}% осталось).
-Можно зафиксировать checkpoint, чтобы потом продолжить с чистым контекстом.
-
-Варианты:
-1. `/checkpoint` - сохранить summary + continuation prompt в outputs/operations/handoff-archive/, без compact.
-2. `/compact` - запустить manual compact сейчас; post-compact hook сохранит summary автоматически.
-3. продолжать без compact - работа идёт как есть."""
-
-SOFT_BODY_EN = """\
+SOFT_BODY = """\
 Context is about {used:.0f}% used (~{remaining:.0f}% remaining).
 Consider checkpointing now so you can resume later with a fresh context.
 
@@ -48,17 +39,7 @@ Options:
 3. continue without compact - keep working as is."""
 
 
-HARD_BODY_RU = """\
-Контекст использован примерно на {used:.0f}% - достигнут жёсткий порог.
-Настоятельно рекомендуется checkpoint или compact перед продолжением.
-
-Рекомендуемые варианты:
-1. `/checkpoint` - сохранить summary + continuation prompt (сохраняет работу; контекст НЕ освобождает).
-2. `/compact` - запустить manual compact сейчас; post-compact hook сохранит summary, контекст освободится.
-
-Опцию «продолжать без compact» не предлагать."""
-
-HARD_BODY_EN = """\
+HARD_BODY = """\
 Context is about {used:.0f}% used - hard threshold reached.
 Strongly recommend a checkpoint or compact before continuing further.
 
@@ -70,43 +51,32 @@ Do not offer "continue without compact"."""
 
 
 REASON_WRAPPER = """\
-Использование контекста ~{used:.0f}%, достигнут порог checkpoint.
-
-НЕ запускай /compact автоматически.
-НЕ создавай файлы автоматически без явного одобрения пользователя.
-
-Покажи пользователю варианты:
-
-{body_ru}
-
-Жди решения пользователя.
-
----
-
 Context window usage is approximately {used:.0f}%, which crossed the project checkpoint threshold.
 
 Do not run /compact automatically.
 Do not create files automatically unless the user approves.
 
-Ask the user, briefly, with these options:
+Ask the user, briefly, with these options, in the language the user is speaking:
 
-{body_en}
+{body}
 
 Wait for the user's decision."""
 
 
 def build_reason(level: str, used: float, remaining: float) -> str:
-    """Render the offer reason. Each language section carries its OWN single-language
-    body so the options block appears once per language (not the doubled bilingual
-    body the old single {body} placeholder produced)."""
-    if level == "hard":
-        body_ru, body_en = HARD_BODY_RU, HARD_BODY_EN
-    else:
-        body_ru, body_en = SOFT_BODY_RU, SOFT_BODY_EN
+    """Render the offer reason, in English only.
+
+    The reason text is emitted on stderr and the operator sees it, so every
+    duplicate is a duplicate the operator reads. It carried a full Russian
+    section beside the English one, and the assistant's own answer made a third
+    rendering of the same three lines. English alone is the right single
+    language here: this hook ships in a public engine, and the wrapper asks for
+    the reply in whatever language the operator is actually speaking.
+    """
+    body = HARD_BODY if level == "hard" else SOFT_BODY
     return REASON_WRAPPER.format(
         used=used,
-        body_ru=body_ru.format(used=used, remaining=remaining),
-        body_en=body_en.format(used=used, remaining=remaining),
+        body=body.format(used=used, remaining=remaining),
     )
 
 

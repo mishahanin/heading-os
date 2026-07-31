@@ -348,11 +348,35 @@ Rules:
 3. Before making changes, briefly restate the current objective, constraints, files involved, and next concrete action.
 """
     elif quarantine_kind is None:
+        # The two headings are not decoration: scripts/next-signal.py's
+        # read_handoff() renders /next's strongest-signal block out of
+        # `## Objective` and `## Next steps`, and this pointer carried neither,
+        # so /next printed its handoff header over nothing after EVERY
+        # successful compact, for the whole life of the archive. Measured
+        # against the live archive on 2026-07-31: 20 of the 20 newest handoffs
+        # parsed to an empty objective and zero steps.
+        #
+        # The hook cannot know the session's objective, so it does not invent
+        # one. It states the one thing it does know, and points at the text
+        # that carries the rest. The summary keeps its own heading and stays
+        # last, so a body that happens to contain its own `## ` heading cannot
+        # displace the fields above it.
         summary_pointer = f"""# Latest handoff summary
 
 Source: {archive_ref}
 Generated: {now.isoformat()}
 Trigger: compact / {pointer_trigger}
+
+## Objective
+
+Resume the work this session was doing when it compacted. The full summary is under Summary below, and in the archive file named above.
+
+## Next steps
+
+- Read the archived handoff at {archive_ref} for the full summary.
+- Treat the repository state and the most recent commits as authoritative.
+
+## Summary
 
 {summary_text}
 """

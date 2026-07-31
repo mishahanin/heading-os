@@ -920,6 +920,47 @@ def test_the_quarantine_pointer_renders_in_the_next_signal(tmp_path, monkeypatch
     assert "QUARANTIN" in rendered.upper()
 
 
+def test_the_success_pointer_renders_in_the_next_signal(tmp_path, monkeypatch):
+    """The common case, which was blank while the rare alarm case was rich.
+
+    The quarantine pointer got the parseable shape first, so after that fix
+    /next rendered the FAILURE path better than the SUCCESS path. Measured
+    against the live archive: the 20 newest handoffs all parsed to an empty
+    objective and zero next steps, so /next has printed its handoff header over
+    nothing after every successful compact since the archive began.
+    """
+    import importlib.util
+
+    _run_hook(tmp_path, monkeypatch, "plain summary with nothing secret in it")
+
+    spec = importlib.util.spec_from_file_location(
+        "next_signal_success", ENGINE / "scripts" / "next-signal.py")
+    next_signal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(next_signal)
+
+    handoff = next_signal.read_handoff()
+    assert handoff is not None
+    assert handoff["source"], "the pointer names no source"
+    assert ".quarantine/" not in handoff["source"], "this is the success path"
+    assert handoff["objective"], "the handoff header renders over nothing"
+    assert handoff["next_steps"], "no next step was parsed"
+    assert handoff["source"] in " ".join(handoff["next_steps"]), (
+        "the steps do not point at the archive that was actually written")
+
+    rendered = next_signal.render_text({"handoff": handoff})
+    assert handoff["objective"] in rendered
+
+
+def test_the_success_pointer_still_carries_the_summary_text(tmp_path, monkeypatch):
+    """The control. Adding headings must not push the summary out of the file
+    that checkpoint-inject.py reads, or the next session gets a shape and no
+    content."""
+    module = _run_hook(tmp_path, monkeypatch, "a distinctive line of prose")
+
+    pointer = (module.LATEST_DIR / "summary.md").read_text(encoding="utf-8")
+    assert "a distinctive line of prose" in pointer
+
+
 def test_a_redactor_that_returns_a_non_string_quarantines_too(
         tmp_path, monkeypatch, capsys):
     """MINOR 5. The guarded import covers the RAISING failure only.

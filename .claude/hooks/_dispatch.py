@@ -120,7 +120,7 @@ SECRET_PATTERNS = [
 # the same reason the pattern list is. A pattern that cannot match without a
 # literal substring records it; testing the substring first is O(n) and changes
 # no verdict. Measured 2026-07-31: without it a 200 KB single-string scan costs
-# 32.2s here, with it 0.00015s.
+# 81.6s here, with it 0.00223s.
 REQUIRED_SUBSTRING = {
     "connection string with inline credentials": "://",
 }
@@ -128,13 +128,21 @@ REQUIRED_SUBSTRING = {
 SECRETS_ALLOW_BASENAMES = {
     "prevent-secrets.py",   # Legacy hook with the same pattern catalog; self-trigger if scanned
     "secret-scanner.py",    # Git pre-commit secret-scanner (mirror of these patterns)
-    "secret_patterns.py",   # The shared vocabulary; contains the patterns by definition
     ".env.example",         # Placeholder values only
 }
 # Path-scoped allow: only honoured when the file lives inside .claude/hooks/.
 # A file named _dispatch.py anywhere else (outputs/, scripts/) must still be scanned.
 SECRETS_ALLOW_HOOK_BASENAMES = {
     "_dispatch.py",
+}
+# Path-scoped allow: only honoured when the file lives inside scripts/utils/.
+# secret_patterns.py contains the patterns by definition and would self-trigger
+# if scanned; a file of that name anywhere else (a decoy, a planted secret) must
+# still be scanned. Narrowed from a basename-wide entry in SECRETS_ALLOW_BASENAMES
+# (any secret_patterns.py in either repo was unscanned) to match the scanner's
+# own SKIP_PATHS narrowing (scripts/secret-scanner.py) rather than contradict it.
+SECRETS_ALLOW_UTILS_BASENAMES = {
+    "secret_patterns.py",
 }
 # Directory allow-list. Matched as path SEGMENTS, not raw substrings, so a
 # look-alike like `mytests/security/` or `my.sessions/` does NOT slip past the
@@ -157,6 +165,10 @@ def _secrets_path_allowed(file_path: str) -> bool:
         return True
     if basename in SECRETS_ALLOW_HOOK_BASENAMES and (
         "/.claude/hooks/" in normalized or normalized.startswith(".claude/hooks/")
+    ):
+        return True
+    if basename in SECRETS_ALLOW_UTILS_BASENAMES and (
+        "/scripts/utils/" in normalized or normalized.startswith("scripts/utils/")
     ):
         return True
     # Exact .env basename set only — `.env` and dotted variants (`.env.local`,

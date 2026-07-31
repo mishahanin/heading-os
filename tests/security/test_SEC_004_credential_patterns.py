@@ -396,3 +396,117 @@ def test_pattern_descriptions_are_unique():
                     in _pattern_entries_from_source("scripts/utils/secret_patterns.py")]
     duplicates = {d for d in descriptions if descriptions.count(d) > 1}
     assert not duplicates, f"duplicate pattern descriptions: {duplicates}"
+
+
+# ---------------------------------------------------------------------------
+# The runtime companion to the AST ratchet.
+#
+# The AST test above (test_the_hook_and_the_shared_module_carry_the_same_patterns)
+# parses tree.body, matches only ast.Assign, and returns on the FIRST
+# SECRET_PATTERNS binding. Three ordinary constructs defeat it while the
+# runtime behaviour genuinely differs:
+#
+#   a) a second `SECRET_PATTERNS = [...]` (or `= []`) assigned later at module
+#      scope. The AST walk returns on the first match and never sees the
+#      rebind; the interpreter executes both assignments in order and keeps
+#      the LAST one. Ratchet green, runtime list wrong (or empty).
+#   b) `SECRET_PATTERNS += [...]` is an ast.AugAssign, not an ast.Assign, so
+#      the walk's `isinstance(node, ast.Assign)` check never matches it at
+#      all -- the entries it adds or drops are invisible to the AST test.
+#   c) `re.compile(pattern, flags=re.IGNORECASE)` passes flags as a keyword
+#      argument. The AST test reads flags positionally from `call.args[1]`,
+#      so a keyword-only flags argument never appears in what it compares.
+#
+# This test instead imports (executes) both files via the existing
+# _load_module_patterns helper and compares the actual compiled regex
+# objects the interpreter produced -- pattern text, compiled flags bitmask,
+# and description, in order. All three bypasses above change what this
+# comparison sees, because it observes the runtime result, not the source
+# shape.
+# ---------------------------------------------------------------------------
+
+def test_the_hook_and_the_shared_module_match_at_runtime():
+    """Runtime companion to the AST ratchet. Closes bypasses (a) trailing
+    rebind, (b) AugAssign, and (c) keyword-argument flags -- see module
+    docstring above for how each defeats the AST-only comparison."""
+    shared = _load_module_patterns("scripts/utils/secret_patterns.py")
+    hook = _load_module_patterns(".claude/hooks/_dispatch.py")
+
+    # Non-empty first, or a load failure on either side (getattr(..., [])
+    # default) would make the equality below vacuously true.
+    assert shared, "no patterns loaded from scripts/utils/secret_patterns.py"
+    assert hook, "no patterns loaded from .claude/hooks/_dispatch.py"
+
+    shared_sig = [(pat.pattern, pat.flags, desc) for pat, desc in shared]
+    hook_sig = [(pat.pattern, pat.flags, desc) for pat, desc in hook]
+    assert shared_sig == hook_sig, (
+        "runtime SECRET_PATTERNS diverged between the shared module and the "
+        "hook's embedded copy:\n"
+        f"  shared={shared_sig!r}\n"
+        f"  hook={hook_sig!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Control-flow tests for the mirrored prefilter, through check_prevent_secrets
+# itself.
+#
+# All the prefilter tests above compare DATA -- the REQUIRED_SUBSTRING dicts,
+# and needle exactness against a bare compiled pattern. None of them calls
+# _scan_for_secrets or check_prevent_secrets, so none exercises the hook's own
+# branch: `if needle is not None and needle not in text: continue`. Inverting
+# that condition to `needle in text` silently turns OFF connection-string
+# detection for every real connection string (the needle "://" IS present in
+# every real one, so the inverted branch skips the pattern precisely when it
+# should fire) while every existing test in this file stays green, because
+# none of them drives a Write or Bash payload through the function that owns
+# the branch.
+# ---------------------------------------------------------------------------
+
+def _load_dispatch_module():
+    """Import .claude/hooks/_dispatch.py fresh and return the live module
+    (not just its SECRET_PATTERNS), so its functions can be called directly."""
+    spec = importlib.util.spec_from_file_location(
+        "_dispatch_live", str(_ROOT / ".claude/hooks/_dispatch.py")
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _assembled_connection_string():
+    sep = "://"
+    return "postgresql" + sep + "dbuser" + ":" + "s3cr3tpass" + "@" + "db.example.com:5432/mydb"
+
+
+def test_check_prevent_secrets_blocks_write_with_connection_string():
+    """Write path: a connection-string credential in file content must be
+    blocked, with a reason naming the finding."""
+    mod = _load_dispatch_module()
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": "outputs/scratch/notes.txt",
+            "content": "conn = " + repr(_assembled_connection_string()),
+        },
+    }
+    result = mod.check_prevent_secrets(payload)
+    assert result is not None, "connection string in Write content was not blocked"
+    assert result["decision"] == "block"
+    assert "connection string with inline credentials" in result["reason"]
+
+
+def test_check_prevent_secrets_blocks_bash_with_connection_string():
+    """Bash path (the `command` key, no file_path): same credential, same
+    requirement."""
+    mod = _load_dispatch_module()
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": "psql " + _assembled_connection_string(),
+        },
+    }
+    result = mod.check_prevent_secrets(payload)
+    assert result is not None, "connection string in Bash command was not blocked"
+    assert result["decision"] == "block"
+    assert "connection string with inline credentials" in result["reason"]

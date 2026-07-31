@@ -42,6 +42,18 @@ Never include the actual credential value, even partially.
 
 (The former `protect-secure.py` vault air-gap hook was removed with the `_secure/` vault in Plan 5. Session sensitivity is now the fail-closed `SENSITIVE_MODE` flag — `scripts/utils/sensitive.py` — which suppresses observability and triggers external-API prompt sanitization; it is not a write-blocking hook.)
 
+**Generated artifacts are redacted at birth.** `.claude/hooks/checkpoint-save.py`
+runs the compact summary through `redact()` from `scripts/utils/secret_patterns.py`
+before writing the handoff archive, so a session that merely DISCUSSES a
+credential pattern cannot produce a tracked file that blocks its own backup.
+Redaction is best-effort and never costs the handoff; layer 6 remains the wall.
+
+The pattern vocabulary lives in `scripts/utils/secret_patterns.py`. The scanner
+and the redactor import it. `.claude/hooks/_dispatch.py` keeps an embedded copy
+on purpose, because a guarded import in the blocking PreToolUse gate would be
+fail-open, and `tests/security/test_SEC_004_credential_patterns.py` holds the two
+in lockstep.
+
 ### The commit hook is bypassable; the push scan is not
 
 `git commit --no-verify` (or `-n`) skips every pre-commit hook, and git offers no setting to forbid that flag — the hook file can also simply be deleted. So the commit-time gate can never be made truly mandatory on its own. **Never pass `--no-verify`.** The guarantee that secrets never reach a remote lives at the push layer (layer 6, pure code, both repos) and, for a server-side guarantee, in GitHub push protection / secret scanning enabled on both private repos. Treat the commit hook as a fast local warning, not the wall. Do NOT set `core.hooksPath` (a literal path value once silently bypassed every hook — see `reference/workspace-overview.md`).

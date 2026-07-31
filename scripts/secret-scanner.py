@@ -24,7 +24,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import RED, YELLOW, GREEN, BOLD, RESET
-from scripts.utils.secret_patterns import ALLOWLIST_TOKEN, SECRET_PATTERNS, iter_patterns
+from scripts.utils.secret_patterns import ALLOWLIST_TOKEN, iter_patterns
+from scripts.utils.paths import get_workspace_root
 
 # Binary/non-text extensions to skip
 SKIP_EXTENSIONS = {
@@ -38,11 +39,15 @@ SKIP_EXTENSIONS = {
     ".pen", ".session",
 }
 
-# Files that legitimately contain secret patterns (self-references, examples)
-SKIP_FILES = {
-    "secret-scanner.py",
-    "prevent-secrets.py",
-    "secret_patterns.py",   # the shared vocabulary; contains the patterns by definition
+# Files that legitimately contain secret patterns (self-references, examples).
+# Repo-relative paths, NOT basenames. A basename match blinds the scan to any
+# file of that name anywhere in either repository, which is a blind spot the
+# three original entries carried and Task 1 widened by one. Measured by the
+# Task 1 reviewer with a planted key in a nested file.
+SKIP_PATHS = {
+    "scripts/secret-scanner.py",
+    ".claude/hooks/prevent-secrets.py",
+    "scripts/utils/secret_patterns.py",
     ".env.example",
 }
 
@@ -53,15 +58,20 @@ def scan_file(filepath: str) -> list:
     Returns list of (line_num, pattern_desc) tuples. Never includes the actual secret.
     """
     findings = []
-    basename = os.path.basename(filepath)
     ext = os.path.splitext(filepath)[1].lower()
 
     # Skip binary files
     if ext in SKIP_EXTENSIONS:
         return findings
 
-    # Skip self-referencing files
-    if basename in SKIP_FILES:
+    # Skip self-referencing files. Repo-relative path match, not basename: a
+    # file outside the repository root (a /tmp fixture, for instance) has no
+    # relative path and is simply scanned.
+    try:
+        rel = Path(filepath).resolve().relative_to(get_workspace_root()).as_posix()
+    except ValueError:
+        rel = None
+    if rel in SKIP_PATHS:
         return findings
 
     try:

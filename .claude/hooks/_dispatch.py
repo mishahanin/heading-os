@@ -110,13 +110,25 @@ SECRET_PATTERNS = [
     ), "Plaintext password in markdown"),
     (re.compile(
         r'(?:EXCHANGE_PASSWORD|DB_PASSWORD|SMTP_PASSWORD|AUTH_PASSWORD)'
-        r'\s*=\s*[A-Za-z0-9!@#$%^&*_+=-]{8,}'
+        r'\s*=\s*'
+        r'(?!(?i:your[-_]|changeme|example|placeholder|redacted|dummy|xxx|<))'
+        r'[A-Za-z0-9!@#$%^&*_+=-]{8,}'
     ), "Password in environment variable assignment"),
 ]
+
+# Mirror of REQUIRED_SUBSTRING in scripts/utils/secret_patterns.py, embedded for
+# the same reason the pattern list is. A pattern that cannot match without a
+# literal substring records it; testing the substring first is O(n) and changes
+# no verdict. Measured 2026-07-31: without it a 200 KB single-string scan costs
+# 32.2s here, with it 0.00015s.
+REQUIRED_SUBSTRING = {
+    "connection string with inline credentials": "://",
+}
 
 SECRETS_ALLOW_BASENAMES = {
     "prevent-secrets.py",   # Legacy hook with the same pattern catalog; self-trigger if scanned
     "secret-scanner.py",    # Git pre-commit secret-scanner (mirror of these patterns)
+    "secret_patterns.py",   # The shared vocabulary; contains the patterns by definition
     ".env.example",         # Placeholder values only
 }
 # Path-scoped allow: only honoured when the file lives inside .claude/hooks/.
@@ -166,6 +178,9 @@ def _scan_for_secrets(text: str) -> Tuple[bool, Optional[str]]:
     if not text:
         return False, None
     for pattern, desc in SECRET_PATTERNS:
+        needle = REQUIRED_SUBSTRING.get(desc)
+        if needle is not None and needle not in text:
+            continue
         if pattern.search(text):
             return True, desc
     return False, None

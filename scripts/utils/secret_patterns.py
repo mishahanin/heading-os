@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Credential patterns, and the two operations over them.
 
-The single source of truth for what this workspace calls a secret. Two
-consumers import it: scripts/secret-scanner.py (the push-time and commit-time
-wall) and .claude/hooks/checkpoint-save.py (the redactor that keeps a generated
-handoff from ever blocking that wall).
+The single source of truth for what this workspace calls a secret. One
+consumer imports it today: scripts/secret-scanner.py (the push-time and
+commit-time wall). .claude/hooks/checkpoint-save.py (the redactor that keeps a
+generated handoff from ever blocking that wall) is the intended second
+consumer, wired in a later slice.
 
 A third consumer does NOT import it, on purpose. .claude/hooks/_dispatch.py is
 the blocking PreToolUse gate, and its own comments record why its one external
@@ -18,8 +19,8 @@ tests/security/test_SEC_004_credential_patterns.py holds the two in lockstep.
 
 That guard is not theoretical. The copies had already drifted twice before it
 existed: once on the {16,} threshold (fixed by hand under F-L4) and once on the
-placeholder lookahead of the environment-password entry, found on 2026-07-31 by
-parsing both files.
+placeholder lookahead of the environment-password entry, found AND closed on
+2026-07-31 by parsing both files.
 """
 import re
 

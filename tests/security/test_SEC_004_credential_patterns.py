@@ -243,3 +243,156 @@ def test_scanner_ignores_placeholder_connection_string(scripts_dir, tmp_path, sa
     assert _run_scanner(scripts_dir, tmp_path, "ph.txt", sample + "\n") == 0, (
         f"placeholder URI {sample!r} should not be flagged as a real credential (F-L3)"
     )
+
+
+# ---------------------------------------------------------------------------
+# The anti-drift ratchet.
+#
+# _dispatch.py deliberately does NOT import the shared module: it is the
+# blocking PreToolUse gate, and a guarded import that fell back to an empty
+# pattern list would be a fail-open hole in a security control. The copy is the
+# safe choice; the drift is what has to be made impossible to ship.
+#
+# Compared on the AST of each entry rather than on source text, so a reflowed
+# line or a changed comment does not read as drift and a changed regex does.
+#
+# Not hypothetical. The copies drifted twice before this guard existed: the
+# {16,} threshold (F-L4, above) and the placeholder lookahead on the
+# environment-password entry, measured on 2026-07-31.
+# ---------------------------------------------------------------------------
+
+import ast  # noqa: E402
+
+
+def _pattern_entries_from_source(rel_path: str):
+    """[(description, regex_source, flags_dump)] parsed from a file's source.
+
+    Parsed, never imported. _dispatch.py runs module-level code, and the
+    property under test is a property of the source text either way.
+    """
+    path = _ROOT / rel_path
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "SECRET_PATTERNS":
+                entries = []
+                for elt in node.value.elts:
+                    call, desc = elt.elts
+                    flags = ast.dump(call.args[1]) if len(call.args) > 1 else ""
+                    entries.append((desc.value, ast.dump(call.args[0]), flags))
+                return entries
+    raise AssertionError(f"SECRET_PATTERNS not found at module scope in {rel_path}")
+
+
+def test_the_hook_and_the_shared_module_carry_the_same_patterns():
+    """The one assertion that makes the embedded copy safe to keep."""
+    shared = _pattern_entries_from_source("scripts/utils/secret_patterns.py")
+    hook = _pattern_entries_from_source(".claude/hooks/_dispatch.py")
+
+    assert len(shared) == len(hook), (
+        f"pattern COUNT drifted: shared module has {len(shared)}, "
+        f".claude/hooks/_dispatch.py has {len(hook)}")
+
+    drifted = [
+        (i, s[0], h[0]) for i, (s, h) in enumerate(zip(shared, hook, strict=True), 1) if s != h
+    ]
+    assert not drifted, "pattern entries drifted:\n  " + "\n  ".join(
+        f"#{i}: shared={s!r} hook={h!r}" for i, s, h in drifted)
+
+
+def test_the_ratchet_actually_compares_something():
+    """A guard that silently parsed an empty list would pass forever."""
+    shared = _pattern_entries_from_source("scripts/utils/secret_patterns.py")
+    assert len(shared) >= 16
+    assert all(desc and src for desc, src, _flags in shared)
+
+
+def _required_substrings(rel_path: str) -> dict:
+    """REQUIRED_SUBSTRING as a plain dict, parsed from source."""
+    path = _ROOT / rel_path
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "REQUIRED_SUBSTRING":
+                return {k.value: v.value for k, v in zip(node.value.keys, node.value.values, strict=True)}
+    raise AssertionError(f"REQUIRED_SUBSTRING not found at module scope in {rel_path}")
+
+
+def test_the_prefilter_is_identical_in_both_copies():
+    """The prefilter is a second thing that must not drift, and it is more
+    dangerous than the patterns: an entry that is not logically exact silently
+    DISABLES a pattern rather than merely reporting a difference."""
+    shared = _required_substrings("scripts/utils/secret_patterns.py")
+    hook = _required_substrings(".claude/hooks/_dispatch.py")
+    assert shared == hook, f"prefilter drifted: shared={shared} hook={hook}"
+
+
+def test_every_prefilter_entry_names_a_real_pattern():
+    """A typo in a description key would make the entry dead rather than wrong,
+    which is the quiet failure. Keys must match a description that exists."""
+    shared = _required_substrings("scripts/utils/secret_patterns.py")
+    descriptions = {desc for desc, _src, _flags
+                    in _pattern_entries_from_source("scripts/utils/secret_patterns.py")}
+    unknown = set(shared) - descriptions
+    assert not unknown, f"prefilter names patterns that do not exist: {unknown}"
+
+
+@pytest.mark.parametrize("description,needle", [
+    ("connection string with inline credentials", "://"),
+])
+def test_every_prefilter_entry_is_logically_exact(description, needle):
+    """The entry is only safe if the pattern genuinely cannot match without the
+    needle. Asserted against the real pattern rather than trusted, because a
+    wrong entry turns a security control off without failing anything else."""
+    patterns = {d: p for p, d in
+                _load_module_patterns("scripts/utils/secret_patterns.py")}
+    pattern = patterns[description]
+    # Text that would otherwise be a match, with the needle removed.
+    sample = "https" + "x-access-token" + ":" + "value" + "@" + "host"
+    assert needle not in sample
+    assert pattern.search(sample) is None, (
+        f"{description!r} matched text containing no {needle!r}; the prefilter "
+        f"entry would suppress a real finding")
+
+
+@pytest.mark.parametrize("placeholder", [
+    "your-email-password",
+    "your_password",
+    "changeme123",
+    "<your-password>",
+    "ExampleValue",
+    "placeholder-secret",
+    "redacted-value",
+])
+def test_dispatch_env_password_placeholder_not_flagged(placeholder):
+    """The twin the suite was missing. Its absence is why the drift survived:
+    the tests were asymmetric in exactly the place the code was."""
+    patterns = _load_module_patterns(".claude/hooks/_dispatch.py")
+    # Without this line the test is vacuously satisfiable: _load_module_patterns
+    # ends in getattr(mod, "SECRET_PATTERNS", []), so a load failure yields an
+    # empty list, no hits, and a green "nothing was flagged" that proves nothing.
+    assert patterns, "no patterns loaded from _dispatch.py"
+    line = _ENV_KEY + "=" + placeholder
+    hits = [desc for pattern, desc in patterns if pattern.search(line)]
+    assert not hits, f"placeholder {placeholder!r} flagged by the hook as {hits}"
+
+
+def test_dispatch_env_password_real_value_still_flagged():
+    """The reconciliation must not cost the hook its real-value detection."""
+    patterns = _load_module_patterns(".claude/hooks/_dispatch.py")
+    line = _ENV_KEY + "=" + "Hunter2" + "!" + "xKQ9mZ"
+    hits = [desc for pattern, desc in patterns if pattern.search(line)]
+    assert "Password in environment variable assignment" in hits
+
+
+def test_pattern_descriptions_are_unique():
+    """REQUIRED_SUBSTRING is keyed by description, so a duplicate description
+    would apply one pattern's prefilter to another and disable it silently."""
+    descriptions = [desc for desc, _src, _flags
+                    in _pattern_entries_from_source("scripts/utils/secret_patterns.py")]
+    duplicates = {d for d in descriptions if descriptions.count(d) > 1}
+    assert not duplicates, f"duplicate pattern descriptions: {duplicates}"

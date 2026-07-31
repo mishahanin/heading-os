@@ -18,13 +18,13 @@ Used by:
 """
 
 import sys
-import re
 import os
 import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import RED, YELLOW, GREEN, BOLD, RESET
+from scripts.utils.secret_patterns import ALLOWLIST_TOKEN, SECRET_PATTERNS, iter_patterns
 
 # Binary/non-text extensions to skip
 SKIP_EXTENSIONS = {
@@ -42,46 +42,9 @@ SKIP_EXTENSIONS = {
 SKIP_FILES = {
     "secret-scanner.py",
     "prevent-secrets.py",
+    "secret_patterns.py",   # the shared vocabulary; contains the patterns by definition
     ".env.example",
 }
-
-# Inline allowlist token (same convention as Yelp/detect-secrets). A line carrying
-# this marker is an intentional, reviewed pattern (test fixtures, docs) and is skipped.
-ALLOWLIST_TOKEN = "pragma: allowlist secret"
-
-# Secret patterns: (compiled_regex, description)
-# Thresholds tuned to avoid matching placeholders like "sk-ant-your-key-here"
-SECRET_PATTERNS = [
-    # API key formats - require 16+ chars of key material after prefix (aligned with _dispatch.py, F-L4)
-    (re.compile(r'sk-ant-[a-zA-Z0-9_-]{16,}'), "Anthropic API key"),
-    (re.compile(r'pplx-[a-zA-Z0-9]{16,}'), "Perplexity API key"),
-    (re.compile(r'r8_[a-zA-Z0-9]{16,}'), "Replicate API token"),
-    (re.compile(r'fc-[A-Za-z0-9]{16,}'), "Firecrawl API key"),
-    (re.compile(r'ctx7sk-[a-zA-Z0-9-]{16,}'), "Context7 API key"),
-    (re.compile(r'ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
-    (re.compile(r'gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
-    (re.compile(r'AKIA[0-9A-Z]{16}'), "AWS access key"),
-    (re.compile(r'xoxb-[0-9]+-[a-zA-Z0-9]+'), "Slack bot token"),
-    (re.compile(r'xoxp-[0-9]+-[a-zA-Z0-9]+'), "Slack user token"),
-    (re.compile(r'ya29\.[A-Za-z0-9._-]{50,}'), "Google OAuth token"),
-    # JWT, PEM private keys, and credentialed connection strings (F-L3; mirror in _dispatch.py)
-    (re.compile(r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "JWT bearer token"),
-    (re.compile(r'-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'), "PEM private key"),
-    (re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]*://(?!user:pass(?:word)?@|username:password@)[^:@\s/?]{2,}:[^:@\s/?]{2,}@'), "connection string with inline credentials"),
-    # Markdown password fields with actual values (not placeholders)
-    (re.compile(
-        r'\*\*Password:\*\*\s+'
-        r'(?!Stored|REDACTED|N/A|See |TBD|Change|Reset|Set |Use |Your )'
-        r'[^\n]{8,}'
-    ), "Plaintext password in markdown"),
-    # Generic env-style password assignments with real values
-    (re.compile(
-        r'(?:EXCHANGE_PASSWORD|DB_PASSWORD|SMTP_PASSWORD|AUTH_PASSWORD)'
-        r'\s*=\s*'
-        r'(?!(?i:your[-_]|changeme|example|placeholder|redacted|dummy|xxx|<))'
-        r'[A-Za-z0-9!@#$%^&*_+=-]{8,}'
-    ), "Password in environment variable assignment"),
-]
 
 
 def scan_file(filepath: str) -> list:
@@ -110,7 +73,7 @@ def scan_file(filepath: str) -> list:
     for line_num, line in enumerate(lines, 1):
         if ALLOWLIST_TOKEN in line:
             continue
-        for pattern, desc in SECRET_PATTERNS:
+        for pattern, desc in iter_patterns(line):
             if pattern.search(line):
                 findings.append((line_num, desc))
                 break  # One finding per line is enough

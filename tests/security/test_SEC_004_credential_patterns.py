@@ -23,18 +23,22 @@ TEST_CREDENTIALS = {
 
 def test_secret_scanner_detects_firecrawl(scripts_dir):
     """secret-scanner.py must detect Firecrawl API keys with alphanumeric chars."""
-    content = read_file_content(scripts_dir / "secret-scanner.py")
+    # The vocabulary moved to scripts/utils/secret_patterns.py; the assertion is
+    # unchanged, only its target. The _dispatch.py twins below are unaffected.
+    content = read_file_content(scripts_dir / "utils" / "secret_patterns.py")
     # Must have a pattern that matches fc- followed by alphanumeric (not just hex)
     assert re.search(r'fc-\[.*[Aa].*[Zz]', content), (
-        "secret-scanner.py Firecrawl pattern must match alphanumeric characters, not just hex"
+        "secret_patterns.py Firecrawl pattern must match alphanumeric characters, not just hex"
     )
 
 
 def test_secret_scanner_detects_google_oauth(scripts_dir):
     """secret-scanner.py must detect Google OAuth tokens."""
-    content = read_file_content(scripts_dir / "secret-scanner.py")
+    # The vocabulary moved to scripts/utils/secret_patterns.py; the assertion is
+    # unchanged, only its target. The _dispatch.py twins below are unaffected.
+    content = read_file_content(scripts_dir / "utils" / "secret_patterns.py")
     assert "ya29" in content, (
-        "secret-scanner.py must have a pattern for Google OAuth tokens (ya29.*)"
+        "secret_patterns.py must have a pattern for Google OAuth tokens (ya29.*)"
     )
 
 

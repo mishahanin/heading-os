@@ -500,13 +500,27 @@ def test_the_prefilter_matches_at_runtime():
 # (outputs/scratch/secret-scanner.py, knowledge/prevent-secrets.py,
 # crm/contacts/.env.example). All three are path-scoped now, and the cases
 # below hold them there in both directions.
+#
+# The first narrowing reached one of the three allowance sets. `.claude/hooks/`
+# and `scripts/utils/` kept a containing-DIRECTORY scope, and both are ordinary
+# creatable directory names, so a decoy at
+# outputs/scratch/.claude/hooks/_dispatch.py or
+# outputs/scratch/scripts/utils/secret_patterns.py was allowed while the
+# identically shaped outputs/scratch/scripts/secret-scanner.py was blocked --
+# measured against the live gate on 2026-07-31. All four files are matched
+# WORKSPACE-EXACT now, so a foreign absolute root and any planted copy are
+# blocked, and the real files stay writable (asserted against the real root in
+# test_the_narrowed_allowances_still_cover_the_real_files).
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("rel_path,allowed", [
     ("scripts/utils/secret_patterns.py", True),
-    ("/abs/root/scripts/utils/secret_patterns.py", True),
-    ("scripts/utils/nested/secret_patterns.py", True),
+    ("/abs/root/scripts/utils/secret_patterns.py", False),
+    ("scripts/utils/nested/secret_patterns.py", False),
+    ("outputs/scratch/scripts/utils/secret_patterns.py", False),
     (".claude/hooks/_dispatch.py", True),
+    ("/abs/root/.claude/hooks/_dispatch.py", False),
+    ("outputs/scratch/.claude/hooks/_dispatch.py", False),
     ("myscripts/utils/secret_patterns.py", False),      # segment anchor
     ("outputs/scratch/secret_patterns.py", False),
     ("knowledge/notes/secret_patterns.py", False),
@@ -527,7 +541,8 @@ def test_the_prefilter_matches_at_runtime():
     ("myscripts/secret-scanner.py", False),             # segment anchor
     # .claude/hooks/prevent-secrets.py -- the runpy shim.
     (".claude/hooks/prevent-secrets.py", True),
-    ("/abs/root/.claude/hooks/prevent-secrets.py", True),
+    ("/abs/root/.claude/hooks/prevent-secrets.py", False),
+    ("outputs/scratch/.claude/hooks/prevent-secrets.py", False),
     ("knowledge/prevent-secrets.py", False),
     ("outputs/scratch/prevent-secrets.py", False),
     # .env.example is a TEMPLATE. It carries placeholders, so it needs no

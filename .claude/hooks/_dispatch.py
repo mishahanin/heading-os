@@ -133,44 +133,34 @@ REQUIRED_SUBSTRING = {
 # side (SKIP_PATHS in scripts/secret-scanner.py) already carried repo-relative
 # paths for the same three files; these sets are the hook's alignment with it.
 #
-# The hook cannot compare repo-relative paths the way the scanner does: it is
-# handed whatever the tool call carried (absolute, relative to a drifted shell,
-# or inside the sibling data repo), and it has no reliable root to subtract. So
-# it scopes by containing DIRECTORY instead, anchored on segment boundaries.
-# That is marginally wider than the scanner's exact-path match — it also covers
-# a nested scripts/utils/nested/secret_patterns.py — and deliberately so: the
-# hole being closed was basename-anywhere, not one directory level.
+# Every file below is allowed WORKSPACE-EXACT, never by containing directory.
+# `scripts/`, `.claude/hooks/` and `scripts/utils/` are all ordinary creatable
+# directory names, so a segment match leaves a decoy — outputs/scratch/scripts/
+# secret-scanner.py, outputs/scratch/.claude/hooks/_dispatch.py,
+# outputs/scratch/scripts/utils/secret_patterns.py — unscanned, which is a
+# smaller version of the basename-anywhere hole this file closed on the same
+# day. The first narrowing reached only the `scripts/` entry; the other two
+# stayed directory-scoped until the decoys were measured against the live gate
+# and written successfully. The one case the wider scope also covered, a nested
+# scripts/utils/nested/secret_patterns.py, exists nowhere in the tree.
 #
-# Path-scoped allow: only honoured when the file lives inside .claude/hooks/.
-# A file named _dispatch.py anywhere else (outputs/, scripts/) must still be
-# scanned. prevent-secrets.py sits here too: it is a 28-line runpy shim holding
-# no patterns at all, so the old "legacy hook with the same pattern catalog"
-# justification was never true — but the scanner skips it by path, and the two
-# walls agreeing is worth more than deleting an allowance that costs nothing.
-SECRETS_ALLOW_HOOK_BASENAMES = {
-    "_dispatch.py",
-    "prevent-secrets.py",
-}
-# Path-scoped allow: only honoured when the file lives inside scripts/utils/.
-# secret_patterns.py contains the patterns by definition and would self-trigger
-# if scanned; a file of that name anywhere else (a decoy, a planted secret) must
-# still be scanned.
-SECRETS_ALLOW_UTILS_BASENAMES = {
-    "secret_patterns.py",
-}
-# WORKSPACE-EXACT allow, not a directory scope. `scripts/` is an ordinary
-# directory name, so a segment match would leave a decoy at
-# outputs/scratch/scripts/secret-scanner.py unscanned, which is a smaller
-# version of the basename-anywhere hole this file just closed. These are exact
-# repo-relative paths, matching the scanner's own SKIP_PATHS rather than
-# widening past it.
+# These are exact repo-relative paths, matching the scanner's own SKIP_PATHS
+# rather than widening past it. _is_workspace_file honours the relative form and
+# THIS workspace's absolute form; a foreign absolute root is not this file.
 #
-# secret-scanner.py has held ZERO re.compile calls since the vocabulary moved to
-# scripts/utils/secret_patterns.py, so "mirror of these patterns" stopped
-# describing it; it is kept because the scanner skips it by path and the two
-# walls agreeing is worth more than removing an allowance that costs nothing.
+# Why each is exempt: secret_patterns.py holds the vocabulary by definition and
+# would self-trigger on every edit, and _dispatch.py embeds a copy of it for the
+# same reason. prevent-secrets.py is a 28-line runpy shim holding no patterns at
+# all, and secret-scanner.py has held ZERO re.compile calls since the vocabulary
+# moved out of it — so for those two the "same pattern catalog" justification
+# stopped being true; both are kept because the scanner skips them by path and
+# the two walls agreeing is worth more than removing an allowance that costs
+# nothing.
 SECRETS_ALLOW_WORKSPACE_PATHS = {
     "scripts/secret-scanner.py",
+    "scripts/utils/secret_patterns.py",
+    ".claude/hooks/_dispatch.py",
+    ".claude/hooks/prevent-secrets.py",
 }
 # Directory allow-list. Matched as path SEGMENTS, not raw substrings, so a
 # look-alike like `mytests/security/` or `my.sessions/` does NOT slip past the
@@ -204,10 +194,6 @@ def _secrets_path_allowed(file_path: str) -> bool:
     # correctly even on Linux (os.path.basename does not split on "\" off Windows).
     normalized = file_path.replace("\\", "/")
     basename = normalized.rsplit("/", 1)[-1]
-    if basename in SECRETS_ALLOW_HOOK_BASENAMES and _under_dir(normalized, ".claude/hooks/"):
-        return True
-    if basename in SECRETS_ALLOW_UTILS_BASENAMES and _under_dir(normalized, "scripts/utils/"):
-        return True
     if any(_is_workspace_file(normalized, rel) for rel in SECRETS_ALLOW_WORKSPACE_PATHS):
         return True
     # Exact .env basename set only — `.env` and dotted variants (`.env.local`,

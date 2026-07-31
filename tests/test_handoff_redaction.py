@@ -371,3 +371,173 @@ def test_a_quarantined_summary_never_reaches_the_tracked_pointer(
                if p.is_file() and module.QUARANTINE_DIR not in p.parents]
     for path in outside:
         assert "SENSITIVE-MARKER-" + "abc123" not in path.read_text(encoding="utf-8")
+
+
+# ============================================================
+# The alarm state: every channel around the quarantine must tell the truth
+# ============================================================
+
+def _raise_exploded(_text):
+    raise RuntimeError("redactor exploded")
+
+
+def _quarantine_run(tmp_path, monkeypatch, summary: str, redactor):
+    """Drive the hook down the quarantine branch with a chosen broken redactor."""
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+    monkeypatch.setattr(module, "redact", redactor)
+    _feed(module, monkeypatch, summary)
+    return module
+
+
+def _outside_quarantine(module):
+    return [p for p in module.HANDOFF_DIR.rglob("*")
+            if p.is_file() and module.QUARANTINE_DIR not in p.parents]
+
+
+def _system_message(capsys) -> tuple[str, str]:
+    """The hook's one stdout line, decoded, plus stderr."""
+    import json
+
+    captured = capsys.readouterr()
+    return json.loads(captured.out.strip().splitlines()[-1])["systemMessage"], captured.err
+
+
+def test_the_tracked_pointer_never_carries_the_exception_message(
+        tmp_path, monkeypatch, capsys):
+    """An exception MESSAGE is a channel that can carry the summary text.
+
+    The pointer at .latest/summary.md is tracked, and the whole point of the
+    quarantine is that nothing outside it reproduces the text that could not be
+    redacted. Interpolating `{exc}` there hands the text straight back into the
+    tracked tree by a side door.
+
+    Not reachable through today's redact(), whose every failure mode is a pure
+    str.split / pattern.sub with a fixed replacement template. It is reachable
+    the moment redact() is swapped or broken, which is the exact premise the
+    guarded import above exists on, and neither existing quarantine test can see
+    it because both raise RuntimeError("redactor exploded"), a message that
+    structurally cannot carry the summary.
+    """
+    marker = "LEAKY-MARKER-" + "xyz789"
+
+    def _boom_carrying_the_text(text):
+        raise ValueError("failed on input: " + text)
+
+    module = _quarantine_run(
+        tmp_path, monkeypatch, marker + " and some ordinary prose",
+        _boom_carrying_the_text)
+
+    for path in _outside_quarantine(module):
+        assert marker not in path.read_text(encoding="utf-8"), (
+            f"{path} carries the summary text via the exception message")
+
+    quarantined = [p for p in module.QUARANTINE_DIR.rglob("*") if p.is_file()]
+    assert quarantined, "the handoff was lost"
+    assert any(marker in p.read_text(encoding="utf-8") for p in quarantined)
+
+    _, err = _system_message(capsys)
+    assert marker in err, "the full exception must still reach stderr, which is not tracked"
+
+
+def test_the_quarantine_system_message_does_not_claim_a_save(
+        tmp_path, monkeypatch, capsys):
+    """Channel (a). The systemMessage is the ONE channel the operator and the
+    assistant actually see, and on the alarm path it reported a save and named a
+    file that was never written."""
+    module = _quarantine_run(tmp_path, monkeypatch, "plain summary",
+                             _raise_exploded)
+
+    message, _ = _system_message(capsys)
+    assert "Saved handoff" not in message, f"the alarm path claims a save: {message}"
+    assert "QUARANTIN" in message.upper(), f"the alarm is not named: {message}"
+
+    quarantined = next(p for p in module.QUARANTINE_DIR.rglob("*") if p.is_file())
+    rel = quarantined.relative_to(tmp_path).as_posix()
+    assert rel in message, f"the quarantine is not named: {message}"
+
+    # The dated archive genuinely does not exist, so no channel may name it.
+    assert not list(module.HANDOFF_DIR.glob("*.md"))
+
+
+def _handoff_refs(text: str) -> list[str]:
+    """Every handoff-archive path the artifact names, @-prefixed or bare."""
+    import re
+
+    return [m.rstrip(".,;:)").lstrip("@")
+            for m in re.findall(r"@?outputs/operations/handoff-archive/\S+", text)]
+
+
+def test_the_quarantine_continuation_prompt_names_no_file_that_was_never_written(
+        tmp_path, monkeypatch):
+    """Channel (b). The prompt told the next session to read a dated archive that
+    the quarantine branch never wrote."""
+    module = _quarantine_run(tmp_path, monkeypatch, "plain summary", _raise_exploded)
+
+    prompt = (module.LATEST_DIR / "prompt.md").read_text(encoding="utf-8")
+    refs = _handoff_refs(prompt)
+    assert refs, f"the prompt points the next session at nothing:\n{prompt}"
+    for ref in refs:
+        assert (tmp_path / ref).exists(), f"dangling reference {ref!r} in:\n{prompt}"
+
+    # And it must say plainly what state this is.
+    assert "QUARANTIN" in prompt.upper()
+    assert "UNREDACTED" in prompt.upper()
+
+
+def test_the_quarantine_state_entry_records_no_dangling_path(tmp_path, monkeypatch):
+    """Channel (c). checkpoint-state.json recorded the same nonexistent path."""
+    import json
+
+    module = _quarantine_run(tmp_path, monkeypatch, "plain summary", _raise_exploded)
+
+    cs = json.loads(module.STATE_PATH.read_text(encoding="utf-8"))
+    recorded = cs.get("last_compact_summary_path")
+    if recorded is not None:
+        assert (tmp_path / recorded).exists(), (
+            f"state records a path that was never written: {recorded!r}")
+
+
+def test_the_quarantine_pointer_renders_in_the_next_signal(tmp_path, monkeypatch):
+    """MINOR 3. read_handoff() parses Source / Generated / ## Objective /
+    ## Next steps, and the quarantine pointer carried none of them, so /next
+    printed the handoff header with nothing under it - the loudest surface the
+    operator has, rendering the alarm as blank."""
+    import importlib.util
+
+    _quarantine_run(tmp_path, monkeypatch, "plain summary", _raise_exploded)
+
+    spec = importlib.util.spec_from_file_location(
+        "next_signal_under_test", ENGINE / "scripts" / "next-signal.py")
+    next_signal = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(next_signal)
+
+    handoff = next_signal.read_handoff()
+    assert handoff is not None
+    assert ".quarantine/" in handoff["source"], (
+        f"the pointer does not name the quarantine as its source: {handoff['source']!r}")
+    assert handoff["objective"], "the alarm renders blank under the handoff header"
+
+    rendered = next_signal.render_text({"handoff": handoff})
+    assert "QUARANTIN" in rendered.upper()
+
+
+def test_a_redactor_that_returns_a_non_string_quarantines_too(
+        tmp_path, monkeypatch, capsys):
+    """MINOR 5. The guarded import covers the RAISING failure only.
+
+    A redact() that returns None never raises, so the archive was written with
+    the literal string "None" as its whole Summary section: the handoff
+    destroyed, zero stderr, and a systemMessage reporting success.
+    """
+    module = _quarantine_run(tmp_path, monkeypatch, "the real summary body",
+                             lambda _text: None)
+
+    quarantined = [p for p in module.QUARANTINE_DIR.rglob("*") if p.is_file()]
+    assert quarantined, "a non-raising broken redactor destroyed the handoff"
+    body = quarantined[0].read_text(encoding="utf-8")
+    assert "the real summary body" in body
+    assert "\nNone\n" not in body
+
+    message, err = _system_message(capsys)
+    assert "Saved handoff" not in message
+    assert "TypeError" in err

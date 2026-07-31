@@ -133,6 +133,14 @@ def main() -> int:
     stamp = now.strftime("%Y-%m-%d-%H%M%S")
     archive_name = f"{stamp}_handoff_compact-{trigger_slug}_{session_slug}.md"
     archive_path = HANDOFF_DIR / archive_name
+    quarantine_path = QUARANTINE_DIR / archive_name
+
+    # Data-root-relative refs. Every path any artifact NAMES is one of these
+    # three, so a channel can only name something that was actually written.
+    data_root = get_data_root()
+    archive_ref = archive_path.relative_to(data_root).as_posix()
+    quarantine_ref = quarantine_path.relative_to(data_root).as_posix()
+    summary_ref = (LATEST_DIR / "summary.md").relative_to(data_root).as_posix()
 
     # Redact BEFORE the text reaches any file. The archive is tracked, and a
     # credential-shaped string reaching it blocks push-all's content scan and
@@ -144,12 +152,28 @@ def main() -> int:
     # is worse than an unredacted one: the push-time scan still refuses to let
     # a real secret off the machine.
     summary_text = compact_summary or "_No compact summary provided._"
-    quarantine_reason = None
+    quarantine_kind = None
     try:
-        summary_text = redact(summary_text)
+        redacted = redact(summary_text)
+        # A redactor that RETURNS something broken never raises, so the guarded
+        # import above does not cover it. `redact` returning None wrote an
+        # archive whose entire Summary section was the literal string "None":
+        # the handoff destroyed, stderr silent, systemMessage reporting success.
+        # Raising routes that failure into the same quarantine as any other.
+        if not isinstance(redacted, str):
+            raise TypeError(
+                f"redact() returned {type(redacted).__name__}, expected str")
+        summary_text = redacted
     except Exception as exc:  # noqa: BLE001 - never lose the handoff
-        quarantine_reason = f"{type(exc).__name__}: {exc}"
-        print(f"checkpoint-save: redaction failed ({quarantine_reason}); "
+        # The TYPE goes to the tracked pointer; the MESSAGE goes to stderr only,
+        # and the split is the whole point. An exception message is a channel
+        # that can carry the summary text - `raise ValueError("failed on input: "
+        # + text)` is an ordinary shape - and the premise of the quarantine is
+        # that nothing outside it reproduces text that could not be redacted.
+        # stderr is not tracked, so the full message is safe there and nowhere
+        # else.
+        quarantine_kind = type(exc).__name__
+        print(f"checkpoint-save: redaction failed ({quarantine_kind}: {exc}); "
               f"QUARANTINING the handoff", file=sys.stderr)
 
     archive_md = f"""# Handoff - post-compact ({trigger})
@@ -169,7 +193,7 @@ Continue this Claude Code session from the saved handoff.
 
 First read:
 
-@{archive_path.relative_to(get_data_root()).as_posix()}
+@{archive_ref}
 
 Then continue the latest unfinished task.
 
@@ -185,20 +209,21 @@ This handoff was generated automatically after a {trigger} compact event.
 Repository state is authoritative; this file is supporting context.
 """
 
-    summary_pointer = f"""# Latest handoff summary
+    if quarantine_kind is None:
+        summary_pointer = f"""# Latest handoff summary
 
-Source: {archive_path.relative_to(get_data_root()).as_posix()}
+Source: {archive_ref}
 Generated: {now.isoformat()}
 Trigger: compact / {trigger}
 
 {summary_text}
 """
 
-    prompt_pointer = f"""Continue this Claude Code session from the saved handoff.
+        prompt_pointer = f"""Continue this Claude Code session from the saved handoff.
 
 First read:
 
-@{archive_path.relative_to(get_data_root()).as_posix()}
+@{archive_ref}
 
 Then continue the latest unfinished task.
 
@@ -208,11 +233,62 @@ Rules:
 3. Before making changes, briefly restate the current objective, constraints, files involved, and next concrete action.
 4. Continue implementation from the current repo state.
 """
+    else:
+        # The alarm state, written in the shape the readers actually parse.
+        #
+        # Source / Generated / "## Objective" / "## Next steps" are what
+        # scripts/next-signal.py read_handoff() looks for, and render_text()
+        # prints only the objective and the steps. A pointer carrying none of
+        # them made /next print its "Handoff (strongest signal)" header with
+        # nothing under it, so the loudest surface the operator has rendered the
+        # alarm as blank. Measured.
+        #
+        # Only the exception TYPE appears here. The message stays on stderr.
+        summary_pointer = f"""# Latest handoff summary
+
+Source: {quarantine_ref}
+Generated: {now.isoformat()}
+Trigger: compact / {trigger}
+
+## Objective
+
+REDACTION FAILED ({quarantine_kind}), so this handoff was QUARANTINED: it is NOT in the archive and NOT in the backup.
+
+## Next steps
+
+- Read the quarantined handoff at: {quarantine_path}
+- Treat it as UNREDACTED - it may carry live credentials, so never copy it into a tracked file.
+- Fix the redactor (scripts/utils/secret_patterns.py), then re-file the handoff into the archive once it redacts clean.
+
+## Notes
+
+The summary text is deliberately not reproduced here: this file is tracked, and copying an unredacted summary into it is the exact failure that made the quarantine necessary. The exception message is on stderr only, because a message can itself carry the summary text.
+"""
+
+        prompt_pointer = f"""Continue this Claude Code session from the QUARANTINED handoff.
+
+Redaction failed on the last compact, so no dated archive file was written. The
+full handoff text is UNREDACTED and quarantined outside the tracked tree at:
+
+{quarantine_ref}
+
+First read:
+
+@{summary_ref}
+
+Then continue the latest unfinished task.
+
+Rules:
+1. Treat repository state as authoritative.
+2. Do not redo broad discovery unless the summary is insufficient.
+3. Before making changes, briefly restate the current objective, constraints, files involved, and next concrete action.
+4. Continue implementation from the current repo state.
+5. Never copy the quarantined text into a tracked file.
+"""
 
     try:
-        if quarantine_reason is None:
+        if quarantine_kind is None:
             write_text_atomic(archive_path, archive_md)
-            write_text_atomic(LATEST_DIR / "summary.md", summary_pointer)
         else:
             # QUARANTINE, not a raw write into the tracked archive.
             #
@@ -229,18 +305,8 @@ Rules:
             # inject still tells the next session where to look and the tracked
             # tree stays clean. This is an alarm state, not the permanent hiding
             # that gitignoring the whole archive would have been.
-            QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
-            quarantined = QUARANTINE_DIR / archive_name
-            write_text_atomic(quarantined, archive_md)
-            write_text_atomic(LATEST_DIR / "summary.md", (
-                "# Latest handoff summary\n\n"
-                "REDACTION FAILED, so this handoff was QUARANTINED and is not "
-                "in the backup.\n\n"
-                f"Reason: {quarantine_reason}\n"
-                f"Quarantined at: {quarantined}\n\n"
-                "The summary text is deliberately not reproduced here: this file "
-                "is tracked, and copying an unredacted summary into it is the "
-                "exact failure that made the quarantine necessary.\n"))
+            write_text_atomic(quarantine_path, archive_md)
+        write_text_atomic(LATEST_DIR / "summary.md", summary_pointer)
         write_text_atomic(LATEST_DIR / "prompt.md", prompt_pointer)
     except Exception as exc:
         # Generic systemMessage; full exception goes to stderr to avoid
@@ -270,9 +336,12 @@ Rules:
                 "last_offered_bucket": 0,
                 "last_compact_at": now.isoformat(),
                 "last_compact_trigger": trigger,
-                "last_compact_summary_path": archive_path.relative_to(
-                    get_data_root()
-                ).as_posix(),
+                # The path that EXISTS. Recording the dated archive on the
+                # quarantine branch left a dangling pointer in state, naming a
+                # file no branch had written.
+                "last_compact_summary_path": (
+                    archive_ref if quarantine_kind is None else quarantine_ref
+                ),
             }
         )
         write_json_atomic(STATE_PATH, cs)
@@ -280,16 +349,19 @@ Rules:
         # State reset failure is non-fatal
         print(f"checkpoint-save: state reset failed: {exc}", file=sys.stderr)
 
-    print(
-        json.dumps(
-            {
-                "systemMessage": (
-                    f"Saved handoff: {archive_path.relative_to(get_data_root()).as_posix()}"
-                )
-            },
-            ensure_ascii=False,
+    # The one channel the operator and the assistant actually see. On the alarm
+    # path it used to report a save and name a file that was never written,
+    # which made the quarantine silent - and loudness is the entire reason to
+    # quarantine rather than write the summary raw.
+    if quarantine_kind is None:
+        message = f"Saved handoff: {archive_ref}"
+    else:
+        message = (
+            f"REDACTION FAILED ({quarantine_kind}): handoff QUARANTINED at "
+            f"{quarantine_ref}, unredacted and outside the backup. "
+            "No archive file was written. See stderr."
         )
-    )
+    print(json.dumps({"systemMessage": message}, ensure_ascii=False))
     return 0
 
 

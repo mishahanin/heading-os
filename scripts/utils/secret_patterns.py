@@ -138,26 +138,30 @@ def redact(text: str) -> str:
         return text
 
     out = []
-    # split("\n"), NOT splitlines(). This is the line that makes the guarantee
-    # true, and the obvious spelling breaks it. scan_file reads the file in text
-    # mode and iterates readlines(), which splits on universal newlines only.
-    # str.splitlines() additionally splits on the vertical tab, the form
+    # split("\n"), NOT splitlines(). str.splitlines() over-splits on eight
+    # code points readlines() does not treat as a break (vertical tab, form
     # feed, the three ASCII file/group/record separators, NEL, and the
-    # Unicode LINE and PARAGRAPH SEPARATOR code points. Named rather than
-    # typed: this file is prose under the zero-hidden-characters rule.
-    # A credential spanning any of them would be cut in two by the
-    # redactor, left unmatched, and then caught by the scanner: the redactor
-    # reports clean and the wall refuses the push, which is the exact failure
-    # this slice exists to remove.
+    # Unicode LINE and PARAGRAPH SEPARATOR), so it cannot be used here: a
+    # credential spanning one of those would be cut in two by the redactor,
+    # left unmatched, and then caught by the scanner, which is the exact
+    # failure this slice exists to remove.
     #
-    # Measured at the pre-impl gate. A U+2028 that slipped into the probe input
-    # by accident demonstrated it live: splitlines gave four lines where
-    # readlines gave two. split("\n") matches readlines, and joining with "\n"
-    # restores the input byte for byte.
+    # split("\n") alone still under-splits relative to readlines(), which
+    # (via universal newlines) also treats a lone "\r" as a line break.
+    # Because the allowlist token suppresses a whole line, an under-split
+    # line can carry that suppression across a boundary the scanner honours.
+    # So each "\n"-segment is split again on "\r", and the allowlist check
+    # and the substitution run per sub-segment. This reproduces readlines()'s
+    # universal-newline behaviour for the allowlist decision while rejoining
+    # sub-segments with "\r" and lines with "\n", which restores the input
+    # byte for byte.
     for line in text.split("\n"):
-        if ALLOWLIST_TOKEN not in line:
-            for pattern, description in iter_patterns(line):
-                line = pattern.sub(
-                    REDACTION_TEMPLATE.format(description=description), line)
-        out.append(line)
+        sub_lines = []
+        for sub_line in line.split("\r"):
+            if ALLOWLIST_TOKEN not in sub_line:
+                for pattern, description in iter_patterns(sub_line):
+                    sub_line = pattern.sub(
+                        REDACTION_TEMPLATE.format(description=description), sub_line)
+            sub_lines.append(sub_line)
+        out.append("\r".join(sub_lines))
     return "\n".join(out)

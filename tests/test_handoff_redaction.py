@@ -484,6 +484,46 @@ def test_the_quarantine_continuation_prompt_names_no_file_that_was_never_written
     assert "UNREDACTED" in prompt.upper()
 
 
+def test_the_quarantined_body_names_no_file_that_was_never_written(
+        tmp_path, monkeypatch):
+    """The same defect one level in, where only a human looks.
+
+    The body is built once and written down one of two branches, so its
+    continuation section named the dated archive on BOTH. On the quarantine
+    branch that file does not exist, and the reader being misdirected is a
+    person recovering an unredacted handoff by hand, with no tooling to catch
+    the dangling reference for them.
+    """
+    module = _quarantine_run(tmp_path, monkeypatch, "plain summary", _raise_exploded)
+
+    quarantined = [p for p in module.QUARANTINE_DIR.rglob("*.md") if p.is_file()]
+    assert len(quarantined) == 1, f"expected one quarantined file, got {quarantined}"
+    body = quarantined[0].read_text(encoding="utf-8")
+
+    refs = _handoff_refs(body)
+    assert refs, f"the quarantined body points at nothing:\n{body}"
+    for ref in refs:
+        assert (tmp_path / ref).exists(), f"dangling reference {ref!r} in:\n{body}"
+
+    assert "QUARANTIN" in body.upper()
+    assert "UNREDACTED" in body.upper()
+
+
+def test_the_normal_body_still_names_its_own_archive(tmp_path, monkeypatch):
+    """The control. The conditional above must not blank the success branch."""
+    module = _run_hook(tmp_path, monkeypatch, "plain summary with nothing secret in it")
+
+    archived = [p for p in module.HANDOFF_DIR.glob("*.md") if p.is_file()]
+    assert len(archived) == 1, f"expected one archived file, got {archived}"
+    body = archived[0].read_text(encoding="utf-8")
+
+    refs = _handoff_refs(body)
+    assert refs, f"the archived body points at nothing:\n{body}"
+    for ref in refs:
+        assert (tmp_path / ref).exists(), f"dangling reference {ref!r} in:\n{body}"
+    assert archived[0].name in body, "the body does not name its own archive file"
+
+
 def test_the_quarantine_state_entry_records_no_dangling_path(tmp_path, monkeypatch):
     """Channel (c). checkpoint-state.json recorded the same nonexistent path."""
     import json

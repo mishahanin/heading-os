@@ -176,6 +176,25 @@ def main() -> int:
         print(f"checkpoint-save: redaction failed ({quarantine_kind}: {exc}); "
               f"QUARANTINING the handoff", file=sys.stderr)
 
+    # The body names where IT actually landed. archive_md is built once and
+    # written down one of two branches, so an unconditional archive_ref here
+    # tells a human recovering the QUARANTINED file to open a dated archive
+    # that was never written.
+    if quarantine_kind is None:
+        body_lead = f"""First read:
+
+@{archive_ref}
+
+Then continue the latest unfinished task."""
+    else:
+        body_lead = f"""You are reading the quarantined handoff itself, at:
+
+{quarantine_ref}
+
+Redaction failed ({quarantine_kind}), so this file is UNREDACTED and sits
+outside the backup. No dated archive file was written. Never copy this text
+into a tracked file. Then continue the latest unfinished task."""
+
     archive_md = f"""# Handoff - post-compact ({trigger})
 
 Generated: {now.isoformat()}
@@ -191,11 +210,7 @@ Transcript: {transcript_path}
 
 Continue this Claude Code session from the saved handoff.
 
-First read:
-
-@{archive_ref}
-
-Then continue the latest unfinished task.
+{body_lead}
 
 Rules:
 1. Treat repository state as authoritative.

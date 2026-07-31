@@ -108,10 +108,18 @@ SECRET_PATTERNS = [
         r'(?!Stored|REDACTED|N/A|See |TBD|Change|Reset|Set |Use |Your )'
         r'[^\n]{8,}'
     ), "Plaintext password in markdown"),
+    # Whole-value placeholder exclusion; the rationale, the dropped inert `<`
+    # alternative, and the residual bound are documented at the mirror of this
+    # entry in scripts/utils/secret_patterns.py. The regex text must stay
+    # byte-identical to that mirror; test_SEC_004 holds the two in lockstep.
     (re.compile(
         r'(?:EXCHANGE_PASSWORD|DB_PASSWORD|SMTP_PASSWORD|AUTH_PASSWORD)'
         r'\s*=\s*'
-        r'(?!(?i:your[-_]|changeme|example|placeholder|redacted|dummy|xxx|<))'
+        r'(?i:(?!'
+        r'(?=[A-Za-z0-9_-]*(?:your|changeme|example|placeholder|redacted|dummy|x{3,}))'
+        r'[A-Za-z]+[0-9]{0,3}(?:[-_][A-Za-z]+[0-9]{0,3})*'
+        r'(?![A-Za-z0-9!@#$%^&*_+=-])'
+        r'))'
         r'[A-Za-z0-9!@#$%^&*_+=-]{8,}'
     ), "Password in environment variable assignment"),
 ]

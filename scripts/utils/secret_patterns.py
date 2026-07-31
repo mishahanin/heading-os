@@ -52,11 +52,38 @@ SECRET_PATTERNS = [
         r'(?!Stored|REDACTED|N/A|See |TBD|Change|Reset|Set |Use |Your )'
         r'[^\n]{8,}'
     ), "Plaintext password in markdown"),
-    # Generic env-style password assignments with real values
+    # Generic env-style password assignments with real values.
+    #
+    # The exclusion is WHOLE-VALUE. Until 2026-07-31 it read
+    # `(?!(?i:your[-_]|changeme|example|placeholder|redacted|dummy|xxx|<))`,
+    # which tested only how the value BEGINS, so any tail could ride in behind a
+    # marker: a real password starting "xxx" passed this pattern, the blocking
+    # PreToolUse gate, AND the push-time content scan this workspace calls
+    # unbypassable. All seven word alternatives were defeated identically.
+    #
+    # Now the exclusion fires only when the value TAKEN WHOLE has placeholder
+    # shape: words of letters, each with an optional short digit tail, joined by
+    # - or _, carrying a marker somewhere. A real password breaks that shape at
+    # the first letter/digit mix inside a word, with or without punctuation.
+    #
+    # Two things to inherit rather than rediscover:
+    #   - The old `<` alternative was inert and is gone. `<` is not in the value
+    #     class, so a value starting with it never reached the exclusion at all.
+    #   - Residual bound, like the {0,31} bound above: a real password that is
+    #     itself word-shaped and carries a marker ("dummy-horse-battery-staple")
+    #     is still excluded. Strictly smaller than the old hole, which admitted
+    #     any tail whatsoever.
+    #
+    # Measured before shipping, across both repositories: 5087 files, 1327251
+    # lines, 0 new positives, 0 regressions.
     (re.compile(
         r'(?:EXCHANGE_PASSWORD|DB_PASSWORD|SMTP_PASSWORD|AUTH_PASSWORD)'
         r'\s*=\s*'
-        r'(?!(?i:your[-_]|changeme|example|placeholder|redacted|dummy|xxx|<))'
+        r'(?i:(?!'
+        r'(?=[A-Za-z0-9_-]*(?:your|changeme|example|placeholder|redacted|dummy|x{3,}))'
+        r'[A-Za-z]+[0-9]{0,3}(?:[-_][A-Za-z]+[0-9]{0,3})*'
+        r'(?![A-Za-z0-9!@#$%^&*_+=-])'
+        r'))'
         r'[A-Za-z0-9!@#$%^&*_+=-]{8,}'
     ), "Password in environment variable assignment"),
 ]

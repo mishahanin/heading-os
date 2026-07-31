@@ -259,12 +259,26 @@ def check_prevent_secrets(payload: dict) -> Optional[dict]:
                 ),
             }
         return None
-    file_path = tool_input.get("file_path", "")
+    # All four write shapes the dispatcher is registered for, not just the two
+    # that carry their text at the top level. MultiEdit keeps every replacement
+    # in edits[i]["new_string"] and NotebookEdit names its target notebook_path
+    # and its text new_source, so both walked past this gate untouched until
+    # 2026-07-31: the notebook returned at the empty-path guard below, the
+    # MultiEdit scanned an empty string. check_protect_personal_threads
+    # destructures the same four correctly, and it is the fix for a prior
+    # instance of this bug — the shape is copied from it deliberately.
+    file_path = tool_input.get("file_path", "") or tool_input.get("notebook_path", "") or ""
     if not file_path or _secrets_path_allowed(file_path):
         return None
-    content = tool_input.get("content", "") or ""
-    new_string = tool_input.get("new_string", "") or ""
-    matched, desc = _scan_for_secrets(content + "\n" + new_string)
+    parts = [
+        tool_input.get("content") or "",
+        tool_input.get("new_string") or "",
+        tool_input.get("new_source") or "",
+    ]
+    for edit in (tool_input.get("edits") or []):
+        if isinstance(edit, dict):
+            parts.append(edit.get("new_string") or "")
+    matched, desc = _scan_for_secrets("\n".join(parts))
     if matched:
         basename = os.path.basename(file_path)
         # NOTE: the reason text below references `.claude/hooks/prevent-secrets.py`,

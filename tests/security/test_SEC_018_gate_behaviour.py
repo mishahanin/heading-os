@@ -31,6 +31,12 @@ stdin, JSON decision on stdout -- and compares the verdict against scan_file's
 verdict on the same text. A ratchet that imported the module under a different
 __name__ would reproduce the blind spot it exists to close.
 
+The sweep runs over EVERY tool shape the write matcher registers, not just
+Write. Building only Write payloads was a sixth construct in its own right, and
+it was live rather than hypothetical: MultiEdit carries its text inside
+`edits[i]["new_string"]` and NotebookEdit names its target `notebook_path`, so
+both returned no decision at all while this module reported the gate green.
+
 Every credential sample is assembled from fragments at runtime; this file carries
 no whole credential-shaped literal, and it is scanned by the same wall it tests.
 """
@@ -180,15 +186,80 @@ def _run_gate(payload: dict, extra_env: dict | None = None,
     return json.loads(proc.stdout)
 
 
+# A path the allowance does not cover, so the scan actually runs.
+_PROBE_PATH = "outputs/scratch/gate-behaviour-probe.txt"
+_PROBE_NOTEBOOK = "outputs/scratch/gate-behaviour-probe.ipynb"
+
+
 def _write_payload(sample: str) -> dict:
-    # A path the allowance does not cover, so the scan actually runs.
     return {
         "tool_name": "Write",
         "tool_input": {
-            "file_path": "outputs/scratch/gate-behaviour-probe.txt",
+            "file_path": _PROBE_PATH,
             "content": "value = " + repr(sample) + "\n",
         },
     }
+
+
+def _edit_payload(sample: str) -> dict:
+    return {
+        "tool_name": "Edit",
+        "tool_input": {
+            "file_path": _PROBE_PATH,
+            "old_string": "value = None\n",
+            "new_string": "value = " + repr(sample) + "\n",
+        },
+    }
+
+
+def _multiedit_payload(sample: str) -> dict:
+    """The shape that carried the text where nothing was reading it.
+
+    MultiEdit keeps every replacement inside `edits[i]["new_string"]` and puts
+    nothing at the top level, so a gate reading only `new_string` scanned an
+    empty string and allowed the write. `check_protect_personal_threads` in the
+    same hook destructures this shape correctly, and
+    tests/test_protect_personal_threads_hook.py pins it there.
+    """
+    return {
+        "tool_name": "MultiEdit",
+        "tool_input": {
+            "file_path": _PROBE_PATH,
+            "edits": [
+                {"old_string": "first\n", "new_string": "the heading is set\n"},
+                {"old_string": "second\n", "new_string": "value = " + repr(sample) + "\n"},
+            ],
+        },
+    }
+
+
+def _notebookedit_payload(sample: str) -> dict:
+    """The other shape, and it missed on BOTH halves.
+
+    NotebookEdit names its target `notebook_path`, not `file_path`, so a gate
+    keyed on `file_path` returned at its empty-path guard before it ever looked
+    at the cell source in `new_source`.
+    """
+    return {
+        "tool_name": "NotebookEdit",
+        "tool_input": {
+            "notebook_path": _PROBE_NOTEBOOK,
+            "cell_id": "cell-1",
+            "new_source": "value = " + repr(sample) + "\n",
+        },
+    }
+
+
+# Every tool the dispatcher is registered for on the write matcher in
+# .claude/settings.local.json (`Write|Edit|MultiEdit|NotebookEdit`). Sweeping
+# the whole vocabulary over each one is what makes the module docstring's claim
+# true: two of the four returned no decision at all until 2026-07-31.
+_WRITE_SHAPES = [
+    ("Write", _write_payload),
+    ("Edit", _edit_payload),
+    ("MultiEdit", _multiedit_payload),
+    ("NotebookEdit", _notebookedit_payload),
+]
 
 
 def _bash_payload(sample: str) -> dict:
@@ -203,15 +274,19 @@ def _scanner_verdict(tmp_path: Path, sample: str) -> list:
     return [desc for _line, desc in scanner.scan_file(str(target))]
 
 
+@pytest.mark.parametrize("tool_name,builder", _WRITE_SHAPES,
+                         ids=[name for name, _b in _WRITE_SHAPES])
 @pytest.mark.parametrize("description,sample", SAMPLE_ITEMS)
-def test_the_gate_refuses_every_credential_family_on_a_write(description, sample):
-    decision = _run_gate(_write_payload(sample))
+def test_the_gate_refuses_every_credential_family_on_a_write(
+        description, sample, tool_name, builder):
+    decision = _run_gate(builder(sample))
     assert decision.get("decision") == "block", (
-        f"the live gate did NOT block a {description}: {decision!r}"
+        f"the live gate did NOT block a {description} written through "
+        f"{tool_name}: {decision!r}"
     )
     assert description in decision.get("reason", ""), (
-        f"blocked, but the reason does not name {description!r}: "
-        f"{decision.get('reason')!r}"
+        f"blocked through {tool_name}, but the reason does not name "
+        f"{description!r}: {decision.get('reason')!r}"
     )
 
 

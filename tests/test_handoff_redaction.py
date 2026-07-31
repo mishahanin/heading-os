@@ -659,6 +659,35 @@ def test_a_quarantined_summary_never_reaches_the_tracked_pointer(
         assert "SENSITIVE-MARKER-" + "abc123" not in path.read_text(encoding="utf-8")
 
 
+def test_the_quarantine_pointer_names_both_forms_of_the_one_path(
+        tmp_path, monkeypatch):
+    """One file, two spellings, and nothing told the reader they were one file.
+
+    prompt.md and the systemMessage name the data-root-relative ref. The
+    summary.md next-step named the absolute path instead, so the three surfaces
+    the operator reads described the same quarantined handoff two different
+    ways. The pointer now leads with the ref, the way every other surface does,
+    and carries the absolute path on its own labelled line, because a human
+    recovering that file is at a shell where the ref resolves against nothing.
+    """
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+
+    def _boom(_text):
+        raise RuntimeError("redactor exploded")
+
+    monkeypatch.setattr(module, "redact", _boom)
+    _feed(module, monkeypatch, "plain summary, no secret")
+
+    quarantined = next(p for p in module.QUARANTINE_DIR.rglob("*.md"))
+    ref = quarantined.relative_to(tmp_path).as_posix()
+    pointer = (module.LATEST_DIR / "summary.md").read_text(encoding="utf-8")
+
+    assert f"- Read the quarantined handoff at: {ref}" in pointer, (
+        f"the next-step does not name the ref every other surface uses:\n{pointer}")
+    assert f"- Absolute path, for a shell: {quarantined.as_posix()}" in pointer, (
+        f"the absolute path is not on a labelled line of its own:\n{pointer}")
+
+
 # ============================================================
 # The other three payload fields, which also reach tracked files
 # ============================================================

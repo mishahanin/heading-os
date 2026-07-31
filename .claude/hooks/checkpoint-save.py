@@ -216,6 +216,13 @@ def main() -> int:
 
     # Refs. Every path any artifact NAMES is one of these three, so a channel
     # can only name something that was actually written.
+    #
+    # One surface names the same file twice, and the comment used to deny it.
+    # The quarantine pointer gives the ref AND, on a labelled line of its own,
+    # the ABSOLUTE form of that ref: the ref is what every other surface uses,
+    # and the absolute path is what a human recovering the file can paste into a
+    # shell that knows nothing about the data root. Two spellings of one written
+    # file, stated as such rather than left to be inferred.
     data_root = get_data_root()
 
     def _ref(path: Path) -> str:
@@ -440,7 +447,8 @@ REDACTION FAILED ({quarantine_kind}), so this handoff was QUARANTINED: it is NOT
 
 ## Next steps
 
-- Read the quarantined handoff at: {quarantine_path}
+- Read the quarantined handoff at: {quarantine_ref}
+- Absolute path, for a shell: {quarantine_path}
 - Treat it as UNREDACTED - it may carry live credentials, so never copy it into a tracked file.
 - Fix the redactor (scripts/utils/secret_patterns.py), then re-file the handoff into the archive once it redacts clean.
 

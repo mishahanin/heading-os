@@ -85,8 +85,8 @@ def test_the_round_trip_is_byte_identical_across_every_line_break_code_point(cod
 
 
 def _allowlist_case_token_then_cr_then_secret() -> str:
-    """The reviewer's exact repro: token on one universal-newline segment, a
-    lone "\\r" boundary, then the secret on the next segment."""
+    """Token on one universal-newline segment, a lone "\\r" boundary, then the
+    secret on the next segment."""
     from scripts.utils.secret_patterns import ALLOWLIST_TOKEN
 
     return ("Reviewed the scanner. Lines carrying " + ALLOWLIST_TOKEN + " are skipped."
@@ -94,7 +94,7 @@ def _allowlist_case_token_then_cr_then_secret() -> str:
 
 
 def _allowlist_case_secret_then_cr_then_token() -> str:
-    """Same repro, reversed order."""
+    """Same shape, reversed order."""
     from scripts.utils.secret_patterns import ALLOWLIST_TOKEN
 
     return ("The remote was " + _connection_string() + " at the time."
@@ -103,9 +103,7 @@ def _allowlist_case_secret_then_cr_then_token() -> str:
 
 
 def _allowlist_case_crlf_control() -> str:
-    """Control: a real "\\r\\n" break between token and secret. `str.split("\\n")`
-    already separates these onto two elements before any `\\r`-aware fix, so this
-    case must pass both before and after the fix."""
+    """A real "\\r\\n" break between token and secret."""
     from scripts.utils.secret_patterns import ALLOWLIST_TOKEN
 
     return ("Reviewed the scanner. Lines carrying " + ALLOWLIST_TOKEN + " are skipped.\r\n"
@@ -113,8 +111,7 @@ def _allowlist_case_crlf_control() -> str:
 
 
 def _allowlist_case_plain_single_line_control() -> str:
-    """Control: token and secret share one real line, exactly as the scanner
-    sees it. Must pass both before and after the fix."""
+    """Token and secret share one real line, exactly as the scanner sees it."""
     from scripts.utils.secret_patterns import ALLOWLIST_TOKEN
 
     return "sample " + _connection_string() + "  # " + ALLOWLIST_TOKEN
@@ -131,24 +128,63 @@ def _allowlist_case_plain_single_line_control() -> str:
     "crlf_control",
     "plain_single_line_control",
 ])
-def test_the_allowlist_token_suppresses_redaction_where_it_suppresses_scanning(
-        make_text, tmp_path):
-    """The allowlist decision must match the REAL scanner's line boundaries,
-    not redact()'s own idea of a line. A lone "\\r" ends a line for scan_file's
-    readlines() (universal newlines) but was, before this fix, invisible to
-    redact()'s str.split("\\n"), so an allowlist token on one side of a lone
-    "\\r" wrongly suppressed redaction of a secret on the other side.
+def test_the_allowlist_token_does_not_suppress_redaction(make_text, tmp_path):
+    """The redactor redacts regardless of the allowlist marker, and the scanner
+    still accepts what it produced.
 
-    Asserted through the real scanner subprocess, not through redact()'s own
-    notion of what it did: an identity function would satisfy a bare
-    `redact(x) == x` assertion here and hide exactly this bug.
+    REPLACES test_the_allowlist_token_suppresses_redaction_where_it_suppresses_scanning,
+    which asserted the opposite. That behaviour mirrored scan_file so the
+    redactor and the wall would agree line for line, and the mirroring was the
+    stated reason the invariant held by construction. It is wrong here. The
+    allowlist marker is a human-authored, reviewed annotation in a SOURCE file.
+    A compact summary is machine-generated and reviewed by nobody, and the
+    marker reaches one by accident, most often in a session ABOUT the secret
+    scanner, which is the exact session shape that produced the original
+    incident. So a generated summary that happens to mention the marker no
+    longer carries a live credential past both the redactor and the wall.
+
+    Dropping the check only ever redacts MORE, so the invariant is strictly
+    stronger, not weaker: whatever the scanner would flag is a subset of what
+    the redactor now removes. Asserted through the real scanner subprocess
+    rather than through redact()'s own idea of what it did.
     """
     from scripts.utils.secret_patterns import redact
 
     text = make_text()
-    target = tmp_path / "handoff.md"
-    target.write_text(redact(text), encoding="utf-8")
+    out = redact(text)
+    assert "not-a-real-token-value" not in out, (
+        "the allowlist marker still suppresses redaction")
 
+    target = tmp_path / "handoff.md"
+    target.write_text(out, encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(ENGINE / "scripts" / "secret-scanner.py"), str(target)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_prose_mentioning_the_allowlist_marker_beside_a_key_still_loses_the_key(
+        tmp_path):
+    """The reviewer's exact shape: one segment carrying BOTH an ordinary
+    sentence about the allowlist convention and a live credential.
+
+    Measured before the fix: redact returned the input unchanged and the wall
+    accepted it, so the credential reached a tracked file and left the machine.
+    """
+    from scripts.utils.secret_patterns import ALLOWLIST_TOKEN, redact
+
+    text = ("we discussed the " + ALLOWLIST_TOKEN + " convention and the key "
+            + _api_key())
+    out = redact(text)
+
+    assert _api_key() not in out
+    assert "[REDACTED: Anthropic API key]" in out
+    assert "we discussed the " in out, "the prose did not survive"
+
+    target = tmp_path / "handoff.md"
+    target.write_text(out, encoding="utf-8")
     result = subprocess.run(
         [sys.executable, str(ENGINE / "scripts" / "secret-scanner.py"), str(target)],
         capture_output=True, text=True,
@@ -198,6 +234,252 @@ def test_the_output_of_the_redactor_passes_the_scanner(tmp_path):
 
     result = subprocess.run(
         [sys.executable, str(ENGINE / "scripts" / "secret-scanner.py"), str(target)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+# ============================================================
+# Nesting: redacting the inner span must not disarm the outer pattern
+# ============================================================
+
+def _nested_key_in_userinfo() -> tuple[str, str]:
+    """The reviewer's exact F5 shape, plus the password that used to survive it.
+
+    An API key sitting where a connection string's username goes. Replacing the
+    inner span first breaks the connection-string pattern's character-class run,
+    because the marker carries a space and a bracket, and the outer pattern then
+    matches nothing at all - so the password walked straight through both the
+    redactor and the wall.
+    """
+    userinfo_tail = "s3cret" + "pw" + "9142"
+    text = ("https://" + _api_key() + ":" + userinfo_tail + "@" + "db.example.com/main")
+    return text, userinfo_tail
+
+
+def test_a_credential_nested_inside_another_does_not_shield_the_outer_one(tmp_path):
+    from scripts.utils.secret_patterns import redact
+
+    text, userinfo_tail = _nested_key_in_userinfo()
+    out = redact(text)
+
+    assert _api_key() not in out
+    assert userinfo_tail not in out, "the outer credential survived the inner redaction"
+
+    target = tmp_path / "handoff.md"
+    target.write_text(out, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(ENGINE / "scripts" / "secret-scanner.py"), str(target)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+# Planted secret material, kept distinct per role so an assertion names exactly
+# which one survived. Split literals: the file is tracked and public.
+_SAMPLE_USERINFO_TAIL = "s3cr" + "etpw" + "0001"
+_OUTER_USERINFO_TAIL = "s3cr" + "etpw" + "0002"
+
+
+def _credential_samples() -> dict:
+    """One sample per pattern family, assembled at runtime and never written
+    whole, so the prevent-secrets hook has nothing to refuse."""
+    alnum = "AB3c" * 6
+    return {
+        "anthropic": "sk-" + "ant-" + alnum,
+        "perplexity": "pplx-" + alnum,
+        "replicate": "r8" + "_" + alnum,
+        "firecrawl": "fc-" + alnum,
+        "context7": "ctx7" + "sk-" + alnum,
+        "github_pat": "ghp" + "_" + alnum,
+        "github_oauth": "gho" + "_" + alnum,
+        "aws": "AKIA" + "AB3C" * 4,
+        "slack_bot": "xoxb-" + "12345" + "-" + alnum,
+        "slack_user": "xoxp-" + "12345" + "-" + alnum,
+        "google_oauth": "ya29" + "." + (alnum * 3)[:56],
+        "jwt": "eyJ" + alnum[:14] + "." + alnum[:14] + "." + alnum[:14],
+        "pem": "-----BEGIN " + "PRIVATE KEY" + "-----",
+        "connection": ("https://" + "carrier" + ":" + _SAMPLE_USERINFO_TAIL
+                       + "@" + "db.example.com/main"),
+    }
+
+
+def _containers() -> dict:
+    """The four patterns that can lexically ENCLOSE another credential.
+
+    Some pairings are lexically impossible (a PEM header cannot sit in a URL's
+    userinfo, which forbids spaces). They are generated anyway: an impossible
+    nesting still produces a real inner match, and the property under test is
+    that nothing the pattern vocabulary covers in the INPUT survives, never
+    that a given pairing forms a valid outer match.
+    """
+    return {
+        "conn_user": lambda inner: (
+            "https://" + inner + ":" + _OUTER_USERINFO_TAIL + "@" + "db.example.com/main"),
+        "conn_password": lambda inner: (
+            "https://" + "carrier" + ":" + inner + "@" + "db.example.com/main"),
+        "markdown_password": lambda inner: "**" + "Password:" + "**" + " " + inner,
+        "env_password": lambda inner: "EXCHANGE_" + "PASSWORD" + "=" + inner,
+    }
+
+
+def _wrap_variants(core: str, token: str) -> list:
+    """The shapes a generated handoff actually produces around a credential."""
+    return [
+        core,
+        "Task 3 is done. The remote was " + core,
+        core + " and then Task 4 continues.",
+        "Task 3 is done. The remote was " + core + " and then Task 4 continues.",
+        "we discussed the " + token + " convention and " + core,
+        "line one\nTask 3 used " + core + "\nline three\n",
+        "carriage\rTask 3 used " + core + "\rtail\n",
+    ]
+
+
+def _nested_corpus(padding_rounds: int = 0, seed: int = 20260731) -> list:
+    """Differential-fuzz corpus of (text, planted-needles) pairs.
+
+    Credential families nested inside one another in BOTH orders, each wrapped
+    in the prose shapes a generated handoff produces. Deterministic by default;
+    `padding_rounds` adds seeded random filler around every case, which is how
+    the larger ad-hoc run was driven.
+    """
+    import random
+
+    from scripts.utils.secret_patterns import ALLOWLIST_TOKEN
+
+    samples = _credential_samples()
+    containers = _containers()
+
+    cores = [(value, (value,)) for value in samples.values()]
+    for name, build in containers.items():
+        extra = (_OUTER_USERINFO_TAIL,) if name == "conn_user" else ()
+        for value in samples.values():
+            cores.append((build(value), (value, *extra)))
+    # Both orders: every ordered pair of containers, so A(B(x)) and B(A(x)) are
+    # both present.
+    for outer_name, outer in containers.items():
+        for inner_name, inner in containers.items():
+            extra = tuple(
+                _OUTER_USERINFO_TAIL for name in (outer_name, inner_name)
+                if name == "conn_user")[:1]
+            for key in ("anthropic", "jwt", "connection"):
+                cores.append((outer(inner(samples[key])), (samples[key], *extra)))
+
+    corpus = []
+    for core, needles in cores:
+        needle_set = tuple(dict.fromkeys(
+            (*needles, _SAMPLE_USERINFO_TAIL) if _SAMPLE_USERINFO_TAIL in core else needles))
+        for text in _wrap_variants(core, ALLOWLIST_TOKEN):
+            corpus.append((text, needle_set))
+
+    if padding_rounds:
+        rng = random.Random(seed)  # noqa: S311 - seeded fuzz filler, not crypto
+        alphabet = "abcdefghijklmnopqrstuvwxyz0123456789 .,:/@=*-_\r\n"
+        padded = []
+        for text, needle_set in corpus:
+            for _ in range(padding_rounds):
+                head = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 24)))
+                tail = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 24)))
+                padded.append((head + text + tail, needle_set))
+        corpus.extend(padded)
+    return corpus
+
+
+def _scanner_lines(text: str) -> list:
+    """The line split scan_file gets for free from readlines(): the three
+    universal-newline forms, and nothing else."""
+    import re
+
+    return re.split(r"\r\n|\r|\n", text)
+
+
+def _needle_coverage(text: str, needle: str):
+    """How many occurrences of needle the pattern vocabulary puts INSIDE a match,
+    how many it leaves outside, and what the first covering pattern was.
+
+    Computed line by line, exactly as the wall computes it, and per OCCURRENCE
+    rather than per string. A needle no pattern reached was never a credential
+    the wall would have flagged, so the redactor owes nothing for that
+    occurrence - and the degenerate nestings in this corpus repeat one literal
+    both inside a match and outside it, so counting the string once would
+    demand the removal of material the wall never objected to.
+    """
+    from scripts.utils.secret_patterns import SECRET_PATTERNS
+
+    covered = 0
+    uncovered = 0
+    first = None
+    for line in _scanner_lines(text):
+        spans = []
+        for pattern, description in SECRET_PATTERNS:
+            for match in pattern.finditer(line):
+                spans.append((match.start(), match.end(), description))
+        start = line.find(needle)
+        while start != -1:
+            end = start + len(needle)
+            enclosing = next(
+                (d for s, e, d in spans if s <= start and end <= e), None)
+            if enclosing is None:
+                uncovered += 1
+            else:
+                covered += 1
+                first = first or enclosing
+            start = line.find(needle, start + 1)
+    return covered, uncovered, first
+
+
+def test_the_nested_corpus_loses_every_credential_the_wall_would_have_flagged():
+    """The differential fuzz, committed rather than run once and reported.
+
+    The assertion is deliberately NOT "the scanner is quiet on the output". The
+    scanner is quiet on the broken output too, which is the whole shape of F5:
+    redacting the inner span breaks the outer pattern's character-class run, so
+    the wall stops seeing the password it used to refuse and accepts it. A fuzz
+    that only re-ran the scanner measured zero survivors against the defect.
+
+    The property that catches it: for every planted needle the pattern
+    vocabulary COVERS in the input, no byte of that needle survives the
+    redaction. Coverage is computed line by line, the way scan_file computes it,
+    so a needle no pattern reached is correctly exempt.
+    """
+    from scripts.utils.secret_patterns import redact
+
+    corpus = _nested_corpus()
+    assert len(corpus) >= 500, f"corpus shrank to {len(corpus)} cases"
+
+    survivors = []
+    for text, needles in corpus:
+        out = redact(text)
+        for needle in needles:
+            covered, uncovered, description = _needle_coverage(text, needle)
+            if covered and out.count(needle) > uncovered:
+                survivors.append((description, text, out))
+
+    assert not survivors, (
+        f"{len(survivors)} of {len(corpus)} cases kept covered credential material; "
+        f"first: pattern={survivors[0][0]!r}\n  in : {survivors[0][1]!r}\n"
+        f"  out: {survivors[0][2]!r}")
+
+
+def test_the_nested_corpus_leaves_the_scanner_nothing_to_find(tmp_path):
+    """The same corpus through the REAL scanner, one subprocess for all of it.
+
+    Necessary but not sufficient (see the test above for why), and kept because
+    it is the property the wall actually enforces: the count of files the
+    scanner objects to must be zero.
+    """
+    from scripts.utils.secret_patterns import redact
+
+    corpus = _nested_corpus()
+    paths = []
+    for index, (text, _needles) in enumerate(corpus):
+        path = tmp_path / f"case-{index:05d}.md"
+        path.write_text(redact(text), encoding="utf-8")
+        paths.append(str(path))
+
+    result = subprocess.run(
+        [sys.executable, str(ENGINE / "scripts" / "secret-scanner.py"), *paths],
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stdout
@@ -272,16 +554,20 @@ def _load_hook_sandboxed(tmp_path, monkeypatch):
     return module
 
 
-def _feed(module, monkeypatch, summary: str):
+def _feed_payload(module, monkeypatch, payload: dict):
     """Drive the hook the way Claude Code does: one JSON payload on stdin."""
     import io
     import json
 
-    payload = {"session_id": "s", "trigger": "manual",
-               "compact_summary": summary, "transcript_path": "/dev/null"}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     module.main()
     return module
+
+
+def _feed(module, monkeypatch, summary: str):
+    return _feed_payload(module, monkeypatch, {
+        "session_id": "s", "trigger": "manual",
+        "compact_summary": summary, "transcript_path": "/dev/null"})
 
 
 def _run_hook(tmp_path, monkeypatch, summary: str):
@@ -371,6 +657,79 @@ def test_a_quarantined_summary_never_reaches_the_tracked_pointer(
                if p.is_file() and module.QUARANTINE_DIR not in p.parents]
     for path in outside:
         assert "SENSITIVE-MARKER-" + "abc123" not in path.read_text(encoding="utf-8")
+
+
+# ============================================================
+# The other three payload fields, which also reach tracked files
+# ============================================================
+
+def _slug_surviving_key() -> str:
+    """A credential made only of characters safe_slug keeps verbatim.
+
+    session_id is slugged into the FILENAME, and that filename is then quoted
+    back into the body, both pointers and the state entry. A key of alphanumerics
+    and hyphens passes safe_slug untouched, so the credential rides the filename
+    into four tracked artifacts.
+    """
+    return "sk-" + "ant-" + ("B" * 25)
+
+
+_FIELD_POISON = {
+    # Reaches the body and both pointers (each carries "Trigger: compact / ...").
+    "trigger": _connection_string,
+    # Reaches the filename, and through it the body, both pointers and the state.
+    "session_id": _slug_surviving_key,
+    # Reaches the body.
+    "transcript_path": _connection_string,
+}
+
+
+@pytest.mark.parametrize("field", sorted(_FIELD_POISON))
+def test_every_payload_field_is_redacted_not_only_the_summary(
+        field, tmp_path, monkeypatch):
+    """redact() was applied to compact_summary alone. The other three fields go
+    into the same tracked files verbatim, so any one of them blocks the wall and
+    with it the backup of BOTH repositories - the exact incident this slice
+    exists to remove, reached by a different door.
+    """
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+    poison = _FIELD_POISON[field]()
+
+    payload = {"session_id": "s", "trigger": "manual",
+               "compact_summary": "plain summary, nothing secret",
+               "transcript_path": "/dev/null"}
+    payload[field] = poison
+    _feed_payload(module, monkeypatch, payload)
+
+    files = [p for p in module.HANDOFF_DIR.rglob("*") if p.is_file()]
+    assert files, "the hook wrote nothing"
+
+    for path in files:
+        assert poison not in path.read_text(encoding="utf-8"), f"{path} carries it"
+        assert poison not in path.name, f"the filename carries it: {path.name}"
+
+    result = subprocess.run(
+        [sys.executable, str(ENGINE / "scripts" / "secret-scanner.py"),
+         *[str(p) for p in files]],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_a_redacted_session_id_still_produces_a_sane_filename(tmp_path, monkeypatch):
+    """The marker carries a colon, a space and brackets, and it lands in the
+    slug. The name must stay something a shell and a human can both handle."""
+    import re
+
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+    payload = {"session_id": _slug_surviving_key(), "trigger": "manual",
+               "compact_summary": "plain summary", "transcript_path": ""}
+    _feed_payload(module, monkeypatch, payload)
+
+    archived = [p for p in module.HANDOFF_DIR.glob("*.md") if p.is_file()]
+    assert len(archived) == 1, f"expected one archived file, got {archived}"
+    assert re.fullmatch(r"[A-Za-z0-9._-]+", archived[0].name), (
+        f"the redaction marker leaked into the filename: {archived[0].name!r}")
 
 
 # ============================================================
@@ -581,3 +940,113 @@ def test_a_redactor_that_returns_a_non_string_quarantines_too(
     message, err = _system_message(capsys)
     assert "Saved handoff" not in message
     assert "TypeError" in err
+
+
+# ============================================================
+# A body that cannot be written at all: three defects, not one
+# ============================================================
+
+_LOSS_MARKER = "LOST-RUN-" + "marker42"
+_PREVIOUS_MARKER = "PREVIOUS-RUN-" + "marker17"
+
+
+def _block_the_quarantine(module):
+    """The reviewer's repro: .quarantine is a regular FILE, so mkdir fails.
+
+    Measured before the fix: return code 0, systemMessage "write failed", one
+    file on disk (the blocker itself), and the summary text nowhere. The handoff
+    was gone, the loudest channel did not say so, and because both pointer
+    writes sat inside the same try after the body write, the PREVIOUS compact's
+    .latest/summary.md survived untouched - so the next session resumed from a
+    stale handoff with nothing marking it stale.
+    """
+    module.QUARANTINE_DIR.parent.mkdir(parents=True, exist_ok=True)
+    module.QUARANTINE_DIR.write_text("a regular file, so mkdir fails\n",
+                                     encoding="utf-8")
+
+
+def _all_written(module):
+    return [p for p in module.HANDOFF_DIR.rglob("*") if p.is_file()]
+
+
+def test_a_body_that_cannot_be_written_says_LOST_not_write_failed(
+        tmp_path, monkeypatch, capsys):
+    """Defect one. The handoff is unrecoverable - this hook runs after the
+    session context is discarded - and the one channel the operator sees called
+    it a write failure, which reads like a retryable hiccup."""
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+    _block_the_quarantine(module)
+    monkeypatch.setattr(module, "redact", _raise_exploded)
+    _feed(module, monkeypatch, _LOSS_MARKER + " and some ordinary prose")
+
+    message, err = _system_message(capsys)
+    assert "LOST" in message.upper(), f"the loss is not named: {message}"
+    assert "Saved handoff" not in message
+    assert _LOSS_MARKER not in message
+    assert "OSError" in err or "FileExistsError" in err, err
+
+
+def test_a_lost_body_still_leaves_a_pointer_that_is_not_the_previous_one(
+        tmp_path, monkeypatch):
+    """Defect two. Both pointer writes were collateral of the body write, so a
+    failed body left the PREVIOUS compact's pointer in place and the next
+    session resumed from it as though it were current."""
+    first = _load_hook_sandboxed(tmp_path, monkeypatch)
+    _feed(first, monkeypatch, _PREVIOUS_MARKER + " is the older handoff")
+    pointer_path = first.LATEST_DIR / "summary.md"
+    assert _PREVIOUS_MARKER in pointer_path.read_text(encoding="utf-8")
+
+    second = _load_hook_sandboxed(tmp_path, monkeypatch)
+    _block_the_quarantine(second)
+    monkeypatch.setattr(second, "redact", _raise_exploded)
+    _feed(second, monkeypatch, _LOSS_MARKER + " and some ordinary prose")
+
+    pointer = pointer_path.read_text(encoding="utf-8")
+    assert _PREVIOUS_MARKER not in pointer, "the stale pointer survived the loss"
+    assert "LOST" in pointer.upper(), f"the pointer does not say what happened:\n{pointer}"
+
+    prompt = (second.LATEST_DIR / "prompt.md").read_text(encoding="utf-8")
+    assert "LOST" in prompt.upper(), f"the prompt does not say what happened:\n{prompt}"
+    for ref in _handoff_refs(prompt):
+        assert (tmp_path / ref).exists(), f"dangling reference {ref!r} in:\n{prompt}"
+
+
+def test_a_lost_body_leaks_the_summary_nowhere(tmp_path, monkeypatch, capsys):
+    """Defect three's floor. The text could not be redacted, so no tracked file
+    may reproduce it - and on this path there is not even a quarantine to hold
+    it."""
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+    _block_the_quarantine(module)
+    monkeypatch.setattr(module, "redact", _raise_exploded)
+    _feed(module, monkeypatch, _LOSS_MARKER + " and some ordinary prose")
+
+    for path in _all_written(module):
+        assert _LOSS_MARKER not in path.read_text(encoding="utf-8"), f"{path} leaked it"
+    assert _LOSS_MARKER not in module.STATE_PATH.read_text(encoding="utf-8")
+
+    message, _err = _system_message(capsys)
+    assert _LOSS_MARKER not in message
+
+
+def test_a_failed_archive_write_on_the_success_branch_is_reported_as_lost_too(
+        tmp_path, monkeypatch, capsys):
+    """The same loss reached by the other branch: redaction succeeded, the
+    archive write did not. Nothing about the reporting should differ."""
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+    real_write = module.write_text_atomic
+
+    def _refuse_the_body(path, content):
+        if path.suffix == ".md" and path.parent == module.HANDOFF_DIR:
+            raise OSError("no space left on device")
+        return real_write(path, content)
+
+    monkeypatch.setattr(module, "write_text_atomic", _refuse_the_body)
+    _feed(module, monkeypatch, _LOSS_MARKER + " and some ordinary prose")
+
+    message, err = _system_message(capsys)
+    assert "LOST" in message.upper(), f"the loss is not named: {message}"
+    assert "no space left on device" in err
+
+    pointer = (module.LATEST_DIR / "summary.md").read_text(encoding="utf-8")
+    assert "LOST" in pointer.upper()
+    assert _LOSS_MARKER not in pointer

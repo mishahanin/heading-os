@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Credential patterns, and the two operations over them.
 
-The single source of truth for what this workspace calls a secret. One
-consumer imports it today: scripts/secret-scanner.py (the push-time and
-commit-time wall). .claude/hooks/checkpoint-save.py (the redactor that keeps a
-generated handoff from ever blocking that wall) is the intended second
-consumer, wired in a later slice.
+The single source of truth for what this workspace calls a secret. Two consumers
+import it today: scripts/secret-scanner.py (the push-time and commit-time wall),
+and .claude/hooks/checkpoint-save.py, which calls `redact` below so a generated
+handoff can never block that wall.
 
 A third consumer does NOT import it, on purpose. .claude/hooks/_dispatch.py is
 the blocking PreToolUse gate, and its own comments record why its one external
@@ -75,8 +74,17 @@ SECRET_PATTERNS = [
 #     25,000 chars  0.46s     100,000 chars   7.21s
 #                             200,000 chars  32.20s
 #
-# Doubling the input quadruples the time. With the guard, 200,000 chars costs
-# 0.00015s and 1,000,000 costs 0.00068s, and every verdict is unchanged.
+# Doubling the input quadruples the time. The guard changes no verdict, and what
+# it buys depends entirely on whether the needle is present:
+#
+#   needle ABSENT   200,000 chars 0.00015s   1,000,000 chars 0.00068s
+#   needle PRESENT   12,500 chars 0.51s         50,000 chars 7.98s
+#                                             200,000 chars 39.79s
+#
+# So the guard protects only text carrying no "://" at all, and "://" appears in
+# essentially every real markdown file. On realistic input the quadratic cost is
+# still paid in full. It predates this module and fixing it is separate work;
+# what is written here is only what the guard actually does.
 #
 # This is LIVE today, not a hazard this slice introduces: check_prevent_secrets
 # in .claude/hooks/_dispatch.py passes whole file content as ONE string, so a
@@ -112,12 +120,81 @@ def iter_patterns(text: str):
 REDACTION_TEMPLATE = "[REDACTED: {description}]"
 
 
+def _redact_segment(segment: str) -> str:
+    """Redact one segment: every span, computed on the ORIGINAL text, merged.
+
+    Both halves of that sentence are load-bearing, and the second is the one
+    that was missing. Substituting pattern by pattern is DESTRUCTIVE across
+    patterns: the marker carries a space and a bracket, so redacting an inner
+    span breaks the character-class run an enclosing pattern depends on, and the
+    enclosing pattern then matches nothing. Measured on an API key sitting where
+    a connection string's username goes - the password after the colon walked
+    out intact, and the wall accepted it, because the broken shape no longer
+    matched anything at all. A fixpoint loop does not help: that output is
+    already a fixpoint.
+
+    So every span is collected first, overlapping spans are merged into one
+    interval, and each interval is replaced in a single right-to-left pass. A
+    merged interval is named after the WIDEST pattern that contributed to it,
+    which for a nested credential is the enclosing one.
+    """
+    spans = []
+    for pattern, description in iter_patterns(segment):
+        for match in pattern.finditer(segment):
+            start, end = match.span()
+            if end > start:
+                spans.append((start, end, description))
+    if not spans:
+        return segment
+
+    spans.sort(key=lambda span: (span[0], -span[1]))
+    merged = []
+    for start, end, description in spans:
+        if merged and start < merged[-1][1]:
+            prev_start, prev_end, prev_description, prev_width = merged[-1]
+            if end - start > prev_width:
+                prev_description, prev_width = description, end - start
+            merged[-1] = (prev_start, max(prev_end, end), prev_description, prev_width)
+        else:
+            merged.append((start, end, description, end - start))
+
+    out = []
+    cursor = 0
+    for start, end, description, _width in merged:
+        out.append(segment[cursor:start])
+        out.append(REDACTION_TEMPLATE.format(description=description))
+        cursor = end
+    out.append(segment[cursor:])
+    return "".join(out)
+
+
 def redact(text: str) -> str:
     """Replace every credential-shaped SPAN with a marker naming what it was.
 
-    Line-based and allowlist-aware, mirroring scan_file's semantics exactly, so
-    that "the redactor's output passes the scanner" holds by construction rather
-    than by coincidence.
+    "The redactor's output passes the scanner" rests on four things, none of
+    them the allowlist:
+
+      1. The same pattern vocabulary, iterated through the same `iter_patterns`
+         prefilter, over the same line boundaries scan_file reads.
+      2. Every span computed on the original segment and merged before any
+         substitution, so no substitution can disarm a sibling pattern and no
+         partial residue is left behind (see `_redact_segment`).
+      3. No marker text containing anything the vocabulary matches. The
+         prefilter half of that is pinned by
+         test_no_redaction_marker_reintroduces_a_prefilter_needle.
+      4. Measurement rather than argument: a differential fuzz nests every
+         credential family inside every container family in both orders and
+         checks that nothing the vocabulary covered in the input survives.
+
+    THE ALLOWLIST IS DELIBERATELY NOT HONOURED HERE, and that is a difference
+    from scan_file, not an oversight. `ALLOWLIST_TOKEN` marks a human-authored,
+    reviewed pattern in a SOURCE file. A compact summary is machine-generated
+    and reviewed by nobody, and the marker lands in one by accident - most
+    likely in a session ABOUT the secret scanner, which is exactly the session
+    shape that caused the incident this redactor exists for. Honouring it there
+    let a live credential through the redactor AND the wall together. Ignoring
+    it only ever redacts MORE, so the invariant above is strictly stronger for
+    it: whatever the scanner would flag is a subset of what this removes.
 
     The span is replaced rather than the line, so the caller's prose survives:
     the handoff exists to let the next session resume, and a gutted summary
@@ -147,21 +224,13 @@ def redact(text: str) -> str:
     # failure this slice exists to remove.
     #
     # split("\n") alone still under-splits relative to readlines(), which
-    # (via universal newlines) also treats a lone "\r" as a line break.
-    # Because the allowlist token suppresses a whole line, an under-split
-    # line can carry that suppression across a boundary the scanner honours.
-    # So each "\n"-segment is split again on "\r", and the allowlist check
-    # and the substitution run per sub-segment. This reproduces readlines()'s
-    # universal-newline behaviour for the allowlist decision while rejoining
-    # sub-segments with "\r" and lines with "\n", which restores the input
-    # byte for byte.
+    # (via universal newlines) also treats a lone "\r" as a line break. So each
+    # "\n"-segment is split again on "\r" and redacted per sub-segment, which
+    # reproduces readlines()'s line boundaries exactly. That matters for prose,
+    # not for safety: the markdown-password pattern runs greedily to end of
+    # LINE, so on an under-split segment it would eat every "\r"-separated line
+    # after the label too. Sub-segments rejoin with "\r" and lines with "\n",
+    # which restores the input byte for byte.
     for line in text.split("\n"):
-        sub_lines = []
-        for sub_line in line.split("\r"):
-            if ALLOWLIST_TOKEN not in sub_line:
-                for pattern, description in iter_patterns(sub_line):
-                    sub_line = pattern.sub(
-                        REDACTION_TEMPLATE.format(description=description), sub_line)
-            sub_lines.append(sub_line)
-        out.append("\r".join(sub_lines))
+        out.append("\r".join(_redact_segment(sub_line) for sub_line in line.split("\r")))
     return "\n".join(out)

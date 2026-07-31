@@ -1151,3 +1151,142 @@ def test_a_failed_archive_write_on_the_success_branch_is_reported_as_lost_too(
     pointer = (module.LATEST_DIR / "summary.md").read_text(encoding="utf-8")
     assert "LOST" in pointer.upper()
     assert _LOSS_MARKER not in pointer
+
+
+# ============================================================
+# Promoted from the frozen contract, retired 2026-07-31.
+#
+# tests/contract/2026-07-31-handoff-redaction/ was written at the pre-impl gate
+# before any implementation existed, and removed when the slice shipped. Two of
+# its seven tests were already held here and one in
+# tests/security/test_SEC_004_credential_patterns.py, so only the five below
+# moved. Each carries the property the contract was frozen to hold, and each is
+# a property nothing else in this file asserts.
+# ============================================================
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+
+
+def _repo_with_one_commit(base: Path) -> Path:
+    """A git repo with no origin, so _push_delta_files falls back to ls-files."""
+    repo = base / "overlay"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "builder@example.invalid")
+    _git(repo, "config", "user.name", "Builder")
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "seed")
+    return repo
+
+
+def _load_push_all():
+    """push-all.py as a module. Its name is not importable, hence the loader.
+
+    tests/conftest.py sets the guard that makes its module-scope ensure_venv()
+    a no-op, so importing it here does not re-exec the pytest process.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "push_all_promoted", ENGINE / "scripts" / "push-all.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_real_push_gate_accepts_a_generated_handoff(tmp_path, monkeypatch):
+    """The span the plan admitted it did not hold.
+
+    content_scan() is the authoritative wall: it SELECTS the files about to be
+    pushed AND scans them AND refuses. Running the scanner CLI on a path proves
+    the scanning half only, and every other end-to-end test in this file does
+    exactly that. This drives the whole function over a repository carrying a
+    handoff the hook actually generated.
+    """
+    push_all = _load_push_all()
+    repo = _repo_with_one_commit(tmp_path / "r")
+
+    module = _load_hook_sandboxed(repo, monkeypatch)
+    _feed(module, monkeypatch, "the remote was " + _connection_string() + " at the time")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "handoff")
+
+    push_all.content_scan(repo)  # must not raise SystemExit
+
+
+def test_the_real_push_gate_still_refuses_an_unredacted_handoff(tmp_path):
+    """The control, without which the test above passes for the wrong reason.
+
+    A content_scan that accepted everything would make the flagship green while
+    proving nothing. Here the poisoned text is written directly, with no hook and
+    no redaction, and the gate must refuse it with exit 2.
+    """
+    push_all = _load_push_all()
+    repo = _repo_with_one_commit(tmp_path / "r")
+    (repo / "handoff.md").write_text("the remote was " + _connection_string() + " at the time\n",
+                                     encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "poison")
+
+    with pytest.raises(SystemExit) as caught:
+        push_all.content_scan(repo)
+    assert caught.value.code == 2
+
+
+def test_every_file_the_hook_writes_survives_the_scanner(tmp_path, monkeypatch):
+    """Globbed rather than named, so a future FOURTH output file is covered on
+    the day it lands instead of the day it leaks.
+
+    The sibling tests in this file name the files they check, which is what
+    makes this one worth keeping separately.
+    """
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+    _feed(module, monkeypatch, "remote " + _connection_string() + " here")
+
+    written = sorted(module.HANDOFF_DIR.rglob("*"))
+    files = [p for p in written if p.is_file()]
+    assert len(files) >= 2, f"the hook wrote {len(files)} file(s), expected at least 2"
+
+    result = subprocess.run(
+        [sys.executable, str(ENGINE / "scripts" / "secret-scanner.py"),
+         *[str(p) for p in files]],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_non_ascii_prose_around_a_secret_survives_intact():
+    """Handoffs here are largely in Russian, and every other sample in this file
+    is ASCII, so nothing else would notice a redactor that mangled Cyrillic."""
+    from scripts.utils.secret_patterns import redact
+
+    before = "Задача 3 закрыта. Ремоут был "
+    after = " на тот момент. Дальше задача 4."
+    out = redact(before + _connection_string() + after)
+
+    assert out.startswith(before)
+    assert out.endswith(after)
+    assert "not-a-real-token-value" not in out
+
+
+def test_redaction_is_idempotent():
+    """Redacting a redacted summary must be a no-op.
+
+    Not hypothetical plumbing: .latest/summary.md is rewritten on every compact,
+    and any future path that re-reads an archived handoff and passes it through
+    again must not nest markers inside markers.
+    """
+    from scripts.utils.secret_patterns import redact
+
+    once = redact("remote " + _connection_string() + " end")
+
+    # Asserted by CONTENT before idempotence, because equality alone is vacuous:
+    # the pre-impl probe caught exactly that. Against a null implementation both
+    # sides are None and `redact(once) == once` is trivially true.
+    assert "not-a-real-token-value" not in once
+    assert "[REDACTED:" in once
+
+    assert redact(once) == once
+    assert once.count("[REDACTED:") == 1, "a second pass nested a marker in a marker"

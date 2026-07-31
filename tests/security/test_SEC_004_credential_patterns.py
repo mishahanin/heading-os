@@ -145,15 +145,27 @@ _ROOT = _Path(__file__).resolve().parent.parent.parent
 _ALIGNED_PREFIXES = ["sk-ant-", "pplx-", "r8_", "fc-", "ctx7sk-", "ghp_", "gho_"]
 
 
-def _load_module_patterns(rel_path: str):
-    """Import a scanner module by file path and return its SECRET_PATTERNS list."""
+def _load_scanner_module(rel_path: str):
+    """Import a scanner module by file path and return the live module.
+
+    One loader, deliberately. An earlier revision of this file grew a second,
+    subtly different one (no SystemExit guard) beside it, and two loaders in one
+    file drift. The SystemExit guard is the safe superset: a module with a
+    `__main__` guard never raises it, and one whose import parses argv would
+    otherwise take the test session down with it.
+    """
     spec = importlib.util.spec_from_file_location("_scanmod_" + rel_path.replace("/", "_"), str(_ROOT / rel_path))
     mod = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(mod)
     except SystemExit:
         pass
-    return getattr(mod, "SECRET_PATTERNS", [])
+    return mod
+
+
+def _load_module_patterns(rel_path: str):
+    """The runtime SECRET_PATTERNS list of a scanner module."""
+    return getattr(_load_scanner_module(rel_path), "SECRET_PATTERNS", [])
 
 
 @pytest.mark.parametrize("prefix", _ALIGNED_PREFIXES)
@@ -447,6 +459,70 @@ def test_the_hook_and_the_shared_module_match_at_runtime():
     )
 
 
+def test_the_prefilter_matches_at_runtime():
+    """The same runtime companion for REQUIRED_SUBSTRING, which had only the
+    AST guard and so carried all three bypasses the test above just closed.
+
+    This structure is the more dangerous of the two: an entry whose needle is
+    not logically exact does not merely mis-describe a pattern, it silently
+    DISABLES it. One trailing rebind or one item-assignment after the literal
+    is enough to add a needle that appears in no text, switching that pattern
+    off inside the blocking gate while every source-level guard stays green.
+    """
+    shared = getattr(_load_scanner_module("scripts/utils/secret_patterns.py"),
+                     "REQUIRED_SUBSTRING", {})
+    hook = getattr(_load_scanner_module(".claude/hooks/_dispatch.py"),
+                   "REQUIRED_SUBSTRING", {})
+
+    # Non-empty first: an empty dict on both sides compares equal and proves
+    # nothing, which is exactly the vacuous-green shape being guarded against.
+    assert shared, "no REQUIRED_SUBSTRING loaded from scripts/utils/secret_patterns.py"
+    assert hook, "no REQUIRED_SUBSTRING loaded from .claude/hooks/_dispatch.py"
+    assert shared == hook, (
+        "runtime REQUIRED_SUBSTRING diverged between the shared module and the "
+        f"hook's embedded copy:\n  shared={shared!r}\n  hook={hook!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The path-scoped allowance itself.
+#
+# _secrets_path_allowed decides which files the write-time gate does not scan
+# at all, so a loosened anchor there is a hole no pattern test would see. The
+# comment above SECRETS_ALLOW_DIR_SEGMENTS records that a substring match once
+# bypassed the scan for any path merely CONTAINING the allowed text; nothing in
+# the suite would have caught a regression back to it. The `myscripts/utils/`
+# and backslash cases below are what makes that comment enforceable.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rel_path,allowed", [
+    ("scripts/utils/secret_patterns.py", True),
+    ("/abs/root/scripts/utils/secret_patterns.py", True),
+    ("scripts/utils/nested/secret_patterns.py", True),
+    (".claude/hooks/_dispatch.py", True),
+    ("myscripts/utils/secret_patterns.py", False),      # segment anchor
+    ("outputs/scratch/secret_patterns.py", False),
+    ("knowledge/notes/secret_patterns.py", False),
+    ("outputs/scratch/_dispatch.py", False),
+    ("mytests/security/planted.py", False),             # segment anchor
+    ("tests/security/fixture.py", True),
+])
+def test_the_path_allowance_is_segment_anchored(rel_path, allowed):
+    mod = _load_dispatch_module()
+    assert mod._secrets_path_allowed(rel_path) is allowed, (
+        f"{rel_path} was {'blocked' if allowed else 'allowed'}, "
+        f"expected the opposite"
+    )
+
+
+def test_the_path_allowance_normalizes_backslashes():
+    """A Windows-style path must resolve its basename off Windows too, or the
+    allowance silently stops applying to the files it is meant to cover."""
+    mod = _load_dispatch_module()
+    assert mod._secrets_path_allowed(r"scripts\utils\secret_patterns.py") is True
+    assert mod._secrets_path_allowed(r"outputs\scratch\secret_patterns.py") is False
+
+
 # ---------------------------------------------------------------------------
 # Control-flow tests for the mirrored prefilter, through check_prevent_secrets
 # itself.
@@ -464,14 +540,8 @@ def test_the_hook_and_the_shared_module_match_at_runtime():
 # ---------------------------------------------------------------------------
 
 def _load_dispatch_module():
-    """Import .claude/hooks/_dispatch.py fresh and return the live module
-    (not just its SECRET_PATTERNS), so its functions can be called directly."""
-    spec = importlib.util.spec_from_file_location(
-        "_dispatch_live", str(_ROOT / ".claude/hooks/_dispatch.py")
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """The live hook module, so its functions can be called directly."""
+    return _load_scanner_module(".claude/hooks/_dispatch.py")
 
 
 def _assembled_connection_string():

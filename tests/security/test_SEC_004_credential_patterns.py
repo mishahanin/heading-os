@@ -493,6 +493,13 @@ def test_the_prefilter_matches_at_runtime():
 # bypassed the scan for any path merely CONTAINING the allowed text; nothing in
 # the suite would have caught a regression back to it. The `myscripts/utils/`
 # and backslash cases below are what makes that comment enforceable.
+#
+# Three entries were allowed BY BASENAME, anywhere in either repository, until
+# 2026-07-31: secret-scanner.py, prevent-secrets.py and .env.example. Each was
+# measured against the live gate with a planted key and each allowed the write
+# (outputs/scratch/secret-scanner.py, knowledge/prevent-secrets.py,
+# crm/contacts/.env.example). All three are path-scoped now, and the cases
+# below hold them there in both directions.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("rel_path,allowed", [
@@ -506,6 +513,29 @@ def test_the_prefilter_matches_at_runtime():
     ("outputs/scratch/_dispatch.py", False),
     ("mytests/security/planted.py", False),             # segment anchor
     ("tests/security/fixture.py", True),
+    # scripts/secret-scanner.py -- the commit-time and push-time wall itself.
+    ("scripts/secret-scanner.py", True),
+    ("/abs/root/scripts/secret-scanner.py", True),
+    ("outputs/scratch/secret-scanner.py", False),
+    ("knowledge/secret-scanner.py", False),
+    ("myscripts/secret-scanner.py", False),             # segment anchor
+    # .claude/hooks/prevent-secrets.py -- the runpy shim.
+    (".claude/hooks/prevent-secrets.py", True),
+    ("/abs/root/.claude/hooks/prevent-secrets.py", True),
+    ("knowledge/prevent-secrets.py", False),
+    ("outputs/scratch/prevent-secrets.py", False),
+    # .env.example is a TEMPLATE. It carries placeholders, so it needs no
+    # exemption anywhere, and a real credential in one is a finding rather than
+    # a false positive. Every other .env variant stays exempt: those are the
+    # gitignored files that legitimately hold live credentials.
+    (".env.example", False),
+    ("crm/contacts/.env.example", False),
+    ("/abs/root/.env.example", False),
+    (".env", True),
+    ("/abs/root/.env", True),
+    (".env.local", True),
+    (".env.production", True),
+    (".envil", False),
 ])
 def test_the_path_allowance_is_segment_anchored(rel_path, allowed):
     mod = _load_dispatch_module()
@@ -521,6 +551,46 @@ def test_the_path_allowance_normalizes_backslashes():
     mod = _load_dispatch_module()
     assert mod._secrets_path_allowed(r"scripts\utils\secret_patterns.py") is True
     assert mod._secrets_path_allowed(r"outputs\scratch\secret_patterns.py") is False
+    assert mod._secrets_path_allowed(r"scripts\secret-scanner.py") is True
+    assert mod._secrets_path_allowed(r"outputs\scratch\secret-scanner.py") is False
+
+
+def test_the_narrowed_allowances_still_cover_the_real_files():
+    """The other direction, against the real paths rather than a synthetic one.
+
+    Narrowing an allowance is only correct if the workspace can still maintain
+    the files it was written for. Each of these exists on disk and is edited in
+    the ordinary course of maintaining the wall."""
+    mod = _load_dispatch_module()
+    for rel in ("scripts/secret-scanner.py",
+                ".claude/hooks/prevent-secrets.py",
+                ".claude/hooks/_dispatch.py",
+                "scripts/utils/secret_patterns.py"):
+        assert (_ROOT / rel).is_file(), f"{rel} does not exist; the case is stale"
+        assert mod._secrets_path_allowed(rel) is True, f"{rel} lost its allowance"
+        assert mod._secrets_path_allowed(str(_ROOT / rel)) is True, (
+            f"{rel} lost its allowance when given as an absolute path")
+
+
+def test_the_real_env_example_is_writable_even_though_it_is_scanned():
+    """.env.example lost its exemption, so the legitimate case is now a
+    CONTENT question rather than a path question: the real template must still
+    pass the gate. It does, because placeholders are what a template holds --
+    every value in it is a `your-...-here` shape the patterns already exclude.
+    If a future edit trips this, the template gained something that looks like a
+    real credential, which is the finding, not the false positive."""
+    mod = _load_dispatch_module()
+    env_example = _ROOT / ".env.example"
+    assert env_example.is_file(), ".env.example does not exist; the case is stale"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(env_example),
+            "content": env_example.read_text(encoding="utf-8"),
+        },
+    }
+    assert mod.check_prevent_secrets(payload) is None, (
+        "the real .env.example would now be refused by the write-time gate")
 
 
 # ---------------------------------------------------------------------------

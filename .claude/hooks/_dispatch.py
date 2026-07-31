@@ -125,24 +125,45 @@ REQUIRED_SUBSTRING = {
     "connection string with inline credentials": "://",
 }
 
-SECRETS_ALLOW_BASENAMES = {
-    "prevent-secrets.py",   # Legacy hook with the same pattern catalog; self-trigger if scanned
-    "secret-scanner.py",    # Git pre-commit secret-scanner (mirror of these patterns)
-    ".env.example",         # Placeholder values only
-}
+# EVERY allowance below is PATH-SCOPED. There is deliberately no basename-wide
+# set any more: one existed until 2026-07-31 and allowed prevent-secrets.py,
+# secret-scanner.py and .env.example anywhere in EITHER repository, which was
+# measured against the live gate with a planted key in outputs/scratch/,
+# knowledge/ and crm/contacts/ — all three written successfully. The scanner
+# side (SKIP_PATHS in scripts/secret-scanner.py) already carried repo-relative
+# paths for the same three files; these sets are the hook's alignment with it.
+#
+# The hook cannot compare repo-relative paths the way the scanner does: it is
+# handed whatever the tool call carried (absolute, relative to a drifted shell,
+# or inside the sibling data repo), and it has no reliable root to subtract. So
+# it scopes by containing DIRECTORY instead, anchored on segment boundaries.
+# That is marginally wider than the scanner's exact-path match — it also covers
+# a nested scripts/utils/nested/secret_patterns.py — and deliberately so: the
+# hole being closed was basename-anywhere, not one directory level.
+#
 # Path-scoped allow: only honoured when the file lives inside .claude/hooks/.
-# A file named _dispatch.py anywhere else (outputs/, scripts/) must still be scanned.
+# A file named _dispatch.py anywhere else (outputs/, scripts/) must still be
+# scanned. prevent-secrets.py sits here too: it is a 28-line runpy shim holding
+# no patterns at all, so the old "legacy hook with the same pattern catalog"
+# justification was never true — but the scanner skips it by path, and the two
+# walls agreeing is worth more than deleting an allowance that costs nothing.
 SECRETS_ALLOW_HOOK_BASENAMES = {
     "_dispatch.py",
+    "prevent-secrets.py",
 }
 # Path-scoped allow: only honoured when the file lives inside scripts/utils/.
 # secret_patterns.py contains the patterns by definition and would self-trigger
 # if scanned; a file of that name anywhere else (a decoy, a planted secret) must
-# still be scanned. Narrowed from a basename-wide entry in SECRETS_ALLOW_BASENAMES
-# (any secret_patterns.py in either repo was unscanned) to match the scanner's
-# own SKIP_PATHS narrowing (scripts/secret-scanner.py) rather than contradict it.
+# still be scanned.
 SECRETS_ALLOW_UTILS_BASENAMES = {
     "secret_patterns.py",
+}
+# Path-scoped allow: only honoured when the file lives inside scripts/.
+# secret-scanner.py has held ZERO re.compile calls since the vocabulary moved to
+# scripts/utils/secret_patterns.py, so "mirror of these patterns" stopped
+# describing it; it is kept, path-scoped, to match the scanner's own SKIP_PATHS.
+SECRETS_ALLOW_SCRIPTS_BASENAMES = {
+    "secret-scanner.py",
 }
 # Directory allow-list. Matched as path SEGMENTS, not raw substrings, so a
 # look-alike like `mytests/security/` or `my.sessions/` does NOT slip past the
@@ -156,33 +177,45 @@ SECRETS_ALLOW_EXACT_PATHS = {
     "outputs/browser/cookies.json",    # Browser cookies for headless automation  # leak-guard: ok (allowlist exact-path key, not path construction)
 }
 
+def _under_dir(normalized: str, segment: str) -> bool:
+    """True when `segment` is a segment-anchored directory prefix of the path.
+
+    The segment must start at the path root or be preceded by a `/`, so
+    `tests/security/` matches `.../tests/security/x` but never
+    `.../mytests/security/x`.
+    """
+    return normalized.startswith(segment) or ("/" + segment) in normalized
+
+
 def _secrets_path_allowed(file_path: str) -> bool:
     # Normalize FIRST so a Windows-style backslash path resolves its basename
     # correctly even on Linux (os.path.basename does not split on "\" off Windows).
     normalized = file_path.replace("\\", "/")
     basename = normalized.rsplit("/", 1)[-1]
-    if basename in SECRETS_ALLOW_BASENAMES:
+    if basename in SECRETS_ALLOW_HOOK_BASENAMES and _under_dir(normalized, ".claude/hooks/"):
         return True
-    if basename in SECRETS_ALLOW_HOOK_BASENAMES and (
-        "/.claude/hooks/" in normalized or normalized.startswith(".claude/hooks/")
-    ):
+    if basename in SECRETS_ALLOW_UTILS_BASENAMES and _under_dir(normalized, "scripts/utils/"):
         return True
-    if basename in SECRETS_ALLOW_UTILS_BASENAMES and (
-        "/scripts/utils/" in normalized or normalized.startswith("scripts/utils/")
-    ):
+    if basename in SECRETS_ALLOW_SCRIPTS_BASENAMES and _under_dir(normalized, "scripts/"):
         return True
     # Exact .env basename set only — `.env` and dotted variants (`.env.local`,
     # `.env.production`), but NOT look-alikes like `.envil` or `.environment`.
-    if basename == ".env" or basename.startswith(".env."):
+    #
+    # `.env.example` is carved OUT, and it is the one exception worth stating.
+    # The rest of this branch exempts the gitignored files that legitimately
+    # hold live credentials; a `.example` template holds placeholders by
+    # definition, so it needs no exemption, and the old basename-wide entry let
+    # a planted key be written to a `.env.example` in any directory. Scanning it
+    # costs nothing (measured: the real template is clean) and a real credential
+    # appearing in one is a finding rather than a false positive. This is
+    # STRICTER than the scanner's SKIP_PATHS, which still skips the repo-root
+    # `.env.example`; the difference is deliberate and in the safe direction.
+    if basename != ".env.example" and (basename == ".env" or basename.startswith(".env.")):
         return True
     if normalized in SECRETS_ALLOW_EXACT_PATHS:
         return True
-    # Segment-anchored directory match: the segment must start at the path root
-    # or be preceded by a `/`, so `tests/security/` matches `.../tests/security/x`
-    # but never `.../mytests/security/x`.
-    anchored = "/" + normalized
     for seg in SECRETS_ALLOW_DIR_SEGMENTS:
-        if normalized.startswith(seg) or ("/" + seg) in anchored:
+        if _under_dir(normalized, seg):
             return True
     return False
 
@@ -228,9 +261,8 @@ def check_prevent_secrets(payload: dict) -> Optional[dict]:
         # is preserved manually — regenerate fixtures via
         # `python outputs/operations/workspace/capture_hook_fixtures.py` and diff
         # against `tests/fixtures/expected/` before any change to this filename
-        # reference. The actual allow-list is in SECRETS_ALLOW_BASENAMES /
-        # SECRETS_ALLOW_HOOK_BASENAMES / SECRETS_ALLOW_PATHS above in this same
-        # file (_dispatch.py).
+        # reference. The actual allow-list is the four SECRETS_ALLOW_* sets above
+        # in this same file (_dispatch.py).
         return {
             "decision": "block",
             "reason": (

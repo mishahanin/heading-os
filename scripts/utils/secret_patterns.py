@@ -107,3 +107,57 @@ def iter_patterns(text: str):
         if needle is not None and needle not in text:
             continue
         yield pattern, description
+
+
+REDACTION_TEMPLATE = "[REDACTED: {description}]"
+
+
+def redact(text: str) -> str:
+    """Replace every credential-shaped SPAN with a marker naming what it was.
+
+    Line-based and allowlist-aware, mirroring scan_file's semantics exactly, so
+    that "the redactor's output passes the scanner" holds by construction rather
+    than by coincidence.
+
+    The span is replaced rather than the line, so the caller's prose survives:
+    the handoff exists to let the next session resume, and a gutted summary
+    fails at that.
+
+    ONE PATTERN IS AN EXCEPTION, and it is stated here rather than discovered
+    later. "Plaintext password in markdown" ends in [^\\n]{8,}, which is greedy
+    to end of line, so a line beginning with a bolded Password label loses
+    everything after that label, prose included. Measured: a sentence about a
+    rotation policy came back as the marker alone. The pattern is doing its job,
+    since text after that label is exactly where a password would sit, and
+    narrowing it here would weaken detection to protect prose. Pinned by
+    test_the_markdown_password_pattern_eats_its_whole_line.
+
+    Returns the input unchanged, byte for byte, when nothing matches.
+    """
+    if not text:
+        return text
+
+    out = []
+    # split("\n"), NOT splitlines(). This is the line that makes the guarantee
+    # true, and the obvious spelling breaks it. scan_file reads the file in text
+    # mode and iterates readlines(), which splits on universal newlines only.
+    # str.splitlines() additionally splits on the vertical tab, the form
+    # feed, the three ASCII file/group/record separators, NEL, and the
+    # Unicode LINE and PARAGRAPH SEPARATOR code points. Named rather than
+    # typed: this file is prose under the zero-hidden-characters rule.
+    # A credential spanning any of them would be cut in two by the
+    # redactor, left unmatched, and then caught by the scanner: the redactor
+    # reports clean and the wall refuses the push, which is the exact failure
+    # this slice exists to remove.
+    #
+    # Measured at the pre-impl gate. A U+2028 that slipped into the probe input
+    # by accident demonstrated it live: splitlines gave four lines where
+    # readlines gave two. split("\n") matches readlines, and joining with "\n"
+    # restores the input byte for byte.
+    for line in text.split("\n"):
+        if ALLOWLIST_TOKEN not in line:
+            for pattern, description in iter_patterns(line):
+                line = pattern.sub(
+                    REDACTION_TEMPLATE.format(description=description), line)
+        out.append(line)
+    return "\n".join(out)

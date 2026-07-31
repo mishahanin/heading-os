@@ -214,12 +214,34 @@ def main() -> int:
     archive_path = HANDOFF_DIR / archive_name
     quarantine_path = QUARANTINE_DIR / archive_name
 
-    # Data-root-relative refs. Every path any artifact NAMES is one of these
-    # three, so a channel can only name something that was actually written.
+    # Refs. Every path any artifact NAMES is one of these three, so a channel
+    # can only name something that was actually written.
     data_root = get_data_root()
-    archive_ref = archive_path.relative_to(data_root).as_posix()
-    quarantine_ref = quarantine_path.relative_to(data_root).as_posix()
-    summary_ref = (LATEST_DIR / "summary.md").relative_to(data_root).as_posix()
+
+    def _ref(path: Path) -> str:
+        """Data-root-relative when it can be, absolute when it cannot. Total.
+
+        HANDOFF_DIR resolves through get_outputs_dir(), which on a non-CEO
+        workspace prefers the exec's slug-named data sibling; the refs are
+        computed against get_data_root(), which never reads the workspace
+        identity and stops at the generic one. The two diverge on any exec
+        workspace that has not pinned HEADING_OS_DATA, and provisioning does not
+        pin it, so nothing warns.
+
+        A bare relative_to() raised there, uncaught, BEFORE a single byte was
+        written: no archive, no quarantine, no pointer and no systemMessage.
+        This hook runs after the session's context has been discarded, so that
+        is the one loss nobody can undo. An absolute ref is an uglier string and
+        an incomparably better outcome.
+        """
+        try:
+            return path.relative_to(data_root).as_posix()
+        except ValueError:
+            return path.as_posix()
+
+    archive_ref = _ref(archive_path)
+    quarantine_ref = _ref(quarantine_path)
+    summary_ref = _ref(LATEST_DIR / "summary.md")
 
     # The body names where IT actually landed. archive_md is built once and
     # written down one of two branches, so an unconditional archive_ref here

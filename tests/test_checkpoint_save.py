@@ -40,14 +40,17 @@ def _run_hook(tmp_path, payload):
     """Run checkpoint-save.py with the DATA root redirected into tmp_path."""
     env = dict(os.environ)
     env["HEADING_OS_DATA"] = str(tmp_path)
-    proc = subprocess.run(
+    return _spawn(env, payload)
+
+
+def _spawn(env, payload):
+    return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
         env=env,
     )
-    return proc
 
 
 def test_postcompact_does_not_crash_with_data_repo_path(tmp_path):
@@ -88,6 +91,88 @@ def test_continuation_prompt_uses_data_root_relative_path(tmp_path):
     )
     # Must not leak an absolute machine path into the resume artifact.
     assert str(tmp_path) not in prompt, "absolute path leaked into continuation prompt"
+
+
+def _exec_layout(tmp_path):
+    """A scratch workspace whose two path resolvers legitimately disagree.
+
+    HANDOFF_DIR resolves through get_outputs_dir(), which on a non-CEO workspace
+    goes to get_exec_data_root() and PREFERS the slug-named sibling. The refs are
+    computed against get_data_root(), which never reads the workspace identity
+    and stops at the generic sibling. Nothing reconciles the two unless
+    HEADING_OS_DATA is pinned, and provisioning does not pin it.
+
+    Built out of real directories rather than monkeypatched resolvers, so the
+    divergence is the one the resolvers actually produce: WORKSPACE_ROOT points
+    the identity lookup at a scratch engine root, and both siblings exist beside
+    it. The hook's own STATE_PATH is the real engine file, restored by the
+    autouse fixture above.
+    """
+    engine = tmp_path / "engine"
+    (engine / ".claude").mkdir(parents=True)
+    (engine / "CLAUDE.md").write_text("scratch engine root\n", encoding="utf-8")
+    (engine / ".workspace-identity.json").write_text(
+        json.dumps({"role": "member", "slug": "example", "type": "exec-workspace"}),
+        encoding="utf-8",
+    )
+    generic = tmp_path / ".heading-os-data"
+    generic.mkdir()
+    slug_named = tmp_path / ".heading-os-data-example"
+    slug_named.mkdir()
+
+    env = dict(os.environ)
+    env.pop("HEADING_OS_DATA", None)
+    env["WORKSPACE_ROOT"] = str(engine)
+    return env, generic, slug_named
+
+
+def test_exec_layout_still_writes_the_handoff(tmp_path):
+    """The handoff must survive a data root the archive path is not under.
+
+    Before the fix, archive_path.relative_to(data_root) raised an uncaught
+    ValueError before a single byte was written: no archive, no quarantine, no
+    pointer, no systemMessage, return code 1. This hook runs after the session's
+    context has been discarded, so that outcome is the one loss nobody can undo.
+    """
+    env, generic, slug_named = _exec_layout(tmp_path)
+    proc = _spawn(env, {
+        "session_id": "test-sess", "trigger": "manual",
+        "compact_summary": "exec layout summary body", "transcript_path": "",
+    })
+
+    assert proc.returncode == 0, f"hook exited non-zero:\n{proc.stderr}"
+    assert "Traceback" not in proc.stderr, f"hook crashed:\n{proc.stderr}"
+
+    archive_dir = slug_named / "outputs" / "operations" / "handoff-archive"
+    files = list(archive_dir.glob("*_handoff_compact-manual_*.md"))
+    assert files, f"no handoff archive written under {archive_dir}"
+    assert "exec layout summary body" in files[0].read_text(encoding="utf-8")
+
+    latest = archive_dir / ".latest"
+    assert (latest / "summary.md").exists(), "latest/summary.md not written"
+    assert (latest / "prompt.md").exists(), "latest/prompt.md not written"
+
+    # Nothing landed under the root the refs were computed against.
+    assert not list(generic.rglob("*.md")), (
+        f"the hook wrote into {generic}, which is not where HANDOFF_DIR resolves")
+
+
+def test_exec_layout_refs_fall_back_to_the_absolute_path(tmp_path):
+    """A ref that cannot be made relative names the file ABSOLUTELY rather than
+    naming nothing. The pointer's whole job is to be readable by the next
+    session, so a ref it cannot resolve is as bad as no pointer at all."""
+    env, _generic, slug_named = _exec_layout(tmp_path)
+    proc = _spawn(env, {
+        "session_id": "test-sess", "trigger": "manual",
+        "compact_summary": "s", "transcript_path": "",
+    })
+    assert proc.returncode == 0, f"hook exited non-zero:\n{proc.stderr}"
+
+    archive_dir = slug_named / "outputs" / "operations" / "handoff-archive"
+    archive = next(iter(archive_dir.glob("*.md")))
+    prompt = (archive_dir / ".latest" / "prompt.md").read_text(encoding="utf-8")
+    assert archive.as_posix() in prompt, (
+        f"the continuation prompt names no readable path:\n{prompt}")
 
 
 def test_state_reset_records_data_root_relative_summary_path(tmp_path):

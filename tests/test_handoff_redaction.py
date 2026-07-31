@@ -226,3 +226,148 @@ def test_no_redaction_marker_reintroduces_a_prefilter_needle():
             assert needle not in marker, (
                 f"prefilter needle {needle!r} appears in the redaction marker "
                 f"for {description!r}: {marker!r}")
+
+
+# ============================================================
+# The hook: the composition, and the promise that it never loses a handoff
+# ============================================================
+
+def _load_hook_sandboxed(tmp_path, monkeypatch):
+    """Load checkpoint-save.py with BOTH of its write targets redirected.
+
+    Two targets, and missing either one damages the live workspace:
+
+      - HANDOFF_DIR resolves through get_outputs_dir() -> get_data_root(), which
+        reads HEADING_OS_DATA at call time and computes HANDOFF_DIR at module
+        exec. So the env var must be set BEFORE exec_module, not after.
+      - STATE_PATH does NOT go through the data root. It is
+        WORKSPACE/.claude/state/checkpoint-state.json, an ENGINE path, and
+        main() writes it unconditionally at the end. A test that forgets this
+        overwrites the live session's checkpoint state.
+
+    The assertion below is not decoration. If the redirect ever silently fails,
+    the next line would write into the operator's real handoff archive.
+    """
+    import importlib.util
+
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+    spec = importlib.util.spec_from_file_location(
+        "checkpoint_save_under_test", ENGINE / ".claude" / "hooks" / "checkpoint-save.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    monkeypatch.setattr(module, "STATE_PATH", tmp_path / "checkpoint-state.json")
+
+    # Operand order is not style: ruff's SIM300 flags the natural spelling here
+    # as a Yoda condition, and lint-ratchet turns that into a blocked commit.
+    # Measured at the pre-impl gate, on this exact line.
+    assert tmp_path in module.HANDOFF_DIR.parents or tmp_path == module.HANDOFF_DIR, (
+        f"sandbox escaped: HANDOFF_DIR is {module.HANDOFF_DIR}, not under {tmp_path}. "
+        f"HEADING_OS_DATA only reaches HANDOFF_DIR through get_outputs_dir(), which "
+        f"honours it ONLY when is_ceo_workspace() is true (scripts/utils/workspace.py:272); "
+        f"on a non-CEO clone it resolves through get_personal_root() instead, which need "
+        f"not sit under the data root. If you are running on such a clone, this failure is "
+        f"the sandbox refusing to write outside tmp_path, which is correct: fix the "
+        f"harness, never the assertion.")
+    return module
+
+
+def _feed(module, monkeypatch, summary: str):
+    """Drive the hook the way Claude Code does: one JSON payload on stdin."""
+    import io
+    import json
+
+    payload = {"session_id": "s", "trigger": "manual",
+               "compact_summary": summary, "transcript_path": "/dev/null"}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    module.main()
+    return module
+
+
+def _run_hook(tmp_path, monkeypatch, summary: str):
+    return _feed(_load_hook_sandboxed(tmp_path, monkeypatch), monkeypatch, summary)
+
+
+def test_the_hook_writes_an_archive_the_scanner_accepts(tmp_path, monkeypatch):
+    """SC-1. The end-to-end span: a poisoned summary in, a clean file out."""
+    module = _run_hook(tmp_path, monkeypatch,
+                       "the remote was " + _connection_string() + " at the time")
+
+    written = sorted(p for p in module.HANDOFF_DIR.rglob("*.md"))
+    assert written, "the hook wrote no handoff at all"
+
+    result = subprocess.run(
+        [sys.executable, str(ENGINE / "scripts" / "secret-scanner.py"),
+         *[str(p) for p in written]],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_both_summary_carrying_files_are_redacted(tmp_path, monkeypatch):
+    """The dated archive AND .latest/summary.md carry the summary. Redacting one
+    and not the other would leave the wall blocked by the other."""
+    module = _run_hook(tmp_path, monkeypatch,
+                       "remote " + _connection_string() + " here")
+
+    bodies = [p.read_text(encoding="utf-8") for p in module.HANDOFF_DIR.rglob("*.md")]
+    assert len(bodies) >= 2
+    for body in bodies:
+        assert "not-a-real-token-value" not in body
+
+
+def test_the_surrounding_summary_still_reaches_the_archive(tmp_path, monkeypatch):
+    """Redaction must not cost the handoff its usefulness."""
+    module = _run_hook(tmp_path, monkeypatch,
+                       "Task 3 is done. remote " + _connection_string() + " . Next: Task 4.")
+
+    body = next(iter(module.HANDOFF_DIR.glob("*.md"))).read_text(encoding="utf-8")
+    assert "Task 3 is done." in body
+    assert "Next: Task 4." in body
+
+
+def test_a_redactor_that_raises_quarantines_rather_than_losing_the_handoff(
+        tmp_path, monkeypatch, capsys):
+    """SC-3. The hook runs AFTER the context is gone, so a handoff it fails to
+    write cannot be regenerated by anyone."""
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+
+    def _boom(_text):
+        raise RuntimeError("redactor exploded")
+
+    monkeypatch.setattr(module, "redact", _boom)
+    _feed(module, monkeypatch, "plain summary, no secret")
+
+    quarantined = list(module.QUARANTINE_DIR.rglob("*.md"))
+    assert quarantined, "the handoff was lost when the redactor raised"
+    assert "plain summary, no secret" in quarantined[0].read_text(encoding="utf-8")
+    assert "redactor exploded" in capsys.readouterr().err
+
+
+def test_a_quarantined_summary_never_reaches_the_tracked_pointer(
+        tmp_path, monkeypatch):
+    """The half that makes quarantine better than a raw write.
+
+    Writing the unredacted summary where it normally goes would resurrect the
+    original incident: the wall refuses and the backup is blocked, now rarely
+    and undiagnosed. The pointer must name the quarantine WITHOUT reproducing
+    the text that could not be redacted.
+    """
+    module = _load_hook_sandboxed(tmp_path, monkeypatch)
+
+    def _boom(_text):
+        raise RuntimeError("redactor exploded")
+
+    monkeypatch.setattr(module, "redact", _boom)
+    _feed(module, monkeypatch, "SENSITIVE-MARKER-" + "abc123")
+
+    pointer = (module.LATEST_DIR / "summary.md").read_text(encoding="utf-8")
+    assert "SENSITIVE-MARKER-" + "abc123" not in pointer
+    assert "QUARANTINED" in pointer
+    assert str(module.QUARANTINE_DIR) in pointer
+
+    # And nothing outside the quarantine carries it either.
+    outside = [p for p in module.HANDOFF_DIR.rglob("*")
+               if p.is_file() and module.QUARANTINE_DIR not in p.parents]
+    for path in outside:
+        assert "SENSITIVE-MARKER-" + "abc123" not in path.read_text(encoding="utf-8")

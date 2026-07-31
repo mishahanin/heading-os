@@ -30,12 +30,40 @@ WORKSPACE = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(WORKSPACE))
 from scripts.utils.workspace import get_data_root, get_outputs_dir  # noqa: E402
 
+# Guarded, and the guard is not defensive habit. This plan's own constraint says
+# a lost handoff is worse than an unredacted one, because the hook runs after the
+# session context is discarded and nobody can regenerate what it fails to write.
+# An UNGUARDED import contradicts that constraint directly: if the module fails
+# to import, checkpoint-save.py does not load at all and NO handoff is written.
+# The try/except in main() would never run, because main() would never be
+# reached. Caught at the pre-impl gate.
+#
+# Exception is caught broadly on purpose, matching _dispatch.py's reasoning for
+# its own guarded import: a SyntaxError in a module this one imports is as fatal
+# as an ImportError, and both cost the handoff. The failure is never silent.
+try:
+    from scripts.utils.secret_patterns import redact  # noqa: E402
+except Exception as _exc:  # noqa: BLE001 - never lose the handoff
+    print(f"checkpoint-save: redaction unavailable ({type(_exc).__name__}): {_exc}",
+          file=sys.stderr)
+    _REDACT_UNAVAILABLE = _exc
+
+    def redact(_text):  # type: ignore[misc]
+        # RAISES rather than returning the text unchanged, and the difference
+        # matters. An identity fallback would let main() proceed as if redaction
+        # had succeeded and write the raw summary into the TRACKED archive,
+        # which is precisely the incident this slice removes. Raising routes the
+        # handoff to the quarantine path instead: memory preserved, tracked tree
+        # clean, backup unblocked.
+        raise RuntimeError(f"redaction module unavailable: {_REDACT_UNAVAILABLE}")
+
 # Handoff archive is DATA -> resolves under the data root (sibling), not the engine.
 # @-reference paths must therefore be data-root-relative (outputs/...), NOT
 # engine-relative: archive_path lives under the data sibling, so relative_to(WORKSPACE)
 # would raise ValueError. The data-path-redirect hook resolves the outputs/... ref.
 HANDOFF_DIR = get_outputs_dir() / "operations" / "handoff-archive"
 LATEST_DIR = HANDOFF_DIR / ".latest"
+QUARANTINE_DIR = HANDOFF_DIR / ".quarantine"
 STATE_PATH = WORKSPACE / ".claude" / "state" / "checkpoint-state.json"
 
 
@@ -106,7 +134,23 @@ def main() -> int:
     archive_name = f"{stamp}_handoff_compact-{trigger_slug}_{session_slug}.md"
     archive_path = HANDOFF_DIR / archive_name
 
+    # Redact BEFORE the text reaches any file. The archive is tracked, and a
+    # credential-shaped string reaching it blocks push-all's content scan and
+    # therefore the whole backup. Measured on 2026-07-31, when this hook wrote
+    # the two files that refused the push.
+    #
+    # Best-effort on purpose. This hook runs after the session's context has
+    # been discarded, so a handoff it fails to write is gone for good, and that
+    # is worse than an unredacted one: the push-time scan still refuses to let
+    # a real secret off the machine.
     summary_text = compact_summary or "_No compact summary provided._"
+    quarantine_reason = None
+    try:
+        summary_text = redact(summary_text)
+    except Exception as exc:  # noqa: BLE001 - never lose the handoff
+        quarantine_reason = f"{type(exc).__name__}: {exc}"
+        print(f"checkpoint-save: redaction failed ({quarantine_reason}); "
+              f"QUARANTINING the handoff", file=sys.stderr)
 
     archive_md = f"""# Handoff - post-compact ({trigger})
 
@@ -166,8 +210,37 @@ Rules:
 """
 
     try:
-        write_text_atomic(archive_path, archive_md)
-        write_text_atomic(LATEST_DIR / "summary.md", summary_pointer)
+        if quarantine_reason is None:
+            write_text_atomic(archive_path, archive_md)
+            write_text_atomic(LATEST_DIR / "summary.md", summary_pointer)
+        else:
+            # QUARANTINE, not a raw write into the tracked archive.
+            #
+            # The obvious fallback, writing the unredacted summary where it
+            # normally goes, RESURRECTS the incident this slice exists to
+            # remove: the wall refuses, the backup of the irreplaceable half of
+            # the workspace is blocked, and nobody finds out because this hook's
+            # stderr is read by no one. Rarer than before and undiagnosed is a
+            # worse failure than the original, not a better one.
+            #
+            # So the memory is preserved OUTSIDE the tracked tree and the wall
+            # is left unarmed. What lands at the normal pointer path is a
+            # POINTER carrying no summary text at all, so the SessionStart
+            # inject still tells the next session where to look and the tracked
+            # tree stays clean. This is an alarm state, not the permanent hiding
+            # that gitignoring the whole archive would have been.
+            QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
+            quarantined = QUARANTINE_DIR / archive_name
+            write_text_atomic(quarantined, archive_md)
+            write_text_atomic(LATEST_DIR / "summary.md", (
+                "# Latest handoff summary\n\n"
+                "REDACTION FAILED, so this handoff was QUARANTINED and is not "
+                "in the backup.\n\n"
+                f"Reason: {quarantine_reason}\n"
+                f"Quarantined at: {quarantined}\n\n"
+                "The summary text is deliberately not reproduced here: this file "
+                "is tracked, and copying an unredacted summary into it is the "
+                "exact failure that made the quarantine necessary.\n"))
         write_text_atomic(LATEST_DIR / "prompt.md", prompt_pointer)
     except Exception as exc:
         # Generic systemMessage; full exception goes to stderr to avoid

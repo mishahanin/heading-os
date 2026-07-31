@@ -111,6 +111,10 @@ def _run_scanner(scripts_dir, tmp_path, filename, content):
     # flagged either way (measured 2026-07-31).
     "placeholder-secret-1",
     "dummy_value_123",
+    # Promoted from the retired 2026-07-31-placeholder-exclusion contract:
+    # the shipped .env.example value, and an all-x placeholder.
+    "your_exchange_password_here",
+    "xxxxxxxx",
 ])
 def test_env_password_placeholder_not_flagged(scripts_dir, tmp_path, placeholder):
     """Placeholder values in .env-style password assignments must NOT be flagged."""
@@ -140,6 +144,73 @@ def test_a_placeholder_that_breaks_word_shape_is_an_accepted_false_positive(
     assert _run_scanner(scripts_dir, tmp_path, "fp.env", content) == 1, (
         f"{placeholder!r} is no longer flagged; if that was deliberate, update "
         f"the residual-false-positive note in scripts/utils/secret_patterns.py"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Promoted from tests/contract/2026-07-31-placeholder-exclusion/, retired when
+# that slice shipped. The contract froze the whole-value property before the
+# code existed; these are the parts of it that no other test held.
+#
+# The defect: the exclusion tested how a value BEGAN. All seven word
+# alternatives were defeated identically, so a real password prefixed `xxx`
+# passed the commit hook, the blocking PreToolUse gate and the push-time content
+# scan into a public repository. Two tails per marker, because a narrowing that
+# keys on punctuation alone still admits an alphanumeric password.
+#
+# Samples are assembled by runtime concatenation, so this file carries no
+# matching literal and cannot block its own push.
+# ---------------------------------------------------------------------------
+
+_BYPASS_TAILS = {
+    "with-symbol": "A9f" + "!q2K" + "zLm3" + "Rt7v",
+    "symbol-free": "A9f" + "q2Kz" + "Lm3R" + "t7vB",
+}
+_BYPASS_MARKERS = ["your-", "your_", "changeme", "example",
+                   "placeholder", "redacted", "dummy", "xxx"]
+_BYPASSES = [(m, t) for m in _BYPASS_MARKERS for t in sorted(_BYPASS_TAILS)]
+
+
+def _bypass_sample(marker: str, tail_name: str) -> str:
+    return f"{_ENV_KEY}={marker}{_BYPASS_TAILS[tail_name]}"
+
+
+def _flagged_by(patterns, sample: str) -> bool:
+    return any(rx.search(sample) for rx, _desc in patterns)
+
+
+@pytest.mark.parametrize("marker,tail", _BYPASSES)
+def test_a_marker_prefixed_high_entropy_value_is_flagged(marker, tail):
+    """Every word alternative, not only xxx, must stop hiding a real value."""
+    from scripts.utils.secret_patterns import SECRET_PATTERNS
+
+    assert _flagged_by(SECRET_PATTERNS, _bypass_sample(marker, tail)), (
+        f"a {tail} high-entropy value prefixed {marker!r} slipped past the patterns"
+    )
+
+
+@pytest.mark.parametrize("marker,tail", _BYPASSES)
+def test_the_blocking_gate_copy_flags_the_same_bypass(marker, tail):
+    """_dispatch.py keeps its own copy; the hole must be closed there too.
+
+    The lockstep ratchets already prove the two copies are identical, so this
+    looks redundant. It is not: identity plus a property of one copy is an
+    INFERENCE, and this asserts the property directly on the copy that actually
+    blocks a write.
+    """
+    patterns = getattr(_load_dispatch_module(), "SECRET_PATTERNS", [])
+
+    assert _flagged_by(patterns, _bypass_sample(marker, tail)), (
+        f"the PreToolUse gate still admits a {tail} value prefixed {marker!r}"
+    )
+
+
+def test_the_push_time_wall_refuses_a_file_carrying_the_bypass(scripts_dir, tmp_path):
+    """End to end through the authoritative wall, not just the pattern list."""
+    content = _bypass_sample("xxx", "symbol-free") + "\n"
+    assert _run_scanner(scripts_dir, tmp_path, "leaked.env", content) == 1, (
+        "the push-time content scan accepted a file carrying a real credential "
+        "behind a placeholder prefix"
     )
 
 

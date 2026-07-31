@@ -33,7 +33,7 @@ Never include the actual credential value, even partially.
 
 ## Defense Layers
 
-1. **Secret detection hook** (`prevent-secrets.py`): PreToolUse Write|Edit -- blocks content containing API key patterns, password patterns, and credential assignments before it reaches the filesystem.
+1. **Secret detection hook** (`.claude/hooks/_dispatch.py`, `check_prevent_secrets`): PreToolUse, registered for `Write|Edit|MultiEdit|NotebookEdit`, `Bash` and `Read` -- blocks content containing API key patterns, password patterns, and credential assignments on all four write tools before it reaches the filesystem, and the same patterns in a Bash command. A Read payload carries no content, so the check is inert there. `prevent-secrets.py`, the filename the block text still names, is a 28-line runpy shim that delegates here.
 2. **Corporate boundary hook** (`protect-corporate.py`): PreToolUse Write|Edit -- blocks writes to `corporate/` in exec workspaces (read-only, managed by CEO).
 3. **Hidden character hook** (`post-write-sanitize.py`): PostToolUse Write|Edit -- scans written files for invisible Unicode characters and flags contamination.
 4. **Prompt injection guard** (`prompt-guard.py`): PostToolUse Write|Edit -- advisory detection of prompt injection patterns in ingest-path files (knowledge/, datastore/, crm/contacts/).

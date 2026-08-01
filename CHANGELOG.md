@@ -47,6 +47,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   pre-standardization reports use a bracket-less convention and still count zero,
   because matching a bare `H1` token safely needs its own vetting against prose.
 
+- **The cost side of every subtraction argument is now a number.**
+  `scripts/slice-cycle-time.py` reads the ledger Canopus already writes and
+  reports, per slice, approve-to-release duration beside the friction that
+  happened inside it: release windows opened, approvals retaken, verify failures.
+  First reading over the real history: **9 shipped slices, median 5.76h, mean
+  7.0h, with 6 windows, 19 retakes and 6 verify failures across them.** Two
+  deliberate choices. Duration starts at the FIRST approval, so a retake cannot
+  shorten the slice it lengthened. And an unshipped slice reports `open` rather
+  than zero, because folding a running slice in as zero flatters every average.
+  The limit is stated in the output itself rather than left to be discovered: the
+  earliest machine-recorded moment is the approval, so deciding what to build,
+  planning and writing the test are real work this number does not contain.
+
 - **A slice that fails mid-flight now has a way back.** `scripts/slice-rollback.py`
   returns the frozen paths to the commit the freeze recorded, keeping a copy of
   everything it replaces under `.logs/rollback/<timestamp>/` and printing where.

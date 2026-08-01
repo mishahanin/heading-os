@@ -1,6 +1,17 @@
-"""Frozen contract — A11, depth calibrated to risk by machine.
+"""Depth calibrated to risk by machine.
 
-Canopus contract for `docs/superpowers/specs/2026-08-01-canopus-v2-design.md` §6 A11.
+Promoted from `tests/contract/2026-08-01-depth-calibration/` on 2026-08-02. It
+was A11's frozen Canopus contract, and it outlived its slice: A11 was built
+inside the denial-counter freeze rather than under one of its own, so no release
+ever retired it. A contract left in `tests/contract/` binds every later slice to
+that slice's behaviour verbatim, and this one already did once, when the
+2026-08-02 review had to place `tests/test_slice_depth_path_shapes.py` outside
+it rather than extend it. Nothing was dropped in the move: the path-shapes file
+covers spelling normalisation only, and no other test in the suite touched the
+surface list, the floor rule, the removes-ceremony-only rule, the freeze branch,
+the override, or the CLI.
+
+Covers `docs/superpowers/specs/2026-08-01-canopus-v2-design.md` §6 A11.
 
 Canopus runs the same eleven steps through a CHANGELOG typo and through a change
 to the credential patterns. The document's earlier answer was to collapse twelve
@@ -38,7 +49,7 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ROOT = Path(__file__).resolve().parent.parent
 _GATE = _ROOT / "scripts" / "depth-gate.py"
 _CLI = _ROOT / "scripts" / "slice-depth.py"
 

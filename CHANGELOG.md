@@ -32,6 +32,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   on `full`, 42% `standard`, 5% `light`. Calibration is therefore not primarily a
   speed win; what it buys is the right to keep full depth on that half without the
   standard becoming too heavy to use on the rest.
+- **A slice that fails mid-flight now has a way back.** `scripts/slice-rollback.py`
+  returns the frozen paths to the commit the freeze recorded, keeping a copy of
+  everything it replaces under `.logs/rollback/<timestamp>/` and printing where.
+  Dry by default; `--apply` executes; `--json` for a runner. Recovery was manual
+  git surgery, which is tolerable while someone is watching and becomes a hazard
+  the moment the unattended loop runs, because a build that fails at 03:00 leaves
+  a half-written tree and the next thing to touch it is another automated step.
+  Two deliberate properties: nothing is ever deleted, and an untracked file is
+  named but never moved, because whether it belongs to the failed slice is not
+  knowable from here and guessing is the one way this tool could destroy the work
+  it exists to protect. It also reads a freeze manifest that fails strict
+  validation, on purpose: the slice that failed badly enough to need this is
+  exactly the slice whose manifest may be what broke, and a recovery tool that
+  refuses on a schema mismatch is useless in the only situation it exists for.
+
 - **Every guard refusal is now counted.** `scripts/utils/denial_log.py` appends one
   redacted line per refused path, and `scripts/denials.py` reports the counts from
   the terminal (`--days`, `--detail`, `--json`). Instrumented: the PreToolUse

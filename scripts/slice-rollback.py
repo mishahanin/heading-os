@@ -78,6 +78,41 @@ def _read_freeze(root: Path):
         return raw, None
 
 
+def _slug(label: str) -> str:
+    """A label safe to put in a directory name.
+
+    The manifest is read raw when strict validation refuses it, which is the
+    whole point of this command — so the label is untrusted string data, not a
+    schema-checked field. Before this, a label carrying `../` sent the preserved
+    copies somewhere other than the `saved_to` path the command PRINTS: measured
+    2026-08-01, label `../../escape` reported
+    `.logs/rollback/<stamp>-../../escape` while the bytes landed in
+    `.logs/rollback/escape`. For a tool whose one promise is "nothing is deleted
+    and the path is printed", printing the wrong path is the failure.
+    """
+    safe = "".join(c if (c.isalnum() or c in "-_.") else "-" for c in str(label))
+    safe = safe.strip("-.") or "unlabelled"
+    return safe[:64]
+
+
+def _contained(root: Path, base: Path, rel: str):
+    """(source, destination) for a frozen path, or None when it escapes.
+
+    Applies the prefix check the workspace security rule requires of any path
+    built from data we did not author: resolve, then confirm the result is still
+    under the tree it is supposed to be under. An absolute or `../` entry in a
+    manifest's file list would otherwise read and write outside the workspace.
+    """
+    try:
+        source = (root / rel).resolve()
+        destination = (base / rel).resolve()
+        source.relative_to(root.resolve())
+        destination.relative_to(base.resolve())
+    except (ValueError, OSError):
+        return None
+    return source, destination
+
+
 def _frozen_paths(manifest) -> list:
     files = manifest.get("files") or {}
     if isinstance(files, dict):
@@ -85,13 +120,30 @@ def _frozen_paths(manifest) -> list:
     return sorted(files or [])
 
 
+def _resolves(root: Path, sha: str) -> bool:
+    """Whether the freeze's commit is reachable in this clone."""
+    return _git(["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"],
+                root).returncode == 0
+
+
 def _drifted(root: Path, sha: str, paths) -> list:
-    """Frozen paths whose working copy differs from the freeze's commit."""
+    """Frozen paths whose working copy differs from the freeze's commit.
+
+    `git diff --quiet` answers 0 for same, 1 for differs and >1 for an ERROR,
+    so treating every non-zero code as drift made an unreadable commit look like
+    total drift — and an unreachable `git_sha` is exactly the broken-manifest
+    case this command exists for. The caller checks `_resolves` first; this
+    keeps the distinction anyway, because a per-path error is not evidence of a
+    change.
+    """
     out = []
     for rel in paths:
         proc = _git(["diff", "--quiet", sha, "--", rel], root)
-        if proc.returncode != 0:
+        if proc.returncode == 1:
             out.append(rel)
+        elif proc.returncode > 1:
+            print(f"{YELLOW}Could not compare {rel} against {sha[:12]}: "
+                  f"{proc.stderr.strip()}{RESET}", file=sys.stderr)
     return out
 
 
@@ -123,18 +175,33 @@ def main() -> int:
     label = manifest.get("label") or "(unlabelled)"
     sha = manifest.get("git_sha") or ""
     paths = _frozen_paths(manifest)
+    if sha and not _resolves(root, sha):
+        reason = (f"the freeze names commit {sha[:12]}, which this clone cannot "
+                  f"resolve; there is nothing to restore from")
+        if args.as_json:
+            json.dump({"error": reason, "label": label, "git_sha": sha,
+                       "frozen_paths": paths, "applied": False},
+                      sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            print(f"{RED}Cannot roll back: {reason}.{RESET}")
+        return 2
     drifted = _drifted(root, sha, paths) if sha else []
     untracked = _untracked(root)
 
     saved_to = None
     if args.apply and drifted:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        saved_to = log_dir("rollback", f"{stamp}-{label}")
+        saved_to = log_dir("rollback", f"{stamp}-{_slug(label)}")
         for rel in drifted:
-            source = root / rel
+            contained = _contained(root, saved_to, rel)
+            if contained is None:
+                print(f"{YELLOW}Refusing to touch {rel}: it resolves outside the "
+                      f"workspace.{RESET}", file=sys.stderr)
+                continue
+            source, destination = contained
             if not source.is_file():
                 continue
-            destination = saved_to / rel
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
         restore = _git(["checkout", sha, "--", *drifted], root)

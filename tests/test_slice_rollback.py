@@ -172,3 +172,66 @@ def test_a_manifest_with_no_commit_to_restore_from_refuses(slice_repo):
     proc = _run([], root)
     assert proc.returncode != 0
     assert "restore from" in (proc.stdout + proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the /scrutinize execution pass, 2026-08-01
+# ---------------------------------------------------------------------------
+
+def _rewrite_manifest(root: Path, **changes):
+    state = root / ".canopus" / "freeze.json"
+    manifest = json.loads(state.read_text(encoding="utf-8"))
+    manifest.update(changes)
+    state.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_the_reported_save_location_is_where_the_files_actually_are(
+        slice_repo, tmp_path):
+    """The label is untrusted: the manifest is read RAW when it fails strict
+    validation, which is the whole point of this command. A label carrying `../`
+    used to put the preserved copies somewhere other than the `saved_to` path
+    the command reports, and a recovery tool whose one promise is "nothing is
+    deleted and the path is printed" cannot print the wrong path."""
+    root, target = slice_repo
+    log_root = tmp_path / "logs"
+    _rewrite_manifest(root, label="../../escape")
+    target.write_text("HALF_WRITTEN = 2\n", encoding="utf-8")
+
+    proc = _run(["--apply", "--json"], root, log_root=log_root)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    saved_to = Path(json.loads(proc.stdout)["saved_to"])
+
+    assert ".." not in saved_to.parts
+    assert (saved_to / "scripts" / "thing.py").read_text(encoding="utf-8") == (
+        "HALF_WRITTEN = 2\n"), "the reported location does not hold the files"
+    assert log_root.resolve() in saved_to.resolve().parents
+
+
+def test_a_frozen_path_that_escapes_the_workspace_is_refused(slice_repo, tmp_path):
+    """A raw manifest can name anything. Reading or writing outside the tree is
+    the one way this tool could damage what it exists to protect."""
+    root, target = slice_repo
+    outside = tmp_path / "outside.txt"
+    outside.write_text("NOT OURS\n", encoding="utf-8")
+    _rewrite_manifest(root, files={"scripts/thing.py": "h",
+                                   "../outside.txt": "h"})
+    target.write_text("HALF_WRITTEN = 2\n", encoding="utf-8")
+
+    proc = _run(["--apply"], root, log_root=tmp_path / "logs")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert outside.read_text(encoding="utf-8") == "NOT OURS\n"
+    assert target.read_text(encoding="utf-8") == "ORIGINAL = 1\n"
+
+
+def test_an_unresolvable_commit_is_named_not_reported_as_total_drift(slice_repo):
+    """`git diff --quiet` answers >1 on error, not 1. Treating that as drift made
+    a manifest naming a commit this clone does not have look like every frozen
+    path had changed - in the broken-manifest case this tool exists for."""
+    root, _target = slice_repo
+    _rewrite_manifest(root, git_sha="0" * 40)
+    proc = _run(["--json"], root)
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["applied"] is False
+    assert "resolve" in payload["error"]
+    assert not payload.get("drifted")

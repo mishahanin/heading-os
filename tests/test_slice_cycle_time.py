@@ -126,3 +126,45 @@ def test_a_corrupt_line_does_not_lose_the_rest_of_the_ledger(ledger_root):
     proc = _run(["--json"], ledger_root)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert len(json.loads(proc.stdout)["slices"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the /scrutinize execution pass, 2026-08-01
+# ---------------------------------------------------------------------------
+
+def test_a_row_with_no_utc_offset_does_not_kill_the_report(ledger_root):
+    """`append_history` always writes an aware timestamp, but a hand-edit or an
+    older ledger format need not. One naive row among aware ones used to raise
+    `TypeError: can't compare offset-naive and offset-aware datetimes` out of the
+    sort and take the WHOLE report down - in a file that skips a corrupt line and
+    carries on everywhere else. Naive is read as UTC, the only writer's
+    convention."""
+    path = ledger_root / ".canopus" / "history.jsonl"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"event": "approve", "label": "naive",
+                             "ts": "2026-07-05T10:00:00", "kind": "",
+                             "reason": ""}) + "\n")
+        fh.write(json.dumps({"event": "release", "label": "naive",
+                             "ts": "2026-07-05T13:00:00", "kind": "ship",
+                             "reason": ""}) + "\n")
+    proc = _run(["--json"], ledger_root)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    payload = json.loads(proc.stdout)
+    naive = [s for s in payload["slices"] if s["label"] == "naive"]
+    assert naive and naive[0]["hours"] == 3.0
+
+
+def test_a_ledger_with_nothing_shipped_says_so_instead_of_printing_none(tmp_path):
+    root = tmp_path / "open-only"
+    (root / ".claude").mkdir(parents=True)
+    (root / "CLAUDE.md").write_text("x", encoding="utf-8")
+    canopus = root / ".canopus"
+    canopus.mkdir()
+    (canopus / "history.jsonl").write_text(json.dumps({
+        "event": "approve", "label": "still-running",
+        "ts": "2026-07-09T10:00:00+00:00", "kind": "", "reason": ""}) + "\n",
+        encoding="utf-8")
+    proc = _run([], root)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "None" not in proc.stdout
+    assert "0 shipped of 1" in proc.stdout

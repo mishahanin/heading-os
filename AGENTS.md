@@ -125,6 +125,18 @@ These are enforced by tooling in this repo, not just stated as policy:
 - **Every refusal by these layers is logged**, redacted, to
   `.logs/denials/denials.jsonl` (`scripts/utils/denial_log.py`) — that log is
   telemetry only; it changes no decision and never blocks anything itself.
+  Read it with `python scripts/denials.py [--days N] [--detail] [--json]`.
+- **A commit touching the enforcement surface needs a held Canopus freeze.**
+  The `depth-gate` pre-commit hook (`scripts/depth-gate.py`) refuses a commit
+  that touches the hooks, the secret patterns and scanner, the push walls and
+  their detectors, the send gate, `config/routing-map.yaml`, the security rules,
+  or the Canopus primitives, while no freeze is held — however small the diff.
+  Ask before you start with `python scripts/slice-depth.py`, which classifies
+  the current change as `full`, `standard` or `light` and names the path that
+  raised it. The escape is `HEADING_OS_DEPTH_OVERRIDE="<reason>"` on the commit;
+  an empty reason still refuses, and both the refusal and the override are
+  counted in the denial log above. Full rationale:
+  `scripts/utils/slice_depth.py`.
 
 Full detail: `.claude/rules/security.md`, `SECURITY.md`,
 `docs/SECURITY-MODEL.md`, `docs/engine-data-segregation-contract.md`.

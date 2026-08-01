@@ -8,6 +8,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **Every guard refusal is now counted.** `scripts/utils/denial_log.py` appends one
+  redacted line per denied action, and `scripts/denials.py` reports the counts from
+  the terminal (`--days`, `--detail`, `--json`). Instrumented: the PreToolUse
+  dispatcher (one call site in its main loop, so all eight checks and any ninth
+  added later are counted by construction rather than by an author remembering),
+  the secret scanner, the push-time routing and content walls, the leak guard, and
+  the content guard. Why it exists: the workspace enforced at eleven points and
+  counted none of them, so "this guard is a successful deterrent" and "this guard
+  is pointless ceremony" produced the same observation and no guard could honestly
+  be judged or removed. Two properties are asserted rather than assumed: a record
+  never carries the refused content (reason and path both pass through `redact()`,
+  bounded at 512 characters), and a logging failure never turns a deny into an
+  allow (the writer returns a bool and raises nothing; the contract drives the
+  live hook with an unwritable log destination and requires the block to survive).
+  Scope stated rather than left implicit: Canopus gate refusals are NOT counted
+  here; they measure gate friction, not attempted policy violations, and belong to
+  the per-slice ledger. The log lives under the gitignored `.logs/` because records
+  name real paths and this repository is public.
 - **Remote-identity wall on every supervised push.** No repository other than the
   engine may be pushed to the engine's push remote, or to a remote GitHub reports
   as public. Two checks in `scripts/utils/git_push.py:remote_objection`: an

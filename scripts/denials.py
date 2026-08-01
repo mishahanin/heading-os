@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Report what the workspace's guards refused, and how often.
+
+The console-first read path over `scripts/utils/denial_log.py`. Answers the one
+question no mechanism in this workspace could answer before it existed: is a
+given guard catching anything, or is it ceremony?
+
+Usage:
+    python scripts/denials.py                 # counts per mechanism, all time
+    python scripts/denials.py --days 30       # the mechanism budget window
+    python scripts/denials.py --detail        # one line per refusal
+    python scripts/denials.py --json          # machine-readable
+"""
+import argparse
+import json
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.utils.colors import BOLD, GRAY, GREEN, RESET, YELLOW
+from scripts.utils.denial_log import denial_log_path, read_denials, summarize
+from scripts.utils.workspace import get_default_tz
+
+
+def _stamp(ts) -> str:
+    # Display value, so the operator's local timezone, per the DTZ convention:
+    # serialized timestamps stay UTC epoch in the log, rendering is local.
+    try:
+        return datetime.fromtimestamp(float(ts), tz=get_default_tz()).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return "?"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Report guard refusals.")
+    parser.add_argument("--days", type=float, default=None,
+                        help="only refusals within the last N days")
+    parser.add_argument("--detail", action="store_true",
+                        help="one line per refusal instead of counts")
+    parser.add_argument("--json", action="store_true", dest="as_json",
+                        help="machine-readable output")
+    args = parser.parse_args()
+
+    records = read_denials()
+    if args.days is not None:
+        cutoff = time.time() - args.days * 86400
+        records = [r for r in records if float(r.get("ts") or 0) >= cutoff]
+    counts = summarize(records)
+
+    if args.as_json:
+        json.dump({"total": len(records), "by_mechanism": counts,
+                   "log": str(denial_log_path()),
+                   "window_days": args.days}, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    window = f" in the last {args.days:g} days" if args.days is not None else ""
+    if not records:
+        print(f"{GREEN}0 refusals recorded{window}.{RESET}")
+        print(f"{GRAY}Log: {denial_log_path()}{RESET}")
+        return 0
+
+    if args.detail:
+        for record in records:
+            context = f" [{record['context']}]" if record.get("context") else ""
+            print(f"{_stamp(record.get('ts'))}  {record.get('mechanism')}"
+                  f"{context}  {record.get('action')}  {record.get('path') or ''}")
+        print()
+
+    print(f"{BOLD}{len(records)} refusal(s){window}{RESET}")
+    width = max(len(name) for name in counts)
+    for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(f"  {YELLOW}{count:>5}{RESET}  {name:<{width}}")
+    print(f"{GRAY}Log: {denial_log_path()}{RESET}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

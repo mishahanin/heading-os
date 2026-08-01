@@ -42,6 +42,20 @@ Never include the actual credential value, even partially.
 
 (The former `protect-secure.py` vault air-gap hook was removed with the `_secure/` vault in Plan 5. Session sensitivity is now the fail-closed `SENSITIVE_MODE` flag — `scripts/utils/sensitive.py` — which suppresses observability and triggers external-API prompt sanitization; it is not a write-blocking hook.)
 
+**Every refusal is counted.** Each layer above appends one redacted line to
+`.logs/denials/denials.jsonl` when it refuses, via `log_denial()` from
+`scripts/utils/denial_log.py`; read it with `python scripts/denials.py`. The
+counter is telemetry, never a control: it changes no decision, it raises nothing
+into a caller, and an unwritable log leaves every refusal intact. It exists
+because until 2026-08-01 nothing counted a refusal, so a layer that was quietly
+catching real mistakes and a layer that had never fired once looked identical
+from the outside. For the PreToolUse layers the call sits in the dispatcher's
+main loop rather than in the individual checks, so a check added later is counted
+without its author doing anything. Two things are deliberately absent from a
+record: the refused content (both the reason and the path pass through
+`redact()`) and any Canopus gate refusal (that is slice friction, not an attempted
+policy violation).
+
 **Generated artifacts are redacted at birth.** `.claude/hooks/checkpoint-save.py`
 runs the compact summary through `redact()` from `scripts/utils/secret_patterns.py`
 before writing the handoff archive, so a session that merely DISCUSSES a

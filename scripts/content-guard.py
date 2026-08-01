@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
+from scripts.utils.denial_log import log_denial
 from scripts.utils.engine_guard import repo_carried_paths
 from scripts.utils.workspace import get_data_root, get_routing_destination, get_workspace_root
 
@@ -109,6 +110,11 @@ def main() -> int:
             findings.append((rel, lineno, matched, category))
 
     if findings:
+        for rel, lineno, _matched, category in findings:
+            # The matched token IS the real-entity value, so it never enters the
+            # record: where and what class, not what.
+            log_denial(mechanism="content-guard", action="commit",
+                       path=f"{rel}:{lineno}", reason=f"real-entity token [{category}]")
         print(f"{RED}{BOLD}BLOCKED — real-entity content in engine-routed file(s):{RESET}")
         for rel, lineno, matched, category in findings:
             print(f"  {RED}{rel}:{lineno}{RESET}  \"{matched}\"  {GRAY}[{category}]{RESET}")

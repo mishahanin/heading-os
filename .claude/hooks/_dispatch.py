@@ -83,6 +83,35 @@ def _load_canopus() -> bool:
     _CANOPUS_AVAILABLE = True
     return True
 
+
+def _record_denial(mechanism: str, payload: dict, reason: str) -> None:
+    """Count one refusal. Telemetry only — it can never change a decision.
+
+    Called from main()'s terminal deny path and from nowhere else, so a check
+    added tomorrow is counted by construction rather than by its author
+    remembering to add a line. Lazy and guarded for the same reason the canopus
+    import above is: this runs inside the workspace's only synchronous wall
+    between a model mistake and a written credential, and no failure here may
+    take that wall down. It runs on denials only, which are rare, so the
+    overwhelming majority of tool calls never pay for the import.
+    """
+    try:
+        sys.path.insert(0, str(WORKSPACE))
+        from scripts.utils.denial_log import log_denial
+
+        tool_input = payload.get("tool_input") or {}
+        log_denial(
+            mechanism=mechanism,
+            action=payload.get("tool_name") or "unknown",
+            path=(tool_input.get("file_path")
+                  or tool_input.get("notebook_path")
+                  or None),
+            reason=reason,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[_dispatch] denial counter unavailable ({type(exc).__name__}): {exc}",
+              file=sys.stderr)
+
 # ============================================================
 # check_prevent_secrets — secret patterns in content or Bash commands
 # ============================================================
@@ -961,6 +990,10 @@ def main():
         if decision is None:
             continue
         if decision.get("decision") == "block":
+            # One call site, ahead of both terminal renderings below, so every
+            # check's refusal is counted the same way and a ninth check inherits
+            # the counter without touching this file. A1 of the v2 design.
+            _record_denial(check.__name__, payload, decision.get("reason", ""))
             # protect-personal-threads blocks are rendered as a PreToolUse
             # permission deny (hookSpecificOutput / exit 0) so the CLI shows an
             # intentional policy block with its reason, NOT a "hook error" — the

@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.denial_log import log_denial
 from scripts.utils.workspace import get_data_root, get_routing_destination, get_workspace_root
 
 # Data-path tokens that must never be hardcoded as string literals in engine code.
@@ -95,6 +96,9 @@ def check_paths(files) -> int:
             if m:
                 violations.append((rel, n, m.group(1)))
     if violations:
+        for rel, n, lit in violations:
+            log_denial(mechanism="leak-guard:check-paths", action="commit",
+                       path=f"{rel}:{n}", reason=f"hardcoded data-path literal {lit!r}")
         print("BLOCKED - hardcoded data-path literal(s) outside the get_*_dir() seam:")
         for rel, n, lit in violations:
             print(f"  {rel}:{n}  \"{lit}\"  -> use a get_*_dir() helper from scripts/utils/workspace.py")
@@ -139,6 +143,9 @@ def check_staged(files) -> int:
         if get_routing_destination(rel) in {"private", "corporate"}:
             leaked.append(rel)
     if leaked:
+        for rel in leaked:
+            log_denial(mechanism="leak-guard:check-staged", action="commit",
+                       path=rel, reason=f"routes {get_routing_destination(rel)}")
         print("BLOCKED - non-engine content staged into the engine repo:")
         for rel in leaked:
             print(f"  {rel}  -> routes to '{get_routing_destination(rel)}'; belongs in the data/corporate repo")

@@ -44,6 +44,37 @@ os.environ.setdefault(_venv._SENTINEL, "1")
 _TESTS_ROOT = Path(__file__).resolve().parent
 _ENGINE_ROOT = _TESTS_ROOT.parent
 
+# Runtime logs written during a test run go to their own directory, never to the
+# operator's. Measured the day the denial counter landed (2026-08-01): a single
+# suite run appended 13 refusals to the production `.logs/denials/denials.jsonl`
+# from tests that legitimately exercise leak-guard and the push walls with
+# fixtures. Left alone, the instrument built to decide which guards earn their
+# cost would have counted its own test suite as the workspace's main offender,
+# which is the same defect class as an instrument with a silently wrong
+# denominator — the thing this counter exists to end, reproduced inside it.
+#
+# Assignment, not setdefault: isolation that a stray shell variable can switch
+# off is not isolation. Individual tests still redirect per-case with monkeypatch
+# or an explicit subprocess env, and both continue to win over this.
+_TEST_LOG_DIR = str(_ENGINE_ROOT / ".logs" / "_pytest")
+os.environ["WORKSPACE_LOG_DIR"] = _TEST_LOG_DIR
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_logs():
+    """Re-arm the redirection before every test.
+
+    The module-scope assignment above covers import time and nothing else. A
+    test that sets the variable by hand and pops it in a `finally` leaves it
+    UNSET for every test that follows, and the rest of the session then writes
+    to the operator's real log. That is not hypothetical: the denial counter's
+    own contract does exactly that, and it is how this fixture was found.
+    Restoring per test costs nothing and does not fight monkeypatch, which
+    applies inside the test body, after this.
+    """
+    os.environ["WORKSPACE_LOG_DIR"] = _TEST_LOG_DIR
+    yield
+
 
 def pytest_sessionstart(session):
     """Canopus wire 1: refuse to run the suite while the freeze gate reads red.

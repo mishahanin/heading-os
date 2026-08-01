@@ -64,6 +64,7 @@ ensure_venv()
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.content_denylist import build_denylist
+from scripts.utils.denial_log import CONTEXT_ENV, log_denial
 from scripts.utils.engine_guard import scan_engine_repo
 from scripts.utils.git_push import remote_objection, supervised_push
 from scripts.utils.workspace import (
@@ -149,10 +150,14 @@ def content_scan(repo: Path) -> None:
     files = _push_delta_files(repo)
     if not files:
         return
+    # The scanner counts its own refusal; this names the caller so a push-time
+    # catch is distinguishable from a commit-time one. Counting here as well
+    # would record one refusal twice and corrupt the denominator.
+    env = dict(os.environ, **{CONTEXT_ENV: "push"})
     proc = subprocess.run(
         ["python3", str(SCANNER), "--stdin"],
         cwd=str(repo), input="\n".join(sorted(files)),
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     if proc.returncode != 0:
         sys.stdout.write(proc.stdout)
@@ -177,6 +182,9 @@ def engine_clean_scan(repo: Path) -> None:
     """
     flagged = scan_engine_repo(repo)
     if flagged:
+        for rel in flagged:
+            log_denial(mechanism="push:engine-clean-scan", action="push",
+                       path=rel, reason="routes private/corporate in the engine clone")
         print(f"{RED}REFUSING TO PUSH — data-class artifact(s) in the engine clone:{RESET}")
         for f in flagged:
             print(f"  {RED}{f}{RESET}")
@@ -216,6 +224,11 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
         for lineno, matched, category in dl.scan_text(text):
             findings.append((rel, lineno, matched, category))
     if findings:
+        for rel, lineno, _matched, category in findings:
+            # The matched token is a real-entity name, so it is the payload the
+            # log must not carry: record where and what class, never the value.
+            log_denial(mechanism="push:engine-content-scan", action="push",
+                       path=f"{rel}:{lineno}", reason=f"real-entity token [{category}]")
         print(f"{RED}REFUSING TO PUSH — real-entity CONTENT in engine-routed file(s):{RESET}")
         for rel, lineno, matched, category in findings:
             print(f"  {RED}{rel}:{lineno}{RESET}  \"{matched}\"  {GRAY}[{category}]{RESET}")

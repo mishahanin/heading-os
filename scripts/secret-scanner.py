@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import RED, YELLOW, GREEN, BOLD, RESET
+from scripts.utils.denial_log import log_denial
 from scripts.utils.secret_patterns import ALLOWLIST_TOKEN, iter_patterns
 from scripts.utils.paths import get_workspace_root
 
@@ -176,6 +177,15 @@ def main():
     try:
         results = scan_files(file_list)
         print_results(results)
+        # Count the refusal, one record per refused file. The reason names the
+        # pattern description only; log_denial redacts, but the finding tuples
+        # never carried the matched text in the first place. When the push wall
+        # drives this scanner as a subprocess it sets HEADING_OS_DENIAL_CONTEXT
+        # and does NOT log again, so one refusal is one record.
+        for filepath, findings in results.items():
+            descriptions = sorted({desc for _line, desc in findings})
+            log_denial(mechanism="secret-scanner", action="scan",
+                       path=filepath, reason="; ".join(descriptions))
         sys.exit(1 if results else 0)
     except Exception as e:
         print(f"{RED}Scanner error: {e}{RESET}", file=sys.stderr)

@@ -8,6 +8,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **How much process a change carries is now computed from the change.**
+  `scripts/utils/slice_depth.py` classifies a set of paths as `full`, `standard`
+  or `light`; `scripts/depth-gate.py` is the pre-commit hook that makes the answer
+  bind; `scripts/slice-depth.py` answers "how deep is what I am about to commit"
+  from the terminal (`--files`, `--range`, `--json`). Canopus previously ran the
+  same eleven steps through a CHANGELOG typo and through a change to the
+  credential patterns, and the obvious repair (collapse the lifecycle for
+  everybody) is a uniform trade of rigour for speed, including where rigour is the
+  point. Two rules keep this from being decorative: the floor cannot be diluted
+  (one enforcement-surface path among fifty prose paths is still `full`), and
+  calibration may only ever REMOVE ceremony, never lower the depth of work that
+  touches the surface however small the diff. The gate refuses a `full` change
+  while no Canopus freeze is held, and the refusal names the file that raised the
+  depth and the command that proceeds properly. The escape is
+  `HEADING_OS_DEPTH_OVERRIDE="<reason>"`: an empty reason still refuses, and both
+  the refusal and the override are counted through the denial log, so "we
+  overrode it every time" is readable rather than folklore. Deliberately
+  bypassable and deliberately not promoted to the push wall, because depth is a
+  process discipline rather than a leak wall, and locking the operator out of an
+  emergency fix to his own hooks would trade a real risk for a procedural one.
+  Measured with the shipped classifier over the last 60 engine commits: 52% land
+  on `full`, 43% `standard`, 5% `light`. Calibration is therefore not primarily a
+  speed win; what it buys is the right to keep full depth on that half without the
+  standard becoming too heavy to use on the rest.
 - **Every guard refusal is now counted.** `scripts/utils/denial_log.py` appends one
   redacted line per refused path, and `scripts/denials.py` reports the counts from
   the terminal (`--days`, `--detail`, `--json`). Instrumented: the PreToolUse

@@ -76,6 +76,22 @@ ENFORCEMENT_SURFACE = (
     # The freeze primitive itself: the thing that makes a locked test immovable.
     "scripts/utils/canopus_freeze.py",
     "scripts/utils/canopus_gate.py",
+    # The approve/freeze/verify CLI and the redness-and-vacuity checks behind it.
+    # Omitting these was a hole in the floor for the first hour this file
+    # existed: the primitives were covered while the command that drives them,
+    # and the code deciding whether a contract is honest, were not.
+    "scripts/canopus.py",
+    "scripts/utils/canopus_contract.py",
+    # What decides pass or fail. `run-tests.py` is the gate CI and the push path
+    # run, and `tests/conftest.py` holds both the freeze check that refuses to
+    # run a suite against a moved contract and the re-exec guard whose absence
+    # once made the whole suite print nothing while exiting 0.
+    "scripts/run-tests.py",
+    "tests/conftest.py",
+    # This mechanism, and the gate that binds it. A calibration whose own
+    # classifier can be lowered at standard depth calibrates nothing.
+    "scripts/utils/slice_depth.py",
+    "scripts/depth-gate.py",
 )
 
 # Prose. Light depth requires EVERY path in the change to be prose; one file

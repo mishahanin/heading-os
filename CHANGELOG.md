@@ -28,8 +28,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   bypassable and deliberately not promoted to the push wall, because depth is a
   process discipline rather than a leak wall, and locking the operator out of an
   emergency fix to his own hooks would trade a real risk for a procedural one.
-  Measured with the shipped classifier over the last 60 engine commits: 52% land
-  on `full`, 43% `standard`, 5% `light`. Calibration is therefore not primarily a
+  Measured with the shipped classifier over the last 60 engine commits: 53% land
+  on `full`, 42% `standard`, 5% `light`. Calibration is therefore not primarily a
   speed win; what it buys is the right to keep full depth on that half without the
   standard becoming too heavy to use on the rest.
 - **Every guard refusal is now counted.** `scripts/utils/denial_log.py` appends one

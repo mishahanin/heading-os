@@ -1,7 +1,13 @@
-"""Frozen contract — A1, the denied-attempt counter.
+"""The denied-attempt counter.
 
-Canopus contract for the first addition of the v2 design
-(`docs/superpowers/specs/2026-08-01-canopus-v2-design.md`, §6 A1):
+Promoted from `tests/contract/2026-08-01-denial-counter/` when the slice shipped
+on 2026-08-02. It was this slice's frozen Canopus contract; a contract left in
+place after its slice binds every later slice to that slice's behaviour
+verbatim, so the coverage moves here and the frozen copy goes. Nothing was
+dropped in the move: no other test in the suite held any of it.
+
+The addition it covers (`docs/superpowers/specs/2026-08-01-canopus-v2-design.md`,
+§6 A1):
 
     Every refusal, by any guard, appends one line: what was refused, by which
     mechanism, on which path.
@@ -39,7 +45,7 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ROOT = Path(__file__).resolve().parent.parent
 _HOOK = _ROOT / ".claude" / "hooks" / "_dispatch.py"
 _SCANNER = _ROOT / "scripts" / "secret-scanner.py"
 _CLI = _ROOT / "scripts" / "denials.py"

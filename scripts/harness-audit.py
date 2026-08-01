@@ -140,17 +140,33 @@ def user_settings_path() -> Path:
 def _surface_files(root: Path):
     """Every installed file on the instruction-or-execution surface, sorted.
 
-    Sorted so a manifest diff in git is a diff of content, not of walk order.
+    Sorted so a manifest diff is a diff of content, not of walk order.
+    """
+    return _walk_surface(root)[0]
+
+
+def _walk_surface(root: Path):
+    """`(real files, symlinks)` on the surface.
+
+    Symlinks are NOT followed, because following one leaves the plugin root and
+    a target chosen by the content being audited is exactly the wrong thing to
+    hash. They are also not silently dropped, which is what this tool did until
+    it was tested with one: a symlinked `innocent.md` pointing at a payload was
+    absent from the baseline AND absent from the injection scan, and the audit
+    exited 0. Unvouchable content on the loaded surface is a finding, so a
+    symlink is reported by name and never resolved.
     """
     if not root.is_dir():
-        return []
-    out = []
+        return [], []
+    files, links = [], []
     for path in root.rglob("*"):
-        if not path.is_file() or path.is_symlink():
+        if path.suffix.lower() not in SURFACE_SUFFIXES:
             continue
-        if path.suffix.lower() in SURFACE_SUFFIXES:
-            out.append(path)
-    return sorted(out)
+        if path.is_symlink():
+            links.append(path)
+        elif path.is_file():
+            files.append(path)
+    return sorted(files), sorted(links)
 
 
 # ============================================================
@@ -358,6 +374,14 @@ def _render(result) -> None:
         print(f"{GREEN}No injected instruction patterns{RESET} "
               f"{GRAY}in {len(result['scanned'])} loaded file(s){RESET}")
 
+    if result["symlinks"]:
+        print()
+        print(f"{RED}{BOLD}{len(result['symlinks'])} symlink(s) on the installed "
+              f"surface{RESET} {GRAY}not followed, so not hashed and not scanned; "
+              f"content this audit cannot vouch for{RESET}")
+        for path in result["symlinks"]:
+            print(f"  {RED}symlink {RESET} {path}")
+
     if result["unreadable"]:
         print()
         print(f"{YELLOW}{len(result['unreadable'])} file(s) could not be read"
@@ -383,8 +407,20 @@ def main() -> int:
                      else default_manifest_path())
 
     index, hash_unreadable = build_surface_index(root)
+    symlinks = [p.relative_to(root).as_posix() for p in _walk_surface(root)[1]]
 
     if args.update:
+        # An index that emptied out is almost always a mistyped root, and
+        # accepting it would mint a baseline everything matches forever. Refusing
+        # is the same rule as "a missing baseline is not agreement".
+        previous = read_manifest(manifest_path)
+        if not index and previous and previous.get("entries"):
+            print(f"{RED}Refusing to accept an EMPTY surface over a baseline of "
+                  f"{len(previous['entries'])} file(s).{RESET}\n{GRAY}Nothing was "
+                  f"found under {root}. If the plugins really are gone, delete the "
+                  f"baseline deliberately; if the root is wrong, fix it.{RESET}",
+                  file=sys.stderr)
+            return 2
         atomic_write_text(manifest_path, json.dumps(
             {"version": MANIFEST_VERSION, "entries": index}, indent=2,
             sort_keys=True) + "\n")
@@ -409,6 +445,7 @@ def main() -> int:
         "injection": findings,
         "scanned": scanned,
         "unreadable": unreadable,
+        "symlinks": symlinks,
         "surface_files": len(index),
     }
 
@@ -419,7 +456,8 @@ def main() -> int:
         _render(result)
 
     drifted = any(result["drift"][k] for k in ("added", "changed", "removed"))
-    if result["baseline_missing"] or drifted or result["injection"]:
+    if (result["baseline_missing"] or drifted or result["injection"]
+            or result["symlinks"]):
         return 1
     return 0
 

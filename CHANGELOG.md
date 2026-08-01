@@ -30,7 +30,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   call, and is wired into no hook, because THE LAW says the honest order is to
   measure the first run's yield and let that number decide whether it earns a
   hook, a timer, or removal. First run: 12 third-party hooks inventoried, 236
-  installed files baselined, 453 loaded files scanned, zero injected patterns.
+  installed files baselined, 453 loaded files scanned, zero injected patterns,
+  and one symlink named (`superpowers/6.1.1/AGENTS.md` to its own `CLAUDE.md`,
+  benign, and previously invisible to everything).
   The detection vocabulary moved to `scripts/utils/injection_patterns.py` and is
   now imported by both consumers rather than duplicated; unlike the credential
   patterns, neither consumer blocks, so neither needs an embedded copy and no

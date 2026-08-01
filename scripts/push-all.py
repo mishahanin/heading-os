@@ -153,7 +153,12 @@ def content_scan(repo: Path) -> None:
     # The scanner counts its own refusal; this names the caller so a push-time
     # catch is distinguishable from a commit-time one. Counting here as well
     # would record one refusal twice and corrupt the denominator.
-    env = dict(os.environ, **{CONTEXT_ENV: "push"})
+    #
+    # The repo name rides along because the scanner records a repo-RELATIVE path
+    # and this function runs over both clones: without it, the same relative
+    # path in the engine and in the data overlay produce two records nothing can
+    # tell apart, which is the ambiguity the context field exists to remove.
+    env = dict(os.environ, **{CONTEXT_ENV: f"push:{repo.name}"})
     proc = subprocess.run(
         ["python3", str(SCANNER), "--stdin"],
         cwd=str(repo), input="\n".join(sorted(files)),

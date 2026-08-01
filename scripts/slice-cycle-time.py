@@ -25,7 +25,7 @@ import argparse
 import json
 import statistics
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -66,10 +66,23 @@ def _rows(path: Path) -> list:
 
 
 def _when(row):
+    """The row's timestamp as an AWARE datetime, or None.
+
+    `append_history` writes `datetime.now(timezone.utc).isoformat()`, so every
+    row this workspace produces carries an offset. A hand-edit or an older
+    ledger format need not, and a single naive row among aware ones used to
+    raise `TypeError: can't compare offset-naive and offset-aware datetimes`
+    out of the sort — killing the whole report over one bad line, in a file that
+    otherwise skips a corrupt line and carries on. Naive is read as UTC, which
+    is the convention the only writer uses.
+    """
     try:
-        return datetime.fromisoformat(str(row.get("ts")))
+        stamp = datetime.fromisoformat(str(row.get("ts")))
     except (TypeError, ValueError):
         return None
+    if stamp.tzinfo is None:
+        return stamp.replace(tzinfo=timezone.utc)
+    return stamp
 
 
 def summarise(rows) -> dict:
@@ -161,9 +174,12 @@ def main() -> int:
 
     summary = result["summary"]
     print()
+    # No shipped slice means no duration to average, which is a real state on a
+    # fresh ledger. It used to render as "median Noneh, mean Noneh".
+    central = (f"median {summary['median_hours']}h, mean {summary['mean_hours']}h"
+               if summary["shipped_count"] else "no completed slice to average yet")
     print(f"{BOLD}{summary['shipped_count']} shipped of {summary['slices']}{RESET}"
-          f"  {GRAY}median {summary['median_hours']}h, mean {summary['mean_hours']}h"
-          f"{RESET}")
+          f"  {GRAY}{central}{RESET}")
     print(f"{GRAY}friction across all slices: {summary['total_windows']} window(s), "
           f"{summary['total_reapprovals']} retake(s), "
           f"{summary['total_verify_failures']} verify failure(s){RESET}")

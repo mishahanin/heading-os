@@ -96,7 +96,8 @@ def _record_denial(mechanism: str, payload: dict, reason: str) -> None:
     overwhelming majority of tool calls never pay for the import.
     """
     try:
-        sys.path.insert(0, str(WORKSPACE))
+        if str(WORKSPACE) not in sys.path:
+            sys.path.insert(0, str(WORKSPACE))
         from scripts.utils.denial_log import log_denial
 
         tool_input = payload.get("tool_input") or {}

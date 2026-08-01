@@ -28,8 +28,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   bypassable and deliberately not promoted to the push wall, because depth is a
   process discipline rather than a leak wall, and locking the operator out of an
   emergency fix to his own hooks would trade a real risk for a procedural one.
-  Measured with the shipped classifier over the last 60 engine commits: 53% land
-  on `full`, 42% `standard`, 5% `light`. Calibration is therefore not primarily a
+  Measured with the shipped classifier on 2026-08-01, over the 60 engine commits
+  then current: 53% land on `full`, 42% `standard`, 5% `light`. The window slides
+  as commits land, so the reading is anchored to its date rather than quoted as a
+  standing property. Calibration is therefore not primarily a
   speed win; what it buys is the right to keep full depth on that half without the
   standard becoming too heavy to use on the rest.
 - **The false-positive rate was measured against a denominator thirty times too
@@ -62,7 +64,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - **A slice that fails mid-flight now has a way back.** `scripts/slice-rollback.py`
   returns the frozen paths to the commit the freeze recorded, keeping a copy of
-  everything it replaces under `.logs/rollback/<timestamp>/` and printing where.
+  everything it replaces under `.logs/rollback/<timestamp>-<label>/` and printing
+  where.
   Dry by default; `--apply` executes; `--json` for a runner. Recovery was manual
   git surgery, which is tolerable while someone is watching and becomes a hazard
   the moment the unattended loop runs, because a build that fails at 03:00 leaves
@@ -136,6 +139,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **`push-all.py`: a refusal about one repository no longer cancels the other.** The command had ten `sys.exit` sites making two different statements in one uniform, and the branch check was one of the wrong kind: whenever the engine clone sat on a feature branch the process died at the engine and the DATA overlay was never pushed at all. Since the engine sits on a feature branch during every slice of work by construction, the backup had been quietly declining to back up the only irreplaceable half of the workspace for the duration of every slice. A new `RepoNotPushable` separates "this repository cannot be pushed right now" (a branch that is not `main`, an unarmed engine test gate) from "stop the world" (a secret in content, a data artifact in the engine clone, a real-entity token in an engine-routed file, an absent push token, a misconfigured data root). The eight stop-the-world refusals are untouched, at their original exit codes, and `SystemExit` is not an `Exception` subclass so no security refusal can be absorbed as a skip even by accident. Three operator-visible consequences: the **DATA overlay is now pushed first** (the engine's pre-push hook runs the full suite inside the push, and data is the only half that cannot be reconstructed), a skipped repository is **committed locally and named with its reason** in a closing summary, and **exit `3` now means a partial backup** rather than a failure. Exit `0`, `1` and `2` keep their meanings exactly; nothing in the workspace branched on this exit code, so `3` breaks no caller. `--dry-run` reports the same skips and still writes nothing: the precondition check moved above the dry-run return, because a dry run that hides the one thing the change surfaces would be a dry run that lies. Documented for operators in `docs/DEPLOYMENT.md` and in the `/backup`, `/sync` and `/push-updates` skills. Exit `3` distinguishes its two shapes in the headline rather than in prose: `Partial: N of M repo(s) not pushed` means the rest pushed and verified, while `NOTHING PUSHED: all M repo(s) skipped` means no new off-machine copy exists at all. The managed-workspace and pre-cutover modes push a single repository, so exit `3` there can only ever be the second shape, and calling that "partial" would have been a false success claim about the only irreplaceable half of the workspace.
 
 ### Fixed
+- **The depth floor depended on how a path was spelled.** `scripts/depth-gate.py
+  .claude/hooks/_dispatch.py` refused, and the same file passed as an absolute
+  path exited 0; `classify(["scripts/./push-all.py"])` answered `standard`.
+  `_normalise()` collapsed backslashes and a single leading `./` and nothing
+  else, in a module whose own docstring names the floor as the thing that cannot
+  be diluted. The wired gate was never bypassed, because pre-commit feeds
+  git-relative names, but the advisory CLI the operator reads BEFORE starting
+  work was, which is the reading that decides how much process a change carries.
+  `classify()` now takes the workspace root, collapses dot segments and
+  re-expresses an absolute path relative to the root, once per call rather than
+  once per path. Regression coverage lives in
+  `tests/test_slice_depth_path_shapes.py`, outside the frozen depth-calibration
+  contract, so a later regression does not bind every future slice to this
+  slice's behaviour.
+- **The rollback tool printed a save location that did not hold the files.**
+  With a freeze label carrying `../`, `scripts/slice-rollback.py --apply`
+  reported one directory and wrote the replaced bytes to another. The label is
+  untrusted input by construction: `_read_freeze()` deliberately reads the
+  manifest raw when strict validation fails, because the slice that fails badly
+  enough to need a rollback is the slice whose manifest may be what broke. For a
+  tool whose single promise is that nothing is deleted and the operator is told
+  where it went, printing the wrong path is the whole failure. The label is now
+  slugged, and the destination is resolved and prefix-checked against the log
+  root before anything is written.
+- **The leak guard wrote the refused content into the denial record.**
+  `_LITERAL_RE` captures the data-path token plus everything to the closing
+  quote, so a real path landed in `.logs/denials/denials.jsonl` whole, and
+  `redact()` does not strip it because a path is not credential-shaped. That
+  contradicts the property `scripts/utils/denial_log.py` states and its sibling
+  guards honour. The record now carries the token class; the operator's terminal
+  still shows the literal, because that is a reading, not a record. Beside it,
+  `scripts/denials.py` renders every record field through a printable filter: a
+  record's `path` is a denied tool call's `file_path`, which a prompt injection
+  can shape, so replaying an escape sequence into the operator's terminal when he
+  reads the log would make the instrument a delivery mechanism. Mechanism names
+  that render to the same safe string are summed rather than overwritten, so the
+  per-mechanism totals still add up to the record count printed above them.
+- **Smaller corrections from the same pass.** `push-all.py` now records the repo
+  name in the denial context, because the scanner logs a repo-relative path and
+  the wall runs over both clones, so the same relative path produced two records
+  nothing could tell apart. `slice-cycle-time.py` reads a naive ledger timestamp
+  as UTC instead of raising `TypeError` out of the sort and losing the whole
+  report over one hand-edited line, and reports "no completed slice to average
+  yet" instead of "median Noneh". `.claude/hooks/_dispatch.py` no longer grows
+  `sys.path` on every counted refusal.
 - **The PostCompact hook wrote the compact summary into the tracked handoff
   archive unmodified, so a session discussing the secret scanner produced files
   that refused `push-all.py`.** Measured on 2026-07-31: four findings in two

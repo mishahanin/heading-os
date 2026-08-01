@@ -48,6 +48,20 @@ def _epoch(ts):
         return None
 
 
+def _printable(value) -> str:
+    """A record field safe to write to a terminal.
+
+    A record's `path` is the denied tool call's `file_path`, which a prompt
+    injection can shape, and `redact()` substitutes credential patterns without
+    touching control bytes. Replaying an ESC sequence into the operator's
+    terminal when he reads the log would make the instrument a delivery
+    mechanism, so escapes are shown as text rather than executed.
+    """
+    text = "" if value is None else str(value)
+    return "".join(ch if (ch.isprintable() or ch == " ") else repr(ch)[1:-1]
+                   for ch in text)
+
+
 def _stamp(ts) -> str:
     # Display value, so the operator's local timezone, per the DTZ convention:
     # serialized timestamps stay UTC epoch in the log, rendering is local.
@@ -89,15 +103,24 @@ def main() -> int:
 
     if args.detail:
         for record in records:
-            context = f" [{record['context']}]" if record.get("context") else ""
-            print(f"{_stamp(record.get('ts'))}  {record.get('mechanism')}"
-                  f"{context}  {record.get('action')}  {record.get('path') or ''}")
+            context = (f" [{_printable(record['context'])}]"
+                       if record.get("context") else "")
+            print(f"{_stamp(record.get('ts'))}  {_printable(record.get('mechanism'))}"
+                  f"{context}  {_printable(record.get('action'))}  "
+                  f"{_printable(record.get('path'))}")
         print()
 
     print(f"{BOLD}{len(records)} record(s){window}{RESET} "
           f"{GRAY}(one per refused path){RESET}")
-    width = max(len(name) for name in counts)
-    for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+    # Summed, not overwritten: two mechanism names that render to the same safe
+    # string must not silently collapse into one, or the per-mechanism totals
+    # would stop adding up to the record count printed one line above.
+    names = {}
+    for name, count in counts.items():
+        safe = _printable(name)
+        names[safe] = names.get(safe, 0) + count
+    width = max(len(name) for name in names)
+    for name, count in sorted(names.items(), key=lambda kv: (-kv[1], kv[0])):
         print(f"  {YELLOW}{count:>5}{RESET}  {name:<{width}}")
     print(f"{GRAY}Log: {denial_log_path()}{RESET}")
     return 0

@@ -97,8 +97,16 @@ def check_paths(files) -> int:
                 violations.append((rel, n, m.group(1)))
     if violations:
         for rel, n, lit in violations:
+            # The TOKEN, never the matched literal. `_LITERAL_RE` captures the
+            # token plus everything up to the closing quote, so the literal can
+            # carry a real path tail ("outputs/clients/<name>-contract.pdf") —
+            # the refused content itself, which `denial_log` states a record
+            # never carries and which `redact()` does not strip because a path
+            # is not credential-shaped. content-guard and the push walls already
+            # log only the class; this now matches them.
+            token = next((t for t in DATA_PATH_TOKENS if lit.startswith(t)), "unknown")
             log_denial(mechanism="leak-guard:check-paths", action="commit",
-                       path=f"{rel}:{n}", reason=f"hardcoded data-path literal {lit!r}")
+                       path=f"{rel}:{n}", reason=f"hardcoded data-path literal [{token}]")
         print("BLOCKED - hardcoded data-path literal(s) outside the get_*_dir() seam:")
         for rel, n, lit in violations:
             print(f"  {rel}:{n}  \"{lit}\"  -> use a get_*_dir() helper from scripts/utils/workspace.py")

@@ -77,7 +77,7 @@ def main() -> int:
 
     root = get_workspace_root()
     held, manifest = _freeze_state(root)
-    result = classify(paths, freeze=manifest)
+    result = classify(paths, freeze=manifest, root=root)
 
     if result["depth"] != DEPTH_FULL:
         return 0

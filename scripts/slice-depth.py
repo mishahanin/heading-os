@@ -84,7 +84,7 @@ def main() -> int:
         source = "the current change (staged + modified)"
 
     held, manifest = _freeze_state(root)
-    result = classify(paths, freeze=manifest)
+    result = classify(paths, freeze=manifest, root=root)
     depth = result["depth"]
 
     if args.as_json:

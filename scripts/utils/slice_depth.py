@@ -43,8 +43,10 @@ DEPTH_ORDER = (DEPTH_LIGHT, DEPTH_STANDARD, DEPTH_FULL)
 # whatever its size. An entry ending in "/" matches as a directory prefix;
 # anything else matches that exact path.
 #
-# `tests/contract/test_slice_depth_surface.py` asserts every entry still names a
-# path that exists, because a rename silently dropping a file off this list is
+# `tests/contract/2026-08-01-depth-calibration/test_contract.py` asserts every
+# entry still names a path that exists (the test is
+# `test_no_surface_entry_names_a_path_that_no_longer_exists`), because a rename
+# silently dropping a file off this list is
 # how the mechanism would die without anyone noticing: the guard keeps passing,
 # on a smaller set.
 ENFORCEMENT_SURFACE = (
@@ -100,16 +102,72 @@ _PROSE_SUFFIXES = (".md", ".markdown", ".rst", ".txt")
 _PROSE_PREFIXES = ("docs/", "reference/")
 
 
-def _normalise(path) -> str:
+def _collapse(text: str) -> str:
+    """Drop `.` segments and resolve `..` against what precedes it.
+
+    Pure string work, no filesystem: this runs inside a commit hook, once per
+    staged path, and a `stat` per segment would buy nothing. A leading `..` that
+    cannot be resolved is kept, so such a path stays outside the surface rather
+    than silently becoming a repo-relative one.
+    """
+    parts = []
+    for part in text.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts and parts[-1] != "..":
+                parts.pop()
+            else:
+                parts.append(part)
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
+def _normalise_root(root) -> str:
+    """The workspace root as a POSIX string with no trailing slash, or ''.
+
+    Resolved lazily and never fatally: this module is imported by a commit-time
+    gate, and a root that cannot be determined must cost the absolute-path
+    refinement, not the whole classification. Idempotent, so `classify` can
+    resolve once and hand the result down as the per-path argument.
+    """
+    if root is None:
+        try:
+            from scripts.utils.paths import get_workspace_root
+
+            root = get_workspace_root()
+        except Exception:
+            return ""
+    return str(root).replace("\\", "/").rstrip("/")
+
+
+def _normalise(path, root=None) -> str:
     """A repo-relative POSIX path. Backslashes are separators, not content.
 
     A Windows-shaped path that skipped the floor would be a silent bypass, and
     the workspace is driven from WSL where both forms appear.
+
+    THREE shapes of the same file must reach the same answer, because a floor
+    that depends on how the caller happened to spell the path is not a floor.
+    Measured 2026-08-01, before this handled the latter two: `depth-gate.py
+    .claude/hooks/_dispatch.py` refused, while `depth-gate.py
+    "$(pwd)/.claude/hooks/_dispatch.py"` and `classify(['scripts/./push-all.py'])`
+    both passed at standard. pre-commit feeds git-relative names, so the wired
+    gate was never bypassed; the advisory CLI the operator reads before starting
+    work was, and the docstring at the top of this file sells the answer as one
+    that binds.
+
+    An absolute path outside *root* keeps its segments but loses its leading
+    slash, so `/tmp/scripts/push-all.py` stays unmatched while `/scripts/...`
+    reads as repo-relative. That direction is deliberate: over-classifying an
+    ambiguous path costs ceremony, under-classifying it costs the floor.
     """
     text = str(path).replace("\\", "/").strip()
-    while text.startswith("./"):
-        text = text[2:]
-    return text.lstrip("/")
+    root_text = _normalise_root(root)
+    if root_text and text.startswith(root_text + "/"):
+        text = text[len(root_text) + 1:]
+    return _collapse(text)
 
 
 def _surface_match(path: str):
@@ -127,31 +185,39 @@ def _is_prose(path: str) -> bool:
     return path.endswith(_PROSE_SUFFIXES) or path.startswith(_PROSE_PREFIXES)
 
 
-def _frozen_paths(freeze) -> set:
+def _frozen_paths(freeze, root=None) -> set:
     """Paths under a live freeze. Tolerates a manifest shape we do not own."""
     if not isinstance(freeze, dict):
         return set()
     files = freeze.get("files")
     if isinstance(files, dict):
-        return {_normalise(p) for p in files}
+        return {_normalise(p, root) for p in files}
     if isinstance(files, (list, tuple)):
-        return {_normalise(p) for p in files}
+        return {_normalise(p, root) for p in files}
     return set()
 
 
-def classify(paths, freeze=None) -> dict:
+def classify(paths, freeze=None, root=None) -> dict:
     """Return the depth a change over *paths* carries.
 
     `freeze` is an optional Canopus manifest; anything under it is load-bearing
     for the slice in flight, whatever the file happens to be, so it forces full
     depth the same way the surface does.
 
+    `root` is the workspace root an absolute path is made relative to. A caller
+    that already holds it passes it; one that does not gets it resolved lazily,
+    so the floor does not depend on every caller remembering.
+
     The result names WHICH path raised the depth. An answer nobody can audit is
     an answer nobody will trust, and the first instinct on being refused is to
     ask what tripped it.
     """
-    normalised = [_normalise(p) for p in paths if str(p).strip()]
-    frozen = _frozen_paths(freeze)
+    # Resolved ONCE, not per path: `get_workspace_root()` stats the filesystem on
+    # every call and is not cached, and this runs inside a commit hook over the
+    # whole staged set.
+    root_text = _normalise_root(root)
+    normalised = [_normalise(p, root_text) for p in paths if str(p).strip()]
+    frozen = _frozen_paths(freeze, root_text)
 
     triggers = []
     for path in normalised:

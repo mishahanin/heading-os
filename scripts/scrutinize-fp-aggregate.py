@@ -13,9 +13,13 @@ outputs/operations/scrutiny/_fp_aggregate.md with:
 
 The "total findings emitted" denominator is approximated by scanning
 every saved scrutiny report under outputs/operations/scrutiny/*.md
-for finding lines `[B1] (conf: 92) ...` and counting them. This is
-exact when the FP-flagging discipline is followed: every false-positive
-finding flagged, every other finding implicitly true-positive.
+for finding lines `[B1] (conf: 92) ...` - tolerating the markdown
+decoration those lines have carried across report-format revisions
+(heading level, bold list item) - and counting them. This is exact
+when the FP-flagging discipline is followed: every false-positive
+finding flagged, every other finding implicitly true-positive. A
+minority of pre-standardization reports use a bracket-less convention
+and are not counted; see the comment above `_PREFIX_RE`.
 
 Usage:
   python scripts/scrutinize-fp-aggregate.py            # rebuild aggregate
@@ -44,10 +48,38 @@ SCRUTINY_DIR = get_outputs_dir() / "operations" / "scrutiny"
 FP_LOG_PATH = SCRUTINY_DIR / "_fp_log.jsonl"
 AGGREGATE_PATH = SCRUTINY_DIR / "_fp_aggregate.md"
 
+# Finding-declaration lines carry `[<severity><n>]`, but the surrounding
+# markdown decoration has drifted across the report history (2026-04 -> 2026-08):
+# bare (`[N1] (conf: 90) ...`), inside a heading (`### [L1] (conf: 90) ...`,
+# `#### [M7] RESOLVED - ...`), or inside a bolded list item (`- **[M1]** ...`,
+# `**[M1] (conf: 78)** ...`). _PREFIX_RE enumerates exactly those observed
+# prefixes rather than a single greedy `^\s*` - measured against the full
+# outputs/operations/scrutiny/ corpus on 2026-08-01, `^\s*\[` alone matched 7
+# findings across 3 of 63 reports; the prefix-aware pattern below matches 213
+# across 41. The ID itself may carry a suffix from iterative re-runs
+# (`[L1-i2]`, `[M2-carry]`) or a compressed range (`[M1-M5]`, `[L3]-[L7]`) -
+# the suffix is consumed but not expanded, so a compressed range still counts
+# as one finding (a documented undercount, not a crash risk; ranges are rare -
+# 2 occurrences in the full corpus).
+#
+# A handful of pre-standardization reports use a bracket-less convention
+# (`- H1 (...)`, `### H1 (conf 90) - ...`) instead of `[H1]`. That is a
+# different shape, not a looser prefix on this one, and matching it safely
+# would need its own regex vetted separately against false positives (a bare
+# "H1"/"M3" token is far more likely to collide with unrelated prose than a
+# bracketed one). Deliberately out of scope here - those few reports undercount
+# to 0 rather than risk a false match elsewhere.
+_PREFIX_RE = r"(?:#{3,4}\s+|-\s+\*\*|\*\*)?"
 _FINDING_RE = re.compile(
-    r"^\s*\[([BHMLN]\d+)\]\s*(?:\(conf:\s*(\d+)\))?",
+    rf"^{_PREFIX_RE}\[([BHMLN]\d+)(?:-[A-Za-z0-9]+)?\]",
     re.MULTILINE,
 )
+# Confidence annotations also drifted: `(conf: 92)`, `(conf 75)` (no colon),
+# `(emitted conf: 72, MEDIUM)`, `(conf: 90, iteration 2)`. Matched against the
+# rest of the finding's own line rather than requiring it immediately after
+# the closing `]`, since bold-wrapped findings close the `**` at varying
+# points (`- **[N1] (conf: 70)** ...` vs `- **[M1]** ... (conf: 70)`-free).
+_CONF_RE = re.compile(r"conf:?\s*(\d+)", re.IGNORECASE)
 
 SEVERITY_PREFIX = {"B": "BLOCKER", "H": "HIGH", "M": "MEDIUM", "L": "LOW", "N": "NIT"}
 SEVERITIES = ["BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT"]
@@ -96,7 +128,11 @@ def count_total_findings() -> dict[str, dict]:
         target = _infer_target_type(report.stem)
         for match in _FINDING_RE.finditer(text):
             fid = match.group(1)
-            conf_raw = match.group(2)
+            line_end = text.find("\n", match.end())
+            if line_end == -1:
+                line_end = len(text)
+            conf_match = _CONF_RE.search(text[match.end():line_end])
+            conf_raw = conf_match.group(1) if conf_match else None
             severity = SEVERITY_PREFIX.get(fid[0], "UNKNOWN")
             by_severity[severity] += 1
             by_target_type[target] += 1

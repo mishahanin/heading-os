@@ -32,6 +32,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   on `full`, 42% `standard`, 5% `light`. Calibration is therefore not primarily a
   speed win; what it buys is the right to keep full depth on that half without the
   standard becoming too heavy to use on the rest.
+- **The false-positive rate was measured against a denominator thirty times too
+  small.** `scripts/scrutinize-fp-aggregate.py` counted finding lines with
+  `^\s*\[([BHMLN]\d+)\]`, which tolerates leading whitespace and nothing else,
+  while the report format drifted across 2026-04 to 2026-08 and finding lines
+  gained heading prefixes (`### [L1]`) and bold-list wrapping (`- **[M1]**`).
+  Measured over the real 63-report corpus: the old pattern matched **7 findings in
+  3 reports**, the corrected one matches **213 in 41**. Every false-positive rate
+  this instrument has ever reported was computed against the wrong denominator.
+  The fix enumerates the five prefix conventions actually observed rather than
+  loosening the anchor, tolerates iteration-suffixed ids (`[L1-i2]`), and reads
+  the confidence annotation from the rest of the finding's own line so the three
+  spellings that exist all parse. Stated rather than hidden: a handful of
+  pre-standardization reports use a bracket-less convention and still count zero,
+  because matching a bare `H1` token safely needs its own vetting against prose.
+
 - **A slice that fails mid-flight now has a way back.** `scripts/slice-rollback.py`
   returns the frozen paths to the commit the freeze recorded, keeping a copy of
   everything it replaces under `.logs/rollback/<timestamp>/` and printing where.

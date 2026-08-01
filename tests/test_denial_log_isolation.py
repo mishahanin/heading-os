@@ -12,6 +12,7 @@ still in force, so removing that line fails a test rather than silently poisonin
 a month of measurements.
 """
 import os
+import time
 from pathlib import Path
 
 from scripts.utils.denial_log import denial_log_path, log_denial, read_denials
@@ -31,11 +32,27 @@ def test_the_suite_writes_its_denials_somewhere_of_its_own():
 
 
 def test_a_denial_written_during_the_suite_lands_in_the_suite_directory():
-    before = len(read_denials())
-    assert log_denial(mechanism="isolation-probe", action="test",
+    """Assert on a marker unique to this call, never on the whole-file total.
+
+    The isolation this file guards points EVERY xdist worker at one directory,
+    so the log it reads is shared by the whole run and roughly 1300 records
+    arrive in it from other tests. A count delta and a "last record" check both
+    read whichever worker wrote most recently, so both fail whenever another
+    worker appends between the write and the read. That is not theoretical: the
+    pre-push gate runs the suite through `scripts/run-tests.py` with `-n auto`,
+    and this test failed there three times in twenty-four runs, once with
+    `assert 1456 == (1453 + 1)` — two foreign records inside the window.
+
+    Asserting the record's own presence tests the same property (a denial
+    written during the suite lands in the suite's log, not the operator's) and
+    is true no matter what any other worker does.
+    """
+    marker = f"isolation-probe-{os.getpid()}-{time.time_ns()}"
+    assert log_denial(mechanism=marker, action="test",
                       path="tests/test_denial_log_isolation.py",
                       reason="written by the isolation regression test") is True
-    records = read_denials()
-    assert len(records) == before + 1
-    assert records[-1]["mechanism"] == "isolation-probe"
+    assert any(record.get("mechanism") == marker for record in read_denials()), (
+        "the record this test just wrote is absent from the log the suite is "
+        "pointed at"
+    )
     assert str(denial_log_path()).startswith(str(Path(os.environ["WORKSPACE_LOG_DIR"])))

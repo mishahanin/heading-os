@@ -5,10 +5,19 @@ The console-first read path over `scripts/utils/denial_log.py`. Answers the one
 question no mechanism in this workspace could answer before it existed: is a
 given guard catching anything, or is it ceremony?
 
+The unit is one record per refused PATH, and it is stated here because it is not
+the same as one record per refused action for every guard. A denied tool call is
+one path and so one record; a commit refused by the content guard over six
+offending lines is six. That is the right shape for `--detail`, which exists to
+show every offending location, and it is why the counts below are labelled
+records. Read them as caught-something versus never-fired — the discrimination
+this instrument was built for, and the one that holds under either unit — and not
+as a like-for-like frequency ranking across mechanisms.
+
 Usage:
     python scripts/denials.py                 # counts per mechanism, all time
     python scripts/denials.py --days 30       # the mechanism budget window
-    python scripts/denials.py --detail        # one line per refusal
+    python scripts/denials.py --detail        # one line per refused path
     python scripts/denials.py --json          # machine-readable
 """
 import argparse
@@ -25,6 +34,20 @@ from scripts.utils.denial_log import denial_log_path, read_denials, summarize
 from scripts.utils.workspace import get_default_tz
 
 
+def _epoch(ts):
+    """The record's timestamp as a float, or None when it cannot be read.
+
+    `read_denials` already tolerates a truncated write by skipping the line, but
+    a line can be valid JSON and still carry an unreadable `ts` — and the window
+    filter used to hand that straight to `float()`, so one corrupt-but-parseable
+    record killed `--days` with a traceback while every other path survived it.
+    """
+    try:
+        return float(ts)
+    except (TypeError, ValueError):
+        return None
+
+
 def _stamp(ts) -> str:
     # Display value, so the operator's local timezone, per the DTZ convention:
     # serialized timestamps stay UTC epoch in the log, rendering is local.
@@ -39,7 +62,7 @@ def main() -> int:
     parser.add_argument("--days", type=float, default=None,
                         help="only refusals within the last N days")
     parser.add_argument("--detail", action="store_true",
-                        help="one line per refusal instead of counts")
+                        help="one line per refused path instead of counts")
     parser.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable output")
     args = parser.parse_args()
@@ -47,7 +70,8 @@ def main() -> int:
     records = read_denials()
     if args.days is not None:
         cutoff = time.time() - args.days * 86400
-        records = [r for r in records if float(r.get("ts") or 0) >= cutoff]
+        records = [r for r in records
+                   if (_epoch(r.get("ts")) or 0) >= cutoff]
     counts = summarize(records)
 
     if args.as_json:
@@ -70,7 +94,8 @@ def main() -> int:
                   f"{context}  {record.get('action')}  {record.get('path') or ''}")
         print()
 
-    print(f"{BOLD}{len(records)} refusal(s){window}{RESET}")
+    print(f"{BOLD}{len(records)} record(s){window}{RESET} "
+          f"{GRAY}(one per refused path){RESET}")
     width = max(len(name) for name in counts)
     for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
         print(f"  {YELLOW}{count:>5}{RESET}  {name:<{width}}")

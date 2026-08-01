@@ -110,10 +110,15 @@ def main() -> int:
             findings.append((rel, lineno, matched, category))
 
     if findings:
+        # --all is the hand-run sweep of the whole engine surface; no gate drives
+        # it and nothing is in flight to refuse. The hit is still real and worth
+        # recording, but calling it a commit would be false, so the record says
+        # which it was and a reader can tell a caught commit from a report.
+        action = "audit" if args.all else "commit"
         for rel, lineno, _matched, category in findings:
             # The matched token IS the real-entity value, so it never enters the
             # record: where and what class, not what.
-            log_denial(mechanism="content-guard", action="commit",
+            log_denial(mechanism="content-guard", action=action,
                        path=f"{rel}:{lineno}", reason=f"real-entity token [{category}]")
         print(f"{RED}{BOLD}BLOCKED — real-entity content in engine-routed file(s):{RESET}")
         for rel, lineno, matched, category in findings:

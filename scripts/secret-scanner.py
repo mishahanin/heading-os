@@ -182,9 +182,13 @@ def main():
         # never carried the matched text in the first place. When the push wall
         # drives this scanner as a subprocess it sets HEADING_OS_DENIAL_CONTEXT
         # and does NOT log again, so one refusal is one record.
+        # --scan-dir is the hand-run recursive sweep, driven by no gate; the hit
+        # is real either way, but a report is not a refusal and the record says
+        # which it was.
+        action = "audit" if args.scan_dir else "scan"
         for filepath, findings in results.items():
             descriptions = sorted({desc for _line, desc in findings})
-            log_denial(mechanism="secret-scanner", action="scan",
+            log_denial(mechanism="secret-scanner", action=action,
                        path=filepath, reason="; ".join(descriptions))
         sys.exit(1 if results else 0)
     except Exception as e:

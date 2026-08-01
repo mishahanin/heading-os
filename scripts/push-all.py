@@ -295,6 +295,16 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
         if SECRET_TRACKED.search(f) and not f.endswith((".example", ".sample", ".template"))
     ]
     if leaks:
+        # Counted like the two walls above it, and it is the only refusal in this
+        # file that needed adding: the three below are configuration and
+        # precondition failures, which the counter deliberately leaves out, while
+        # this one is a leak guard proper. content_scan() does not cover it —
+        # that scans the push DELTA (_push_delta_files), so a credential file
+        # tracked since long before this push is refused here and would otherwise
+        # be refused with nothing recording that it happened.
+        for rel in leaks:
+            log_denial(mechanism="push:secret-tracked-files", action="push",
+                       path=rel, reason="secret-like path tracked in the repository")
         print(f"{RED}REFUSING TO PUSH — secret-like tracked files:{RESET}")
         for f in leaks:
             print(f"  {RED}{f}{RESET}")

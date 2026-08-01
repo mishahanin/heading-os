@@ -53,8 +53,12 @@ from the outside. For the PreToolUse layers the call sits in the dispatcher's
 main loop rather than in the individual checks, so a check added later is counted
 without its author doing anything. Two things are deliberately absent from a
 record: the refused content (both the reason and the path pass through
-`redact()`) and any Canopus gate refusal (that is slice friction, not an attempted
-policy violation).
+`redact()`) and any refusal by the Canopus LIFECYCLE gate — `freeze_gate()` in
+`scripts/utils/canopus_gate.py` and the approve/verify gates in
+`scripts/canopus.py` — which is slice friction, not an attempted policy
+violation, and belongs to the per-slice ledger. Read that exclusion narrowly: the
+PreToolUse freeze check `check_canopus_freeze` is one of the eight dispatcher
+checks and IS counted, like the other seven.
 
 **Generated artifacts are redacted at birth.** `.claude/hooks/checkpoint-save.py`
 runs the compact summary through `redact()` from `scripts/utils/secret_patterns.py`

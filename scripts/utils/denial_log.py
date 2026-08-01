@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Append-only count of refusals — one line per denied action, by any guard.
+"""Append-only count of refusals — one line per refused path, by any guard.
 
-The workspace enforces at eleven points (the eight PreToolUse checks in
-`.claude/hooks/_dispatch.py`, the secret scanner, the push-time routing and
-content walls, the leak guard) and, until this module existed, counted none of
-them. Without a count, "this guard is a successful deterrent" and "this guard is
-pointless ceremony" produce the SAME observation, so no guard can be judged and
-none can honestly be removed. See
-`docs/superpowers/specs/2026-08-01-canopus-v2-design.md` §6 A1.
+The instrumented set is the eight PreToolUse checks in
+`.claude/hooks/_dispatch.py`, the secret scanner, the leak guard's two checks,
+the content guard, and the push-time routing, content and tracked-secret walls.
+Until this module existed, none of them counted anything. Without a count, "this
+guard is a successful deterrent" and "this guard is pointless ceremony" produce
+the SAME observation, so no guard can be judged and none can honestly be removed.
+See `docs/superpowers/specs/2026-08-01-canopus-v2-design.md` §6 A1.
+
+The unit is one line per refused PATH, which is not one line per refused ACTION
+for every guard: a denied tool call is one path, a commit refused by the content
+guard over six offending lines is six. Both units answer the fired-versus-never-
+fired question A3 asks, and per-path is the one that lets `scripts/denials.py
+--detail` name every offending location. Read the per-mechanism totals as that
+discrimination, not as a like-for-like frequency ranking.
 
 Two properties carry the security weight:
 

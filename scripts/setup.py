@@ -518,7 +518,10 @@ def step_install_python_deps(state: dict) -> bool:
 
     # Preferred path: uv sync (isolated venv from pyproject.toml + uv.lock).
     # Avoids the PEP 668 system-Python rejection modern distros enforce, and
-    # installs the exact locked set. See docs/security/DEPENDENCY-POLICY.md.
+    # installs the exact locked set. The rationale lived at
+    # docs/security/DEPENDENCY-POLICY.md, which routes private and so is absent
+    # from a public clone; CONTRIBUTING.md carries the part a contributor needs
+    # (exact pins, no silent dependency bumps).
     if shutil.which("uv"):
         print("  Running: uv sync --all-extras --all-groups")
         try:

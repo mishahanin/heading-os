@@ -35,10 +35,20 @@ clone that overlay is simply absent and the engine runs on its defaults and
 
 ## Setup
 
-1. `python -m venv .venv && source .venv/bin/activate`
-2. `pip install -r requirements.txt` (dev tooling: `requirements-dev.txt`)
-3. `cp .env.example .env`, then fill in your own credentials — never commit `.env`
-4. `pytest -q` to verify the suite passes
+Canonical toolchain is `uv`; `pyproject.toml` is the source of truth and `uv.lock`
+pins the resolved set.
+
+1. `uv sync --all-extras --group dev`
+2. `cp .env.example .env`, then fill in your own credentials — never commit `.env`
+3. `pre-commit install` — once per fresh clone, or the commit gates are not armed
+4. `.venv/bin/python -m pytest tests/ -q` to verify the suite passes
+
+The `venv` + `pip` path still works for tooling that cannot run `uv`
+(`python -m venv .venv`, then `pip install -r requirements.txt`, dev tooling in
+`requirements-dev.txt`); `requirements.txt` is a generated export, never
+hand-edited. Invoke `.venv/bin/python` explicitly rather than a bare `python`, so
+a machine-wide interpreter without the pinned dependencies cannot silently run
+the suite.
 
 ## Contributing & security
 

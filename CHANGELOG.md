@@ -8,6 +8,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **We scanned everything this workspace writes and nothing it installs.**
+  `scripts/harness-audit.py` audits the code and text that arrives from outside
+  and then loads into, or executes inside, every session. Measured on one
+  machine on 2026-08-02 before the tool existed: 10 plugins on disk (4 at version
+  `unknown`), 116 markdown files, 75 scripts, 28 hook files, and 6 PostToolUse
+  hooks from a single plugin each running a bash script out of the cache. Files
+  of that surface scanned by any existing layer: zero. `prompt-guard.py` covers
+  four data ingest paths and none of this, and `superpowers` moved 5.1.0 to
+  6.1.1 on 2026-07-14 with nobody reading the diff. The audit does three things:
+  enumerates every hook command running in the session that this repository does
+  not own (12 on the first run, from three sources including user-level
+  settings); hashes the installed surface against a reviewed baseline committed
+  in the PRIVATE data overlay, so the next upgrade is a named list of changed
+  files rather than nothing. The baseline started in the public engine's
+  `config/` and the commit gate refused it: 236 sha256 digests are high-entropy
+  strings, and `detect-secrets` was right. Adding a pragma or an allow-list entry
+  to push our own file is the move this workspace forbids, so the file moved
+  instead, which also removes the noise it would have been on every other clone; and scans all loaded content for injected
+  instructions. It is a REPORTER, not a gate: it refuses nothing, blocks no tool
+  call, and is wired into no hook, because THE LAW says the honest order is to
+  measure the first run's yield and let that number decide whether it earns a
+  hook, a timer, or removal. First run: 12 third-party hooks inventoried, 236
+  installed files baselined, 453 loaded files scanned, zero injected patterns.
+  The detection vocabulary moved to `scripts/utils/injection_patterns.py` and is
+  now imported by both consumers rather than duplicated; unlike the credential
+  patterns, neither consumer blocks, so neither needs an embedded copy and no
+  lockstep test is required. Idea taken from `affaan-m/ECC`'s AgentShield;
+  the question was taken, not the design.
+
 - **How much process a change carries is now computed from the change.**
   `scripts/utils/slice_depth.py` classifies a set of paths as `full`, `standard`
   or `light`; `scripts/depth-gate.py` is the pre-commit hook that makes the answer

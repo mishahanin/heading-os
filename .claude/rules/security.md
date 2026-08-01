@@ -42,6 +42,24 @@ Never include the actual credential value, even partially.
 
 (The former `protect-secure.py` vault air-gap hook was removed with the `_secure/` vault in Plan 5. Session sensitivity is now the fail-closed `SENSITIVE_MODE` flag — `scripts/utils/sensitive.py` — which suppresses observability and triggers external-API prompt sanitization; it is not a write-blocking hook.)
 
+7. **Harness audit** (`scripts/harness-audit.py`): the only layer that looks
+   OUTWARD rather than inward. Every layer above watches what this workspace
+   writes; this one watches what it installs and then executes -- the plugin
+   cache, the hooks plugins register, and user-level settings this repository
+   does not own. It enumerates third-party hook commands, hashes the installed
+   surface against a reviewed baseline kept in the PRIVATE data overlay (never in
+   the public engine: 236 sha256 digests read as high-entropy strings and the
+   commit gate refuses them, correctly) so an upgrade is a readable diff, and scans all loaded content for injected
+   instructions using the shared vocabulary in
+   `scripts/utils/injection_patterns.py`. **It is a reporter, not a gate**: it
+   refuses nothing and is wired into no hook, on purpose, so that its first
+   measurement decides whether it earns one. A missing baseline is reported, not
+   read as agreement. The `<!-- audit-skip-start -->` allowance and the path
+   allowance both apply to files in THIS repository only, never to installed
+   content, because a marker an attacker can write is a marker an attacker can
+   hide behind. Run it with `python scripts/harness-audit.py`; accept a reviewed
+   surface with `--update-manifest`.
+
 **Every refusal is counted.** Each layer above appends one redacted line to
 `.logs/denials/denials.jsonl` when it refuses, via `log_denial()` from
 `scripts/utils/denial_log.py`; read it with `python scripts/denials.py`. The

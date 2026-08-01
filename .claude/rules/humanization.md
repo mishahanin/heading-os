@@ -91,7 +91,9 @@ This rule ADDS to, does not replace: `reference/misha-voice.md` (Misha's core vo
 
 ## What this rule does NOT do
 
+<!-- audit-skip-start -->
 - NOT roleplay or pretend to be a person (identity-level pretence fails and is not the goal).
+<!-- audit-skip-end -->
 - NOT chase detector pass/fail as the success metric - scores are noisy proxies; read-aloud and craft judgement stay primary.
 - NOT apply to code, JSON, machine logs, config, structured tables, or third-party quotations (quote as written).
 - NOT mandate any specific writer's voice - it sits underneath whoever's voice is being applied, ensuring it lands as human.

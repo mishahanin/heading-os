@@ -42,6 +42,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **A frozen contract can hand-author every fixture for a store it never calls,
+  and nothing notices.** Measured at `a2cb7d1^`: the gate-yield contract held 23
+  tests, its code read the denial store, it called the real writer zero times,
+  and it stamped `"ts": "2026-08-02T00:00:00+00:00"` while the writer emits a
+  `time.time()` float. The tool shipped useless for half its mechanisms and the
+  23-test contract said nothing, because the mismatch was untestable by
+  construction. `scripts/utils/production_shape.py` now refuses a contract whose
+  code under test reads a registered record store when no test in that contract
+  builds its fixtures by CALLING that store's writer. Soft at `approve` and
+  `freeze` over what exists, hard at attestation over the full closure, because
+  the module under test does not exist yet at freeze time. The witness is the
+  writer, not the live file: a fixture minted by the real writer carries the real
+  shape by construction and stays hermetic. The check is total -- an internal
+  fault refuses nothing -- and it REPORTS that fault on stderr rather than
+  leaving the gate quietly toothless. The registry is one enumerated table, not a
+  heuristic: a gate that accuses falsely is a gate people learn to disable.
+
 - **A success criterion and the test that decides it were written twice, by
   hand, with nothing detecting a divergence.** Measured 2026-08-02 across the two
   slices shipped that day: one gate artifact states seven success criteria, its

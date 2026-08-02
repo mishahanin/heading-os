@@ -1,31 +1,28 @@
-"""Frozen contract for the production-shape slice.
+"""The production-shape check itself: promoted from the retired frozen contract.
 
-Gives teeth to the fifth planning-gate rule: a fixture must produce the shape the
-real source produces. Today that rule is prose the author must remember. This
-makes the gate refuse when the code under test reads a record store and no test
-in the contract builds its fixtures by calling that store's WRITER.
+`tests/contract/2026-08-02-production-shape/` was the slice's frozen contract and
+was removed at release, because a contract left in place binds every later slice
+to this one's behaviour. The coverage it held is worth keeping, so it lives here
+under the ordinary suite. The wiring, ordering, and the step-11 review findings
+are pinned separately in tests/test_production_shape_wiring.py.
 
-The witness is the writer, not the live file. A test that reads live mutable
-state is a bad test and this workspace deliberately does not write them; a
-fixture minted by the real writer carries the real shape by construction, and
-stays hermetic.
+The criterion labels are kept as provenance: they name which of the gate
+artifact's eight success criteria each test was written to decide.
 
-Every test imports the code under test INSIDE its body: the implementation does
-not exist when this contract is frozen.
-
-Each docstring OPENS with the criterion it claims, per scripts/sc-trace.py.
-
-Measured 2026-08-02, and this is the whole reason the slice exists: at a2cb7d1^
-the gate-yield contract held 23 tests, its code read the denial store, it called
-the real writer ZERO times, and it hand-authored `"ts": "2026-08-02T00:00:00+00:00"`
-while the writer emits a time.time() float. It shipped useless for half its
-mechanisms and a 23-test frozen contract said nothing.
+One change on promotion, and it is the L2 finding the operator was asked about at
+release: the A/B pair reads blobs out of git history, so a history rewrite turned
+them into ERRORs rather than skips. They now skip with the reason when the
+revision is unreachable. A rewrite is a fact about the repository, not evidence
+that the checker regressed; when the revision IS reachable the assertions are
+unchanged and still fail on a real regression.
 """
 
 import subprocess
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[3]
+import pytest
+
+_ROOT = Path(__file__).resolve().parents[1]
 
 HISTORICAL_PARENT = "a2cb7d1^"
 HISTORICAL_CONTRACT = "tests/contract/2026-08-02-gate-yield/test_contract.py"
@@ -72,6 +69,24 @@ def _tree(tmp_path, *, contract_body, module_body):
         DENIAL_LOG, encoding="utf-8"
     )
     return tmp_path / "tests" / "contract" / "slice"
+
+
+def _blob(rev_path: str) -> str:
+    """The blob at `rev:path`, or a skip when that revision is gone.
+
+    L2, resolved at release. The engine's history has been rewritten once
+    already (the public cutover squashed it to a single commit), so pinning a
+    test to a literal sha is a standing tripwire. An unreachable revision means
+    the measurement can no longer be taken, which is a different thing from the
+    checker having regressed, and only one of those is a test failure.
+    """
+    out = subprocess.run(
+        ["git", "show", rev_path], cwd=_ROOT,
+        capture_output=True, text=True, check=False,
+    )
+    if out.returncode != 0:
+        pytest.skip(f"historical revision unreachable: {rev_path}")
+    return out.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +177,7 @@ def test_the_closure_follows_a_from_package_import_of_a_module(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_the_registry_maps_a_store_module_to_its_writer(tmp_path):
+def test_the_registry_maps_a_store_module_to_its_writer():
     """SC-5. A store absent from the registry is unguarded; the registry being
     one enumerated place is what turns that hole into a fixable one."""
     from scripts.utils.production_shape import RECORD_STORES
@@ -199,14 +214,6 @@ def test_an_unparseable_contract_file_refuses_nothing(tmp_path):
 # ---------------------------------------------------------------------------
 # SC-7 / SC-8 - the measured A/B against the real past defect
 # ---------------------------------------------------------------------------
-
-
-def _blob(rev_path: str) -> str:
-    out = subprocess.run(
-        ["git", "show", rev_path], cwd=_ROOT,
-        capture_output=True, text=True, check=True,
-    )
-    return out.stdout
 
 
 def test_the_historical_blind_contract_is_refused(tmp_path):

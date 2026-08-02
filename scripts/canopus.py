@@ -128,6 +128,7 @@ from scripts.utils.canopus_pack import (  # noqa: E402
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
 from scripts.utils.gate_yield import record_refusal  # noqa: E402
+from scripts.utils.sc_trace import gate_refusal  # noqa: E402
 from scripts.utils.canopus_steps import (  # noqa: E402
     ACTS,
     NO_SLICE,
@@ -527,6 +528,24 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
         if not expected:
             print("canopus: --contract names no test modules; a contract with no "
                   "tests can never be attested", file=sys.stderr)
+            return (None, "", False)
+        # A12, and the position is argued rather than convenient. AFTER the
+        # names-no-modules refusal, because that one is the more fundamental
+        # finding and its message is the more useful: over an empty contract
+        # directory this check would otherwise report every criterion as
+        # unclaimed, which is true and useless. BEFORE the contract RUN, because
+        # the answer is static, costs one file read, and cannot be changed by
+        # anything the run does -- behind it the operator pays a full pytest
+        # session plus the null-stub session behind that before being told about
+        # a docstring. The same ordering argument the repository checks make.
+        #
+        # `gate_refusal` is TOTAL and fails open on anything short of a definite
+        # finding, because this builder is shared by approve and freeze and a
+        # raise here would refuse every slice in the workspace including the
+        # `/canopus back` that repairs it.
+        criteria_refusal = gate_refusal(anchor_path, contracts)
+        if criteria_refusal:
+            print(f"canopus: {criteria_refusal}", file=sys.stderr)
             return (None, "", False)
         # One real run, read twice. Running the contract for the outcomes and
         # again for the report would double the wall time and compare outcomes

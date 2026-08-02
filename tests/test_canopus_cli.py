@@ -36,9 +36,19 @@ def tree(tmp_path: Path, monkeypatch) -> Path:
 
 @pytest.fixture
 def anchor(tmp_path: Path) -> Path:
+    """A scratch gate artifact, carrying the criteria section A12 now demands.
+
+    `approve --contract` and `freeze --contract` refuse an artifact stating no
+    success criteria at all, because a contract checked against zero criteria
+    passes by having nothing to satisfy. Every scratch artifact here therefore
+    states one, and `_write_contract` claims it.
+    """
     path = tmp_path / "outside" / "gate-artifact.md"
     path.parent.mkdir(parents=True)
-    path.write_text("# gate artifact\n")
+    path.write_text("# gate artifact\n\n"
+                    "## Phase 1 — Success criteria\n\n"
+                    "- **SC-1** WHEN a scratch slice runs, THE SYSTEM SHALL "
+                    "behave as the test says.\n")
     return path
 
 
@@ -648,11 +658,14 @@ def _write_contract(tree, red=True):
     """
     directory = tree / "tests" / "contract" / "slice"
     directory.mkdir(parents=True, exist_ok=True)
-    first = ("def test_a():\n"
+    # The docstring claims SC-1 from the `anchor` fixture. A12: approve and
+    # freeze refuse a contract leaving a stated criterion claimed by nothing.
+    first = ('def test_a():\n'
+             '    """SC-1."""\n'
              "    from absent_thing import answer\n"
              "    assert answer() == 42\n"
              if red else
-             "def test_a():\n    assert True\n")
+             'def test_a():\n    """SC-1."""\n    assert True\n')
     (directory / "test_contract.py").write_text(
         first + "\n\ndef test_b():\n    assert True\n"
     )
@@ -1807,7 +1820,8 @@ def _write_vacuous_contract(tree: Path, real: bool = False) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     second = "assert answer() == 42" if real else "assert answer() is not None"
     (directory / "test_contract.py").write_text(
-        "def test_vacuous():\n"
+        'def test_vacuous():\n'
+        '    """SC-1."""\n'
         "    from absent_thing import answer\n"
         "    assert answer() is not None\n"
         "\n\n"
@@ -1920,7 +1934,8 @@ def _write_vacuous_contract_plus(tree: Path, tail: str) -> Path:
     (directory / "test_contract.py").write_text(
         "import pytest\n"
         "\n\n"
-        "def test_vacuous():\n"
+        'def test_vacuous():\n'
+        '    """SC-1."""\n'
         "    from absent_thing import answer\n"
         "    assert answer() is not None\n"
         "\n\n"
@@ -1987,7 +2002,8 @@ def test_freeze_refuses_the_from_none_bypass(tree, anchor, capsys):
     directory = tree / "tests" / "contract" / "slice"
     directory.mkdir(parents=True)
     (directory / "test_contract.py").write_text(
-        "def test_vacuous():\n"
+        'def test_vacuous():\n'
+        '    """SC-1."""\n'
         "    try:\n"
         "        from absent_thing import answer\n"
         "    except ImportError:\n"
@@ -2021,7 +2037,8 @@ def _write_conftest_fixture_contract(tree) -> Path:
         "    return Widget()\n"
     )
     (directory / "test_contract.py").write_text(
-        "def test_widget_exists(widget):\n"
+        'def test_widget_exists(widget):\n'
+        '    """SC-1."""\n'
         "    assert widget is not None\n"
     )
     return directory
@@ -2072,7 +2089,8 @@ def test_freeze_still_takes_a_real_contract_whose_fixture_is_in_a_conftest(
         "    return Widget()\n"
     )
     (directory / "test_contract.py").write_text(
-        "def test_widget_reports_zero(widget):\n"
+        'def test_widget_reports_zero(widget):\n'
+        '    """SC-1."""\n'
         "    assert len(widget.items()) == 0\n"
     )
 
@@ -2090,7 +2108,8 @@ def _write_importless_contract(tree) -> Path:
     """
     directory = tree / "tests" / "contract" / "slice"
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "test_contract.py").write_text("def test_a():\n    assert 1 == 2\n")
+    (directory / "test_contract.py").write_text(
+        'def test_a():\n    """SC-1."""\n    assert 1 == 2\n')
     return directory
 
 
@@ -2309,7 +2328,7 @@ def test_the_null_stub_does_not_run_once_the_contract_is_already_refused(
     # Module-scope import: the file collects nothing, caught by the first run.
     (directory / "test_contract.py").write_text(
         "from absent_thing import answer\n\n\n"
-        "def test_a():\n    assert answer() == 42\n"
+        'def test_a():\n    """SC-1."""\n    assert answer() == 42\n'
     )
     calls = []
 
@@ -2343,7 +2362,7 @@ def test_the_null_stub_does_not_run_when_a_RED_contract_is_already_refused(
     # Module-scope import: this file collects nothing and earns the refusal.
     (directory / "test_broken.py").write_text(
         "from absent_thing import answer\n\n\n"
-        "def test_a():\n    assert answer() == 42\n"
+        'def test_a():\n    """SC-1."""\n    assert answer() == 42\n'
     )
     # And this one is red, so the contract as a whole is.
     (directory / "test_red.py").write_text("def test_b():\n    assert False\n")
@@ -2708,7 +2727,14 @@ def test_freeze_refuses_a_waiver_the_approval_does_not_carry(tree, anchor, capsy
     # without the flag leaves, minus the hash mismatch that would refuse first
     # for a different reason.
     approved = _recorded(anchor)
-    anchor.write_text(f"# gate artifact\n\ncanopus-anchor: {approved}\n")
+    # The criteria section rides along: dropping it would refuse this freeze for
+    # A12's empty-criteria rule before it ever reached the waiver check, which is
+    # a different refusal and not the one under test.
+    anchor.write_text("# gate artifact\n\n"
+                      "## Phase 1 — Success criteria\n\n"
+                      "- **SC-1** WHEN a scratch slice runs, THE SYSTEM SHALL "
+                      "behave as the test says.\n\n"
+                      f"canopus-anchor: {approved}\n")
     capsys.readouterr()
 
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),
@@ -2858,7 +2884,7 @@ def test_contract_satisfied_does_not_waive_a_collected_nothing_refusal(
     # Collects nothing: the import is at module scope, so the module never
     # imports and pytest reports a collection error rather than any item.
     (directory / "test_contract.py").write_text(
-        "from absent_thing import answer\n\n\ndef test_a():\n    assert answer()\n"
+        'from absent_thing import answer\n\n\ndef test_a():\n    """SC-1."""\n    assert answer()\n'
     )
 
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor),

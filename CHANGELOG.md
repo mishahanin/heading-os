@@ -8,6 +8,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **A success criterion and the test that decides it were written twice, by
+  hand, with nothing detecting a divergence.** Measured 2026-08-02 across the two
+  slices shipped that day: one gate artifact states seven success criteria, its
+  contract carries 28 test functions, and the string `SC-` appears in those tests
+  three times, all three in prose. Five of the seven criteria were traceable to
+  nothing at all. A test now CLAIMS the criterion it decides in its docstring,
+  and `approve` and `freeze` refuse a contract leaving a stated criterion
+  unclaimed, or claiming one the artifact never stated. `scripts/sc-trace.py`
+  prints the binding without running the gate. Two false-positive classes are
+  closed by position rather than by heuristic, and both were measured on the real
+  corpus rather than imagined: on the artifact side a criterion is DEFINED by the
+  line it opens, so `| H1 | HIGH | SC-13 rewritten: ... |` in a critique table and
+  `SC-1 to SC-7, from the spec` in a later phase are mentions and not definitions;
+  on the test side a claim OPENS the docstring, which this module earned by
+  refusing its own contract at step 8, where three tests describing those very
+  false positives were read as claiming SC-13, SC-7 and SC-9. Read the guarantee
+  narrowly, and it says so in its own clean output: it proves a test claims to
+  decide a criterion, never that it does. The check lives inside the one builder
+  `approve` and `freeze` share, so it is total and fails OPEN on anything short of
+  a definite finding -- a parser defect must not refuse every slice in the
+  workspace including the `/canopus back` that would repair it.
+
 - **Every refusal the engineering standard ever made had vanished.** Measured
   2026-08-02 before this existed: the Canopus lifecycle ledger held 152 events
   and not one refusal, because the twelve early returns across `approve`,

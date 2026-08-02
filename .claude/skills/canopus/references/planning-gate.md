@@ -59,6 +59,12 @@ Include:
 - At least one failure-mode criterion
 - At least one integration criterion
 
+**Write each one in the EARS shape:** `WHEN <trigger>, THE SYSTEM SHALL
+<response>`. Not for its own sake — one trigger and one response is what makes a
+criterion bindable to ONE test. A compound criterion holding two triggers cannot
+be, and Phase 5 will refuse it. Exceeding the 3-5 band is the cheaper error when
+the alternative is folding two claims into one line.
+
 Format:
 ```
 SC-1 [happy-path]: ...
@@ -176,6 +182,22 @@ until the slice was built, attested, and being committed, at which point the
 whole thing was uncommittable and the only sanctioned way out was a window --
 because a baseline entry, a pragma and `--no-verify` are all forbidden here, and
 correctly so. One command at step 4 would have cost nothing.
+
+**A fourth rule, and this is the one the machine enforces.** Every criterion from
+Phase 1 must be claimed in the DOCSTRING of at least one contract test, and no
+docstring may claim a criterion Phase 1 never stated. **The claim OPENS the
+docstring** — `"""SC-2. What this decides."""` — and anything deeper in the prose
+claims nothing, so a test can describe what it is testing without binding to
+every identifier it names. `approve` and `freeze` refuse a contract that leaves a
+criterion unclaimed or claims one out of nowhere. Check it before either command:
+
+    python scripts/sc-trace.py --anchor <gate artifact> --contract tests/contract/{YYYY-MM-DD}-{slug}/
+
+Measured 2026-08-02, which is why this exists: the `gate-yield` artifact stated
+seven criteria, its contract carried 28 tests, and five of the seven were
+traceable to nothing at all. Read the guarantee narrowly — it proves a test
+CLAIMS to decide a criterion, never that it does. A green trace does not excuse
+reading the tests.
 
 Then show what the contract looks like before any code exists:
 

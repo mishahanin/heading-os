@@ -48,6 +48,7 @@ from scripts.utils.canopus_freeze import (
 from scripts.utils.canopus_git import AnchorResolution, resolve_anchor
 from scripts.utils.canopus_tree import tree_state
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW
+from scripts.utils.production_shape import shape_refusal
 
 
 def loss_of_lock_sentences(report: dict, resolution: AnchorResolution) -> list[str]:
@@ -976,6 +977,23 @@ class AttestationRecorder:
                 output["canopus_plugins"] = (
                     sorted(described["plugins"]) if described is not None else None
                 )
+            return False
+        # The HARD half of the production-shape check, and the reason it lives
+        # here rather than only at freeze. At freeze the module under test does
+        # not exist, so the import closure stops at the hole and a brand new
+        # module reaches no store. That is the gate-yield case exactly: its
+        # module was new, its contract hand-authored every denial record, and a
+        # freeze-time check would have passed it. By the time a run attests, the
+        # code is on disk and the closure is real.
+        #
+        # A refusal here withholds the attestation rather than failing the run:
+        # the tests genuinely passed, and what is missing is the evidence that
+        # any of them touched the shape the writer emits. `shape_refusal` is
+        # total and answers "" on any internal fault, so a bug in it cannot make
+        # attestation unreachable for every slice in the workspace.
+        shape = shape_refusal(sorted(self.frozen), self.root)
+        if shape:
+            print(f"canopus: NOT ATTESTED - {shape}", file=sys.stderr)
             return False
         process = self._describe(session.config)
         if process is not None:

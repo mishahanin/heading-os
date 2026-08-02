@@ -128,6 +128,7 @@ from scripts.utils.canopus_pack import (  # noqa: E402
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
 from scripts.utils.gate_yield import record_refusal  # noqa: E402
+from scripts.utils.production_shape import shape_refusal  # noqa: E402
 from scripts.utils.sc_trace import gate_refusal  # noqa: E402
 from scripts.utils.canopus_steps import (  # noqa: E402
     ACTS,
@@ -546,6 +547,17 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
         criteria_refusal = gate_refusal(anchor_path, contracts)
         if criteria_refusal:
             print(f"canopus: {criteria_refusal}", file=sys.stderr)
+            return (None, "", False)
+        # The SOFT half of the production-shape check. Here the closure can only
+        # reach what already exists, so a slice EXTENDING existing code that
+        # reads a record store is refused now, while a slice building a brand
+        # new module is not: at this moment its module is absent by
+        # construction and the walk stops at the hole. That second case is the
+        # gate-yield case exactly, which is why the hard half runs at
+        # attestation, once the code is on disk. Total, like `gate_refusal`.
+        shape = shape_refusal(contracts, root)
+        if shape:
+            print(f"canopus: {shape}", file=sys.stderr)
             return (None, "", False)
         # One real run, read twice. Running the contract for the outcomes and
         # again for the report would double the wall time and compare outcomes

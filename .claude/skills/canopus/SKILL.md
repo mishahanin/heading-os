@@ -147,6 +147,7 @@ python scripts/canopus.py approve --label "{slug}" --anchor {artifact path} \
     --content scripts/utils/canopus_git.py \
     --content scripts/utils/canopus_tree.py \
     --content scripts/utils/colors.py \
+    --content scripts/utils/production_shape.py \
     --content scripts/utils/venv.py \
     --content tests/conftest.py
 # read the already-green count, COMMIT the artifact, then:
@@ -154,10 +155,11 @@ python scripts/canopus.py freeze  ...identical flags...
 python scripts/canopus.py verify
 ```
 
-`verify` must report LOCK HELD and APPROVED. Nine files, not four: the gate's own
+`verify` must report LOCK HELD and APPROVED. Ten files, not four: the gate's own
 import TAIL is inside the guarantee, because a lock whose enforcer can be edited
 is not one. `canopus_freeze` reaches `atomic`, which WRITES the manifest;
-`run-tests` reaches `venv`, which chooses which interpreter runs the gate. The
+`run-tests` reaches `venv`, which chooses which interpreter runs the gate;
+`canopus_gate` reaches `production_shape`, which can WITHHOLD an attestation. The
 list is not decoration and it is checked —
 `tests/test_canopus_freeze.py::test_the_documented_enforcer_set_covers_its_import_closure`
 recomputes the closure and fails if this command has fallen behind it.

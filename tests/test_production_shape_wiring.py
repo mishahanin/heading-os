@@ -61,6 +61,23 @@ def test_the_attestation_path_consults_the_check_before_it_writes():
     )
 
 
+def test_an_unexpected_fault_inside_the_checker_refuses_nothing():
+    """Totality, and the frozen contract does not pin it.
+
+    Found by mutation at step 11: deleting the catch-all in shape_refusal kills
+    none of the ten contract tests. Both SC-6 cases return "" before they ever
+    reach it, one on an empty file list and one on the inner SyntaxError
+    handler, so the guarantee that a bug in this checker cannot become a wall no
+    slice can pass was measured by nothing.
+
+    An int is not path-like, so Path() raises TypeError well inside the try,
+    which is a fault of a kind no inner handler names.
+    """
+    from scripts.utils.production_shape import shape_refusal
+
+    assert shape_refusal([1], Path("/nonexistent-root")) == ""
+
+
 def test_the_checker_is_inside_the_frozen_enforcer_set():
     """A gate whose own checker can be edited mid-slice is not a gate.
 

@@ -1,4 +1,9 @@
-"""Frozen contract - A2, the gate-yield ledger.
+"""A2, the gate-yield ledger.
+
+Retired from `tests/contract/2026-08-02-gate-yield/` into the ordinary suite at
+step 13, 2026-08-02, unchanged apart from this note and the root path. The
+coverage is worth keeping; the lock on it would bind every later slice to this
+one's behaviour.
 
 Two numbers, measured 2026-08-02, scope this and pull in opposite directions.
 
@@ -31,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ROOT = Path(__file__).resolve().parent.parent
 _CLI = _ROOT / "scripts" / "canopus.py"
 _REPORT = _ROOT / "scripts" / "gate-yield.py"
 _GATED = ("cmd_approve", "cmd_freeze", "cmd_release")

@@ -8,6 +8,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **Every refusal the engineering standard ever made had vanished.** Measured
+  2026-08-02 before this existed: the Canopus lifecycle ledger held 152 events
+  and not one refusal, because the twelve early returns across `approve`,
+  `freeze` and `release` all exited without touching it. So "successful
+  deterrent" and "pointless ceremony" were the same observation for the
+  lifecycle gates, which is exactly the state the denied-attempt counter ended
+  for the write guards a day earlier. Twelve returning sites are now recorded
+  with their mechanism and a stable cause class, plus FOUR RAISING CLASSES the
+  plan did not predict: an anchor that is not a file, a contract that is not
+  red, a damaged manifest all raise and land in `main`'s handlers, and counting
+  only the returns would have measured half the yield and called it the yield.
+  Two refusals are deliberately not recorded, both found by the ordinary suite:
+  a root the tool refused to accept has no ledger to belong to, and a refusal
+  CAUSED by the ledger failing cannot be recorded in the ledger. The reporter
+  (`scripts/gate-yield.py`) is minimal on purpose: with a zero-day denial window
+  its job is not to adjudicate the subtraction list but to say when that list
+  can be adjudicated, so `TOO EARLY` is a verdict distinct from `NO YIELD` and
+  each mechanism is judged over its own source's window. It cannot form a
+  removal recommendation at all -- a forbidden-verb list plus its test make the
+  operator's no-deletion rule a property of the code rather than a promise in
+  prose. Step 11 found the report could be made to LIE about its own numbers: a
+  crafted denial reason forged a row indistinguishable from a real one, the
+  third time on this branch a guard was applied to one function and not its
+  sibling, so `printable` now lives in `scripts/utils/denial_log.py` and both
+  readers import one implementation. The slice cost two release windows and
+  earned two rules for the planning gate, both from measurement: a contract test
+  takes its own scratch root and compares invariants rather than raw text, and
+  the contract file is run through the commit gates before it is frozen.
+  `scripts/utils/gate_yield.py`, `scripts/gate-yield.py`,
+  `tests/test_gate_yield.py`, `tests/test_gate_yield_render.py`.
+
 - **The engineering standard had no way in that did not start with a file path.**
   `/canopus` is the operator's surface onto the lifecycle. Bare, it orients
   rather than reports: which step of thirteen, which act, what was just

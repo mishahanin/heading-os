@@ -80,7 +80,23 @@ def _imported_modules(tree: ast.AST, rel: str = "") -> list[str]:
             base = package
             if node.level:
                 parts = package.split(".") if package else []
-                base = ".".join(parts[: len(parts) - (node.level - 1)]) if parts else ""
+                # `max(0, ...)` is the whole of finding L2, found at step 11 of
+                # the next slice. A depth deeper than the package produced a
+                # NEGATIVE slice index, and a negative index does not truncate,
+                # it counts from the end: `from ....denial_log` inside
+                # `scripts/utils/` resolved to `scripts.denial_log` rather than
+                # to nothing. Python itself refuses such an import, so the only
+                # honest answer is no module at all, which the falsy `prefix`
+                # below then skips.
+                keep = max(0, len(parts) - (node.level - 1))
+                base = ".".join(parts[:keep]) if parts else ""
+                # Clamping alone was not the fix, and the regression test said
+                # so: an empty base still reaches the f-string below and yields
+                # `.denial_log`, which is truthy and so survives the `not
+                # prefix` guard. An unresolvable relative import must leave with
+                # nothing, here.
+                if not base:
+                    continue
             prefix = f"{base}.{node.module}" if node.level and node.module else (
                 base if node.level else node.module
             )
@@ -168,6 +184,16 @@ def calls_writer(source: str, writer: str) -> bool:
             return True
         # `denial_log.log_denial(...)`: the attribute names the real symbol on
         # the real module, so no local binding is needed to trust it.
+        #
+        # RESIDUAL, named rather than closed (M2, step 11 of the next slice).
+        # This branch does not resolve what the attribute is ON, so
+        # `mock.log_denial(...)` satisfies a check whose docstring above claims
+        # the binding is resolved. Tightening it to demand a base bound to an
+        # import of the store would refuse a legitimate shape -- a fixture that
+        # RECEIVES the module as a parameter has no import binding to resolve --
+        # and this module's own first principle is that a gate which accuses
+        # falsely is a gate people learn to disable. The quiet direction is the
+        # one taken deliberately; a false accusation is not.
         if isinstance(func, ast.Attribute) and func.attr == writer:
             return True
     return False

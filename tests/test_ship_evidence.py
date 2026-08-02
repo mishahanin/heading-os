@@ -1,33 +1,41 @@
-"""Frozen contract for the ship-evidence slice.
+"""The ship-evidence gate: promoted from the retired frozen contract.
 
-The evidence page for the operator's second approval exists (`canopus.py pack`)
-and nothing requires it. It writes nothing, so whether it ran cannot be
-established afterwards, and on 2026-08-02 the slice shipped hours earlier was
-signed off on a PROSE SUMMARY, which the standard's own NEVER list forbids. No
-artifact records that this happened.
+`tests/contract/2026-08-03-ship-evidence/` was the slice's frozen contract and
+was removed at release, because a contract left in place binds every later slice
+to this one's behaviour. The rules it decided are worth keeping, so they live
+here under the ordinary suite. The CLI wiring and the call ORDER are pinned
+separately in tests/test_ship_evidence_wiring.py, which is where they belong:
+`attestation_refusal` is pure over two strings, so a test calling it directly
+passes against a release path that never consults it.
 
-What this slice buys, stated narrowly because four voices agreed the wide claim
-is false: it does NOT make the approval real, and it cannot, because no machine
-can witness a human reading. What it does buy is that the attestation record
-perishes the moment the working tree moves, so a pack event required to be no
-older than the attestation forces the evidence render to happen AFTER the last
-change rather than merely once per slice. Shipping without a fresh evidence
-render becomes impossible, and skipping one becomes auditable instead of
-invisible.
+The evidence page for the operator's second approval already existed
+(`canopus.py pack`) and nothing required it. It wrote nothing, so whether it ran
+could not be established afterwards, and on 2026-08-02 the slice shipped hours
+earlier was signed off on a PROSE SUMMARY, which the standard's own NEVER list
+forbids. No artifact recorded that it happened.
+
+What this buys, stated narrowly because four council voices agreed the wide
+claim is false: it does NOT make the approval real, and it cannot, because no
+machine witnesses a human reading. Three things hold instead, and only together:
+a render exists, it is no older than the attestation it reports on, and that
+attestation still stands for the tree being shipped. The middle claim alone was
+what the slice shipped first, and `/scrutinize` showed at step 11 that it was
+wider than the code -- an edit made after the render and never re-attested moved
+neither stamp. SC-9 is the answer and the reason the contract grew to nine.
 
 The ledger is trusted about the render exactly when it remembers the freeze it
-is being asked about. That single test settles the fragility the council pressed
-hardest on: a ledger that lost its own freeze event cannot answer, so the ship
-degrades with a warning rather than refusing, and a gate that pushes an honest
-operator toward `--force` is worse than no gate.
+is being asked about, and the attestation is judged only where the tree can be
+described at all. Both are the same posture: fail closed against haste, open
+against a broken environment. A gate that pushes an honest operator toward
+`--force` is worse than no gate.
 
-Every test imports the code under test INSIDE its body: the implementation does
-not exist when this contract is frozen. Every fixture is minted by a real writer
-- the ledger through the CLI's own `freeze` and `pack`, the attestation through
-`build_attestation` and `write_attestation` - never hand-authored, per the fifth
-planning-gate rule.
+Every test imports the code under test INSIDE its body, kept from the frozen
+form. Every fixture is minted by a real writer -- the ledger through the CLI's
+own `freeze` and `pack`, the attestation through `build_attestation` and
+`write_attestation` -- never hand-authored, per the fifth planning-gate rule.
 
-Each docstring OPENS with the criterion it claims, per scripts/sc-trace.py.
+The criterion labels are kept as provenance: they name which of the gate
+artifact's nine success criteria each test was written to decide.
 """
 
 import json

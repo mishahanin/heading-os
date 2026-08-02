@@ -156,6 +156,27 @@ def test_a_module_that_does_not_exist_yet_does_not_abort_the_closure(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_a_relative_import_deeper_than_its_package_resolves_to_nothing():
+    """L2, found at step 11 of the ship-evidence slice.
+
+    `len(parts) - (level - 1)` went NEGATIVE for a depth deeper than the
+    package, and a negative slice index counts from the end rather than
+    truncating: `from ....denial_log` inside `scripts/utils/` answered
+    `scripts.denial_log`. Python refuses such an import outright, so the only
+    honest answer is no module at all.
+    """
+    import ast
+
+    from scripts.utils.production_shape import _imported_modules
+
+    over_deep = ast.parse("from ....denial_log import log_denial\n")
+    assert _imported_modules(over_deep, "scripts/utils/foo.py") == []
+
+    # The neighbouring depth still resolves, so the clamp did not disarm it.
+    one_dot = ast.parse("from .denial_log import log_denial\n")
+    assert "scripts.utils.denial_log" in _imported_modules(one_dot, "scripts/utils/foo.py")
+
+
 def test_the_closure_follows_a_from_package_import_of_a_module(tmp_path):
     """SC-4. `from scripts.utils import denial_log` names a package, not a
     file; following only the module string is the exact escape the enforcer-set

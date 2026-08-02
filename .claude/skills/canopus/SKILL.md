@@ -182,11 +182,23 @@ half — measure against the sentence from step 1, and attack the built thing wi
 `/scrutinize` until it returns nothing new. Green is not the same as right, and
 step 10 is the only place "passed but wrong" is visible.
 
+`pack` is not optional and it is the LAST thing before Approval 2, not the
+first. It records the render, and `release --ship` refuses without one. Run it
+after the last change, because the attestation dies when the tree moves and a
+render older than the attestation describes an earlier state.
+
 ## `/canopus release` — step 13
 
 ```
 python scripts/canopus.py release --ship --reason "<why>"
 ```
+
+It refuses when the ledger remembers this freeze and carries no evidence render
+for it, naming `pack`. It does NOT refuse when the ledger has lost the freeze
+itself: a ledger that cannot answer prints an `unverifiable` warning and lets
+the ship through, because a gate that pushes an honest operator toward `--force`
+is worse than no gate. `--window` is never gated: a window is the way back into
+the build, not the way out of it.
 
 Then finish the step, because the command is not the step:
 

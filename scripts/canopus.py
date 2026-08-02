@@ -126,6 +126,12 @@ from scripts.utils.canopus_pack import (  # noqa: E402
     parse_ts,
     render_process,
 )
+from scripts.utils.canopus_evidence import (  # noqa: E402
+    EVIDENCE_FRESH,
+    EVIDENCE_MISSING,
+    EVIDENCE_UNVERIFIABLE,
+    evidence_state,
+)
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
 from scripts.utils.gate_yield import record_refusal  # noqa: E402
 from scripts.utils.production_shape import shape_refusal  # noqa: E402
@@ -1255,6 +1261,32 @@ def cmd_pack(args) -> int:
           "record is re-checked against the CURRENT tree on every read, so it "
           "perishes the moment the tree the probe run needed to dirty moves, "
           "with or without a new write.")
+
+    # The render is now recorded, which is what lets `release --ship` require
+    # it. This ends `pack` as a pure-report command, deliberately and with the
+    # litter risk closed structurally rather than by a flag: the write is
+    # reachable only past the `read_freeze` above, so it can land only where a
+    # freeze already created `.canopus/`. A `--record` flag was considered and
+    # rejected -- a flag nobody passes is the disuse THE LAW describes, and the
+    # whole point is that the record is not optional.
+    #
+    # Idempotent on the state, not on the command. A second render of a state
+    # that already has a qualifying record adds a line carrying no new fact, and
+    # `pack` is re-runnable by design, so a debugging session would otherwise
+    # inflate the ledger the gate reads.
+    state, _reason = evidence_state(read_ledger(root), manifest["root"],
+                                    (record or {}).get("attested_at"))
+    if state != EVIDENCE_FRESH:
+        failed = _record(root, "pack", digest=manifest["root"],
+                         label=manifest["label"], reason="evidence page rendered")
+        if failed:
+            # Loud, because the page above is the operator's evidence and this
+            # is only telemetry about it: losing the record must not cost the
+            # render, and a silent loss would leave `release --ship` refusing
+            # later for a reason nobody was ever told.
+            print(f"canopus: this render was not recorded ({failed}); "
+                  f"`release --ship` will refuse until `canopus.py pack` "
+                  f"records one", file=sys.stderr)
     return 0
 
 
@@ -1359,6 +1391,28 @@ def cmd_release(args) -> int:
         _record_refusal(root, "release", "no_active_freeze",
                         reason="no active freeze to release")
         return 1
+
+    # Step 13 is the machine-observable successor of the operator's second
+    # approval, so it is the only place the evidence page can be required. A
+    # window is not an approval -- it is the way BACK into the build -- and
+    # gating it would demand an evidence page for work that is not finished.
+    #
+    # This runs BEFORE the ledger append below, so a refused ship leaves the
+    # freeze standing: a refusal that also ended the lock would leave the slice
+    # neither shipped nor protected.
+    if args.kind == "ship":
+        state, reason = evidence_state(
+            read_ledger(root), manifest["root"],
+            (read_attestation(root) or {}).get("attested_at"),
+        )
+        if state == EVIDENCE_MISSING:
+            print(f"canopus: NOT SHIPPED - {reason}", file=sys.stderr)
+            _record_refusal(root, "release", "evidence_missing", reason=reason,
+                            label=manifest["label"])
+            return 1
+        if state == EVIDENCE_UNVERIFIABLE:
+            print(f"canopus: {reason}", file=sys.stderr)
+
     failed = _record(root, "release", digest=manifest["root"],
                      label=manifest["label"], reason=args.reason,
                      kind=args.kind)

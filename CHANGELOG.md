@@ -42,6 +42,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **The evidence page for the operator's second approval existed, and nothing
+  required it.** `canopus.py pack` renders the page a slice is signed off from,
+  wrote nothing, and could therefore not be shown to have run at all. Measured
+  2026-08-02: the slice shipped that day was signed off on a PROSE SUMMARY, the
+  exact thing the standard's own NEVER list forbids, and no artifact records
+  that it happened. `pack` now appends one idempotent `pack` event to the
+  lifecycle ledger and `release --ship` refuses without one, naming the command
+  that clears the refusal. The claim is deliberately narrow and the wide one is
+  retired: this does NOT make the second approval real, because no machine
+  witnesses a human reading. What it does buy is that the attestation record
+  perishes the moment the working tree moves, so a render required to be no
+  older than the attestation must have happened AFTER the last change. Not "a
+  command ran" but "an evidence render exists that no later edit invalidated."
+  The ledger is believed about the render exactly when it remembers the freeze
+  it is being asked about: one that has lost it warns `unverifiable` and lets
+  the ship through rather than refusing, because a gate that pushes an honest
+  operator toward `--force` is worse than no gate. Fail closed against haste,
+  open against a broken disk. `--window` is never gated. Stress-tested by
+  architecture council (Kimi k3 as devil's advocate, Gemini, Grok): the scope is
+  Grok's, the degraded mode is Kimi's, and Gemini's verdict to drop the gate was
+  rejected on the measured ground that `rm -rf .canopus` was already terminal
+  for `--ship` before this change.
+
 - **A frozen contract can hand-author every fixture for a store it never calls,
   and nothing notices.** Measured at `a2cb7d1^`: the gate-yield contract held 23
   tests, its code read the denial store, it called the real writer zero times,

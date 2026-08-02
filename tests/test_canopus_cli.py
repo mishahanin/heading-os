@@ -224,14 +224,22 @@ def test_an_unreadable_member_fails_the_command_without_a_traceback(
 
 
 def test_release_records_the_event_and_clears_the_manifest(tree, anchor):
+    """The `pack` in the middle is the ship-evidence precondition, not scenery.
+
+    From 2026-08-03 a `--ship` refuses unless the ledger carries an evidence
+    render for this freeze, so a test that ships must render one. It stays here
+    rather than moving to the evidence tests because what it pins is unchanged:
+    a release records its event and clears the manifest.
+    """
     _freeze(tree, anchor)
+    assert _run(["pack"], tree) == 0
     assert _run(["release", "--ship", "--reason", "wire 1 shipped"], tree) == 0
     assert not (tree / ".canopus" / "freeze.json").exists()
     events = [
         json.loads(line)["event"]
         for line in (tree / ".canopus" / "history.jsonl").read_text().strip().splitlines()
     ]
-    assert events == ["freeze", "release"]
+    assert events == ["freeze", "pack", "release"]
 
 
 def test_release_without_an_active_freeze_fails(tree, capsys):
@@ -2446,8 +2454,15 @@ def test_a_release_the_ledger_could_not_record_is_refused(
     Both release paths log BEFORE clearing, so a failed ledger write leaves the
     freeze standing. Clearing anyway would end a freeze with no line saying it
     ended, which is exactly the gap deleting the manifest by hand leaves.
+
+    The render is taken BEFORE the ledger is broken, and the ordering carries
+    the point. From 2026-08-03 the `--ship` arm meets the ship-evidence gate
+    first, so without a render this test would pass on the wrong refusal: the
+    right message about the wrong failure. Rendering first puts the ledger's own
+    write failure back in front of the assertion.
     """
     assert _freeze(tree, anchor) == 0
+    assert _run(["pack"], tree) == 0
     capsys.readouterr()
     _ledger_raises(monkeypatch)
 

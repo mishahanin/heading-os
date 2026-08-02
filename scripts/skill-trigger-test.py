@@ -43,6 +43,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
+from scripts.utils.router_payload import (  # noqa: E402
+    load_skill_description,
+    load_triggers,
+    router_rules_text,
+    system_text,
+    user_text,
+)
 from scripts.utils.workspace import get_workspace_root, load_env  # noqa: E402
 
 ROOT = get_workspace_root()
@@ -54,73 +61,14 @@ CATEGORY_DETAIL_DIR = ROOT / "reference" / "skill-router"
 
 
 def load_full_router_rules() -> str:
-    """The router rule text PLUS the per-category detail files.
+    """The exact rule text the judge is sent.
 
-    F-5.2 moved the exclusions/compound columns out of the always-on router rule into
-    reference/skill-router/<category>.md. The judge builds its negative test cases from
-    the documented exclusions, so it must see them: concatenate every detail file under a
-    clear delimiter. Degrades to the rule alone if the detail dir is absent.
+    Delegates to `scripts.utils.router_payload`, which is the single place the
+    outbound payload is built, so the nightly egress check cannot drift from what
+    this script actually sends. Kept as a name here because it is the harness's
+    published surface.
     """
-    parts = [ROUTER_RULE.read_text(encoding="utf-8")]
-    if CATEGORY_DETAIL_DIR.exists():
-        for detail in sorted(CATEGORY_DETAIL_DIR.glob("*.md")):
-            parts.append(
-                f"\n\n=== {detail.stem.upper()} DETAIL (exclusions + compound) ===\n"
-                f"{detail.read_text(encoding='utf-8')}"
-            )
-    return "".join(parts)
-
-
-DEFAULT_MODEL = "claude-sonnet-4-6"
-MODEL_ALIAS = {
-    "haiku": "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-8",
-}
-
-
-# ---------------------------------------------------------------------------
-# Loading
-# ---------------------------------------------------------------------------
-
-def load_triggers(skill_dir: Path) -> list[dict]:
-    """Return the list of trigger cases for a skill, or [] if it has none."""
-    path = skill_dir / "triggers.json"
-    if not path.exists():
-        return []
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise ValueError(f"{path} must be a JSON array of cases")
-    return data
-
-
-def load_skill_description(skill_dir: Path) -> str:
-    """Return the `description` frontmatter field of a skill's SKILL.md (best-effort)."""
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.exists():
-        return ""
-    text = skill_md.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        return ""
-    end = text.find("\n---", 3)
-    if end == -1:
-        return ""
-    fm = text[3:end]
-    # Capture `description:` possibly spanning until the next top-level key.
-    lines = fm.splitlines()
-    desc_lines: list[str] = []
-    capturing = False
-    for line in lines:
-        if line.startswith("description:"):
-            capturing = True
-            desc_lines.append(line.split(":", 1)[1].strip())
-            continue
-        if capturing:
-            # Continuation lines are indented; a new top-level key ends the field.
-            if line and not line[0].isspace():
-                break
-            desc_lines.append(line.strip())
-    return " ".join(d for d in desc_lines if d).strip()
+    return router_rules_text()
 
 
 def list_skills_with_triggers() -> list[str]:
@@ -129,6 +77,14 @@ def list_skills_with_triggers() -> list[str]:
         if child.is_dir() and (child / "triggers.json").exists():
             out.append(child.name)
     return out
+
+
+DEFAULT_MODEL = "claude-sonnet-4-6"
+MODEL_ALIAS = {
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-4-6",
+    "opus": "claude-opus-4-8",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -194,33 +150,19 @@ def changed_routing_skills(base: str = "origin/main") -> list[str]:
 # Judge
 # ---------------------------------------------------------------------------
 
-JUDGE_INSTRUCTION = (
-    "You are a routing oracle for a Claude Code workspace. Below are the workspace's "
-    "skill-routing rules. Given a user message and a TARGET skill, decide whether the "
-    "rules would route that message to the TARGET skill (as its primary skill or compound "
-    "entrypoint). Judge strictly by the rules and the target skill's own trigger description "
-    "— not by what you personally think is reasonable.\n\n"
-    "Reply with ONLY a compact JSON object, no prose:\n"
-    '{"routes_to_target": true|false, "skill": "<skill you think fires, or none>", '
-    '"reason": "<one short clause>"}'
-)
-
-
 def build_system(router_rules: str, skill_name: str, skill_desc: str) -> str:
-    desc = skill_desc or "(no description frontmatter found)"
-    return (
-        f"{JUDGE_INSTRUCTION}\n\n"
-        f"=== TARGET SKILL ===\n/{skill_name}\nDescription: {desc}\n\n"
-        f"=== WORKSPACE SKILL-ROUTING RULES ===\n{router_rules}"
-    )
+    """The system prompt, byte for byte, from the shared payload module."""
+    return system_text(skill_name, skill_desc, router_rules)
+
+
+def build_user(query: str, target: str) -> str:
+    """The user message for one case, byte for byte, from the same module."""
+    return user_text(query, target)
 
 
 def judge_query(client, model: str, system: str, query: str, target: str) -> dict:
     """Ask the judge whether `query` routes to `target`. Returns the parsed verdict dict."""
-    user = (
-        f"User message: {query!r}\n"
-        f"Does this route to /{target}? Answer with the JSON object only."
-    )
+    user = build_user(query, target)
     response = client.messages.create(
         model=model,
         max_tokens=300,

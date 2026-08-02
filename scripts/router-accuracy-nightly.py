@@ -28,8 +28,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW
-from scripts.utils.sensitive import is_sensitive
+from scripts.utils.content_denylist import build_denylist
+from scripts.utils.egress_proof import EGRESS_CLEAR, egress_state
+from scripts.utils.router_payload import dirty_sources, outbound_texts
+from scripts.utils.sensitive import is_sensitive, sensitivity_is_declared
 from scripts.utils.workspace import (
+    get_data_root,
     get_datastore_dir,
     get_default_tz,
     get_workspace_root,
@@ -65,6 +69,9 @@ def compact_record(date_str: str, payload: dict) -> dict:
             per_skill[r["skill"]] = round(r.get("passed", 0) / cases, 4)
     return {
         "date": date_str,
+        # Explicit, because refusals now share this file. A reader must never have
+        # to infer "this one is a measurement" from which keys happen to be present.
+        "status": "ok",
         "overall_rate": payload.get("overall_rate"),
         "total_passed": payload.get("total_passed"),
         "total_cases": payload.get("total_cases"),
@@ -72,12 +79,40 @@ def compact_record(date_str: str, payload: dict) -> dict:
     }
 
 
-def run(model: str) -> int:
-    if is_sensitive():
-        print(f"{YELLOW}SENSITIVE_MODE active - skipping router-accuracy run "
-              f"(judge traffic traverses Anthropic).{RESET}")
-        return 0
+def _record_refusal(reason: str) -> None:
+    """Append a typed refusal to the trend, best-effort.
 
+    The whole reason this slice exists is that a scheduled job which refuses in
+    silence is indistinguishable, from every surface, from a night that never
+    came. The sibling daemon proved it: 74 days of a WARNING in a journal nobody
+    reads, while the heartbeat stayed fresh and every health check said healthy.
+    A refusal that writes nothing would move that bug rather than fix it.
+
+    Best-effort because the record is telemetry ABOUT the refusal, and losing it
+    must not turn a clean refusal into a crash.
+    """
+    try:
+        target = out_dir()
+        target.mkdir(parents=True, exist_ok=True)
+        record = {
+            "date": datetime.now(get_default_tz()).strftime("%Y-%m-%d"),
+            "status": "refused",
+            "reason": reason,
+        }
+        with (target / "trend.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"{RED}router-accuracy: the refusal was not recorded ({exc}){RESET}",
+              file=sys.stderr)
+
+
+def _run_harness(model: str) -> int:
+    """Run the judge harness as a subprocess and persist its result.
+
+    Split out of `run` so the egress decision above it can be tested without an
+    API key, and so a test that says "the harness did not run" is asserting on
+    the real call site rather than on a flag.
+    """
     require_writable_data_root()
 
     target = out_dir()
@@ -112,6 +147,42 @@ def run(model: str) -> int:
           f"({record['total_passed']}/{record['total_cases']}); "
           f"{len(record['per_skill'])} skills -> {target}")
     return 0
+
+
+def run(model: str) -> int:
+    """Decide whether this run has earned egress, then run or refuse.
+
+    The blanket `is_sensitive()` skip this replaces was never wrong about the
+    risk; it was wrong about THIS payload. Every byte the judge receives is
+    tracked engine content in a public repository, so the flag was refusing to
+    leak what is already published, and it refused every night since the runner
+    was written. The proof answers the narrower question per payload.
+
+    A DECLARED sensitivity still wins outright. Unset is the machine's default and
+    the proof may govern it; a person who typed the variable knows something no
+    denylist can, and a machine proof must not overrule them.
+
+    Every exit here is 0. A refusal is not a failure, and a nightly unit that
+    reports failed is a nightly unit the operator learns to ignore.
+    """
+    if sensitivity_is_declared():
+        reason = ("sensitivity was declared for this session, which outranks any "
+                  "payload proof")
+        print(f"{YELLOW}router-accuracy: not running - {reason}.{RESET}")
+        _record_refusal(reason)
+        return 0
+
+    state, reason = egress_state(
+        "\n".join(outbound_texts()),
+        build_denylist(get_data_root()),
+        dirty_sources(),
+    )
+    if state != EGRESS_CLEAR:
+        print(f"{YELLOW}router-accuracy: not running - {reason}.{RESET}")
+        _record_refusal(reason)
+        return 0
+
+    return _run_harness(model)
 
 
 def main(argv=None) -> int:

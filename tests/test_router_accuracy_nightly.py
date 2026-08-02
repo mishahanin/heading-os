@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.utils.egress_proof import EGRESS_CLEAR, EGRESS_UNVERIFIABLE
 from scripts.utils.ops_signals import classify_router_accuracy, router_accuracy_state
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,7 +83,12 @@ def wired_runner(tmp_path, monkeypatch):
     datastore = tmp_path / "datastore"
     monkeypatch.setattr(runner, "get_datastore_dir", lambda: datastore)
     monkeypatch.setattr(runner, "require_writable_data_root", lambda: datastore)
-    monkeypatch.setattr(runner, "is_sensitive", lambda: False)
+    # The egress decision is the runner's new gate; `is_sensitive` no longer
+    # governs it. Default the fixture to "this payload earned egress" so each
+    # test below exercises what it names.
+    monkeypatch.setattr(runner, "sensitivity_is_declared", lambda: False)
+    monkeypatch.setattr(runner, "egress_state",
+                        lambda *a, **k: (EGRESS_CLEAR, ""))
     monkeypatch.setattr(runner, "datetime", _FakeDatetime("2026-07-08"))
     monkeypatch.setattr(runner.subprocess, "run",
                         lambda *a, **k: _Proc(0, json.dumps(HARNESS_JSON)))
@@ -121,11 +127,31 @@ def test_two_runs_two_artifacts_two_trend_lines(wired_runner, monkeypatch):
     assert len((out / "trend.jsonl").read_text().splitlines()) == 2
 
 
-def test_sensitive_mode_writes_nothing(wired_runner, monkeypatch):
+def test_a_refused_run_writes_no_measurement(wired_runner, monkeypatch):
+    """Replaces test_sensitive_mode_writes_nothing, whose premise the egress-proof
+    slice retired: the blanket SENSITIVE_MODE skip is gone and a per-payload proof
+    decides. What must still hold is that a refusal produces NO measurement, and
+    what is new is that it produces a refusal RECORD instead of pure silence."""
     out = wired_runner
-    monkeypatch.setattr(runner, "is_sensitive", lambda: True)
+    monkeypatch.setattr(runner, "egress_state",
+                        lambda *a, **k: (EGRESS_UNVERIFIABLE, "no denylist"))
+
     assert runner.run("sonnet") == 0
-    assert not out.exists()  # nothing written
+
+    assert not (out / "2026-07-08.json").exists()
+    record = json.loads((out / "trend.jsonl").read_text().splitlines()[-1])
+    assert record["status"] == "refused"
+
+
+def test_a_declared_sensitivity_outranks_a_clear_payload(wired_runner, monkeypatch):
+    """A machine proof must not overrule a person who typed the variable."""
+    out = wired_runner
+    monkeypatch.setattr(runner, "sensitivity_is_declared", lambda: True)
+
+    assert runner.run("sonnet") == 0
+
+    assert not (out / "2026-07-08.json").exists()
+    assert json.loads((out / "trend.jsonl").read_text().splitlines()[-1])["status"] == "refused"
 
 
 def test_harness_failure_returns_nonzero(wired_runner, monkeypatch):
@@ -203,7 +229,22 @@ def test_state_single_record_not_due(tmp_path):
     assert sig["due"] is False
 
 
-def test_state_absent_trend_not_due(tmp_path):
+def test_state_absent_trend_is_due(tmp_path):
+    """Inverted by the egress-proof slice, deliberately and with evidence.
+
+    This test previously asserted `due is False, severity == "ok"` for a trend
+    that does not exist, and that assertion is exactly what hid the defect:
+    measured 2026-08-03, the producer had never run once on any host, and this
+    Tier-B signal reported healthy for the whole of that time. A signal whose
+    absence of data reads as good news cannot detect its producer being dead,
+    which is the failure that matters most.
+
+    The neighbouring `test_state_single_record_not_due` still holds and is the
+    boundary: one real measurement with no baseline yet is a trend legitimately
+    forming, not a silent producer.
+    """
     sig = router_accuracy_state(tmp_path)  # nothing on disk
-    assert sig["due"] is False
-    assert sig["severity"] == "ok"
+
+    assert sig["due"] is True
+    assert sig["severity"] != "ok"
+    assert sig["tier"] == "B"

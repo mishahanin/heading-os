@@ -597,6 +597,25 @@ def classify_router_accuracy(latest: dict | None, baseline: dict | None) -> dict
         if lo is not None and bo is not None:
             overall_drop = (bo - lo) * 100.0
 
+    # No measurement at all is a reason to raise, not a reason to say ok. Measured
+    # 2026-08-03: this returned `due=False, severity="ok"` while the job producing
+    # the trend had never run once on any host, so the Tier-B alert described as
+    # "waiting on output" reported healthy for the whole of that time. A signal
+    # whose absence of data reads as good news cannot detect the failure that
+    # matters most, which is the producer being dead. A PRESENT latest with no
+    # baseline stays not-due: that is a trend legitimately forming.
+    if latest is None:
+        return {
+            "key": "router_accuracy",
+            "value": {"worst_skill": None, "worst_drop_pts": 0.0, "overall_drop_pts": 0.0},
+            "threshold": ROUTER_ACCURACY_DROP_PCT,
+            "due": True,
+            "severity": "warn",
+            "tier": "B",
+            "summary": ("router-accuracy: no measurement on record - the nightly "
+                        "run is not producing data"),
+        }
+
     due = worst_drop > ROUTER_ACCURACY_DROP_PCT or overall_drop > ROUTER_ACCURACY_DROP_PCT
     if worst_drop > ROUTER_ACCURACY_HIGH_PCT or overall_drop > ROUTER_ACCURACY_DROP_PCT:
         severity = "high"
@@ -657,6 +676,11 @@ def router_accuracy_state(data_root: Path) -> dict:
     (get_datastore_dir() == data_root/datastore), written by router-accuracy-nightly.py."""
     trend_path = data_root / "datastore" / "operations" / "router-accuracy" / "trend.jsonl"
     records = _read_trend_records(trend_path, ROUTER_ACCURACY_BASELINE_N + 1)
+    # A refusal shares the file with the measurements so a silent night is
+    # visible, which is the whole point of writing it. It carries no `per_skill`,
+    # so counting it as a data point would rebuild the sibling daemon's 0/0
+    # baseline in a new place: a trend of pure refusals must read as no data.
+    records = [r for r in records if r.get("status") != "refused"]
     if len(records) < 2:
         return classify_router_accuracy(records[-1] if records else None, None)
     latest = records[-1]

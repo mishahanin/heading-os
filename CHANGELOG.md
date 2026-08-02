@@ -6,7 +6,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **A scheduled job can now EARN the right to send, instead of guessing from a
+  flag that answers the same thing every night.** `scripts/utils/egress_proof.py`
+  classifies an assembled outbound payload into `egress_clear`,
+  `egress_blocked`, or `egress_unverifiable` by scanning it with the same
+  real-entity detector the content-leak wall uses to decide whether a file may
+  become PUBLIC on GitHub. Clear requires all of: no source with uncommitted
+  changes, a denylist that built and holds tokens, no `content-guard: ok`
+  suppression marker in the payload, and no match. `is_sensitive()` is UNCHANGED
+  and its seven consumers see nothing; the additive `sensitivity_is_declared()`
+  distinguishes "a human typed the variable" from "nobody ever set it", and a
+  declaration outranks any proof. `scripts/utils/router_payload.py` holds the
+  exact wire strings so the checker cannot drift from what is sent.
+  `scripts/router-accuracy-nightly.py` consults the proof, and a refusal now
+  appends a typed record to the trend rather than printing into a journal nobody
+  reads. `scripts/utils/sensitive.py` and the new proof join
+  `ENFORCEMENT_SURFACE`; they were missing, so a change to the workspace's
+  egress control classified as `standard` depth.
+
 ### Fixed
+
+- **A Tier-B alert reported "ok" for every day its producer was dead.**
+  `classify_router_accuracy(None, None)` answered `due=False, severity="ok"`,
+  summary `"router-accuracy: no trend data"`. The nightly runner it watches had
+  never executed once on any host, so the signal described as waiting on that
+  output was reporting healthy the entire time. No measurement is now `due` at
+  `warn`; a present record with no baseline still reads as a trend legitimately
+  forming. `router_accuracy_state` also filters refusal records, so a trend of
+  pure refusals reads as no data rather than as stable. Its sibling
+  `steward-eval-drift.service` shows the same class at 74 days: live, enabled,
+  firing at 02:00 with no misfire, and skipping every night since 2026-05-20
+  while its heartbeat stayed fresh and every health surface called it healthy.
 
 - **The yield report could not read half of its own input, and said nothing.**
   The A1 denial log stamps `time.time()` floats; the Canopus lifecycle ledger

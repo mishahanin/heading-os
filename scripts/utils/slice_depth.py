@@ -67,6 +67,14 @@ ENFORCEMENT_SURFACE = (
     # The send gate. send_capable floors at human approval, in code not config.
     "scripts/utils/tool_risk.py",
     "config/tool-risk.json",
+    # What decides whether anything at all may leave for a third party. The flag
+    # is fail-closed and governs BOTH the observability air-gap and the
+    # external-API prompt sanitizer, across seven consumers; the proof is the one
+    # sanctioned way to earn an exemption from it, per payload. Both were missing
+    # here until 2026-08-03, found by an author trying to edit the first one: the
+    # classifier called a change to the workspace's egress control `standard`.
+    "scripts/utils/sensitive.py",
+    "scripts/utils/egress_proof.py",
     # Decides what counts as private. A wrong edit reroutes real data into the
     # public engine.
     "config/routing-map.yaml",

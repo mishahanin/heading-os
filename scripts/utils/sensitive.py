@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import os
 
-__all__ = ["is_sensitive", "sanitize_prompt_guidance"]
+__all__ = ["is_sensitive", "sanitize_prompt_guidance", "sensitivity_is_declared"]
 
 # The ONLY values that clear sensitivity. Everything else (including unset/empty/garbage)
 # resolves to sensitive — that asymmetry is the fail-closed property.
@@ -41,6 +41,33 @@ def is_sensitive() -> bool:
     cleared tokens in ``_CLEARED`` (case-insensitive) → False.
     """
     return os.environ.get("SENSITIVE_MODE", "").strip().lower() not in _CLEARED
+
+
+def sensitivity_is_declared() -> bool:
+    """True only when a human DELIBERATELY set ``SENSITIVE_MODE`` to a live value.
+
+    ADDITIVE, and deliberately so. ``is_sensitive()`` above collapses two very
+    different situations into one ``True``: "the operator declared this session
+    sensitive" and "nobody has ever set the variable". Collapsing them is right
+    for suppressing telemetry, where the safe answer is the same either way, and
+    it is what leaves an unattended job that consults only the flag permanently
+    dead, since the default is always ``True``.
+
+    A caller that can PROVE its payload carries nothing private may treat the
+    unset default as the machine's default and proceed. It may not do the same to
+    a declaration: a person who typed ``SENSITIVE_MODE=on`` knows something no
+    denylist can, and a machine proof must not overrule them. The council was
+    unanimous on that point and the inline critique reached it independently.
+
+    Empty is NOT a declaration; it is the same absence as unset, spelled shorter.
+    An unrecognised value IS one, because the variable was set on purpose and only
+    the exact cleared tokens mean "go ahead".
+    """
+    raw = os.environ.get("SENSITIVE_MODE")
+    if raw is None:
+        return False
+    value = raw.strip().lower()
+    return bool(value) and value not in _CLEARED
 
 
 def sanitize_prompt_guidance() -> str:

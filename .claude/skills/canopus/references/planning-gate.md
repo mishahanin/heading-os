@@ -1,48 +1,18 @@
----
-name: pre-impl
-description: >
-  Pre-implementation gate: recommended structured checkpoint between plan approval and /implement.
-  Use before any non-trivial implementation: combines success-criteria definition, an inline
-  contrarian stress-test (the /devil discipline), an optional /council architecture review with
-  Kimi as devil's advocate, harness gap audit, and test-contract writing. Produces a GO/NO-GO
-  artifact with a ready-to-paste /implement prompt. Skip for trivial one-liner fixes, typo
-  corrections, and config-only changes.
-argument-hint: "[plan description or @path/to/plan.md]"
-allowed-tools: "Read, Write, Bash(python3:*), Skill"
-metadata:
-  author: Misha Hanin
-  email: misha.hanin@odinix.com
-  version: "1.0"
-x-heading-orchestration:
-  parallel_safe: false
-  shared_state: []
-  triggers: ["pre-implementation gate", "gate before implement", "are we ready to implement", "before we implement", "stress-test plan before building", "pre-impl check"]
-x-heading-capability:
-  what: >
-    6-phase gate before /implement: success criteria, /devil critique, /council architecture
-    review (Kimi as devil's advocate), harness audit, test contract, GO/NO-GO decision.
-  how: >
-    /pre-impl [plan description or @plans/YYYY-MM-DD-slug.md]. Runs an inline /devil-style
-    critique and an optional /council review. Saves artifact alongside the plan it gates at
-    plans/YYYY-MM-DD-pre-impl-{slug}.md (via get_plans_dir()).
-  when: >
-    After /create-plan approval, before /implement, for any non-trivial work. Skip for
-    one-liner fixes and trivial config changes. Full chain: /create-plan -> /pre-impl -> /implement -> /scrutinize.
-x-heading-routing:
-  category: Operations
-  triggers:
-    - NEVER auto-trigger. Explicit `/pre-impl` only.
-  exclusions:
-    - Trivial one-liner fixes -> skip
-    - typo corrections -> skip
-    - 'config-only changes -> skip. For non-trivial work: run after /create-plan approval, before /implement. Full chain: /create-plan -> /pre-impl -> /implement -> /scrutinize'
-  compound: 'No'
-  router: manual
----
+# The planning gate - steps 1 to 6 of a Canopus slice
 
-# Pre-Implementation Gate
+Consumed by: `.claude/skills/canopus/SKILL.md` (`/canopus plan`)
+Last Updated: 2026-08-02
 
-**The full implementation chain: `/create-plan` → approve plan → `/pre-impl` → GO → `/implement` → `/scrutinize`**
+The body below is the former `/pre-impl` skill, MOVED and not rewritten. It was
+the only place the planning half of the standard was written down in full, and
+a rewrite would have quietly dropped what it had learned the hard way. Read
+every `/pre-impl` in the prose below as `/canopus plan`, and its six phases as
+steps 1 to 6 of the thirteen.
+
+**The full chain:** `/canopus plan` -> Approval 1 (step 6) -> `/canopus lock`
+(step 7) -> build (step 8) -> `/canopus check` (steps 9 to 11) -> Approval 2
+(step 12) -> `/canopus release` (step 13).
+
 
 Embodies the core principle from "The New SDLC With Vibe Coding" (Osmani, Saboo, Kartakis, May 2026): tests and success criteria come BEFORE code generation. The gate runs an inline contrarian critique (the `/devil` discipline) and an optional `/council` review to stress-test the plan from distinct angles before a single line of code is written.
 

@@ -154,6 +154,7 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 | `/bridge-health` | NEVER auto-trigger. Explicit `/bridge-health [--stale N] [--gate] [--json]` only. Wraps `scripts/daemon-fleet-health.py` + `scripts/bridge-daemon.py --health` + the `/telemetry/summary` endpoint. Use when the sync-pill is amber/red, the dashboard feels stale, or before scaling Phase 1 -> Phase 2 (need `--gate`). CEO-only, not synced to executives. |
 | `/burst [N]` | NEVER auto-trigger. Explicit `/burst [N]` or `/burst [N]: <seed>` only. |
 | `/calibrate [light]` | NEVER auto-trigger. Explicit `/calibrate [light]` only. |
+| `/canopus [plan \| lock \| check \| release \| back]` | NEVER auto-trigger. Explicit `/canopus [plan \| lock \| check \| release \| back]` only. Bare `/canopus` prints the current position and the full agenda. |
 | `/checkpoint [note]` | NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/` without running /compact. Surfaces from the two-tier checkpoint-offer hook at 25%/30% used context. |
 | `/cold-sweep` | cold sweep, cold-sweep, drain cold contacts, sweep overdue contacts, drain the red debt |
 | `/context7` | context7, look up docs for [library], library documentation |
@@ -171,7 +172,6 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 | `/mullvad` | /mullvad, fastest mullvad server, switch mullvad server, check mullvad speed, mullvad connect |
 | `/next` | what next, what should I do now, logical next step, where were we, recommend next |
 | `/playwright` | screenshot this site, scrape this page, browse to, headless browser |
-| `/pre-impl` | NEVER auto-trigger. Explicit `/pre-impl` only. |
 | `/prime` | NEVER auto-trigger. Explicit `/prime` or "prime" only. |
 | `/promote-corporate` | NEVER auto-trigger. Explicit `/promote-corporate [--force] [--dry-run]` only. CEO-only R16 Layer 2 gate: runs canary soak/freshness/smoke gates, then `--ff-only` merges corporate `staging` -> `main`. Never bumps BUILD.json. |
 | `/publish-corporate` | NEVER auto-trigger. Explicit `/publish-corporate` only. |

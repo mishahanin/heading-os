@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """How much process a change carries, computed from the change itself.
 
-Canopus ran the same eleven steps through a CHANGELOG typo and through a change
+Canopus ran the same thirteen moments through a CHANGELOG typo and through a change
 to the credential patterns. The obvious repair was to collapse the lifecycle for
 everybody, which is a UNIFORM trade of rigour for speed, including on the slices
 where rigour is the entire point. This module is the other repair: full depth

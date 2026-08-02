@@ -1383,7 +1383,7 @@ def test_the_documented_enforcer_set_covers_its_import_closure():
                 if candidate.is_file():
                     queue.append(candidate.relative_to(root).as_posix())
 
-    skill = (root / ".claude" / "skills" / "pre-impl" / "SKILL.md").read_text(encoding="utf-8")
+    skill = (root / ".claude" / "skills" / "canopus" / "SKILL.md").read_text(encoding="utf-8")
     missing = sorted(rel for rel in seen if f"--content {rel}" not in skill)
     assert not missing, (
         f"the documented freeze command does not freeze {missing}; an enforcer's "
@@ -1391,7 +1391,7 @@ def test_the_documented_enforcer_set_covers_its_import_closure():
     )
 
 
-def test_the_pre_impl_skill_writes_real_contract_files_and_freezes_them():
+def test_the_canopus_skill_writes_real_contract_files_and_freezes_them():
     """The gap wire 2 closed, ported here when the wire 2 contract was retired.
 
     Before wire 2 the /pre-impl skill DESCRIBED the contract in prose and
@@ -1404,10 +1404,13 @@ def test_the_pre_impl_skill_writes_real_contract_files_and_freezes_them():
     rather than the bare prefix: `tests/contract/` alone survives a skill that
     merely mentions the path in passing, which is the state this test exists to
     refuse.
+
+    The skill was `/pre-impl` until 2026-08-02 and is now `/canopus`; the gate it
+    carries moved to `references/planning-gate.md` and the property is unchanged.
     """
     from scripts.utils.workspace import get_workspace_root
 
-    skill = get_workspace_root() / ".claude" / "skills" / "pre-impl" / "SKILL.md"
+    skill = get_workspace_root() / ".claude" / "skills" / "canopus" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 
     assert "tests/contract/{YYYY-MM-DD}-{slug}/" in text

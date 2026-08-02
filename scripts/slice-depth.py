@@ -26,7 +26,7 @@ from scripts.utils.slice_depth import DEPTH_FULL, DEPTH_LIGHT, classify
 _COLOUR = {DEPTH_FULL: RED, "standard": YELLOW, DEPTH_LIGHT: GREEN}
 
 _WHAT_IT_MEANS = {
-    "full": "all eleven steps, both approvals, frozen contract, adversarial review",
+    "full": "all thirteen moments, both approvals, frozen contract, adversarial review",
     "standard": "test before the code, machine verdict, one approval at the end",
     "light": "ordinary commit checks; no contract, no approval gate",
 }

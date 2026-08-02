@@ -13,7 +13,7 @@ the override, or the CLI.
 
 Covers `docs/superpowers/specs/2026-08-01-canopus-v2-design.md` §6 A11.
 
-Canopus runs the same eleven steps through a CHANGELOG typo and through a change
+Canopus runs the same thirteen moments through a CHANGELOG typo and through a change
 to the credential patterns. The document's earlier answer was to collapse twelve
 steps to about four, which trades rigour for speed EVERYWHERE, including on the
 slices where rigour is the entire point. Calibrated depth refuses that trade.

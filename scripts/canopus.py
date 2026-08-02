@@ -47,8 +47,10 @@ then checks the hash it wrote has verified nothing.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -125,6 +127,7 @@ from scripts.utils.canopus_pack import (  # noqa: E402
     render_process,
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
+from scripts.utils.canopus_steps import ACTS, STEPS, act, act_of, step  # noqa: E402
 from scripts.utils.canopus_tree import tree_state  # noqa: E402
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
 
@@ -1311,6 +1314,162 @@ def cmd_status(args) -> int:
     return 0
 
 
+# ============================================================
+# where -- the orientation page
+# ============================================================
+
+# The ladder, and its whole justification: only six of the thirteen moments
+# leave a durable trace, so a position is READ at those and INFERRED between
+# them. Each rung names the trace that puts you on it.
+_NO_SLICE = 0
+
+
+def _position(root: Path) -> dict:
+    """Where the slice is, from what the machine can actually see.
+
+    Never guesses silently. `derived` says whether the step itself was observed
+    or inferred from a neighbouring trace, and `basis` says in prose which trace
+    that was. A confident "step 10 of 13" where nothing is knowable is a lie the
+    operator would reasonably act on, which is worse than an admitted gap.
+
+    A damaged manifest is NOT handled here: `read_freeze` raises FreezeCorrupt
+    and `main` reports it. Reporting a position over state that cannot be parsed
+    would be the same lie by a different route.
+    """
+    manifest = read_freeze(root)
+    if manifest is None:
+        return {
+            "slice": None,
+            "number": _NO_SLICE,
+            "derived": False,
+            "basis": "no freeze is held, so no slice is open. This is observed, "
+                     "not inferred: the absence of a lock is itself a fact.",
+            "lock": None,
+        }
+
+    report = verify_manifest(manifest, root)
+    resolution = resolve_anchor(manifest)
+    lock = lock_state(report, resolution.status, resolution.value)
+    attested, _reason = attestation_state(
+        read_attestation(root), report["recomputed_root"], tree_state(root))
+
+    if attested == ATTESTED:
+        return {
+            "slice": manifest["label"],
+            "number": 10,
+            "derived": True,
+            "basis": "the freeze carries an attestation, so step 9 (the "
+                     "machine's own verdict) has passed. Steps 10 and 11 leave "
+                     "no trace on disk, so this is the earliest unfinished "
+                     "moment rather than a measured one.",
+            "lock": lock,
+        }
+    return {
+        "slice": manifest["label"],
+        "number": 8,
+        "derived": True,
+        "basis": "a freeze is held (step 7) and nothing has attested it yet. "
+                 "Writing code leaves no trace this tool can read, so step 8 is "
+                 "inferred from the lock, not measured.",
+        "lock": lock,
+    }
+
+
+def _agenda() -> list:
+    return [
+        {"number": s["number"], "act": s["act"], "name": s["name"],
+         "what": s["what"], "approval": s["approval"],
+         "machine_visible": s["machine_visible"]}
+        for s in STEPS
+    ]
+
+
+def _where_payload(root: Path) -> dict:
+    place = _position(root)
+    number = place["number"]
+    current = step(number)
+    following = step(number + 1)
+    here = act_of(number) if current else act(1)
+    return {
+        "slice": place["slice"],
+        "step": number,
+        "step_name": current["name"] if current else None,
+        "act": {"number": here["number"], "name": here["name"],
+                "steps": list(here["steps"]), "note": here["note"]},
+        "next": ({"number": following["number"], "name": following["name"],
+                  "what": following["what"]} if following else None),
+        "derived": place["derived"],
+        "basis": place["basis"],
+        "lock": place["lock"],
+        "agenda": _agenda(),
+    }
+
+
+def _wrap(text: str, indent: str) -> str:
+    return textwrap.fill(text, width=88, initial_indent=indent,
+                         subsequent_indent=indent)
+
+
+def _print_agenda(current: int) -> None:
+    print(f"\n{BOLD}The thirteen moments{RESET}")
+    for entry in ACTS:
+        first, last = entry["steps"]
+        span = f"step {first}" if first == last else f"steps {first}-{last}"
+        print(f"\n  {BOLD}Act {entry['number']} - {entry['name']}{RESET}  "
+              f"({span}: {entry['note']})")
+        for moment in STEPS:
+            if not first <= moment["number"] <= last:
+                continue
+            here = moment["number"] == current
+            mark = f"{GREEN}>{RESET}" if here else " "
+            # The approvals are marked in the agenda itself, not only in a
+            # legend. They are the two moments the operator must recognise as
+            # his own while reading past them.
+            owner = f"  {YELLOW}[yours]{RESET}" if moment["approval"] else ""
+            label = f"{BOLD}{moment['name']}{RESET}" if here else moment["name"]
+            print(f"  {mark} {moment['number']:>2}. {label}{owner}")
+            print(_wrap(moment["what"], " " * 9))
+
+
+def cmd_where(args) -> int:
+    """The bare orientation page: where you are, and the whole agenda.
+
+    Deliberately not a status line. `status` answers "is the lock intact"; this
+    answers "what is this process and where am I in it", which is the question
+    an operator has when he has been away from it for a week.
+    """
+    root = _resolve_root(args)
+    payload = _where_payload(root)
+    if getattr(args, "as_json", False):
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    where = payload["slice"] or "no slice open"
+    print(f"{BOLD}CANOPUS{RESET}  {where}")
+    if payload["step"] == _NO_SLICE:
+        print(f"\n  Nothing is open. The process has {len(STEPS)} moments and "
+              f"the first one is where it starts.")
+    else:
+        act_line = f"act {payload['act']['number']}, {payload['act']['name']}"
+        print(f"\n  Step {payload['step']} of {len(STEPS)} - "
+              f"{BOLD}{payload['step_name']}{RESET}   ({act_line})")
+        done = step(payload["step"] - 1)
+        if done:
+            print(f"  Just finished: {done['number']}. {done['name']}")
+    if payload["next"]:
+        print(f"  Next: {payload['next']['number']}. {payload['next']['name']}")
+    if payload["lock"] and payload["lock"] != LOCK_HELD:
+        colour = YELLOW if payload["lock"] == LOCK_UNCONFIRMED else RED
+        print(f"  {colour}{payload['lock']}{RESET}  "
+              f"run `canopus verify` for the per-file report")
+
+    tag = "inferred" if payload["derived"] else "observed"
+    print(f"\n  How this was worked out ({tag}):")
+    print(_wrap(payload["basis"], "  "))
+    _print_agenda(payload["step"])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="canopus",
@@ -1411,6 +1570,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="show the active freeze")
     status.set_defaults(func=cmd_status)
+
+    where = sub.add_parser("where", help="where you are in the process, and the "
+                                         "whole agenda")
+    where.add_argument("--json", dest="as_json", action="store_true",
+                       help="the position and agenda as JSON")
+    where.set_defaults(func=cmd_where)
     return parser
 
 

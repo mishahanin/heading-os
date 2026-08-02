@@ -78,7 +78,7 @@ Runs whenever a `plan_path` is supplied — **independent of `--no-trajectory`**
 2. Act on the result:
    - **FOUND** or **SKIPPED**: proceed silently to Phase 0.
    - **MISSING**: surface a one-line reminder, then ask once whether to proceed —
-     > "No `/pre-impl` gate artifact found for this plan. The gate is recommended before implementing (see `/pre-impl`). Proceed anyway, or run `/pre-impl {plan_path}` first?"
+     > "No planning-gate artifact found for this plan. The gate is recommended before implementing (see `/canopus plan`, formerly `/pre-impl`). Proceed anyway, or run `/canopus plan {plan_path}` first?"
 
      This is a **soft** reminder, not a block. If Misha says proceed (or has already implied it), continue to Phase 0. Never refuse to implement on a MISSING result — CEO sovereignty holds.
 

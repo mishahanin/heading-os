@@ -55,7 +55,7 @@ def test_the_attestation_path_consults_the_check_before_it_writes():
 
     assert checks, "canopus_gate.py never calls shape_refusal"
     assert writes, "canopus_gate.py never calls write_attestation"
-    assert min(c.lineno for c in checks) < max(w.lineno for w in writes), (
+    assert min(c.lineno for c in checks) < min(w.lineno for w in writes), (
         "shape_refusal runs after write_attestation, so the record it exists to "
         "withhold is already written by the time it answers"
     )

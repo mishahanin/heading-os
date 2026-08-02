@@ -58,7 +58,7 @@ def _module_to_path(dotted: str) -> str:
     return dotted.replace(".", "/") + ".py"
 
 
-def _imported_modules(tree: ast.AST) -> list[str]:
+def _imported_modules(tree: ast.AST, rel: str = "") -> list[str]:
     """Every dotted name an AST imports, in BOTH readings of `from X import y`.
 
     Following only `node.module` is a real escape rather than a hypothetical
@@ -67,11 +67,27 @@ def _imported_modules(tree: ast.AST) -> list[str]:
     closure entirely. The enforcer-set guard in tests/test_canopus_freeze.py
     had to learn this the same way.
     """
+    package = ".".join(rel[: -len(".py")].split("/")[:-1]) if rel.endswith(".py") else ""
     found: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            found.append(node.module)
-            found.extend(f"{node.module}.{alias.name}" for alias in node.names)
+        if isinstance(node, ast.ImportFrom):
+            # A relative import carries its depth in `node.level` and a module
+            # name that is bare or absent. Returning `node.module` verbatim
+            # yielded `denial_log`, which never equals `scripts.utils.denial_log`,
+            # so every relative reader was invisible. Measured: 106 relative
+            # imports under scripts/, and the largest package there is written
+            # that way.
+            base = package
+            if node.level:
+                parts = package.split(".") if package else []
+                base = ".".join(parts[: len(parts) - (node.level - 1)]) if parts else ""
+            prefix = f"{base}.{node.module}" if node.level and node.module else (
+                base if node.level else node.module
+            )
+            if not prefix:
+                continue
+            found.append(prefix)
+            found.extend(f"{prefix}.{alias.name}" for alias in node.names)
         elif isinstance(node, ast.Import):
             found.extend(alias.name for alias in node.names)
     return found
@@ -98,8 +114,8 @@ def first_party_closure(entry_points: list[str], root: Path) -> set[str]:
             tree = ast.parse(source.read_text(encoding="utf-8"))
         except (SyntaxError, ValueError, OSError):
             continue
-        for dotted in _imported_modules(tree):
-            if not dotted.split(".")[0] in _FIRST_PARTY_ROOTS:
+        for dotted in _imported_modules(tree, rel):
+            if dotted.split(".")[0] not in _FIRST_PARTY_ROOTS:
                 continue
             candidate = _module_to_path(dotted)
             if candidate not in seen:
@@ -119,17 +135,39 @@ def calls_writer(source: str, writer: str) -> bool:
     docstring that mentions the writer, which would let a comment satisfy the
     gate. It is not a theoretical concern: the blob that misled the author of
     this module names `log_denial` in two docstrings and calls it never.
+
+    The binding is RESOLVED rather than name-matched, which closes two measured
+    holes at once. Matching the bare name missed `log_denial as ld` and refused
+    a contract that followed the discipline under an alias; it also accepted a
+    call to a locally DEFINED function that merely shares the name, which is a
+    fixture inventing its own writer and passing for the real one.
     """
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError):
         return False
+
+    bound: set[str] = set()
+    shadowed: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            bound.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == writer
+            )
+        elif (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name == writer):
+            shadowed.add(node.name)
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Name) and func.id == writer:
+        if isinstance(func, ast.Name) and func.id in bound and func.id not in shadowed:
             return True
+        # `denial_log.log_denial(...)`: the attribute names the real symbol on
+        # the real module, so no local binding is needed to trust it.
         if isinstance(func, ast.Attribute) and func.attr == writer:
             return True
     return False
@@ -141,24 +179,33 @@ def calls_writer(source: str, writer: str) -> bool:
 
 
 def _contract_sources(contract_paths, root: Path) -> list[tuple[str, str]]:
-    """(repo-relative name, source text) for every contract source file.
+    """(file name, source text) for every contract source file.
 
     `conftest.py` is collected alongside `test_*.py` on purpose. It is the
     canonical pytest home for a fixture, so a contract that does exactly what
     this module demands -- mint its records through the real writer -- and puts
     that fixture where pytest expects it would otherwise be refused for it.
+
+    Collected for BOTH call shapes, which is the whole of finding H1. The freeze
+    gate passes directories; the attestation gate passes the frozen file list,
+    and that list is filtered by pytest's `python_files` patterns, so it never
+    contains a conftest. Collecting it only on the directory branch made the two
+    gates disagree about the same contract: clean at freeze, falsely accused at
+    attestation. A file input now also picks up the conftest beside it.
     """
     out: list[tuple[str, str]] = []
+    seen: set[Path] = set()
     for raw in contract_paths:
         path = Path(raw)
         if not path.is_absolute():
             path = root / path
-        files = (
-            sorted(path.rglob("test_*.py")) + sorted(path.rglob("conftest.py"))
-            if path.is_dir() else [path]
-        )
+        if path.is_dir():
+            files = sorted(path.rglob("test_*.py")) + sorted(path.rglob("conftest.py"))
+        else:
+            files = [path, path.parent / "conftest.py"]
         for candidate in files:
-            if candidate.is_file():
+            if candidate.is_file() and candidate not in seen:
+                seen.add(candidate)
                 out.append((candidate.name, candidate.read_text(encoding="utf-8")))
     return out
 
@@ -188,7 +235,7 @@ def _modules_reading(store: str, candidates: list[str], root: Path) -> list[str]
             tree = ast.parse(source.read_text(encoding="utf-8"))
         except (SyntaxError, ValueError, OSError):
             continue
-        for dotted in _imported_modules(tree):
+        for dotted in _imported_modules(tree, rel):
             if dotted == store_module or dotted.startswith(store_module + "."):
                 reading.append(rel)
                 break

@@ -105,7 +105,7 @@ Read `references/planning-gate.md` in full and follow it. It is the former
 context, success criteria, the inline contrarian critique, the optional
 architecture council, the harness audit, and the test contract as REAL FILES.
 
-Two things in it decide whether the slice is worth anything:
+Four things in it decide whether the slice is worth anything:
 
 1. **The contract is real test files**, written to
    `tests/contract/{YYYY-MM-DD}-{slug}/`, importing the code under test INSIDE

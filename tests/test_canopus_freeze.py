@@ -1345,43 +1345,27 @@ def test_the_documented_enforcer_set_covers_its_import_closure():
     documented set silently. It asserts against the SKILL text because that is
     the command an operator actually copies.
     """
-    import ast
-
+    from scripts.utils.production_shape import first_party_closure
     from scripts.utils.workspace import get_workspace_root
 
+    # The walk this test used to carry inline now lives in production_shape,
+    # which is where the production-shape gate needed the same computation. The
+    # extraction was declared in that slice's gate artifact and left undone, so
+    # the helper shipped with two contract tests and no consumer; completing it
+    # here is what makes those criteria pin live code. The behaviour is
+    # unchanged: both readings of `from X import y` are followed, because
+    # `from scripts.utils import venv as _venv` yields the PACKAGE
+    # `scripts.utils`, which is not a file, and following only `node.module`
+    # dropped venv.py from the set while this test still passed.
     root = get_workspace_root()
-    seen: set[str] = set()
-    queue = ["scripts/utils/canopus_freeze.py", "scripts/utils/canopus_gate.py",
-             "scripts/run-tests.py", "tests/conftest.py"]
-    while queue:
-        rel = queue.pop()
-        if rel in seen:
-            continue
-        seen.add(rel)
-        for node in ast.walk(ast.parse((root / rel).read_text(encoding="utf-8"))):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                # BOTH readings of `from X import y`, because y can be a module.
-                # Following only `node.module` made this guard blind to exactly
-                # the form `tests/conftest.py` uses -- `from scripts.utils import
-                # venv as _venv` yields the module `scripts.utils`, which is a
-                # package and not a file, so venv.py fell out of the closure
-                # entirely. It survived only because scripts/run-tests.py happened
-                # to spell the same import dotted. Measured: rewriting that one
-                # line to the package form dropped venv.py from the computed set
-                # and this test still passed, which is the silent escape its own
-                # docstring promises cannot happen.
-                modules = [node.module]
-                modules += [f"{node.module}.{alias.name}" for alias in node.names]
-            elif isinstance(node, ast.Import):
-                modules = [alias.name for alias in node.names]
-            else:
-                continue
-            for module in modules:
-                if not module.startswith("scripts"):
-                    continue
-                candidate = root / (module.replace(".", "/") + ".py")
-                if candidate.is_file():
-                    queue.append(candidate.relative_to(root).as_posix())
+    seen = {
+        rel for rel in first_party_closure(
+            ["scripts/utils/canopus_freeze.py", "scripts/utils/canopus_gate.py",
+             "scripts/run-tests.py", "tests/conftest.py"],
+            root,
+        )
+        if (root / rel).is_file()
+    }
 
     skill = (root / ".claude" / "skills" / "canopus" / "SKILL.md").read_text(encoding="utf-8")
     missing = sorted(rel for rel in seen if f"--content {rel}" not in skill)

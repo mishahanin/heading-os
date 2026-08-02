@@ -127,7 +127,15 @@ from scripts.utils.canopus_pack import (  # noqa: E402
     render_process,
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
-from scripts.utils.canopus_steps import ACTS, STEPS, act, act_of, step  # noqa: E402
+from scripts.utils.canopus_steps import (  # noqa: E402
+    ACTS,
+    NO_SLICE,
+    STEPS,
+    act,
+    act_of,
+    position,
+    step,
+)
 from scripts.utils.canopus_tree import tree_state  # noqa: E402
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
 
@@ -1318,61 +1326,26 @@ def cmd_status(args) -> int:
 # where -- the orientation page
 # ============================================================
 
-# The ladder, and its whole justification: only six of the thirteen moments
-# leave a durable trace, so a position is READ at those and INFERRED between
-# them. Each rung names the trace that puts you on it.
-_NO_SLICE = 0
-
-
 def _position(root: Path) -> dict:
-    """Where the slice is, from what the machine can actually see.
+    """Read the disk, then hand the ladder to `canopus_steps.position`.
 
-    Never guesses silently. `derived` says whether the step itself was observed
-    or inferred from a neighbouring trace, and `basis` says in prose which trace
-    that was. A confident "step 10 of 13" where nothing is knowable is a lie the
-    operator would reasonably act on, which is worse than an admitted gap.
-
-    A damaged manifest is NOT handled here: `read_freeze` raises FreezeCorrupt
-    and `main` reports it. Reporting a position over state that cannot be parsed
-    would be the same lie by a different route.
+    Split deliberately: this half touches the filesystem and is awkward to test,
+    the ladder itself is pure and is tested directly. A damaged manifest is NOT
+    handled here -- `read_freeze` raises FreezeCorrupt and `main` reports it.
+    Reporting a position over state that cannot be parsed would be the same lie
+    by a different route.
     """
     manifest = read_freeze(root)
     if manifest is None:
-        return {
-            "slice": None,
-            "number": _NO_SLICE,
-            "derived": False,
-            "basis": "no freeze is held, so no slice is open. This is observed, "
-                     "not inferred: the absence of a lock is itself a fact.",
-            "lock": None,
-        }
+        return dict(position(label=None, attested=False), lock=None)
 
     report = verify_manifest(manifest, root)
     resolution = resolve_anchor(manifest)
     lock = lock_state(report, resolution.status, resolution.value)
     attested, _reason = attestation_state(
         read_attestation(root), report["recomputed_root"], tree_state(root))
-
-    if attested == ATTESTED:
-        return {
-            "slice": manifest["label"],
-            "number": 10,
-            "derived": True,
-            "basis": "the freeze carries an attestation, so step 9 (the "
-                     "machine's own verdict) has passed. Steps 10 and 11 leave "
-                     "no trace on disk, so this is the earliest unfinished "
-                     "moment rather than a measured one.",
-            "lock": lock,
-        }
-    return {
-        "slice": manifest["label"],
-        "number": 8,
-        "derived": True,
-        "basis": "a freeze is held (step 7) and nothing has attested it yet. "
-                 "Writing code leaves no trace this tool can read, so step 8 is "
-                 "inferred from the lock, not measured.",
-        "lock": lock,
-    }
+    return dict(position(label=manifest["label"], attested=attested == ATTESTED),
+                lock=lock)
 
 
 def _agenda() -> list:
@@ -1446,7 +1419,7 @@ def cmd_where(args) -> int:
 
     where = payload["slice"] or "no slice open"
     print(f"{BOLD}CANOPUS{RESET}  {where}")
-    if payload["step"] == _NO_SLICE:
+    if payload["step"] == NO_SLICE:
         print(f"\n  Nothing is open. The process has {len(STEPS)} moments and "
               f"the first one is where it starts.")
     else:

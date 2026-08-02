@@ -129,3 +129,54 @@ def act_of(step_number: int) -> dict:
 def approvals() -> tuple:
     """The operator's own moments, in order."""
     return tuple(s for s in STEPS if s["approval"])
+
+
+# The ladder from a machine-visible trace to a numbered moment. Three rungs,
+# because there are only three states the disk can be in, and each rung names
+# the trace that puts you on it.
+NO_SLICE = 0
+
+
+def position(*, label, attested: bool) -> dict:
+    """Which moment the slice is on, given only what the machine can see.
+
+    PURE, and separate from the disk on purpose. It lived inside the CLI until
+    2026-08-02, where the only way to reach the attested rung from a test was to
+    fabricate a qualifying attestation record on disk -- which would have welded
+    the position contract to the attestation machinery's shape, two things that
+    change for unrelated reasons. Mutation measured the cost of that: changing
+    the derived step from 8 to 3 killed no test at all.
+
+    `derived` says whether the step itself was observed or inferred from a
+    NEIGHBOURING trace, and `basis` says in prose which trace that was. Steps 8,
+    10 and 11 leave nothing on disk, so the honest answer at those is "the
+    earliest unfinished moment", not a measurement. A confident "step 10 of 13"
+    where nothing is knowable is a lie the operator would reasonably act on,
+    which is worse than an admitted gap.
+    """
+    if label is None:
+        return {
+            "slice": None,
+            "number": NO_SLICE,
+            "derived": False,
+            "basis": "no freeze is held, so no slice is open. This is observed, "
+                     "not inferred: the absence of a lock is itself a fact.",
+        }
+    if attested:
+        return {
+            "slice": label,
+            "number": 10,
+            "derived": True,
+            "basis": "the freeze carries an attestation, so step 9 (the "
+                     "machine's own verdict) has passed. Steps 10 and 11 leave "
+                     "no trace on disk, so this is the earliest unfinished "
+                     "moment rather than a measured one.",
+        }
+    return {
+        "slice": label,
+        "number": 8,
+        "derived": True,
+        "basis": "a freeze is held (step 7) and nothing has attested it yet. "
+                 "Writing code leaves no trace this tool can read, so step 8 is "
+                 "inferred from the lock, not measured.",
+    }

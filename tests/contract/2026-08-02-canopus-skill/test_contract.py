@@ -151,17 +151,93 @@ def test_the_machine_visible_moments_are_marked_and_are_a_minority():
     assert 7 in visible and 9 in visible, "the lock and the verdict must be visible"
 
 
-def test_with_no_freeze_held_the_position_is_before_the_lock():
-    proc = _run(["where", "--json"])
+@pytest.fixture
+def scratch(tmp_path):
+    """A tree `where` will accept, carrying no freeze.
+
+    Retake, 2026-08-02: these two ran against the ENGINE root, which carries this
+    slice's own lock, so they described the between-slices state and could never
+    be green while the lock they were locked by was held. A contract that cannot
+    be satisfied while it is frozen is a defect in the contract, and the way out
+    was `/canopus back`, not editing them quietly.
+    """
+    root = tmp_path / "tree"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "run-tests.py").write_text("# gate\n", encoding="utf-8")
+    return root
+
+
+def test_with_no_freeze_held_the_position_is_before_the_lock(scratch):
+    proc = _run(["--root", str(scratch), "where", "--json"])
     payload = _payload(proc)
     assert payload["slice"] is None
     assert payload["step"] <= 6, payload
 
 
-def test_between_slices_it_names_the_first_step_as_next():
-    proc = _run(["where", "--json"])
+def test_between_slices_it_names_the_first_step_as_next(scratch):
+    proc = _run(["--root", str(scratch), "where", "--json"])
     payload = _payload(proc)
     assert payload["next"]["number"] == 1
+
+
+def test_a_held_freeze_puts_the_position_inside_the_building_act(scratch):
+    """End to end, through the CLI, over a real manifest on disk."""
+    from scripts.utils.canopus_freeze import build_manifest, write_freeze
+
+    contract = scratch / "tests" / "contract" / "s"
+    contract.mkdir(parents=True)
+    (contract / "test_c.py").write_text("def test_a():\n    assert 1\n", encoding="utf-8")
+    write_freeze(scratch, build_manifest(
+        [contract], scratch, label="a-slice", frozen_at="2026-08-02T00:00:00+00:00"))
+
+    payload = _payload(_run(["--root", str(scratch), "where", "--json"]))
+    assert payload["slice"] == "a-slice"
+    assert payload["step"] == 8
+    assert payload["act"]["number"] == 2
+    assert payload["next"]["number"] == 9
+
+
+# The ladder itself, pure. Mutation on 2026-08-02 measured that changing the
+# derived step from 8 to 3 killed NO test, because the only tests that touched
+# the derivation were the two above and neither could run. These three rungs are
+# what that mutation should have hit.
+
+def test_the_ladder_reports_no_slice_when_there_is_no_label():
+    from scripts.utils.canopus_steps import NO_SLICE, position
+
+    place = position(label=None, attested=False)
+    assert place["number"] == NO_SLICE
+    assert place["slice"] is None
+    assert place["derived"] is False, "the absence of a lock is observed, not inferred"
+
+
+def test_the_ladder_puts_an_unattested_freeze_at_the_writing_step():
+    from scripts.utils.canopus_steps import act_of, position
+
+    place = position(label="s", attested=False)
+    assert place["number"] == 8
+    assert place["derived"] is True, "step 8 leaves no trace; claiming it is measured is a lie"
+    assert act_of(place["number"])["number"] == 2
+
+
+def test_the_ladder_moves_into_the_checking_act_once_attested():
+    from scripts.utils.canopus_steps import act_of, position
+
+    place = position(label="s", attested=True)
+    assert place["number"] == 10
+    assert act_of(place["number"])["number"] == 3
+    assert place["derived"] is True
+
+
+def test_every_rung_of_the_ladder_says_what_it_was_worked_out_from():
+    """`basis` is the whole reason a position display is allowed to exist."""
+    from scripts.utils.canopus_steps import position
+
+    for kwargs in ({"label": None, "attested": False},
+                   {"label": "s", "attested": False},
+                   {"label": "s", "attested": True}):
+        place = position(**kwargs)
+        assert len(place["basis"].strip()) > 40, kwargs
 
 
 def test_the_position_states_its_own_confidence():

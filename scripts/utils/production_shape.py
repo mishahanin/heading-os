@@ -27,6 +27,7 @@ Consumed by: scripts/canopus.py (approve / freeze / attestation).
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 # ============================================================
@@ -140,17 +141,58 @@ def calls_writer(source: str, writer: str) -> bool:
 
 
 def _contract_sources(contract_paths, root: Path) -> list[tuple[str, str]]:
-    """(repo-relative name, source text) for every contract test file."""
+    """(repo-relative name, source text) for every contract source file.
+
+    `conftest.py` is collected alongside `test_*.py` on purpose. It is the
+    canonical pytest home for a fixture, so a contract that does exactly what
+    this module demands -- mint its records through the real writer -- and puts
+    that fixture where pytest expects it would otherwise be refused for it.
+    """
     out: list[tuple[str, str]] = []
     for raw in contract_paths:
         path = Path(raw)
         if not path.is_absolute():
             path = root / path
-        files = sorted(path.rglob("test_*.py")) if path.is_dir() else [path]
+        files = (
+            sorted(path.rglob("test_*.py")) + sorted(path.rglob("conftest.py"))
+            if path.is_dir() else [path]
+        )
         for candidate in files:
             if candidate.is_file():
                 out.append((candidate.name, candidate.read_text(encoding="utf-8")))
     return out
+
+
+def _modules_reading(store: str, candidates: list[str], root: Path) -> list[str]:
+    """Of `candidates`, those that import a name FROM `store`.
+
+    Reachability is not use, and the difference is the whole of finding H3.
+    `scripts/canopus.py` reaches `denial_log.py` in three hops through
+    `gate_yield`, and a contract that merely imports canopus was told "the code
+    under test reads denial_log" -- false, on the most common contract shape in
+    this workspace, and this module's own docstring says what a gate that
+    accuses falsely becomes. So the accusation now needs a module the contract
+    IMPORTS DIRECTLY to read the store itself.
+
+    The trade is named rather than hidden: a module that delegates its store
+    reading to a helper the contract does not import escapes this check. That
+    is the quiet direction, and a false accusation is not.
+    """
+    store_module = store[: -len(".py")].replace("/", ".")
+    reading: list[str] = []
+    for rel in candidates:
+        source = root / rel
+        if not source.is_file():
+            continue
+        try:
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+        except (SyntaxError, ValueError, OSError):
+            continue
+        for dotted in _imported_modules(tree):
+            if dotted == store_module or dotted.startswith(store_module + "."):
+                reading.append(rel)
+                break
+    return reading
 
 
 def shape_refusal(contract_paths, root: Path) -> str:
@@ -181,19 +223,29 @@ def shape_refusal(contract_paths, root: Path) -> str:
                 if dotted.split(".")[0] in _FIRST_PARTY_ROOTS:
                     entry.append(_module_to_path(dotted))
 
-        closure = first_party_closure(entry, root)
-
         parts: list[str] = []
         for store, writer in RECORD_STORES.items():
-            if store not in closure:
+            readers = _modules_reading(store, entry, root)
+            if not readers:
                 continue
             if any(calls_writer(text, writer) for _, text in sources):
                 continue
             parts.append(
-                f"the code under test reads {store} but no test in the contract "
-                f"calls {writer}(), so every fixture for that store is invented "
-                f"and nothing compares it to the shape the writer emits"
+                f"{readers[0]} reads {store} but no test in the contract calls "
+                f"{writer}(), so every fixture for that store is invented and "
+                f"nothing compares it to the shape the writer emits"
             )
         return "; ".join(parts)
-    except Exception:  # noqa: BLE001 - totality IS the requirement
+    except Exception as exc:  # noqa: BLE001 - totality IS the requirement
+        # Total, and NOT silent. Refusing nothing is the requirement; saying
+        # nothing is a separate choice, and the wrong one: a fault in here
+        # leaves the gate quietly toothless, which is the exact posture this
+        # module exists to remove from somewhere else. Both siblings that share
+        # this shape bind and report, and the workspace rule forbids a handler
+        # that neither logs nor re-raises.
+        print(
+            f"canopus: the production-shape check faulted and refused nothing "
+            f"({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
         return ""

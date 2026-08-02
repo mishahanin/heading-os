@@ -131,6 +131,18 @@ jobs:
         python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, because this job is the one that collects
+          # tests/contract/. A Canopus contract may prove its checker against
+          # the REAL past defect by reading a historical blob
+          # (`git show <sha>:<path>`), which is the "fixture must carry the
+          # shape the real source produces" rule applied to the contract
+          # itself. checkout defaults to depth 1, where those objects are
+          # absent and `git show` fails, so the test ERRORS instead of
+          # measuring anything. Measured 2026-08-02: a depth-1 clone answers
+          # `fatal: invalid object name 'a2cb7d1^'` for the production-shape
+          # contract's A/B pair.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true

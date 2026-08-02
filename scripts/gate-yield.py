@@ -52,7 +52,10 @@ def main(argv=None) -> int:
         description="What each gate has caught, and whether the window is long "
                     "enough to judge it.")
     parser.add_argument("--root", default=str(ENGINE_ROOT),
-                        help="working tree root (default: this script's own repository)")
+                        help="working tree whose LIFECYCLE ledger to read "
+                             "(default: this script's own repository). The denial "
+                             "log is workspace-global and is not moved by this "
+                             "flag, so a non-default root reports two trees")
     parser.add_argument("--json", dest="as_json", action="store_true",
                         help="the summary as JSON")
     args = parser.parse_args(argv)

@@ -433,3 +433,134 @@ def test_a_mechanism_is_judged_over_its_own_sources_window_not_the_oldest_one():
     assert all(m["verdict"] == TOO_EARLY for m in young), (
         "a mechanism recorded for one day was judged over another source's window")
     assert all(m["days"] == 1 for m in young)
+
+
+# ---------------------------------------------------------------------------
+# Regressions found by /scrutinize, 2026-08-02, all four against live data
+# ---------------------------------------------------------------------------
+
+def test_a_denial_stamp_is_read_as_a_time_and_not_dropped():
+    """The two logs have never stamped alike, and only one was ever read.
+
+    `log_denial` writes `time.time()`; the lifecycle ledger writes
+    `datetime.isoformat()`. A parser that knew only the second answered None for
+    every denial row, and None is SILENT here: it reads out as a 0-day window
+    and a blank last-catch rather than as an error. Measured against the live
+    log, all nine A1 guards reported "0 catch(es) in 0 day(s)" and the one guard
+    that HAD caught something reported it with no date. A window pinned at zero
+    can never reach the budget, so NO YIELD was unreachable for half the
+    mechanisms by construction -- the report could not deliver the one verdict
+    it exists to deliver.
+    """
+    from scripts.utils.gate_yield import CATCHING, NO_YIELD, summarise
+
+    epoch = 1782000000.0  # an ordinary time.time() value, as A1 writes it
+    out = summarise(
+        ledger=[],
+        denials=[{"mechanism": "depth-gate", "ts": epoch, "reason": "why"}],
+        since={"lifecycle": "2026-06-21T00:00:00+00:00", "denials": epoch},
+        now="2026-08-02T00:00:00+00:00")
+
+    caught = out["mechanisms"]["depth-gate"]
+    assert caught["days"] > 0, "an epoch stamp collapsed the window to zero"
+    assert caught["last_catch"], "a catch was counted with no date"
+    assert caught["verdict"] == CATCHING
+    # The consequence, asserted directly rather than inferred from the window:
+    # a guard silent past the budget must be able to REACH the flagged verdict.
+    assert out["mechanisms"]["content-guard"]["verdict"] == NO_YIELD, (
+        "a silent guard past a full budget window could not be flagged")
+
+
+def test_the_last_catch_is_a_date_the_operator_can_read():
+    """One source stamps ISO and the other a float; the report answers in one."""
+    from scripts.utils.gate_yield import summarise
+
+    out = summarise(
+        ledger=[],
+        denials=[{"mechanism": "depth-gate", "ts": 1782000000.0, "reason": "w"}],
+        since={"lifecycle": "", "denials": 1782000000.0},
+        now="2026-08-02T00:00:00+00:00")
+
+    assert out["mechanisms"]["depth-gate"]["last_catch"].startswith("2026-")
+
+
+def test_a_refused_freeze_candidate_records_the_candidates_own_cause(tmp_path):
+    """A copy-paste put the lock's cause on the candidate's refusal.
+
+    `cmd_freeze` recorded `freeze_already_active` when `_candidate_manifest`
+    returned None -- prose that control flow has already disproved one branch
+    up. It cost the yield report twice: one cause inflated with refusals it
+    never made, and `candidate_refused` looking like it never fires on this
+    path. Both existing guards passed through it, because one checks that a
+    recorder is CALLED and the other that a cause is EMITTED SOMEWHERE in the
+    file; neither reads the argument. This one reads the argument.
+    """
+    from scripts.utils.canopus_freeze import read_ledger
+
+    root = tmp_path / "tree"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "run-tests.py").write_text("# gate\n", encoding="utf-8")
+    (root / "empty").mkdir()
+    anchor = tmp_path / "anchor.md"  # outside the tree, as an anchor must be
+    anchor.write_text("# a\n\n## Success criteria\n\n- **SC-1** thing\n",
+                      encoding="utf-8")
+
+    proc = _run(["--root", str(root), "freeze", "--label", "x",
+                 "--anchor", str(anchor),
+                 "--content", str(root / "scripts" / "run-tests.py"),
+                 "--contract", str(root / "empty")])
+    assert proc.returncode != 0, proc.stdout
+
+    rows = [r for r in read_ledger(root) if r["event"] == "refuse_freeze"]
+    assert len(rows) == 1, rows
+    assert rows[0]["kind"] == "candidate_refused", (
+        f"the freeze recorded {rows[0]['kind']!r} for a refused CANDIDATE")
+
+
+def test_every_pretooluse_guard_is_declared_so_a_silent_one_stays_visible():
+    """The declared list exists so a guard that has NEVER fired still appears.
+
+    It omitted the whole PreToolUse family -- eight guards, and the eight least
+    likely to fire, since each waits on a model mistake. They were therefore
+    invisible rather than TOO EARLY, which is the exact confusion the list's own
+    comment says it exists to end.
+
+    Read from the dispatcher's registry rather than retyped, so the next check
+    added there fails this test instead of silently vanishing from the report.
+    """
+    from scripts.utils.gate_yield import DENIAL_MECHANISMS
+
+    dispatch = _ROOT / ".claude" / "hooks" / "_dispatch.py"
+    tree = ast.parse(dispatch.read_text(encoding="utf-8"))
+    registry = [n for n in ast.walk(tree)
+                if isinstance(n, ast.Assign)
+                and any(getattr(t, "id", "") == "CHECKS" for t in n.targets)]
+    assert registry, "no CHECKS registry found in the dispatcher"
+    names = [e.id for e in registry[0].value.elts if isinstance(e, ast.Name)]
+    assert len(names) >= 8, names
+
+    # The dispatcher's deny path calls `_record_denial(check.__name__, ...)`,
+    # so the mechanism name IS the function name.
+    missing = sorted(set(names) - set(DENIAL_MECHANISMS))
+    assert not missing, (
+        f"these guards can never show as silent, only as absent: {missing}")
+
+
+def test_the_recorder_survives_a_failure_that_is_not_an_oserror():
+    """Its docstring claims the posture of `log_denial`, which is total.
+
+    Catching only OSError left that claim false for every other failure, and the
+    caller runs this line BEFORE its `return 1` -- so anything escaping converts
+    a clean refusal into a traceback, the outcome the function's own first
+    paragraph names as the worst available.
+    """
+    from scripts.utils import gate_yield
+
+    class NotAPath:
+        """Not path-like, so `Path(root)` raises TypeError -- not an OSError."""
+
+    failure = gate_yield.record_refusal(NotAPath(), mechanism="freeze",
+                                        cause="candidate_refused", reason="w")
+    assert isinstance(failure, str) and failure, "a non-OSError escaped"
+    assert "OSError" not in failure, (
+        f"the point is that this failure was NOT an OSError: {failure}")

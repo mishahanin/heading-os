@@ -109,6 +109,21 @@ DENIAL_MECHANISMS = (
     "push:engine-clean-scan",
     "push:engine-content-scan",
     "push:secret-tracked-files",
+    # The PreToolUse family, by the names `.claude/hooks/_dispatch.py` actually
+    # passes: its deny path calls `_record_denial(check.__name__, ...)`, so the
+    # mechanism name IS the function name. Omitting them was the declared
+    # property failing on its own largest family -- eight guards, and the eight
+    # LEAST likely to fire, because each one waits on a model mistake. A guard
+    # that has never fired was invisible here rather than TOO EARLY, which is
+    # the precise confusion the paragraph above says this list exists to end.
+    "check_prevent_secrets",
+    "check_canopus_freeze",
+    "check_protect_personal_threads",
+    "check_protect_corporate",
+    "check_protect_docs",
+    "check_cwd_anchor",
+    "check_rate_limit",
+    "check_tool_budget",
 )
 
 SOURCE_LIFECYCLE = "lifecycle"
@@ -159,16 +174,49 @@ def record_refusal(root, *, mechanism: str, cause: str, label: str = "",
         append_history(Path(root), f"{_EVENT_PREFIX}{mechanism}", digest="",
                        label=redact_reason(label), kind=cause,
                        reason=redact_reason(reason))
-    except OSError as exc:
-        return f"the refusal could not be recorded: {exc}"
+    except Exception as exc:  # noqa: BLE001 — totality IS the guarantee
+        # `except Exception`, matching `log_denial`, which this docstring claims
+        # the same posture as and which is total. Catching only OSError left the
+        # guarantee above false for every other failure: an import that cannot
+        # resolve, a ledger line that will not serialise. The caller runs this
+        # one line BEFORE its `return 1`, so anything escaping here converts a
+        # clean refusal into a traceback -- the outcome this function's own
+        # first paragraph names as the worst one available.
+        return f"the refusal could not be recorded: {type(exc).__name__}: {exc}"
     return ""
 
 
+# The two sources have never stamped alike, and nothing read them together
+# until this module did. The lifecycle ledger writes
+# `datetime.now(timezone.utc).isoformat()`; the denial log writes `time.time()`.
+_EPOCH = re.compile(r"^\d+(?:\.\d+)?$")
+
+
 def _parse(stamp):
-    if not stamp:
+    """A timestamp from EITHER log, as an aware datetime, or None.
+
+    Reading only the ISO form is not a loud failure, which is why it survived:
+    an unparsed stamp answers None, and None reads out as a 0-day window and a
+    blank last-catch rather than as an error. Measured 2026-08-02 against the
+    live log, every one of the nine A1 guards reported "0 catch(es) in 0
+    day(s)" and the one guard that HAD caught something reported it with no
+    date. A permanently-0-day window can never reach the budget, so NO YIELD --
+    the one verdict this report exists to reach -- was unreachable for half the
+    mechanisms by construction.
+
+    The numeric branch takes the string form too, because `_earliest` passes
+    stamps back through `str()` on the way to the window arithmetic.
+    """
+    if stamp is None or stamp == "" or isinstance(stamp, bool):
         return None
+    text = str(stamp)
+    if isinstance(stamp, (int, float)) or _EPOCH.match(text):
+        try:
+            return datetime.fromtimestamp(float(text), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
     try:
-        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        when = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
     return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
@@ -261,7 +309,11 @@ def _count(entry: dict, stamp, cause) -> None:
     when = _parse(stamp)
     previous = _parse(entry["last_catch"])
     if when is not None and (previous is None or when > previous):
-        entry["last_catch"] = str(stamp)
+        # Normalised, never the raw field. One source stamps ISO and the other
+        # a float, and a report answering "when did it last catch" with
+        # 1785624388.57 makes the operator do the conversion the report exists
+        # to have already done.
+        entry["last_catch"] = when.isoformat()
     key = str(cause or "unclassified")
     entry["causes"][key] = entry["causes"].get(key, 0) + 1
 
@@ -299,6 +351,21 @@ def render(summary: dict, *, now) -> str:
         lines.append(head)
         for cause, count in sorted(entry["causes"].items()):
             lines.append(f"             {printable(cause)}: {count}")
+
+    # Said plainly, because the two halves of this table are not the same kind
+    # of thing and the layout hides it. A lifecycle cause is a declared class
+    # from CAUSES, so two refusals of one kind count as two of one thing. A
+    # denial cause is A1's human sentence, which carries the offending path, so
+    # one guard catching the same class of thing twice in two files shows two
+    # buckets of one. Reading the second as the first over-counts the variety
+    # of what a guard catches.
+    if any(e["source"] == SOURCE_DENIALS and e["causes"]
+           for e in summary["mechanisms"].values()):
+        lines.append("")
+        lines.append("  Causes under a denial-log mechanism are A1's prose reasons, not "
+                     "declared")
+        lines.append("  classes: they carry the path, so they do not aggregate. Count "
+                     "the catches, not the buckets.")
 
     flagged = sorted(n for n, e in summary["mechanisms"].items()
                      if e["verdict"] == NO_YIELD)

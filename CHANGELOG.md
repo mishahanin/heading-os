@@ -6,6 +6,40 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **The yield report could not read half of its own input, and said nothing.**
+  The A1 denial log stamps `time.time()` floats; the Canopus lifecycle ledger
+  stamps `isoformat()` strings; the reader knew only the second. An unparsed
+  stamp answered `None`, and `None` reads out as a 0-day observation window and
+  a blank last-catch rather than as an error, so all nine denial-sourced guards
+  were pinned to a permanently 0-day window no matter how long the log ran.
+  `NO YIELD` -- the one verdict the report exists to reach -- was therefore
+  unreachable for half the mechanisms BY CONSTRUCTION, which is precisely the
+  state the report was built to end. It survived a 28-test frozen contract
+  because every denial fixture in that contract stamps ISO strings, a format no
+  real denial record has ever carried: the mismatch was untestable by
+  construction too. Found by running the shipped tool against the live logs, not
+  by reading it.
+- **`cmd_freeze` recorded a refused candidate as `freeze_already_active`**, a
+  copy of the branch above it whose prose the control flow disproves one line
+  up. It inflated one cause with refusals it never made and left
+  `candidate_refused` looking as though it never fired on that path. Both
+  existing guards passed it: one checks that a recorder is CALLED, the other
+  that a cause is emitted SOMEWHERE in the file, and neither reads the argument.
+- **The declared mechanism list omitted all eight PreToolUse dispatcher
+  guards**, so the guards least likely to fire -- each waits on a model mistake
+  -- were invisible in the report rather than `TOO EARLY`, which is the exact
+  confusion the list's own comment says it exists to end. The new test reads the
+  registry out of `.claude/hooks/_dispatch.py` by AST, so a ninth check fails a
+  test instead of vanishing.
+- `record_refusal` claimed `log_denial`'s total posture while catching only
+  `OSError`, so any other failure converted a clean refusal into a traceback.
+  `sc-trace` tracebacked on an unreadable `--contract` while `--anchor` already
+  exited cleanly, on the command an author runs while still guessing at a path.
+  The yield report's `--root` moved only the lifecycle ledger, leaving the
+  denial half reading the real workspace.
+
 ### Added
 
 - **A success criterion and the test that decides it were written twice, by

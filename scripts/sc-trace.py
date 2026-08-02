@@ -48,7 +48,18 @@ def main(argv=None) -> int:
         return 2
 
     criteria = read_criteria(anchor.read_text(encoding="utf-8", errors="replace"))
-    claims = read_claims(contract_sources(args.contract))
+    # Same courtesy `--anchor` already gets one branch up. A mistyped
+    # `--contract` reached `read_text` and tracebacked, which reads as a broken
+    # tool rather than as a wrong argument -- and this is the command an author
+    # runs at step 4 to check a path he is still guessing at.
+    try:
+        sources = contract_sources(args.contract)
+    except OSError as exc:
+        print(f"{RED}sc-trace: cannot read the contract at "
+              f"{exc.filename or args.contract}: {exc.strerror or exc}{RESET}",
+              file=sys.stderr)
+        return 2
+    claims = read_claims(sources)
     result = trace(criteria, claims)
 
     print(f"{BOLD}CRITERIA{RESET}  {len(result['criteria'])} stated in {anchor.name}")

@@ -874,8 +874,16 @@ def cmd_freeze(args) -> int:
     anchor_path = validate_anchor_path(_under_root(args.anchor, root), root)
     manifest, contract_note, waived = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
-        _record_refusal(root, "freeze", "freeze_already_active",
-                        reason="a freeze is already active")
+        # The cause is the candidate's, not the lock's. This line read
+        # `freeze_already_active` until 2026-08-02 -- a copy of the branch
+        # above, and unreachable prose there: control flow has already proved
+        # no freeze is active. It cost the yield report twice over, inflating
+        # one cause with refusals it never made and leaving `candidate_refused`
+        # looking like it never fires on this path. Both guard tests passed
+        # through it, because one checks that a recorder is CALLED and the
+        # other that a cause is EMITTED SOMEWHERE; neither reads the argument.
+        _record_refusal(root, "freeze", "candidate_refused",
+                        reason="the candidate manifest was refused")
         return 1
     committed_status, committed_hash = read_committed_anchor(anchor_path)
     _working_status, working_hash = read_anchor(anchor_path)

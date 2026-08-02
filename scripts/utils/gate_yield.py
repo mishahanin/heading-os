@@ -69,6 +69,7 @@ CAUSE_LEDGER_WRITE_FAILED = "ledger_write_failed"
 CAUSE_ARTIFACT_WRITE_FAILED = "artifact_write_failed"
 CAUSE_NO_ACTIVE_FREEZE = "no_active_freeze"
 CAUSE_EVIDENCE_MISSING = "evidence_missing"
+CAUSE_ATTESTATION_PERISHED = "attestation_perished"
 # The four that RAISE rather than return. Half the lifecycle's refusals never
 # reach a `return 1` -- an anchor that is not a file, a contract that is not red,
 # a damaged manifest -- and counting only the returns would have measured half
@@ -89,6 +90,7 @@ CAUSES = frozenset({
     CAUSE_ARTIFACT_WRITE_FAILED,
     CAUSE_NO_ACTIVE_FREEZE,
     CAUSE_EVIDENCE_MISSING,
+    CAUSE_ATTESTATION_PERISHED,
     CAUSE_FREEZE_CORRUPT,
     CAUSE_FREEZE_ERROR,
     CAUSE_CONTRACT_ERROR,

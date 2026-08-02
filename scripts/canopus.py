@@ -130,6 +130,7 @@ from scripts.utils.canopus_evidence import (  # noqa: E402
     EVIDENCE_FRESH,
     EVIDENCE_MISSING,
     EVIDENCE_UNVERIFIABLE,
+    attestation_refusal,
     evidence_state,
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
@@ -1415,9 +1416,32 @@ def cmd_release(args) -> int:
     # freeze standing: a refusal that also ended the lock would leave the slice
     # neither shipped nor protected.
     if args.kind == "ship":
+        record = read_attestation(root)
+
+        # The FIRST of the two, because it is the more fundamental failure and
+        # because clearing it invalidates the render anyway: re-running the gate
+        # moves `attested_at` forward, which makes any earlier page stale. Asking
+        # about the page first would send the operator to `pack`, then to the
+        # gate, then back to `pack`.
+        #
+        # Judged from the tree sample rather than from the reason text: a root
+        # that cannot be described is a fault, not haste, and refusing there
+        # would be a wall no slice outside a git working copy could pass.
+        current_tree = tree_state(root)
+        att_state, att_reason = attestation_state(
+            record, verify_manifest(manifest, root)["recomputed_root"], current_tree
+        )
+        stale = attestation_refusal(att_state, att_reason,
+                                    judgeable=current_tree is not None)
+        if stale:
+            print(f"canopus: NOT SHIPPED - {stale}", file=sys.stderr)
+            _record_refusal(root, "release", "attestation_perished",
+                            reason=stale, label=manifest["label"])
+            return 1
+
         state, reason = evidence_state(
             read_ledger(root), manifest["root"],
-            (read_attestation(root) or {}).get("attested_at"),
+            (record or {}).get("attested_at"),
         )
         if state == EVIDENCE_MISSING:
             print(f"canopus: NOT SHIPPED - {reason}", file=sys.stderr)

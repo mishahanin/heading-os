@@ -275,3 +275,31 @@ def test_a_window_release_requires_no_pack_event(tree, anchor):
                 tree) == 0
     assert not (tree / ".canopus" / "freeze.json").exists()
     assert not _events(tree, "pack")
+
+
+# ---------------------------------------------------------------------------
+# SC-9 - a tree the attestation no longer speaks for does not ship
+# ---------------------------------------------------------------------------
+
+
+def test_a_perished_attestation_refuses_the_ship_on_a_judgeable_tree():
+    """SC-9. The eight criteria above were met and the justification still did
+    not hold: the render is compared against a STORED stamp, so an edit made
+    after the render and never re-attested moved neither stamp and shipped.
+
+    Pure over the two inputs, because the CLI half needs a git working copy and
+    what is being decided here is the RULE, not the plumbing: refuse when the
+    record does not attest a tree that could be judged, and never when the tree
+    could not be judged at all, since that is a fault rather than haste.
+    """
+    from scripts.utils.canopus_evidence import attestation_refusal
+    from scripts.utils.canopus_freeze import ATTESTED, NOT_ATTESTED
+
+    assert attestation_refusal(ATTESTED, "", judgeable=True) == ""
+    assert attestation_refusal(NOT_ATTESTED, "the tree moved", judgeable=False) == ""
+
+    refusal = attestation_refusal(NOT_ATTESTED, "the tree moved", judgeable=True)
+    # Content, not emptiness: it must name what to run, or the operator is left
+    # guessing at the one command that clears it.
+    assert "run-tests" in refusal
+    assert "the tree moved" in refusal

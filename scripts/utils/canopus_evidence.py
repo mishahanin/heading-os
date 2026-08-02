@@ -14,18 +14,16 @@ defended. What survives is worth having on its own: a render exists, and it is
 no older than the attestation it reports on. Shipping without one becomes
 impossible; skipping one becomes auditable instead of invisible.
 
-**And the residual, named rather than left to be inferred.** The freshness test
-above is against the ATTESTATION's stamp, not against the tree. An edit made
-AFTER the render, and never re-attested, moves neither stamp: `attested_at` is a
-stored string, `read_attestation` returns the record whatever the tree now looks
-like, and `cmd_release` never calls `attestation_state`. So the render can
-describe an earlier state and still qualify. The chain "the attestation perishes
-when the tree moves, therefore a qualifying render post-dates the last change"
-holds only where something forces re-attestation before shipping, and step 13
-does not. What is caught here is a render that predates the attestation. What is
-not caught here is a tree that moved after the render -- that is the
-perishability the operator reads on `pack` and `status`, and requiring it at
-`--ship` too is a separate decision nobody has made.
+**The second half, and why one function was not enough.** `evidence_state`
+compares the render against the attestation's STORED stamp, and a stamp is not a
+tree. An edit made AFTER the render and never re-attested moves neither stamp,
+so a render describing an earlier state still qualified: `attested_at` is a
+string, `read_attestation` returns the record whatever the tree now looks like,
+and the release path never asked whether that record still speaks for anything.
+Found at step 11 by `/scrutinize`, on the very property this module was built to
+provide. `attestation_refusal` below closes it, and only with both halves in
+place does the chain hold: a qualifying render post-dates the attestation, and
+the attestation still describes the tree being shipped.
 
 **When the ledger is believed.** It is trusted about the render exactly when it
 remembers the freeze it is being asked about. A ledger holding this freeze's own
@@ -48,6 +46,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional, Sequence, Tuple
+
+# The one name imported rather than respelled. `attestation_refusal` compares
+# against the state `attestation_state` actually returns, so a rename there
+# fails here instead of silently making this branch unreachable.
+from scripts.utils.canopus_freeze import ATTESTED as _ATTESTED
 
 # The three answers, named rather than spelled inline at each call site. The
 # precedent is REASON_DIFFERENT_RECIPE in canopus_freeze: a second spelling of a
@@ -119,3 +122,31 @@ def evidence_state(
                 "shipping"
             )
     return EVIDENCE_FRESH, ""
+
+
+def attestation_refusal(state: str, reason: str, *, judgeable: bool) -> str:
+    """The refusal for a record that no longer speaks for the tree, or "".
+
+    `judgeable` is the tree sample's own answer to whether it could be taken at
+    all: `tree_state` returns None for a root that is not a git working copy,
+    and this refuses nothing there. That is the same posture the rest of this
+    module takes and it is not a hedge -- a root that cannot be described is a
+    FAULT, and the standing rule is to fail closed against haste and open
+    against a broken environment. It is also what keeps the rule testable: every
+    scratch root a contract builds is a plain directory, so a blanket refusal on
+    NOT ATTESTED would refuse every ship in every test for a reason that has
+    nothing to do with the discipline.
+
+    Takes the state and reason rather than sampling them, so no sentence from
+    `canopus_freeze` is duplicated here. A second spelling of a reason string in
+    another module is a rename away from a branch going silent, which
+    `REASON_DIFFERENT_RECIPE` exists to warn about and which was measured as a
+    live defect once already.
+    """
+    if state == _ATTESTED or not judgeable:
+        return ""
+    return (
+        f"the attestation does not stand for the tree being shipped ({reason}); "
+        f"re-run `python scripts/run-tests.py`, then render the evidence page "
+        f"again"
+    )

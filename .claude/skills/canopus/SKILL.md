@@ -193,8 +193,11 @@ render older than the attestation describes an earlier state.
 python scripts/canopus.py release --ship --reason "<why>"
 ```
 
-It refuses when the ledger remembers this freeze and carries no evidence render
-for it, naming `pack`. It does NOT refuse when the ledger has lost the freeze
+It refuses on two grounds, and the attestation is checked first because clearing
+it invalidates the page anyway: a record that no longer stands for the tree sends
+you to `run-tests`, and a missing or stale render sends you to `pack`. Neither
+fires on a root that is not a git working copy, where the tree cannot be
+described at all. It does NOT refuse when the ledger has lost the freeze
 itself: a ledger that cannot answer prints an `unverifiable` warning and lets
 the ship through, because a gate that pushes an honest operator toward `--force`
 is worse than no gate. `--window` is never gated: a window is the way back into

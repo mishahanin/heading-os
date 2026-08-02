@@ -1417,7 +1417,12 @@ def cmd_where(args) -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
-    where = payload["slice"] or "no slice open"
+    # Keyed off the STEP, never off the truthiness of the label. A freeze
+    # carrying an empty label made the header read "no slice open" three lines
+    # above "Step 8 of 13", and a position display that contradicts itself is
+    # the exact defect this command exists to prevent. Found at step 11.
+    where = "no slice open" if payload["step"] == NO_SLICE else (
+        payload["slice"] or "(unnamed slice)")
     print(f"{BOLD}CANOPUS{RESET}  {where}")
     if payload["step"] == NO_SLICE:
         print(f"\n  Nothing is open. The process has {len(STEPS)} moments and "

@@ -30,7 +30,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import BOLD, GRAY, GREEN, RESET, YELLOW
-from scripts.utils.denial_log import denial_log_path, read_denials, summarize
+from scripts.utils.denial_log import (  # noqa: E402
+    denial_log_path,
+    printable,
+    read_denials,
+    summarize,
+)
 from scripts.utils.workspace import get_default_tz
 
 
@@ -49,17 +54,8 @@ def _epoch(ts):
 
 
 def _printable(value) -> str:
-    """A record field safe to write to a terminal.
-
-    A record's `path` is the denied tool call's `file_path`, which a prompt
-    injection can shape, and `redact()` substitutes credential patterns without
-    touching control bytes. Replaying an ESC sequence into the operator's
-    terminal when he reads the log would make the instrument a delivery
-    mechanism, so escapes are shown as text rather than executed.
-    """
-    text = "" if value is None else str(value)
-    return "".join(ch if (ch.isprintable() or ch == " ") else repr(ch)[1:-1]
-                   for ch in text)
+    """Delegates to the shared guard in `denial_log`. See it for why."""
+    return printable(value)
 
 
 def _stamp(ts) -> str:

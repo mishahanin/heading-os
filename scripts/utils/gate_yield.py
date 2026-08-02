@@ -32,6 +32,7 @@ _HERE = Path(__file__).resolve().parent.parent.parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+from scripts.utils.denial_log import printable  # noqa: E402
 from scripts.utils.secret_patterns import redact  # noqa: E402
 
 # The name the AST guard looks for. One name, so a refusal cannot be recorded
@@ -290,13 +291,14 @@ def render(summary: dict, *, now) -> str:
     ]
     for name in sorted(summary["mechanisms"]):
         entry = summary["mechanisms"][name]
-        head = (f"  {entry['verdict']:<10} {name:<28} "
+        safe = printable(name)
+        head = (f"  {entry['verdict']:<10} {safe:<28} "
                 f"{entry['caught']} catch(es) in {entry['days']} day(s)")
         if entry["last_catch"]:
             head += f", last {entry['last_catch']}"
         lines.append(head)
         for cause, count in sorted(entry["causes"].items()):
-            lines.append(f"             {cause}: {count}")
+            lines.append(f"             {printable(cause)}: {count}")
 
     flagged = sorted(n for n, e in summary["mechanisms"].items()
                      if e["verdict"] == NO_YIELD)
@@ -304,7 +306,7 @@ def render(summary: dict, *, now) -> str:
     if flagged:
         lines.append(f"  FLAGGED: {len(flagged)} mechanism(s) have caught nothing "
                      f"over a full budget window.")
-        lines.append(f"  {', '.join(flagged)}")
+        lines.append(f"  {', '.join(printable(n) for n in flagged)}")
         lines.append("  Flagged is all this report does. What happens to a flagged "
                      "mechanism is the operator's decision and nobody else's.")
     else:

@@ -55,6 +55,29 @@ MAX_FIELD = 512
 CONTEXT_ENV = "HEADING_OS_DENIAL_CONTEXT"
 
 
+def printable(value) -> str:
+    """A record field safe to write to a terminal.
+
+    A record's `path` is a denied tool call's `file_path`, which a prompt
+    injection can shape, and `redact()` substitutes credential patterns without
+    touching control bytes. Two things go wrong if a reader prints one raw. An
+    ESC sequence replays into the operator's terminal, making the instrument a
+    delivery mechanism. And an embedded newline FORGES a row: measured
+    2026-08-02 against `scripts/gate-yield.py`, a crafted denial reason produced
+    a line reading "FAKE  approve  999 catch(es)" that was indistinguishable
+    from a real one, so the report could be made to lie about the numbers it
+    exists to report.
+
+    Lives here rather than in one reader because `scripts/denials.py` and
+    `scripts/utils/gate_yield.py` both need it, and a guard repaired on one
+    sibling and not the other is a pattern this repository has already paid for
+    more than once.
+    """
+    text = "" if value is None else str(value)
+    return "".join(ch if (ch.isprintable() or ch == " ") else repr(ch)[1:-1]
+                   for ch in text)
+
+
 def denial_log_path() -> Path:
     """Absolute path of the append-only denial log."""
     return log_dir("denials") / "denials.jsonl"

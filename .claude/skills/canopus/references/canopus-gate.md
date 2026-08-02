@@ -1,6 +1,6 @@
 # Canopus at the Fix 1 gate
 
-Consumed by: `.claude/skills/pre-impl/SKILL.md` (Phase 6, "On approval: lock on Canopus").
+Consumed by: `.claude/skills/canopus/SKILL.md` (`/canopus lock` and `/canopus back`) and `.claude/skills/canopus/references/planning-gate.md` (Phase 6, "On approval: lock on Canopus").
 Last Updated: 2026-07-27
 
 The operator-facing detail behind the four commands in the skill. The full

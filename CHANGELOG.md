@@ -8,6 +8,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **The engineering standard had no way in that did not start with a file path.**
+  `/canopus` is the operator's surface onto the lifecycle. Bare, it orients
+  rather than reports: which step of thirteen, which act, what was just
+  finished, what comes next, and the whole agenda every time. Only six of the
+  thirteen moments leave a durable trace, so the payload carries `derived` and
+  `basis` and says plainly when it is inferring, because a confident "step 10 of
+  13" where nothing is knowable is a lie the operator would reasonably act on.
+  The count is thirteen because the operator numbered his own two approvals into
+  the sequence on 2026-08-02; the consequence turned out better than the reason,
+  since acts 1 and 3 now END on his step and act 2 is the only act with no human
+  in it. `/pre-impl` is folded in as `/canopus plan`, its body moved rather than
+  rewritten, and gate artifacts keep the `plans/YYYY-MM-DD-pre-impl-{slug}.md`
+  filename so the nine existing ones stay findable. The slice was re-taken
+  mid-build through its own `/canopus back`: two of the 28 frozen tests
+  described the between-slices state and could never be green while the lock
+  they were frozen by was held, and mutation showed the position ladder was
+  pinned by nothing else. The ladder moved into a pure function, the contract
+  went 28 to 33, and the same three mutations went from killing 0, 0, 0 to
+  killing 2, 1, 1. Step 11 then found the display contradicting itself: a freeze
+  with an empty label printed "no slice open" three lines above "Step 8 of 13".
+  `scripts/utils/canopus_steps.py`, `scripts/canopus.py where`,
+  `.claude/skills/canopus/`, `tests/test_canopus_steps.py`,
+  `tests/test_canopus_where.py`.
+
 - **We scanned everything this workspace writes and nothing it installs.**
   `scripts/harness-audit.py` audits the code and text that arrives from outside
   and then loads into, or executes inside, every session. Measured on one

@@ -1,4 +1,9 @@
-"""Frozen contract - /canopus, the operator's surface onto the lifecycle.
+"""/canopus, the operator's surface onto the lifecycle.
+
+Retired from `tests/contract/2026-08-02-canopus-skill/` into the ordinary suite at
+step 13, 2026-08-02, unchanged apart from this note and the root path. A contract
+left in place binds every later slice to this one's behaviour; the coverage is
+worth keeping, the lock on it is not.
 
 The gap this closes, measured on 2026-08-02: there is no `/canopus` skill. The
 entire lifecycle lives inside `/pre-impl` and its reference file, which are
@@ -38,7 +43,7 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ROOT = Path(__file__).resolve().parent.parent
 _CLI = _ROOT / "scripts" / "canopus.py"
 _SKILL = _ROOT / ".claude" / "skills" / "canopus" / "SKILL.md"
 

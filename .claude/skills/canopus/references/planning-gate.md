@@ -149,6 +149,34 @@ def test_frozen_contract_records_a_baseline():
     assert build_manifest(...)["baseline"] == {"tests/contract/s/test_a.py": 7}
 ```
 
+**A second authoring rule, earned by two measured failures rather than by
+taste.** A contract test must not couple itself to the environment it runs in.
+Both failures were invisible until the build, and both cost a `/canopus back`:
+
+- 2026-08-02, `canopus-skill`: two tests described the between-slices state and
+  ran against the ENGINE root, which carried their own slice's lock. They could
+  never be green while frozen.
+- 2026-08-02, `gate-yield`: a test compared raw stderr from two runs in two
+  different roots, so it compared where each ran rather than what each did.
+
+The rule those two give: **a test that reads working-tree state takes its own
+scratch root, and a test that compares two runs compares the INVARIANT, never
+the raw text.** Ask it of every test at step 4, while changing it is still free.
+After the freeze it costs a window, a re-approval and a re-attestation.
+
+**A third rule, from the same slice, and the cheapest of the three.** Before
+freezing, run the commit gates against the contract file itself:
+
+    pre-commit run --files tests/contract/{YYYY-MM-DD}-{slug}/test_contract.py
+
+Measured 2026-08-02, `gate-yield`: a test variable named `secret` tripped
+detect-secrets' keyword heuristic. The value was assembled by concatenation
+exactly as the workspace requires; the NAME was the problem. Nobody found out
+until the slice was built, attested, and being committed, at which point the
+whole thing was uncommittable and the only sanctioned way out was a window --
+because a baseline entry, a pragma and `--no-verify` are all forbidden here, and
+correctly so. One command at step 4 would have cost nothing.
+
 Then show what the contract looks like before any code exists:
 
     python scripts/canopus.py probe tests/contract/{YYYY-MM-DD}-{slug}/

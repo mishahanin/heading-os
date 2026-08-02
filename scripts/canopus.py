@@ -127,6 +127,7 @@ from scripts.utils.canopus_pack import (  # noqa: E402
     render_process,
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
+from scripts.utils.gate_yield import record_refusal  # noqa: E402
 from scripts.utils.canopus_steps import (  # noqa: E402
     ACTS,
     NO_SLICE,
@@ -251,6 +252,44 @@ def _under_root(raw: str, root: Path) -> Path:
     """
     candidate = Path(raw)
     return candidate if candidate.is_absolute() else root / candidate
+
+
+def _record_refusal(root: Path, mechanism: str, cause: str, *, reason: str = "",
+                    label: str = "") -> None:
+    """Append one refusal to the ledger, and never let that change the refusal.
+
+    Until 2026-08-02 the ledger held 152 events and not one refusal: the twelve
+    early returns across `approve`, `freeze` and `release` all exited without
+    touching it, so every time the standard refused the builder the event
+    vanished and its yield could never be counted.
+
+    Reports its own failure and swallows nothing else. `record_refusal` does not
+    raise, so this cannot convert a refusal into a crash -- the one outcome
+    worse than an unrecorded refusal is a refusal that stops refusing.
+
+    One name, spelled exactly once, because the AST guard in
+    `tests/test_gate_yield.py` walks each refusal's own statement list looking
+    for a call to it. A refusal added later without this line fails that test BY
+    NAME rather than passing silently.
+    """
+    # Two refusals are deliberately NOT recorded, and both were found by the
+    # ordinary suite rather than by me.
+    #
+    # A root this tool REFUSED to accept has no ledger to belong to. Recording
+    # there created `.canopus/` inside a directory with no test gate, which is
+    # the exact litter `_resolve_root` exists to prevent: state written where
+    # neither the dispatcher nor the gate will ever look.
+    if not (root / FREEZE_DIRNAME).exists() and not (root / GATE_SCRIPT).exists():
+        return
+    # And a refusal CAUSED by the ledger failing cannot be recorded in the
+    # ledger. Writing it there would either fail again or, worse, succeed by a
+    # different path and leave a record implying the ledger was working.
+    if cause == "ledger_write_failed":
+        return
+    failed = record_refusal(root, mechanism=mechanism, cause=cause, label=label,
+                            reason=reason)
+    if failed:
+        print(f"canopus: {failed}", file=sys.stderr)
 
 
 def _print_attestation(root: Path, recomputed_root: str, current_tree=None) -> None:
@@ -637,6 +676,8 @@ def cmd_approve(args) -> int:
               "Approving a different set now turns the held lock red the moment "
               "you commit it, and nothing on the tree will have moved.",
               file=sys.stderr)
+        _record_refusal(root, "approve", "freeze_already_active",
+                        reason="a freeze is already active")
         return 1
     anchor_path = validate_anchor_path(_under_root(args.anchor, root), root)
     status, recorded = read_anchor(anchor_path)
@@ -657,13 +698,19 @@ def cmd_approve(args) -> int:
               f"never silently overwritten. If the SET being approved is "
               f"legitimately changing, re-run with --replace and --reason.",
               file=sys.stderr)
+        _record_refusal(root, "approve", "anchor_already_recorded",
+                        reason="the anchor already records an approval and --replace was not given")
         return 1
     if args.replace and not args.reason:
         print("canopus: --replace requires --reason; an unexplained replacement "
               "is indistinguishable from a re-baseline", file=sys.stderr)
+        _record_refusal(root, "approve", "replace_without_reason",
+                        reason="--replace without --reason")
         return 1
     manifest, contract_note, waived = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
+        _record_refusal(root, "approve", "candidate_refused",
+                        reason="the candidate manifest was refused")
         return 1
     # Bound to the ACT, never to the flag's presence, exactly as `cmd_freeze`
     # binds its refusal. This command discarded the third return value and wrote
@@ -730,6 +777,8 @@ def cmd_approve(args) -> int:
               f"{anchor_path}: {exc}. Nothing was approved and nothing was "
               f"logged, so make the artifact writable and run the same command "
               f"again.", file=sys.stderr)
+        _record_refusal(root, "approve", "artifact_write_failed",
+                        reason="the candidate could not be written to the anchor")
         return 1
     logged = ""
     try:
@@ -753,6 +802,8 @@ def cmd_approve(args) -> int:
               f"it if it is the set you meant, and expect a re-run to ask for "
               f"--replace --reason.",
               file=sys.stderr)
+        _record_refusal(root, "approve", "ledger_write_failed",
+                        reason="the candidate was written but a ledger entry failed")
         return 1
     _print_root(manifest["root"], manifest)
     if contract_note:
@@ -798,10 +849,14 @@ def cmd_freeze(args) -> int:
         print("canopus: a freeze is already active; run "
               "`release --window --reason \"<why>\"` first "
               "(changing a contract reopens the approval gate)", file=sys.stderr)
+        _record_refusal(root, "freeze", "freeze_already_active",
+                        reason="a freeze is already active")
         return 1
     anchor_path = validate_anchor_path(_under_root(args.anchor, root), root)
     manifest, contract_note, waived = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
+        _record_refusal(root, "freeze", "freeze_already_active",
+                        reason="a freeze is already active")
         return 1
     committed_status, committed_hash = read_committed_anchor(anchor_path)
     _working_status, working_hash = read_anchor(anchor_path)
@@ -817,6 +872,8 @@ def cmd_freeze(args) -> int:
               f"A contract edited after approval reopens the gate: re-run "
               f"`approve --replace --reason \"<why>\"` and commit it.",
               file=sys.stderr)
+        _record_refusal(root, "freeze", "approval_disagrees",
+                        reason="the committed approval does not match what this freeze would take")
         return 1
     # Bound to the act, like the refusal below and like `cmd_approve`'s write: a
     # ledger line saying a green contract was accepted for a reason, written on a
@@ -857,6 +914,8 @@ def cmd_freeze(args) -> int:
               f"--replace --reason if an approval is already recorded), commit "
               f"the artifact, then freeze.",
               file=sys.stderr)
+        _record_refusal(root, "freeze", "waiver_unapproved",
+                        reason="a waiver no committed approval carries")
         return 1
     manifest["git_sha"] = head_sha(root)
     write_freeze(root, manifest)
@@ -887,6 +946,8 @@ def cmd_freeze(args) -> int:
               f"here and will report every commit made under this lock as made "
               f"outside it.",
               file=sys.stderr)
+        _record_refusal(root, "freeze", "ledger_write_failed",
+                        reason="the freeze was written but its ledger entry failed")
         return 1
     _print_root(manifest["root"], manifest)
     if contract_note:
@@ -1256,6 +1317,8 @@ def cmd_release(args) -> int:
     manifest = read_freeze(root)
     if manifest is None:
         print("canopus: no active freeze to release", file=sys.stderr)
+        _record_refusal(root, "release", "no_active_freeze",
+                        reason="no active freeze to release")
         return 1
     failed = _record(root, "release", digest=manifest["root"],
                      label=manifest["label"], reason=args.reason,
@@ -1557,11 +1620,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _record_raised(args, cause: str, exc: Exception) -> None:
+    """Record a refusal that RAISED rather than returned.
+
+    Half the lifecycle's refusals never reach a `return 1`: an anchor that is not
+    a file, a contract that is not red, a damaged manifest all raise and land in
+    `main`'s handlers. Counting only the returns would have measured half the
+    yield and called it the yield, which is the failure this slice exists to end.
+
+    `main` is the one funnel every raising refusal passes through, so this is one
+    call site rather than a guard per raise, and a raise added later is counted
+    without its author doing anything.
+    """
+    command = getattr(args, "command", "") or ""
+    if command not in ("approve", "freeze", "release"):
+        return
+    _record_refusal(Path(getattr(args, "root", ".")), command, cause,
+                    reason=str(exc))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
     except FreezeCorrupt as exc:
+        _record_raised(args, "freeze_corrupt", exc)
         print(f"canopus: {exc}\n"
               f"         Every write is denied while the manifest is damaged. "
               f"Clear it with: python scripts/canopus.py release --force "
@@ -1569,12 +1652,15 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 1
     except FreezeError as exc:
+        _record_raised(args, "freeze_error", exc)
         print(f"canopus: {exc}", file=sys.stderr)
         return 1
     except ContractError as exc:
+        _record_raised(args, "contract_error", exc)
         print(f"canopus: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:
+        _record_raised(args, "unreadable", exc)
         # Same posture as the test gate: an unreadable member (permissions, a
         # vanished mount) fails the command, it does not traceback. The exit
         # code already failed closed; the layer billed as the guarantee should

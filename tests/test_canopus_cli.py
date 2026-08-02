@@ -10,6 +10,7 @@ import pytest
 
 import scripts.canopus as canopus
 from scripts.canopus import main
+from scripts.utils.canopus_freeze import read_ledger
 from scripts.utils.canopus_git import NO_REPO
 
 
@@ -1323,7 +1324,14 @@ def test_approve_fails_closed_when_the_anchor_cannot_be_written(tree: Path, anch
     assert "could NOT be written to" in err
     assert str(anchor) in err
     assert "canopus-anchor:" not in anchor.read_text()
-    assert not (tree / ".canopus" / "history.jsonl").exists()
+    # The refusal IS on the ledger from 2026-08-02 (A2), and the assertion
+    # changed from "nothing was written" to "the REFUSAL was written and nothing
+    # else". Before A2 the ledger held 152 events and not one refusal, so every
+    # time this gate refused, the event vanished and its yield could never be
+    # counted. What must still be absent is an `approve` entry: a refused
+    # approval must not read as an approval.
+    events = [r["event"] for r in read_ledger(tree)]
+    assert events == ["refuse_approve"], events
 
 
 def test_approve_refuses_a_committed_approval_whose_working_copy_was_scrubbed(
@@ -1484,7 +1492,14 @@ def test_approve_refuses_an_all_green_contract(tree: Path, anchor: Path, capsys)
                  "--contract", "tests/contract/slice"], tree) == 1
     assert "asserts nothing" in capsys.readouterr().err
     assert "canopus-anchor:" not in anchor.read_text()
-    assert not (tree / ".canopus" / "history.jsonl").exists()
+    # The refusal IS on the ledger from 2026-08-02 (A2), and the assertion
+    # changed from "nothing was written" to "the REFUSAL was written and nothing
+    # else". Before A2 the ledger held 152 events and not one refusal, so every
+    # time this gate refused, the event vanished and its yield could never be
+    # counted. What must still be absent is an `approve` entry: a refused
+    # approval must not read as an approval.
+    events = [r["event"] for r in read_ledger(tree)]
+    assert events == ["refuse_approve"], events
 
 
 def test_approve_refuses_a_contract_directory_with_no_test_modules(

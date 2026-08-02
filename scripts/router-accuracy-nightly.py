@@ -37,6 +37,7 @@ from scripts.utils.workspace import (
     get_datastore_dir,
     get_default_tz,
     get_workspace_root,
+    load_env,
     require_writable_data_root,
 )
 
@@ -113,6 +114,19 @@ def _run_harness(model: str) -> int:
     API key, and so a test that says "the harness did not run" is asserting on
     the real call site rather than on a flag.
     """
+    # The operator's timezone lives in the gitignored .env, and `get_default_tz()`
+    # reads os.environ ONLY -- it never loads that file. Without this the dated
+    # artifact and the trend record are stamped UTC while the timer fires on local
+    # time, so a 03:00 Dubai run lands under YESTERDAY's date. Measured on the
+    # first live run: the timer fired 2026-08-03 03:00:02 and the record read
+    # 2026-08-02. `load_env` uses setdefault, so a value already in the
+    # environment (a unit's Environment=, a test's monkeypatch) still wins.
+    #
+    # Called HERE rather than in `run` on purpose: every frozen contract test that
+    # drives a refusal monkeypatches `_run_harness` away, so none of them reaches
+    # the real .env and the contract stays hermetic.
+    load_env()
+
     require_writable_data_root()
 
     target = out_dir()

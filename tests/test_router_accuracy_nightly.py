@@ -154,6 +154,28 @@ def test_a_declared_sensitivity_outranks_a_clear_payload(wired_runner, monkeypat
     assert json.loads((out / "trend.jsonl").read_text().splitlines()[-1])["status"] == "refused"
 
 
+def test_the_harness_loads_the_operators_timezone_before_dating_the_record(
+    wired_runner, monkeypatch
+):
+    """The record must be dated in the timezone the schedule runs on.
+
+    Found by the first live nightly run: the timer fired at 2026-08-03 03:00:02
+    Dubai and the record read `2026-08-02`. `HEADING_OS_TZ` lives in the
+    gitignored .env and `get_default_tz()` reads os.environ only, so every dated
+    artifact was stamped UTC while the unit's OnCalendar ran on local time,
+    putting each night's record under the previous day.
+
+    Asserted on the CALL rather than on a date string: the date itself depends on
+    a real .env this test must not require, while "the environment was loaded
+    before the timezone was read" is the behaviour that was missing.
+    """
+    calls = []
+    monkeypatch.setattr(runner, "load_env", lambda *a, **k: calls.append(True))
+
+    assert runner.run("sonnet") == 0
+    assert calls, "_run_harness must load .env before get_default_tz() reads it"
+
+
 def test_harness_failure_returns_nonzero(wired_runner, monkeypatch):
     monkeypatch.setattr(runner.subprocess, "run",
                         lambda *a, **k: _Proc(1, "", "boom"))

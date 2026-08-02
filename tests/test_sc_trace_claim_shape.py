@@ -12,7 +12,7 @@ The consequence is stronger than noise. Without a leading-position rule a test
 cannot explain what it is testing without accidentally binding to whatever it
 names, which makes the orphan check unusable rather than merely loud.
 """
-from scripts.utils.sc_trace import read_claims
+from scripts.utils.sc_trace import read_claims, refusal, trace
 
 
 def _claims(body: str) -> dict:
@@ -64,3 +64,33 @@ def test_a_non_test_function_claims_nothing():
             '\n\ndef test_one():\n    """SC-2."""\n    assert True\n')
 
     assert _claims(body) == {"SC-2": {"test_contract.py"}}
+
+
+# ============================================================
+# The empty-criteria rule, isolated
+# ============================================================
+
+def test_no_criteria_and_no_claims_at_all_still_refuses():
+    """The anti-vacuity rule, pinned where nothing else pins it.
+
+    Found by mutation at step 11 and worth recording, because the frozen
+    contract's two SC-5 tests were green for the wrong reason. Both point
+    `approve` at an artifact with no criteria section and a contract claiming
+    SC-1 and SC-2 -- so with the empty-criteria rule deleted entirely, those two
+    claims become ORPHANS and the orphan branch refuses instead. Exit 1 either
+    way, and the test cannot tell which rule fired. Deleting the rule killed no
+    test at all.
+
+    Here nothing is claimed either, so the orphan branch has nothing to fire on
+    and only the empty-criteria rule can produce a refusal. Zero criteria and
+    zero unbound criteria is arithmetically a pass, and it is the one answer
+    this module must never give.
+    """
+    assert refusal(trace([], {})) != ""
+
+
+def test_the_empty_criteria_refusal_says_what_is_missing():
+    """A refusal an operator cannot act on is a refusal he routes around."""
+    message = refusal(trace([], {}))
+
+    assert "no success criteria" in message

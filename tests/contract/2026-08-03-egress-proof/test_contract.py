@@ -74,6 +74,27 @@ def _load(path: Path, name: str):
     return mod
 
 
+def _own_trend(runner, tmp_path: Path, monkeypatch) -> Path:
+    """Point the runner's trend at THIS test's scratch root.
+
+    Added at step 12, after the first live nightly run exposed what the first
+    draft had been doing: `_record_refusal` resolves `out_dir()` against the real
+    data overlay, and any test that drives `run()` into a refusal without
+    redirecting it appends a fabricated record to the OPERATOR'S trend. Measured:
+    24 junk lines, three per suite run across eight runs.
+
+    That is this contract breaking the second authoring rule it is bound by --
+    a test that reads or writes tree state takes its own scratch root -- and it
+    is the more embarrassing kind of breach, because the slice's own subject is a
+    job whose records must mean something. A trend seeded by the test suite is a
+    trend that lies in exactly the way this slice exists to stop.
+    """
+    target = tmp_path / "trend-home"
+    target.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(runner, "out_dir", lambda: target)
+    return target
+
+
 # ---------------------------------------------------------------------------
 # SC-1 - a payload carrying nothing from the denylist is clear
 # ---------------------------------------------------------------------------
@@ -247,7 +268,7 @@ def test_the_runner_runs_under_uncleared_sensitive_mode_when_egress_is_clear(
 
 @pytest.mark.parametrize("state_name", ["EGRESS_BLOCKED", "EGRESS_UNVERIFIABLE"])
 def test_the_runner_skips_and_prints_the_reason_when_egress_is_not_clear(
-    state_name, monkeypatch, capsys
+    state_name, tmp_path, monkeypatch, capsys
 ):
     """SC-6. Exit 0 because a refusal is not a failure and a nightly unit that
     reports failed teaches the operator to ignore it. The reason must be printed:
@@ -255,6 +276,7 @@ def test_the_runner_skips_and_prints_the_reason_when_egress_is_not_clear(
     import scripts.utils.egress_proof as ep
 
     runner = _load(_RUNNER_PATH, f"runner_sc6_{state_name}")
+    _own_trend(runner, tmp_path, monkeypatch)
     monkeypatch.setattr(runner, "egress_state",
                         lambda *a, **k: (getattr(ep, state_name), "the stated reason"))
 
@@ -376,7 +398,7 @@ def test_an_explicitly_declared_sensitive_mode_is_not_overridden(monkeypatch):
 
 
 def test_the_runner_skips_when_sensitivity_was_declared_even_if_egress_is_clear(
-    monkeypatch, capsys
+    tmp_path, monkeypatch, capsys
 ):
     """SC-11. The wiring half. A rule that holds in a pure function and never
     reaches the caller is the defect the previous slice shipped and had to fix
@@ -384,6 +406,7 @@ def test_the_runner_skips_when_sensitivity_was_declared_even_if_egress_is_clear(
     from scripts.utils.egress_proof import EGRESS_CLEAR
 
     runner = _load(_RUNNER_PATH, "runner_sc11")
+    _own_trend(runner, tmp_path, monkeypatch)
     monkeypatch.setenv("SENSITIVE_MODE", "on")
     monkeypatch.setattr(runner, "egress_state", lambda *a, **k: (EGRESS_CLEAR, ""))
 
@@ -484,9 +507,7 @@ def test_a_refused_run_appends_a_typed_record_to_the_trend(tmp_path, monkeypatch
     from scripts.utils.egress_proof import EGRESS_UNVERIFIABLE
 
     runner = _load(_RUNNER_PATH, "runner_sc13")
-    target = tmp_path / "trend-home"
-    target.mkdir()
-    monkeypatch.setattr(runner, "out_dir", lambda: target)
+    target = _own_trend(runner, tmp_path, monkeypatch)
     monkeypatch.setattr(runner, "egress_state",
                         lambda *a, **k: (EGRESS_UNVERIFIABLE, "the stated reason"))
 

@@ -1,4 +1,18 @@
-"""A12 — the frozen contract: one criterion, one test, checked by machine.
+"""A12 — one criterion, one test, checked by machine.
+
+Retired from `tests/contract/2026-08-02-sc-trace/` into the ordinary suite at
+step 13, 2026-08-02, unchanged apart from this note and the root path. The
+coverage is worth keeping; the lock on it would bind every later slice to this
+one's behaviour.
+
+Two rules this contract PREDATES, both earned after it was frozen, are pinned in
+`tests/test_sc_trace_claim_shape.py` instead: a claim OPENS a test's docstring,
+and the empty-criteria refusal is the only thing that can fire when nothing is
+claimed either. The second exists because mutation found the two SC-5 tests here
+green for the wrong reason -- with the empty-criteria branch deleted, their
+contract's SC-1 and SC-2 claims become orphans and the orphan branch refuses, so
+neither test can tell which rule fired.
+
 
 Measured on the two slices shipped 2026-08-02: the `gate-yield` gate artifact
 carries seven success criteria, its contract carries 28 test functions, and the
@@ -24,7 +38,7 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parents[3]
+_ROOT = Path(__file__).resolve().parents[1]
 _CLI = _ROOT / "scripts" / "canopus.py"
 _TRACE = _ROOT / "scripts" / "sc-trace.py"
 

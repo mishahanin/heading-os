@@ -1,4 +1,11 @@
-"""Frozen contract — the harness audit.
+"""The harness audit, promoted from its frozen contract.
+
+Was `tests/contract/2026-08-02-harness-audit/`; the slice shipped on
+2026-08-02 and a contract left in place binds every later slice to this
+slice's behaviour verbatim. Its sibling `tests/test_harness_audit.py` holds
+the properties found AFTER the freeze (the skip marker, the symlink hole, the
+emptied baseline), which is why they live apart.
+
 
 Canopus contract for the addition agreed on 2026-08-02: this workspace scans
 everything it WRITES and nothing it INSTALLS.
@@ -51,7 +58,7 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ROOT = Path(__file__).resolve().parent.parent
 _CLI = _ROOT / "scripts" / "harness-audit.py"
 
 # Assembled at runtime so this file carries no whole injection phrase that a

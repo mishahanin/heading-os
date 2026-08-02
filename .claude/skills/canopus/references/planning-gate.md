@@ -199,6 +199,26 @@ traceable to nothing at all. Read the guarantee narrowly — it proves a test
 CLAIMS to decide a criterion, never that it does. A green trace does not excuse
 reading the tests.
 
+**A fifth rule, and it is the one that would have caught the worst defect any of
+these slices shipped.** A fixture must be able to produce the shape the REAL
+source produces. Before freezing, check every fabricated input against a real
+sample: a line from the live log, an actual file on disk, a genuine API
+response. Not the shape the code expects, and not the shape the docstring
+describes — the shape the source actually emits.
+
+Measured 2026-08-02, `gate-yield`: a 28-test frozen contract failed to catch
+that the report could not parse the denial log's timestamps at all, because
+EVERY fixture in it stamped an ISO string and no real denial record has ever
+carried one — the log writes `time.time()` floats. The mismatch was untestable
+by construction. Worse than a gap: the failure was silent, since an unparsed
+stamp answers `None` and `None` renders as a 0-day window rather than as an
+error, so the report's central verdict was unreachable for half its inputs and
+nothing said so. It was found by running the shipped tool against the live logs,
+which is the check this rule turns into a habit.
+
+A test whose fixture cannot produce the real shape is green and proves nothing
+about the real shape.
+
 Then show what the contract looks like before any code exists:
 
     python scripts/canopus.py probe tests/contract/{YYYY-MM-DD}-{slug}/

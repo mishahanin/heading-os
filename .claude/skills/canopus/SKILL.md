@@ -118,7 +118,12 @@ Two things in it decide whether the slice is worth anything:
    red test is vacuous is refused at approve and freeze time, and `vacuity was
    NOT measured` is not a clean bill.
 
-3. **Every criterion is bound to a test, and the machine checks it.** Each
+3. **A fixture must produce the shape the real source produces.** Check every
+   fabricated input against a real sample before freezing. Measured 2026-08-02:
+   a 28-test contract missed that a report could not parse its own log's
+   timestamps, because every fixture in it stamped a format no real record has
+   ever carried. Green, and proving nothing about the real shape.
+4. **Every criterion is bound to a test, and the machine checks it.** Each
    success criterion from Phase 1 is named in the DOCSTRING of at least one
    contract test; `python scripts/sc-trace.py --anchor {artifact} --contract
    {dir}` prints the binding, and `approve` and `freeze` refuse a criterion

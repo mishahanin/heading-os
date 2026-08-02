@@ -53,8 +53,12 @@ FORBIDDEN_VERBS = ("remove", "removal", "delete", "cut ", "drop ", "retire",
                    "subtract", "rip out")
 
 # The refusal causes, as classes rather than prose, so two refusals of one kind
-# count as two of one thing. Every entry is emitted from scripts/canopus.py and
-# a test fails if one is declared here and emitted nowhere.
+# count as two of one thing. The correspondence with scripts/canopus.py is
+# pinned in BOTH directions: a test fails on a cause declared here and emitted
+# nowhere, and a second test fails on a cause emitted there and declared
+# nowhere. One direction alone was not enough -- `evidence_missing` reached the
+# CLI on 2026-08-03 and never reached this table, and every test stayed green
+# because the only guard walked from here outward.
 CAUSE_FREEZE_ALREADY_ACTIVE = "freeze_already_active"
 CAUSE_ANCHOR_ALREADY_RECORDED = "anchor_already_recorded"
 CAUSE_REPLACE_WITHOUT_REASON = "replace_without_reason"
@@ -64,6 +68,7 @@ CAUSE_WAIVER_UNAPPROVED = "waiver_unapproved"
 CAUSE_LEDGER_WRITE_FAILED = "ledger_write_failed"
 CAUSE_ARTIFACT_WRITE_FAILED = "artifact_write_failed"
 CAUSE_NO_ACTIVE_FREEZE = "no_active_freeze"
+CAUSE_EVIDENCE_MISSING = "evidence_missing"
 # The four that RAISE rather than return. Half the lifecycle's refusals never
 # reach a `return 1` -- an anchor that is not a file, a contract that is not red,
 # a damaged manifest -- and counting only the returns would have measured half
@@ -83,6 +88,7 @@ CAUSES = frozenset({
     CAUSE_LEDGER_WRITE_FAILED,
     CAUSE_ARTIFACT_WRITE_FAILED,
     CAUSE_NO_ACTIVE_FREEZE,
+    CAUSE_EVIDENCE_MISSING,
     CAUSE_FREEZE_CORRUPT,
     CAUSE_FREEZE_ERROR,
     CAUSE_CONTRACT_ERROR,

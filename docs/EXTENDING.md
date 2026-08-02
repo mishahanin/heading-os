@@ -205,7 +205,10 @@ freezing anything. `canopus pack` prints the Fix 2 evidence page: all three axes
 (lock, attestation, approval), collected against baseline, the `interpreter`
 block describing what configured the attesting run (which `pack` alone prints),
 commits made while no freeze was held, whether the attestation has gone stale,
-and what is not covered.
+and what is not covered. It also appends one idempotent `pack` event to the
+ledger, which is what lets `release --ship` require that the page was rendered;
+a second render of the same state adds no second line, and a ledger that cannot
+be written costs the record and never the page.
 
 **Red is not the same as meaningful.** A contract can be red only because the
 module it imports does not exist yet, which says nothing about whether its tests
@@ -267,6 +270,45 @@ those lines are forwarded to the operator. ONE underlying cause prints TWICE,
 once per stub run. That is the two runs each reporting, not a second fault, and
 deduplicating it would hide the more interesting case where only one of the two
 runs hit it.
+
+**A criterion nobody tests is not a criterion.** Each success criterion stated in
+the gate artifact must be named in the DOCSTRING of at least one contract test.
+`python scripts/sc-trace.py --anchor <artifact> --contract <dir>` prints the
+binding, and `approve` and `freeze` refuse both directions: a criterion claimed
+by no test, and a test claiming a criterion the artifact never stated. Measured
+2026-08-02, an artifact stating seven criteria against a 28-test contract had
+five of the seven bound to nothing. What this buys is narrow and says so: it
+proves a test CLAIMS to decide a criterion, never that it does.
+
+**A fixture that cannot carry the writer's shape proves nothing.** If the code
+under test reads a registered record store, at least one test in the contract
+must build its fixtures by CALLING that store's writer.
+`scripts/utils/production_shape.py` refuses a contract that does not, softly at
+`approve` and `freeze` over what exists and fully at attestation over the import
+closure, because the module under test does not exist yet at freeze time.
+Measured, the gate-yield contract held 23 tests, its code read the denial store,
+it called the real writer zero times, and every fixture in it stamped an ISO
+string while the writer emits a `time.time()` float. The tool shipped useless for
+half its mechanisms and the 23-test contract said nothing, because the mismatch
+was untestable by construction. The registry of stores is one enumerated table
+rather than a heuristic, and a store absent from it is unguarded on purpose: a
+gate that accuses falsely is a gate people learn to disable. The check is total,
+so an internal fault refuses nothing, and it reports that fault on stderr rather
+than going quietly toothless.
+
+**Shipping requires a fresh evidence render.** `release --ship` refuses unless the
+ledger carries a `pack` event for this freeze that is no older than the
+attestation, and the refusal names `pack` so it can be cleared. The claim is
+narrow on purpose: no machine witnesses a human reading, so this does not make
+the second approval real. It buys that a render exists and is not older than the
+attestation it reports on. It does NOT catch a tree that moved after the render
+and was never re-attested, which is the perishability `pack` and `status` report
+to the operator rather than something `--ship` enforces. When the ledger has lost
+the freeze it is being asked about it cannot answer, so the ship prints
+`unverifiable` and proceeds instead of refusing: fail closed against haste, open
+against a broken disk, because a gate that pushes an honest operator toward
+`--force` is worse than no gate. `release --window` is never gated, being the way
+back into the build rather than the way out of it.
 
 **A retake needs a named waiver, not a workaround.** The redness rule is right
 about a first freeze and wrong about the last one: once a slice has implemented

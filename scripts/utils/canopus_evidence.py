@@ -10,12 +10,22 @@ forbids, and no artifact records that it happened.
 **What this buys, stated narrowly on purpose.** It does NOT make the second
 approval real, and nothing can: no machine witnesses a human reading. Four
 independent voices agreed on that and the wide claim is retired rather than
-defended. What survives is worth having on its own. The attestation record
-perishes the moment the working tree moves, so a render required to be no older
-than the attestation must have happened AFTER the last change. Not "a command
-ran" -- an evidence render exists that no later edit invalidated. Shipping
-without one becomes impossible; skipping one becomes auditable instead of
-invisible.
+defended. What survives is worth having on its own: a render exists, and it is
+no older than the attestation it reports on. Shipping without one becomes
+impossible; skipping one becomes auditable instead of invisible.
+
+**And the residual, named rather than left to be inferred.** The freshness test
+above is against the ATTESTATION's stamp, not against the tree. An edit made
+AFTER the render, and never re-attested, moves neither stamp: `attested_at` is a
+stored string, `read_attestation` returns the record whatever the tree now looks
+like, and `cmd_release` never calls `attestation_state`. So the render can
+describe an earlier state and still qualify. The chain "the attestation perishes
+when the tree moves, therefore a qualifying render post-dates the last change"
+holds only where something forces re-attestation before shipping, and step 13
+does not. What is caught here is a render that predates the attestation. What is
+not caught here is a tree that moved after the render -- that is the
+perishability the operator reads on `pack` and `status`, and requiring it at
+`--ship` too is a separate decision nobody has made.
 
 **When the ledger is believed.** It is trusted about the render exactly when it
 remembers the freeze it is being asked about. A ledger holding this freeze's own

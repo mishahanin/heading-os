@@ -1128,7 +1128,15 @@ def cmd_probe(args) -> int:
 
 
 def cmd_pack(args) -> int:
-    """The Fix 2 evidence page. Reports; never blocks and never writes."""
+    """The Fix 2 evidence page. Reports and never blocks; writes ONE ledger line.
+
+    The write is the whole of the ship-evidence change and it is the only one:
+    the page itself is still pure reporting, the exit code is still 0 whatever
+    the page says, and the single `pack` event exists so `release --ship` can
+    require that this page was rendered. It lands at the END of the function,
+    past every read, so a fault in the reporting cannot leave a record claiming
+    a render that never printed.
+    """
     root = _resolve_root(args)
     manifest = read_freeze(root)
     if manifest is None:
@@ -1173,7 +1181,13 @@ def cmd_pack(args) -> int:
 
     base = args.base or merge_base(root, "main") or "HEAD"
     commits = git_commits(root, base)
-    outside = commits_outside(commits, freeze_windows(read_ledger(root)))
+    # Read ONCE and handed to both readers below, for the reason `current_tree`
+    # above is sampled once: two reads of one append-only file behind one page
+    # leave a window in which the second sees a line the first did not, and the
+    # continuity section and the evidence record would then describe different
+    # ledgers on the same render.
+    entries = read_ledger(root)
+    outside = commits_outside(commits, freeze_windows(entries))
     print(f"\n{BOLD}continuity{RESET}  {len(commits)} commits since {base}")
     if outside:
         for sha, when, subject in outside:
@@ -1274,7 +1288,7 @@ def cmd_pack(args) -> int:
     # that already has a qualifying record adds a line carrying no new fact, and
     # `pack` is re-runnable by design, so a debugging session would otherwise
     # inflate the ledger the gate reads.
-    state, _reason = evidence_state(read_ledger(root), manifest["root"],
+    state, _reason = evidence_state(entries, manifest["root"],
                                     (record or {}).get("attested_at"))
     if state != EVIDENCE_FRESH:
         failed = _record(root, "pack", digest=manifest["root"],

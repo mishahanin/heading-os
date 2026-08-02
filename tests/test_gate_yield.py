@@ -199,6 +199,47 @@ def test_every_declared_cause_is_reachable_from_the_source():
     assert not unreachable, f"declared but never emitted: {unreachable}"
 
 
+def test_every_emitted_cause_is_declared_in_the_vocabulary():
+    """The other direction, and the one that was missing.
+
+    The guard above walks from the table outward, so a cause spelled ONLY at a
+    call site drifts in silently: `evidence_missing` reached
+    `cmd_release` on 2026-08-03, never reached `CAUSES`, and every test stayed
+    green because nothing walked inward. The report's own prose says a lifecycle
+    cause is a declared class from `CAUSES`, and the SC-2 test asserts exactly
+    that of whatever the ledger holds -- it just never exercised the release
+    path. An undeclared cause makes both of those false without failing
+    anything.
+
+    Reads the cause argument of every `_record_refusal` call, in BOTH spellings.
+    `cause` is positional-or-keyword, so reading only `args[2]` would leave
+    `_record_refusal(root, "release", cause="x")` unchecked -- a one-keyword
+    bypass of the guard, which is the same class of hole this test exists to
+    close.
+    """
+    from scripts.utils.gate_yield import CAUSES, RECORDER
+
+    tree = ast.parse(_CLI.read_text(encoding="utf-8"))
+    emitted = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _called_name(node) == RECORDER):
+            continue
+        cause = node.args[2] if len(node.args) >= 3 else next(
+            (kw.value for kw in node.keywords if kw.arg == "cause"), None)
+        # Only a literal can be checked here. A computed cause would need the
+        # value at runtime, and there is none in the CLI today; if one appears,
+        # this skips it rather than accusing it, and the SC-2 assertion over the
+        # written ledger is what catches it instead.
+        if isinstance(cause, ast.Constant) and isinstance(cause.value, str):
+            emitted.add(cause.value)
+
+    assert emitted, f"no {RECORDER} call site spells a literal cause"
+    undeclared = sorted(emitted - set(CAUSES))
+    assert not undeclared, (
+        f"emitted by the CLI but declared in no vocabulary, so the report "
+        f"counts a class nothing named: {undeclared}")
+
+
 # ---------------------------------------------------------------------------
 # Property 2 - recording can never change a refusal
 # ---------------------------------------------------------------------------

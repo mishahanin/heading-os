@@ -51,11 +51,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   lifecycle ledger and `release --ship` refuses without one, naming the command
   that clears the refusal. The claim is deliberately narrow and the wide one is
   retired: this does NOT make the second approval real, because no machine
-  witnesses a human reading. What it does buy is that the attestation record
-  perishes the moment the working tree moves, so a render required to be no
-  older than the attestation must have happened AFTER the last change. Not "a
-  command ran" but "an evidence render exists that no later edit invalidated."
-  The ledger is believed about the render exactly when it remembers the freeze
+  witnesses a human reading. What it does buy is that a render exists and is no
+  older than the attestation it reports on. The residual is named rather than
+  left to be inferred: the freshness test is against the attestation's stamp,
+  not against the tree, so an edit made after the render and never re-attested
+  moves neither stamp and the render still qualifies. A render that predates the
+  attestation is caught; a tree that moved after the render is not, and
+  requiring that at `--ship` too is a separate decision. The ledger is believed about the render exactly when it remembers the freeze
   it is being asked about: one that has lost it warns `unverifiable` and lets
   the ship through rather than refusing, because a gate that pushes an honest
   operator toward `--force` is worse than no gate. Fail closed against haste,

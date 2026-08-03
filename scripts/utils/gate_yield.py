@@ -23,6 +23,7 @@ what make it a property of the code rather than a promise in prose.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -46,6 +47,10 @@ BUDGET_DAYS = 31
 TOO_EARLY = "TOO EARLY"
 NO_YIELD = "NO YIELD"
 CATCHING = "CATCHING"
+# A wall that has caught nothing. Its own success condition, and the reason it
+# needs a verdict of its own: reporting it as NO YIELD states the same fact and
+# means the opposite.
+HOLDING = "HOLDING"
 
 # What `render` may never say. A report that can pronounce a subtraction is one
 # bad reading away from a real one; this list is why it cannot.
@@ -70,6 +75,7 @@ CAUSE_ARTIFACT_WRITE_FAILED = "artifact_write_failed"
 CAUSE_NO_ACTIVE_FREEZE = "no_active_freeze"
 CAUSE_EVIDENCE_MISSING = "evidence_missing"
 CAUSE_ATTESTATION_PERISHED = "attestation_perished"
+CAUSE_RETAKE_CAUSE_MISSING = "retake_cause_missing"
 # The four that RAISE rather than return. Half the lifecycle's refusals never
 # reach a `return 1` -- an anchor that is not a file, a contract that is not red,
 # a damaged manifest -- and counting only the returns would have measured half
@@ -91,6 +97,7 @@ CAUSES = frozenset({
     CAUSE_NO_ACTIVE_FREEZE,
     CAUSE_EVIDENCE_MISSING,
     CAUSE_ATTESTATION_PERISHED,
+    CAUSE_RETAKE_CAUSE_MISSING,
     CAUSE_FREEZE_CORRUPT,
     CAUSE_FREEZE_ERROR,
     CAUSE_CONTRACT_ERROR,
@@ -133,6 +140,219 @@ DENIAL_MECHANISMS = (
     "check_rate_limit",
     "check_tool_budget",
 )
+
+# ============================================================
+# The two axes: a wall and a gate are not the same kind of thing
+# ============================================================
+#
+# Everything above measures a mechanism by how often it caught something. That
+# instrument is correct for exactly one class of mechanism and wrong for the
+# other, and until 2026-08-03 it was pointed at both.
+#
+# A GATE has a symmetric, bounded loss function. Too little of it costs rework;
+# too much costs time. Catch counts are the right way to judge one, and A3's
+# month budget is the right window.
+#
+# A WALL has an asymmetric, unbounded loss function. Zero catches is its SUCCESS
+# condition, and one miss is irreversible: a live credential in a public
+# repository is published the instant the push lands, and no later refusal
+# retracts it. Judging a wall by catch counts inverts its own success signal
+# into evidence against it, which is how a guard gets removed for working.
+#
+# The criterion that replaces catch counts for a wall: it may be removed only
+# when its loss function becomes symmetric and bounded, or when the protected
+# asset or threat ceases to exist structurally. Never on a number of catches, at
+# any window length.
+#
+# The split is by LOSS FUNCTION and deliberately NOT by which log a mechanism
+# writes to. Sorting by log would have been one line and would have swept the
+# depth gate in with the secret scanner because they share a writer.
+WALL_REASONS = {
+    "secret-scanner":
+        "one missed credential in a PUBLIC repository is published the moment "
+        "the push lands, and no later refusal retracts it",
+    "content-guard":
+        "one missed private entity in the public engine is disclosure, and the "
+        "clone that read it is beyond recall",
+    "leak-guard:check-paths":
+        "a data path written into the engine tree leaks operator data into a "
+        "public repository, irreversibly once pushed",
+    "leak-guard:check-staged":
+        "the staged half of the same wall, and the same irreversibility",
+    "push:engine-clean-scan":
+        "the last scan before bytes leave the machine; a miss here has no layer "
+        "behind it",
+    "push:engine-content-scan":
+        "the unbypassable content wall on the push path, whose whole design "
+        "premise is that nothing catches what it misses",
+    "push:secret-tracked-files":
+        "a tracked credential file reaching a remote is a compromised secret, "
+        "rotation not correction",
+    "check_prevent_secrets":
+        "blocks a credential before it reaches the filesystem; a miss becomes "
+        "the commit and push layers' problem, and eventually nobody's",
+    "check_protect_personal_threads":
+        "personal threads are CEO-only by four-layer enforcement; one disclosure "
+        "cannot be undone",
+    "check_protect_corporate":
+        "an exec workspace writing into read-only corporate content corrupts "
+        "what the whole fleet then pulls",
+    "check_protect_docs":
+        "protects the published documentation surface from an unreviewed write",
+}
+
+WALLS = tuple(WALL_REASONS)
+
+# The mechanisms whose loss function IS symmetric and bounded, so catch counts
+# and the month budget are the right instrument. `depth-gate` is the case that
+# proves the split is by loss function: it writes to the denial log exactly like
+# every wall above, and under-ceremony costs rework while over-ceremony costs
+# time. Sweeping it in with the walls would have made the one mechanism v2 most
+# needs to judge unjudgeable.
+GATES = (
+    "approve",
+    "freeze",
+    "release",
+    "depth-gate",
+    "depth-gate:override",
+    "check_canopus_freeze",
+    "check_cwd_anchor",
+    "check_rate_limit",
+    "check_tool_budget",
+)
+
+
+def is_wall(mechanism: str) -> bool:
+    """True when this mechanism must never be judged by its catch count.
+
+    An UNDECLARED name answers True, and the asymmetry is the whole reason. The
+    two failure directions are not equal: calling a gate a wall costs one missing
+    verdict, while calling a wall a gate puts something nobody ever classified
+    into the FLAGGED list, which is the input to a removal decision. So the
+    default is the expensive-but-safe one, and
+    `test_every_declared_mechanism_is_classified_so_the_fail_safe_never_fires`
+    keeps it a net rather than a plan.
+    """
+    return mechanism not in GATES
+
+
+# ============================================================
+# Retake causes: the yield class the instrument could not see
+# ============================================================
+#
+# A retake (`anchor_replaced`) is the standard's largest single output and the
+# report counted none of them. Measured over the 39 in the ledger on 2026-08-03,
+# by hand: 14 were a frozen contract that turned out too weak and was
+# strengthened, 21 were the enforcer bytes moving, 4 were lint debt. The
+# lifecycle's whole reported yield at the time was FIVE.
+#
+# The cause is a DECLARED field from a closed set, never a substring of the human
+# reason. `scripts/utils/canopus_friction.py` refused exactly this shape for
+# waivers and said why: a counter built on a substring lies quietly the first
+# time somebody rewords their sentence.
+CAUSE_CONTRACT_STRENGTHENED = "contract-strengthened"
+CAUSE_ENFORCER_MOVED = "enforcer-moved"
+CAUSE_LINT = "lint"
+CAUSE_SET_WRONG = "frozen-set-wrong"
+
+RETAKE_CAUSES = frozenset({
+    CAUSE_CONTRACT_STRENGTHENED,
+    CAUSE_ENFORCER_MOVED,
+    CAUSE_LINT,
+    CAUSE_SET_WRONG,
+})
+
+UNCLASSIFIED = "unclassified"
+
+# The hand classification of the retakes that predate the declared field, keyed
+# by record identity. Engine-side and COMMITTED, because a bridge kept in a
+# gitignored directory is a bridge one `rm -rf` removes.
+HAND_CLASSIFIED_PATH = Path("config") / "canopus-retake-history.json"
+
+
+def retake_key(row: dict) -> str:
+    """The identity of one retake: its timestamp and its label.
+
+    Not the digest. Two retakes of one slice can carry the same root when the
+    second re-approves an unchanged set, and a key that collides silently merges
+    two classifications into one.
+    """
+    return f"{row.get('ts', '')}|{row.get('label', '')}"
+
+
+def load_hand_classified(root) -> dict:
+    """The committed hand classification, as `{ts|label: cause}`.
+
+    Each entry on disk carries the RAW PROSE REASON recorded at the time beside
+    its class, so every line can be checked against what was actually written
+    rather than against the classifier's summary of it. That column is C1's
+    remedy in the gate artifact and it is the only thing that makes this file
+    auditable; the loader drops it because the counter needs the class alone.
+
+    A missing or damaged file answers `{}` rather than raising. This is a bridge
+    for history, and a report that cannot render because a historical annotation
+    is unreadable has turned a footnote into an outage.
+    """
+    try:
+        raw = json.loads((Path(root) / HAND_CLASSIFIED_PATH)
+                         .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, value in raw.items():
+        # A leading underscore is prose for the reader, not a record. JSON has no
+        # comments, and a data file whose own purpose is undocumented is the
+        # thing somebody drains in six months without knowing what it was for.
+        if str(key).startswith("_"):
+            continue
+        cause = value.get("cause") if isinstance(value, dict) else value
+        if isinstance(cause, str) and cause in RETAKE_CAUSES:
+            out[str(key)] = cause
+    return out
+
+
+def count_retakes(ledger, *, hand_classified: dict) -> dict:
+    """Retakes per cause, across the whole ledger.
+
+    The structural field wins over the hand file for the same record, always. The
+    reverse would let the committed annotation restate the present rather than
+    only supply the past, and a bridge that can overwrite live data is not a
+    bridge.
+
+    A record with neither counts as `unclassified` and is never inferred from its
+    prose. It stays visible as a gap instead of quietly joining a class.
+    """
+    counts: dict = {}
+    for row in ledger:
+        if row.get("event") != "anchor_replaced":
+            continue
+        declared = row.get("kind")
+        cause = (declared if declared in RETAKE_CAUSES
+                 else hand_classified.get(retake_key(row), UNCLASSIFIED))
+        counts[cause] = counts.get(cause, 0) + 1
+    return counts
+
+
+def retake_cause_or_error(cause) -> str:
+    """"" when the cause is a declared one, else the sentence refusing it.
+
+    Returns text rather than raising because every caller is a CLI early-return
+    that prints and exits 1, and the one caller that is not would have to catch
+    an exception to do the same thing.
+    """
+    if not cause:
+        return ("a retake must declare its --cause; an optional field is a field "
+                "that is present when convenient, and the resulting count is a "
+                "count of the times somebody remembered. One of: "
+                + ", ".join(sorted(RETAKE_CAUSES)))
+    if cause not in RETAKE_CAUSES:
+        return (f"unknown --cause {cause!r}; the vocabulary is closed so two "
+                f"retakes of one kind count as two of one thing. One of: "
+                + ", ".join(sorted(RETAKE_CAUSES)))
+    return ""
+
 
 SOURCE_LIFECYCLE = "lifecycle"
 SOURCE_DENIALS = "denials"
@@ -266,7 +486,7 @@ def _window_days(since, now) -> int:
     return max(0, (end - start) // timedelta(days=1))
 
 
-def summarise(*, ledger, denials, since: dict, now) -> dict:
+def summarise(*, ledger, denials, since: dict, now, hand_classified=None) -> dict:
     """Per mechanism: how often it refused, when last, over WHOSE window.
 
     `since` is a mapping per SOURCE and not one timestamp, and that is the whole
@@ -274,6 +494,11 @@ def summarise(*, ledger, denials, since: dict, now) -> dict:
     one shared window would judge a one-day-old mechanism over an eight-day one
     and call it silent before it had a day to speak. Caught at step 5 of this
     slice, before any code existed.
+
+    `hand_classified` supplies the class for retakes that predate the declared
+    field. It defaults to nothing rather than to a disk read, so a caller that
+    wants the bridge asks for it and a test that does not is never reading the
+    operator's real history through a default argument.
     """
     windows = {source: _window_days(since.get(source), now)
                for source in (SOURCE_LIFECYCLE, SOURCE_DENIALS)}
@@ -303,13 +528,23 @@ def summarise(*, ledger, denials, since: dict, now) -> dict:
                    "causes": {}})
         _count(entry, row.get("ts"), row.get("reason"))
 
-    for entry in caught.values():
+    for name, entry in caught.items():
         days = windows.get(entry["source"], 0)
         entry["days"] = days
-        entry["verdict"] = _verdict(entry["caught"], days)
+        entry["wall"] = is_wall(name)
+        entry["verdict"] = _verdict(name, entry["caught"], days)
+
+    hand = dict(hand_classified or {})
+    retakes = count_retakes(ledger, hand_classified=hand)
+    from_hand = sum(
+        1 for row in ledger
+        if row.get("event") == "anchor_replaced"
+        and row.get("kind") not in RETAKE_CAUSES
+        and retake_key(row) in hand)
 
     return {"mechanisms": caught, "windows": windows,
-            "budget_days": BUDGET_DAYS, "generated_for": str(now)}
+            "budget_days": BUDGET_DAYS, "generated_for": str(now),
+            "retakes": retakes, "retakes_from_hand": from_hand}
 
 
 def _count(entry: dict, stamp, cause) -> None:
@@ -326,9 +561,15 @@ def _count(entry: dict, stamp, cause) -> None:
     entry["causes"][key] = entry["causes"].get(key, 0) + 1
 
 
-def _verdict(caught: int, days: int) -> str:
+def _verdict(name: str, caught: int, days: int) -> str:
     if caught:
         return CATCHING
+    if is_wall(name):
+        # No window length changes this, and that is the point rather than a
+        # simplification. The defect was not that 31 days is too short for the
+        # secret scanner; it is that a catch-count verdict exists for this class
+        # at all, so a longer window only makes the wrong verdict more confident.
+        return HOLDING
     return NO_YIELD if days >= BUDGET_DAYS else TOO_EARLY
 
 
@@ -374,6 +615,36 @@ def render(summary: dict, *, now) -> str:
                      "declared")
         lines.append("  classes: they carry the path, so they do not aggregate. Count "
                      "the catches, not the buckets.")
+
+    if any(e["verdict"] == HOLDING for e in summary["mechanisms"].values()):
+        lines.append("")
+        lines.append(f"  {HOLDING} is not {NO_YIELD}. A mechanism whose loss function is "
+                     "asymmetric and")
+        lines.append("  unbounded succeeds by catching nothing, so a catch count judges "
+                     "it backwards and")
+        lines.append("  no window length fixes that. Its stated reason sits beside its "
+                     "name in")
+        lines.append("  WALL_REASONS, where the classification lives, so a changed "
+                     "premise is visible")
+        lines.append("  where the judgement was made.")
+
+    retakes = summary.get("retakes") or {}
+    if retakes:
+        total = sum(retakes.values())
+        by_hand = summary.get("retakes_from_hand", 0)
+        lines.append("")
+        lines.append(f"  RETAKES: {total} frozen-contract retake(s) across the whole "
+                     f"ledger, by declared cause.")
+        for cause, count in sorted(retakes.items()):
+            lines.append(f"             {printable(cause)}: {count}")
+        lines.append(f"  Of these, {by_hand} were classified BY HAND from the record's "
+                     f"prose, because they")
+        lines.append("  predate the declared field. That part is judgement, not "
+                     "measurement, and it is")
+        lines.append("  auditable line by line in config/canopus-retake-history.json, "
+                     "which carries the")
+        lines.append("  raw reason beside every class. A cause is never inferred from "
+                     "prose by the code.")
 
     flagged = sorted(n for n, e in summary["mechanisms"].items()
                      if e["verdict"] == NO_YIELD)

@@ -28,6 +28,7 @@ sys.path.insert(0, str(ENGINE_ROOT))
 from scripts.utils.gate_yield import (  # noqa: E402
     SOURCE_DENIALS,
     SOURCE_LIFECYCLE,
+    load_hand_classified,
     read_sources,
     render,
     summarise,
@@ -68,7 +69,12 @@ def main(argv=None) -> int:
         denials=sources["denials"],
         since={SOURCE_LIFECYCLE: _earliest(sources["ledger"]),
                SOURCE_DENIALS: _earliest(sources["denials"])},
-        now=now)
+        now=now,
+        # Read from the ENGINE root rather than from `--root`, deliberately: the
+        # bridge is a committed engine artifact like the denial log is a
+        # workspace-global one, and following an arbitrary `--root` would silently
+        # answer `{}` and report every historical retake as unclassified.
+        hand_classified=load_hand_classified(ENGINE_ROOT))
     summary["missing_sources"] = sources["missing"]
 
     if args.as_json:

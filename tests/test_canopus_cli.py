@@ -1253,9 +1253,30 @@ def test_approve_replace_requires_a_reason(tree: Path, anchor: Path, capsys):
     assert _run(["approve", "--label", "l", "--anchor", str(anchor),
                  "--replace", "tests/test_alpha.py"], tree) == 1
     assert "--reason" in capsys.readouterr().err
+
+    # And a declared --cause, end to end through the CLI. The frozen contract
+    # pins `retake_cause_or_error` as a function; nothing in it reaches
+    # `cmd_approve`, so without this the refusal could be perfectly correct and
+    # never wired to the command an operator types. Same defect shape the
+    # friction-counters slice found in its own SC-4, one layer over.
     assert _run(["approve", "--label", "l", "--anchor", str(anchor),
                  "--replace", "--reason", "the set changed",
+                 "tests/test_alpha.py"], tree) == 1
+    err = capsys.readouterr().err
+    assert "--cause" in err
+    assert "contract-strengthened" in err, (
+        "the refusal does not name the vocabulary it wants")
+
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "--replace", "--reason", "the set changed",
+                 "--cause", "frozen-set-wrong",
                  "tests/test_alpha.py"], tree) == 0
+
+    # And the cause reaches the LEDGER structurally, not only the argv. A flag
+    # the command accepts and drops leaves `count_retakes` reading exactly the
+    # unclassified records this slice exists to end.
+    replaced = [e for e in _ledger(tree) if e["event"] == "anchor_replaced"]
+    assert replaced and replaced[-1]["kind"] == "frozen-set-wrong", replaced
 
 
 def test_approve_replace_appends_and_keeps_the_earlier_approval(tree: Path, anchor: Path):
@@ -1269,7 +1290,8 @@ def test_approve_replace_appends_and_keeps_the_earlier_approval(tree: Path, anch
     (tree / "tests" / "test_beta.py").write_text("def test_b():\n    assert True\n")
     assert _run(["approve", "tests/test_alpha.py", "tests/test_beta.py",
                  "--label", "l", "--anchor", str(anchor),
-                 "--replace", "--reason", "widened the approved set"], tree) == 0
+                 "--replace", "--reason", "widened the approved set",
+                 "--cause", "frozen-set-wrong"], tree) == 0
 
     text = anchor.read_text()
     second = _recorded(anchor)
@@ -1506,7 +1528,8 @@ def test_a_partly_written_ledger_names_the_entry_that_did_land(
 
     monkeypatch.setattr(canopus_cli, "append_history", failing)
     assert _run(["approve", "tests/test_alpha.py", "--label", "l",
-                 "--anchor", str(anchor), "--replace", "--reason", "set changed"],
+                 "--anchor", str(anchor), "--replace", "--reason", "set changed",
+                 "--cause", "frozen-set-wrong"],
                 tree) == 1
 
     err = capsys.readouterr().err
@@ -1810,7 +1833,8 @@ def test_freeze_takes_a_red_lock_rather_than_none_when_only_the_commit_is_missin
 
     (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
     assert _run(["approve", "tests/test_alpha.py", "--label", "l",
-                 "--anchor", str(anchor), "--replace", "--reason", "edited"],
+                 "--anchor", str(anchor), "--replace", "--reason", "edited",
+                 "--cause", "contract-strengthened"],
                 tree) == 0
     second = _recorded(anchor)
     assert second != first
@@ -2567,7 +2591,8 @@ def test_the_replace_reason_is_written_to_the_artifact(tree: Path, anchor: Path)
     (tree / "tests" / "test_beta.py").write_text("def test_b():\n    assert True\n")
     assert _run(["approve", "tests/test_alpha.py", "tests/test_beta.py",
                  "--label", "l", "--anchor", str(anchor),
-                 "--replace", "--reason", "the beta case joined the set"], tree) == 0
+                 "--replace", "--reason", "the beta case joined the set",
+                 "--cause", "frozen-set-wrong"], tree) == 0
 
     text = anchor.read_text()
     assert "the beta case joined the set" in text
@@ -2605,7 +2630,7 @@ def test_a_multi_line_reason_cannot_forge_a_second_anchor_line(
 
     assert _run(["approve", "tests/test_alpha.py", "--label", "l",
                  "--anchor", str(anchor), "--replace", "--reason",
-                 f"widened\n{forged}"], tree) == 0
+                 f"widened\n{forged}", "--cause", "frozen-set-wrong"], tree) == 0
 
     # No line the operator could read as an approval except the ones approve
     # computed. `read_anchor` takes the LAST such line, so an injected one that

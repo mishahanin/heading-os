@@ -69,13 +69,22 @@ exactly what `freeze` refuses.
 
 1. `python scripts/canopus.py release --window --reason "<why>"`
 2. make the edit
-3. `python scripts/canopus.py approve --replace --reason "<why>" [--contract-satisfied "<why>"] <the same --label / --anchor / --contract / --content flags>`
+3. `python scripts/canopus.py approve --replace --reason "<why>" --cause <class> [--contract-satisfied "<why>"] <the same --label / --anchor / --contract / --content flags>`
 4. commit the anchor artifact in its own repository — that commit IS the approval
 5. `python scripts/canopus.py freeze [--contract-satisfied "<why>"] <the same flags>`
 6. `python scripts/run-tests.py`, then `python scripts/canopus.py verify`
 
 Step 3 is not optional: `--replace` is what appends a second approval line over a
-recorded one, and it demands `--reason`. Step 4 is not optional either: without
+recorded one, and it demands BOTH `--reason` and `--cause`.
+
+`--cause` takes one of `contract-strengthened`, `enforcer-moved`, `lint`,
+`frozen-set-wrong` (the closed vocabulary in `scripts/utils/gate_yield.py`), and it
+is not a duplicate of the reason. The reason says what happened this once, in
+prose no counter can read; the cause is what makes retakes countable. Measured
+2026-08-03: 39 retakes in the ledger and the yield report saw none of them, while
+the whole lifecycle's reported yield was five. A cause is never inferred from the
+prose, because a counter built on a substring lies the first time somebody
+rewords their sentence. Step 4 is not optional either: without
 the commit, `verify` reports `LOSS OF LOCK` because the committed approval still
 holds the older hash. Step 6 is not optional because releasing a freeze clears
 the attestation with it, so the contract has to be run again before `status` or

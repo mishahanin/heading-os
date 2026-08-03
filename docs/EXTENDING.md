@@ -598,9 +598,12 @@ from the build to the operator, not a guarantee held against it.
 
 An anchor artifact that already records a hash is refused, because an approved
 contract's anchor is never silently overwritten. When the frozen SET legitimately
-changes mid-build, `approve --replace --reason "<why>"` appends a second line and
-writes an `anchor_replaced` entry to the ledger; the artifact keeps the whole
-trail. The reason lands in the artifact too, on its own
+changes mid-build, `approve --replace --reason "<why>" --cause <class>` appends a
+second line and writes an `anchor_replaced` entry to the ledger; the artifact keeps
+the whole trail. `--cause` is mandatory and comes from a closed vocabulary, because
+a retake is the standard's largest single output and prose is not countable: 39
+retakes had accumulated in the ledger by 2026-08-03 and the yield report saw none
+of them. The reason lands in the artifact too, on its own
 `canopus-approval-reason:` line directly above the hash it explains, because
 `.canopus/history.jsonl` is gitignored and one command removes it: without that
 line, the durable record a human commits carries two indistinguishable hash lines

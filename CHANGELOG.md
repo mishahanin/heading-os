@@ -8,6 +8,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **The gate-yield report judged a wall and a gate with one instrument, and the
+  instrument was right for only one of them.** Every guard on the push path of a
+  PUBLIC repository reached `NO YIELD` and the FLAGGED list the moment its window
+  passed 31 days. For the secret scanner that verdict is true and useless: zero
+  catches is its success condition and one miss publishes a live credential
+  irreversibly, so a catch count reads its own success signal as evidence against
+  it. `scripts/utils/gate_yield.py` now splits the two axes by LOSS FUNCTION and
+  deliberately not by which log a mechanism writes to. A WALL (asymmetric,
+  unbounded) reads `HOLDING` at any window length and can never be FLAGGED; a GATE
+  (symmetric, bounded) is judged as before. `depth-gate` is the case that proves
+  the split is not a log filter: it shares the walls' writer and stays judgeable,
+  because under-ceremony costs rework and over-ceremony costs time. An UNDECLARED
+  mechanism is treated as a wall, since flagging something nobody classified is
+  the expensive direction and a missing verdict is the cheap one; a second test
+  keeps that fail-safe a net rather than the plan.
+
+  The same report also could not see the standard's largest single output.
+  Measured 2026-08-03: 39 frozen-contract retakes in the ledger, against a whole
+  reported lifecycle yield of five. `approve --replace` now requires `--cause`
+  from a closed vocabulary and writes it to the ledger STRUCTURALLY; a cause is
+  never inferred from the prose reason, for the reason `canopus_friction.py`
+  already refused the same shape ("a counter built on a substring lies quietly
+  the first time somebody rewords"). Retakes predating the field are bridged by
+  the committed `config/canopus-retake-history.json`, which carries the RAW PROSE
+  REASON beside every class so each line is checkable, and a structural cause
+  always beats the file for the same record.
+
+  **The report names how many records came from that file, because that part is
+  judgement and the rest is measurement.** Two hand passes over the same 39
+  records, by the same classifier on the same day, disagreed on three of them
+  (17/18/3, then 14/21/4). The direction is robust across both passes and every
+  denominator; no single figure is. So the frozen criterion asserts coverage
+  computed from the live ledger rather than any total, which is the stronger
+  claim anyway: it cannot go stale, and it fails the moment a pre-field retake
+  exists with no class.
+
 - **The page an operator signs off from now says how hard the green was to
   get.** `pack` rendered `25 of 25`, `LOCK HELD`, `APPROVED` identically for a
   slice that went green first time and one that went green on the sixth attempt.

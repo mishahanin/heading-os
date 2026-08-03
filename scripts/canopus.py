@@ -135,7 +135,10 @@ from scripts.utils.canopus_evidence import (  # noqa: E402
     evidence_state,
 )
 from scripts.utils.canopus_gate import loss_of_lock_sentences  # noqa: E402
-from scripts.utils.gate_yield import record_refusal  # noqa: E402
+from scripts.utils.gate_yield import (  # noqa: E402
+    record_refusal,
+    retake_cause_or_error,
+)
 from scripts.utils.production_shape import shape_refusal  # noqa: E402
 from scripts.utils.sc_trace import gate_refusal  # noqa: E402
 from scripts.utils.canopus_steps import (  # noqa: E402
@@ -746,6 +749,17 @@ def cmd_approve(args) -> int:
         _record_refusal(root, "approve", "replace_without_reason",
                         reason="--replace without --reason")
         return 1
+    # The prose reason and the declared cause are not redundant. The reason says
+    # what happened this once; the cause is the only thing that makes retakes
+    # countable, and a retake is the standard's largest single output. Measured
+    # 2026-08-03: 39 of them in the ledger, and the yield report saw none.
+    if args.replace:
+        cause_error = retake_cause_or_error(getattr(args, "cause", ""))
+        if cause_error:
+            print(f"canopus: {cause_error}", file=sys.stderr)
+            _record_refusal(root, "approve", "retake_cause_missing",
+                            reason="--replace without a declared --cause")
+            return 1
     manifest, contract_note, waived = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
         _record_refusal(root, "approve", "candidate_refused",
@@ -826,8 +840,13 @@ def cmd_approve(args) -> int:
                        reason=_ledger_reason(args.reason or "", satisfied))
         logged = "approve"
         if already:
+            # `kind` carries the declared cause, and it is the whole reason this
+            # slice exists: the prose in `reason` is unreadable by any counter,
+            # and a counter built on its substrings lies the first time somebody
+            # rewords their sentence.
             append_history(root, "anchor_replaced", digest=manifest["root"],
-                           label=args.label, reason=args.reason)
+                           label=args.label, kind=getattr(args, "cause", ""),
+                           reason=args.reason)
     except OSError as exc:
         # Which ledger entry failed is the whole point of this message, so it
         # names the state rather than the call: saying "the ledger entry failed"
@@ -1725,6 +1744,12 @@ def build_parser() -> argparse.ArgumentParser:
                          help="append a new approval over a recorded one")
     approve.add_argument("--reason", default="",
                          help="why the approval is being replaced")
+    approve.add_argument("--cause", default="", metavar="CAUSE",
+                         help="the CLASS of the retake, from the closed set in "
+                              "scripts/utils/gate_yield.RETAKE_CAUSES. Required "
+                              "with --replace: the prose reason says what "
+                              "happened this once, the cause is what makes the "
+                              "standard's largest output countable.")
     approve.set_defaults(func=cmd_approve)
 
     probe = sub.add_parser("probe", help="run a contract set and show what a "

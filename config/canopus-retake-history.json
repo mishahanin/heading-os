@@ -1,0 +1,159 @@
+{
+  "_about": "The hand classification of every Canopus retake (anchor_replaced) that predates the declared --cause field, keyed by 'ts|label'. Read by scripts/utils/gate_yield.load_hand_classified. Each entry carries the RAW PROSE REASON recorded at the time beside its class, so every line can be checked against what was actually written rather than against the classifier's summary of it. THIS IS JUDGEMENT, NOT MEASUREMENT: the same classifier passed over these records twice on 2026-08-03 and disagreed on three of them, which is why the report names the hand-classified count on its own page and why no test asserts a total. A retake recorded after the field landed carries its cause structurally and needs no entry here; the structural cause always wins over this file for the same record. Classes: contract-strengthened, enforcer-moved, lint, frozen-set-wrong.",
+  "2026-07-25T19:56:57.735410+00:00|canopus-wire-2": {
+    "cause": "enforcer-moved",
+    "reason": "the enforcers stopped changing"
+  },
+  "2026-07-25T20:35:58.893903+00:00|canopus-wire-2": {
+    "cause": "enforcer-moved",
+    "reason": "post-audit retake: C1 and C4 fixed; contract is green so --contract correctly refuses"
+  },
+  "2026-07-25T21:26:40.664989+00:00|canopus-wire-2": {
+    "cause": "enforcer-moved",
+    "reason": "guard fix: recipe v3, ancestor guard filtered and extended to the tree root"
+  },
+  "2026-07-26T09:08:34.800424+00:00|canopus-wire-2-1": {
+    "cause": "enforcer-moved",
+    "reason": "enforcer set grew to eight: canopus_git decides the lock state"
+  },
+  "2026-07-26T10:26:49.533442+00:00|canopus-wire-2-1": {
+    "cause": "enforcer-moved",
+    "reason": "window closed: tasks 2 and 3 edited canopus_freeze.py and canopus_gate.py, which the enforcer freeze write-denies"
+  },
+  "2026-07-26T16:56:44.979544+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 1: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-26T17:26:50.687639+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 2: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-26T17:36:10.466715+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 3: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-26T17:47:48.655230+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 3 fix: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-26T18:16:01.285881+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 5: the enforcer bytes changed, so the approved root changed; the contract is now 11 of 11 green, so --contract refuses and the directory is frozen positionally"
+  },
+  "2026-07-26T21:02:39.927825+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 5 fix: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-26T21:21:04.747097+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 5 re-review: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-26T21:36:03.112678+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 6: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-26T22:05:54.875605+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 task 7a: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-26T23:12:11.954814+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 final review fixes: the eight enforcer files changed, so the approved root changed"
+  },
+  "2026-07-26T23:54:11.549346+00:00|2026-07-26-canopus-repository-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.2 documentation truth pass: the enforcer bytes changed, so the approved root changed"
+  },
+  "2026-07-27T15:17:04.855249+00:00|2026-07-27-canopus-interpreter-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.3 rewrote every frozen enforcer; the root moved with them"
+  },
+  "2026-07-27T15:41:25.178206+00:00|2026-07-27-canopus-interpreter-binding": {
+    "cause": "enforcer-moved",
+    "reason": "wire 2.3 is code-complete: the interpreter binding landed, the directory deny retreated to detection, and the enforcer bytes moved, so the previously approved root no longer describes the tree."
+  },
+  "2026-08-01T10:37:04.550513+00:00|denial-counter": {
+    "cause": "contract-strengthened",
+    "reason": "release window closed: the suite was writing into the operator's denial log; isolation added to the frozen tests/conftest.py"
+  },
+  "2026-08-02T08:31:04.294918+00:00|canopus-skill": {
+    "cause": "contract-strengthened",
+    "reason": "the two position tests could not be green while this slice's own lock was held; the retake gives them a scratch root and moves the position ladder into a pure function so its three rungs are testable"
+  },
+  "2026-08-02T09:26:04.862468+00:00|gate-yield": {
+    "cause": "contract-strengthened",
+    "reason": "the unwritable-ledger test compared raw stderr from two runs in different roots, so it compared the path each ran in rather than the refusal; the retake compares the invariant and writes the environment-coupling rule into the planning gate"
+  },
+  "2026-08-02T10:00:01.145035+00:00|gate-yield": {
+    "cause": "lint",
+    "reason": "the frozen contract carried a variable name the commit gate refuses, making the slice uncommittable; rename only, no assertion changed, plus the planning gate learns to run the commit gates against the contract at step 4"
+  },
+  "2026-08-02T14:12:42.310673+00:00|production-shape": {
+    "cause": "contract-strengthened",
+    "reason": "SC-8 named a blob carrying only docstring mentions; the arm now names a suite with 19 real writer calls, and the misleading blob becomes the discriminating assertion"
+  },
+  "2026-08-02T14:18:52.520071+00:00|production-shape": {
+    "cause": "enforcer-moved",
+    "reason": "the hard half required editing the frozen canopus_gate, which moved the enforcer bytes and pulled production_shape into the closure; the content set grows from nine to ten"
+  },
+  "2026-08-02T14:46:02.207414+00:00|production-shape": {
+    "cause": "enforcer-moved",
+    "reason": "three scrutinize findings fixed inside the checker: accusation now needs a directly imported module to read the store, the fault is reported rather than swallowed, and conftest.py is collected"
+  },
+  "2026-08-02T14:49:41.179899+00:00|production-shape": {
+    "cause": "lint",
+    "reason": "lint ratchet refused SIM108 inside the checker; the fix is a ternary and changes no behaviour"
+  },
+  "2026-08-02T19:11:44.292297+00:00|production-shape": {
+    "cause": "enforcer-moved",
+    "reason": "step 11 findings fixed: conftest collected for both call shapes, the declared closure extraction completed so the helper has a consumer, writer bindings resolved, relative imports normalised"
+  },
+  "2026-08-02T21:21:46.477853+00:00|ship-evidence": {
+    "cause": "contract-strengthened",
+    "reason": "step 11 found the justification wider than the code: --ship never consulted attestation_state, so a tree that moved after the render still shipped; SC-9 is the ninth criterion and the fix"
+  },
+  "2026-08-02T22:52:35.575558+00:00|egress-proof": {
+    "cause": "contract-strengthened",
+    "reason": "step-11 repair: SC-3 gains a fixture that reaches degraded-with-tokens, the shape mutation M4 proved the guard exists for"
+  },
+  "2026-08-02T23:11:20.090157+00:00|egress-proof": {
+    "cause": "contract-strengthened",
+    "reason": "step-12 repair: the SC-6 and SC-11 runner tests wrote fabricated refusal records into the operator's real trend; every runner test now takes its own scratch trend home via one shared helper"
+  },
+  "2026-08-03T07:52:19.572467+00:00|timer-timezone": {
+    "cause": "contract-strengthened",
+    "reason": "step-11 repair: the AST order guard saw only DIRECT local-time calls, so load_env moved below a helper that reads the zone survived (M10b); the guard now resolves intra-module callees transitively"
+  },
+  "2026-08-03T08:05:50.396049+00:00|timer-timezone": {
+    "cause": "contract-strengthened",
+    "reason": "step-12 challenge: three of the four conceded limits were fixable and are now closed -- a cross-module callee walk, an executed render validated by systemd-analyze, and a deterministic day-boundary proof on a real entrypoint; contract 11 -> 16 tests"
+  },
+  "2026-08-03T08:07:40.496776+00:00|timer-timezone": {
+    "cause": "lint",
+    "reason": "re-lock after fixing the SIM102 lint debt the ratchet caught: the contract was frozen last time WITHOUT a pre-commit pass over the tests added in the previous window"
+  },
+  "2026-08-03T08:07:51.070679+00:00|timer-timezone": {
+    "cause": "lint",
+    "reason": "re-lock after fixing the SIM102 lint debt the ratchet caught: the contract was frozen last time WITHOUT a pre-commit pass over the tests added in the previous window"
+  },
+  "2026-08-03T08:23:30.909658+00:00|timer-timezone": {
+    "cause": "contract-strengthened",
+    "reason": "step-12 second challenge: the conceded depth limit did not exist (3 hops killed); the real hole was an aliased import at any depth, now fixed by resolving the callee's ORIGINAL name. dream-shadow.timer deployed."
+  },
+  "2026-08-03T08:48:08.410311+00:00|timer-timezone": {
+    "cause": "contract-strengthened",
+    "reason": "step-12 third challenge: every remaining gap closed -- module-attribute imports, order-aware walk, the five daemons, a runtime probe for what static analysis cannot reach, and a mutation harness with a mandatory positive control. Found and fixed a real defect in the previous slice on the way."
+  },
+  "2026-08-03T10:31:05.645502+00:00|retire-eval-drift": {
+    "cause": "contract-strengthened",
+    "reason": "SC-2's surface list wrongly included two retirement stubs whose entire content is the record of the 2026-05-23 migration; satisfying it there meant falsifying history. The surface narrowed to the six files that can install, restart, uninstall or monitor something, and the two stubs moved to SC-2c, which asks the different question: they may NAME it as history, never offer a way to start it. SC-2b's tree-wide sweep also reported gitignored scratch and legitimate history, so it is now scoped to git-tracked instruction files."
+  },
+  "2026-08-03T13:22:57.169617+00:00|friction-counters": {
+    "cause": "contract-strengthened",
+    "reason": "Window 1 at step 11: SC-4 claimed more than it checked, twice. M8 survived a substring check the import line alone satisfied; M10 then survived the AST call-check by computing the section and discarding it. The code changed rather than only the test -- render_friction gained an optional heading_wrap so the section is ONE expression inside the print, making 'wired' and 'reaches the page' one claim. M11 survived a third round by dropping the heading; both branches now assert they open with it. Eleven mutations, eleven killed, none invalid."
+  },
+  "2026-08-03T19:39:59.306306+00:00|yield-axes": {
+    "cause": "contract-strengthened",
+    "reason": "Window 1 at step 8: SC-4c asserted the committed classification holds >= 30 contract-strengthenings, a number taken from a 62-record count over windows AND retakes where one correction is often counted twice. Hand classification over the 38 anchor_replaced records alone: 17 strengthenings, 18 enforcer-moved, 3 lint. SC-4c now asserts coverage and shape over the 38 retakes; the file was NOT reshaped to reach 30, which would have been making the data fit the test."
+  }
+}

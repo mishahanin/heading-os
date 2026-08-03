@@ -708,9 +708,12 @@ which is exactly why it belongs in writing: the vacuity verdict is a courtesy
 from the build to the operator, not a guarantee held against it.</p>
 <p>An anchor artifact that already records a hash is refused, because an approved
 contract&rsquo;s anchor is never silently overwritten. When the frozen SET legitimately
-changes mid-build, <code>approve --replace --reason "&lt;why&gt;"</code> appends a second line and
-writes an <code>anchor_replaced</code> entry to the ledger; the artifact keeps the whole
-trail. The reason lands in the artifact too, on its own
+changes mid-build, <code>approve --replace --reason "&lt;why&gt;" --cause &lt;class&gt;</code> appends a
+second line and writes an <code>anchor_replaced</code> entry to the ledger; the artifact keeps
+the whole trail. <code>--cause</code> is mandatory and comes from a closed vocabulary, because
+a retake is the standard&rsquo;s largest single output and prose is not countable: 39
+retakes had accumulated in the ledger by 2026-08-03 and the yield report saw none
+of them. The reason lands in the artifact too, on its own
 <code>canopus-approval-reason:</code> line directly above the hash it explains, because
 <code>.canopus/history.jsonl</code> is gitignored and one command removes it: without that
 line, the durable record a human commits carries two indistinguishable hash lines

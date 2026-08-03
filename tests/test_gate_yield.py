@@ -353,11 +353,16 @@ def test_too_early_is_a_distinct_verdict_from_no_yield():
 
 
 def test_a_silent_mechanism_inside_the_budget_reads_too_early():
-    from scripts.utils.gate_yield import TOO_EARLY, summarise
+    # Scoped to the GATES since the yield-axes slice split the two axes. A wall
+    # reads HOLDING at every window length, so `all(...)` over every mechanism
+    # would now be asserting that the split does not exist.
+    from scripts.utils.gate_yield import GATES, TOO_EARLY, summarise
 
     out = summarise(ledger=[], denials=[], since=_SINCE,
                     now="2026-08-03T00:00:00+00:00")
-    assert all(m["verdict"] == TOO_EARLY for m in out["mechanisms"].values()), out
+    gates = [m for n, m in out["mechanisms"].items() if n in GATES]
+    assert gates, out
+    assert all(m["verdict"] == TOO_EARLY for m in gates), out
 
 
 def test_a_silent_mechanism_beyond_the_budget_is_flagged_with_its_number():
@@ -463,17 +468,21 @@ def test_a_mechanism_is_judged_over_its_own_sources_window_not_the_oldest_one():
     eight-day one and called it silent before it had a day to speak. That is
     precisely the false NO YIELD this slice exists to make impossible.
     """
-    from scripts.utils.gate_yield import TOO_EARLY, summarise
+    from scripts.utils.gate_yield import GATES, TOO_EARLY, summarise
 
     out = summarise(ledger=[], denials=[],
                     since={"lifecycle": "2026-06-01T00:00:00+00:00",
                            "denials": "2026-10-01T00:00:00+00:00"},
                     now="2026-10-02T00:00:00+00:00")
-    young = [m for m in out["mechanisms"].values() if m["source"] == "denials"]
+    young = [m for n, m in out["mechanisms"].items()
+             if m["source"] == "denials" and n in GATES]
     assert young, out
     assert all(m["verdict"] == TOO_EARLY for m in young), (
         "a mechanism recorded for one day was judged over another source's window")
-    assert all(m["days"] == 1 for m in young)
+    # The window claim itself is the point, and it holds for walls too, so it is
+    # asserted over the whole source rather than only over the gates.
+    assert all(m["days"] == 1 for m in out["mechanisms"].values()
+               if m["source"] == "denials")
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +517,11 @@ def test_a_denial_stamp_is_read_as_a_time_and_not_dropped():
     assert caught["verdict"] == CATCHING
     # The consequence, asserted directly rather than inferred from the window:
     # a guard silent past the budget must be able to REACH the flagged verdict.
-    assert out["mechanisms"]["content-guard"]["verdict"] == NO_YIELD, (
+    # Re-pointed at `check_tool_budget` by the yield-axes slice: `content-guard`
+    # is a WALL, so it now reads HOLDING by design and can never be flagged. The
+    # claim here is about the window arithmetic reaching a verdict, not about
+    # which mechanism, and it needs a mechanism the verdict still applies to.
+    assert out["mechanisms"]["check_tool_budget"]["verdict"] == NO_YIELD, (
         "a silent guard past a full budget window could not be flagged")
 
 

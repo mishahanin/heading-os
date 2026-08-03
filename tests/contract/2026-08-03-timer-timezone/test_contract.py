@@ -401,12 +401,20 @@ def test_the_two_measured_offenders_load_the_env_first_thing_in_main(script_name
 # ---------------------------------------------------------------------------
 
 
-def _module_for(name: str, source: str) -> Path | None:
-    """The workspace module a name was imported from, if any.
+def _module_for(name: str, source: str) -> tuple[Path, str] | None:
+    """The workspace module a name was imported from, and its name THERE.
 
     Only `scripts.*` imports are followed. A third-party or stdlib name is not
     the workspace's to reason about, and following it would make this test a
     whole-program analyser.
+
+    Returns the ORIGINAL name alongside the module, not the local one. An
+    earlier version returned only the path and then looked the callee up by the
+    LOCAL name, so `from scripts.utils.x import reads_the_zone as _rz` resolved
+    the module correctly and then found nothing in it, and the walk stopped
+    there. Measured: a two-hop chain through an aliased import survived while a
+    three-hop chain without one was caught -- so the limit was never depth, as
+    the gate artifact had claimed, but aliasing at ANY depth.
     """
     import ast
 
@@ -415,8 +423,9 @@ def _module_for(name: str, source: str) -> Path | None:
                 and node.module
                 and node.module.startswith("scripts.")):
             continue
-        if any(a.asname == name or (a.asname is None and a.name == name) for a in node.names):
-            return _ROOT / Path(*node.module.split(".")).with_suffix(".py")
+        for alias in node.names:
+            if alias.asname == name or (alias.asname is None and alias.name == name):
+                return _ROOT / Path(*node.module.split(".")).with_suffix(".py"), alias.name
     return None
 
 
@@ -476,12 +485,19 @@ def test_nothing_before_load_env_reaches_a_zone_read_in_any_workspace_module(scr
                 if _reaches(callee, home, home_src, home_funcs, seen):
                     return True
                 continue
-            other = _module_for(name, home_src)
-            if other is not None and other.exists():
-                other_src, other_funcs = _load(other)
-                target = other_funcs.get(name)
-                if target is not None and _reaches(target, other, other_src, other_funcs, seen):
-                    return True
+            resolved = _module_for(name, home_src)
+            if resolved is None:
+                continue
+            other, original = resolved
+            if not other.exists():
+                continue
+            other_src, other_funcs = _load(other)
+            # By the ORIGINAL name: an aliased import names the callee one way
+            # here and another way there, and looking it up by the alias finds
+            # nothing and silently ends the walk.
+            target = other_funcs.get(original)
+            if target is not None and _reaches(target, other, other_src, other_funcs, seen):
+                return True
         return False
 
     offenders = []

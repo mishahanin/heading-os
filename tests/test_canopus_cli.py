@@ -658,6 +658,45 @@ def test_freeze_accepts_content_only_with_no_positional_paths(tree, anchor):
     assert "scripts" not in manifest["dirs"]
 
 
+def test_repin_moves_the_pin_in_the_state_file_and_leaves_the_root_alone(
+        tree, anchor, capsys):
+    """The wiring, asserted on the STATE rather than on the exit code.
+
+    Written after step 11 of the manifest-split slice, where a mutation replaced
+    `repin_enforcer(...)` in `cmd_repin` with a fabricated event dict and the
+    frozen contract stayed green: its wiring test asserts a zero exit and the
+    word "repin" in the output, and a stub satisfies both. That contract was
+    written specifically to close this class of gap, and it did not — the third
+    slice in a row where the CLI path was pinned more weakly than the function
+    behind it.
+
+    Nothing a stub can fake: the pin recorded on disk must MOVE, the contract
+    root must NOT, and the attestation must be gone.
+    """
+    from scripts.utils.canopus_freeze import (
+        attestation_state_path, build_manifest, enforcer_pin, read_freeze,
+        write_freeze,
+    )
+
+    (tree / "scripts" / "helper.py").write_text("x = 1\n")
+    manifest = build_manifest(
+        [tree / "tests"], tree, label="demo", frozen_at="2026-01-01T00:00:00+00:00",
+        anchor=anchor, content_only=[tree / "scripts" / "helper.py"])
+    write_freeze(tree, manifest)
+    attestation_state_path(tree).parent.mkdir(parents=True, exist_ok=True)
+    attestation_state_path(tree).write_text('{"attested": true}')
+    was_pin, was_root = enforcer_pin(manifest), manifest["root"]
+
+    (tree / "scripts" / "helper.py").write_text("x = 2\n")
+    assert _run(["repin", "--reason", "the helper was fixed"], tree) == 0
+
+    now = read_freeze(tree)
+    assert enforcer_pin(now) != was_pin, "the CLI did not move the recorded pin"
+    assert now["root"] == was_root, "a re-pin moved the contract root"
+    assert not attestation_state_path(tree).exists()
+    assert "scripts/helper.py" in capsys.readouterr().out
+
+
 def test_freeze_requires_at_least_one_path(tree, anchor, capsys):
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor)], tree) == 1
     assert "at least one path" in capsys.readouterr().err

@@ -87,6 +87,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **A scheduled job fired four hours off its own configured schedule, on the host
+  that runs the Tribe bot.** `HEADING_OS_TZ` reaches `os.environ` only through
+  `load_env()` reading a gitignored `.env`, so it is per-machine, never in git,
+  and nothing checks that a host has it. The service host had no such line from
+  the 2026-05-23 daemon migration onward, and every caller silently got UTC.
+  Consequence: the fireside day-of reminder, configured for 15:30 and documented
+  in its own docstring as "3h before the 18:30 session", DM'd speakers their Zoom
+  link at 19:30 local -- an hour after the session ended. The Healthchecks.io
+  deadman checks, registered from a laptop where the variable IS set, expected
+  Asia/Dubai and flapped DOWN/UP for about three and a half hours every single
+  day. Fixed on the host, not in the engine; the engine's contribution is the
+  resolver above, which now runs on 3.12 and announces the fallback instead of
+  dying into it. `setup-daemon-healthchecks.py` gained the operational rule that
+  bit this: retiring a daemon means DELETING its check through the API, because
+  that script only ever creates and updates -- an orphaned check keeps alerting
+  forever, and one did.
+
 - **The timezone resolver shipped this morning could not run on Python 3.12, and
   reported UTC.** Twelve timer installers invoked it as a FILE
   (`"$PYTHON" ".../scripts/utils/paths.py" tz`), which puts `scripts/utils/` at

@@ -12,7 +12,16 @@ STEWARD_HC_<DAEMON>. The daemons read those URLs at runtime via
 scripts/utils/healthchecks.ping(); deploy the new .env keys to the Steward host.
 
 A check whose daemon has been retired is a deadman that alerts forever, so an
-entry here is removed in the same change as the code it watches. The third check
+entry here is removed in the same change as the code it watches -- AND the check
+itself is DELETED through the API in that same change. Removing the entry alone
+does nothing to Healthchecks.io: this script only creates and updates, it never
+deletes, so an orphaned check keeps counting down and keeps alerting. Measured
+2026-08-03: `steward-eval-drift` sent a DOWN to the operator's Telegram after its
+daemon and this entry were both gone. Delete with:
+
+    DELETE https://healthchecks.io/api/v3/checks/<uuid>   (X-Api-Key header)
+
+The uuid is the tail of each check's `update_url` in GET /api/v3/checks/. The third check
 that used to sit here was the only one carrying a `schedule`/`tz` pair, and its
 `tz` came from a module-scope zone read with `.env` still unloaded -- so it was
 registered in UTC while the daemon fired at local 02:00. Any future entry needing

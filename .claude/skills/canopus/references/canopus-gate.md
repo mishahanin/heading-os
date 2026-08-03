@@ -60,12 +60,33 @@ prints an amber line naming the window, its timestamp and its reason, with "No
 lock is held, so a green suite proves nothing about the contract." It reports and
 never blocks. A later `freeze` closes it.
 
+## An enforcer edit is `repin`, two commands
+
+Since the manifest-split slice, the enforcer bytes are hashed OUTSIDE the
+contract root. Editing one moves the enforcer PIN and leaves the root alone, so
+the committed approval still matches and no window is needed:
+
+1. `git commit` the enforcer change
+2. `python scripts/canopus.py repin --reason "<why>"`
+3. `python scripts/run-tests.py` — the re-pin clears the attestation, because
+   the enforcer set holds the test runner and `conftest.py`
+
+The commit is REQUIRED and `repin` refuses without it, naming the files. That
+refusal is the whole reason this is not a security trade: the change lands in
+git as a readable diff with an author, which is strictly better evidence than
+the hash line the old six-command ceremony wrote into a private artifact.
+
+An edited enforcer that has not been re-pinned does NOT read `LOCK HELD`.
+`verify` lists it as `enforcer  <path>` with `cure: repin`, and the gate says
+"The ENFORCER moved, not the contract". Cheaper than a retake is the goal;
+invisible is not.
+
 ## Re-freezing after a window: six commands, not one
 
-Any mid-slice edit to a frozen enforcer needs a window, and coming back from one
-is not a single `freeze`. The enforcer BYTES moved, so the root hash moved with
-them, and the committed approval still records the previous root — which is
-exactly what `freeze` refuses.
+A window is still the way back when the CONTRACT itself must change, and coming
+back from one is not a single `freeze`. The contract bytes moved, so the root
+hash moved with them, and the committed approval still records the previous root
+— which is exactly what `freeze` refuses.
 
 1. `python scripts/canopus.py release --window --reason "<why>"`
 2. make the edit

@@ -6,6 +6,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- **One manifest hash covered two claims that have nothing to do with each
+  other, and it charged a full re-approval for the wrong one.** The CONTRACT
+  (what a builder is measured against, and what a human commits an approval
+  over) and the ENFORCER bytes (the code that does the measuring) both lived in
+  the freeze manifest's `files` map and both fed `root_hash`, so touching a
+  single enforcer byte moved the approved root, the committed approval stopped
+  matching, and `freeze` refused until the whole approve/commit/freeze cycle was
+  repeated. Measured over the 39 `anchor_replaced` records in the lifecycle
+  ledger on 2026-08-03: **21 of them were exactly that**, the largest class of
+  retake in the standard's history, and not one was a contract that had changed.
+  Eleven consecutive records in July read, verbatim, "the enforcer bytes changed,
+  so the approved root changed."
+
+  The enforcer now hashes on its own. `scripts/utils/canopus_freeze.py` records
+  those bytes under a `content` map with its own digest, the ENFORCER PIN, and
+  `root_hash_payload` covers everything else it always did — recipe, anchor,
+  anchor binding, contract files and dirs, the per-file baseline, the plugin set.
+  Recipe `canopus-freeze-v6`; a v5 manifest is refused BY NAME rather than
+  reading as a silent loss of lock on a tree where nothing moved.
+
+  **Cheaper, never quieter.** `verify_manifest` reports `enforcer_moved` as its
+  own list beside `changed` and `removed`, folded into `held` and deliberately
+  not into the recomputed root, so an un-repinned enforcer edit does NOT read
+  `LOCK HELD`; `verify` prints it as `enforcer <path> … cure: repin` and the test
+  gate says "The ENFORCER moved, not the contract", because the two have
+  different cures and one undifferentiated red told an operator neither.
+  `canopus repin --reason "<why>"` re-records the pin under the freeze already
+  held and clears the attestation — the enforcer set holds the test runner, the
+  interpreter chooser and `conftest.py`, so a run taken before those bytes
+  changed was produced by a different checker. It never touches `files`, `dirs`,
+  `baseline` or `root`, which is what stops the cheap path becoming a way around
+  the expensive one: a contract edit stays red through any number of re-pins.
+
+  **The commit requirement is why this is not a security trade.** The first draft
+  of the gate accepted it as one, until the operator asked what the trade was and
+  the premise broke: "an enforcer change must pass through a committed approval"
+  was never operator-gated — all 39 retakes were run by the assistant, `git
+  commit` included. What the old design really bought was that the new enforcer
+  state landed in git AT ALL, at a cost of six commands. So `repin` REFUSES while
+  any changed enforcer file is uncommitted, naming the files, and the ledger
+  event carries the sha. A readable diff with an author, in the public engine
+  repository, is strictly better evidence than a hash line in a private artifact.
+  The PreToolUse deny no longer refuses a write to an enforcer path: detection at
+  `verify` replaced prevention, the same asymmetry already recorded for watched
+  directories. Ceremony falls from six commands to two, and `canopus pack` now
+  counts `repins` per label, because an act nobody counts is how a weakened
+  enforcer stops being noticeable.
+
 ### Added
 
 - **The gate-yield report judged a wall and a gate with one instrument, and the

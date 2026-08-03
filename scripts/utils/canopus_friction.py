@@ -68,8 +68,13 @@ _SIMPLE = {
     "freeze": "freezes",
     "refuse_approve": "refusals",
     "refuse_release": "refusals",
+    "refuse_repin": "refusals",
+    "repin": "repins",
     "verify_fail": "verify_failures",
 }
+
+_COUNTERS = ("freezes", "approvals", "retakes", "repins", "windows", "ships",
+             "refusals", "verify_failures")
 
 
 @dataclass(frozen=True)
@@ -86,10 +91,23 @@ class Friction:
     freezes: int = 0
     approvals: int = 0
     retakes: int = 0
+    repins: int = 0
     windows: int = 0
     ships: int = 0
     refusals: int = 0
     verify_failures: int = 0
+
+    def __getitem__(self, name: str) -> int:
+        """One COUNTER by name. Never the label, and never a derived property.
+
+        A caller holding a counter's name reads it without `getattr`, and the
+        narrowing is the point: `friction["label"]` and `friction["clean"]` both
+        raise, so a reader that meant a count cannot silently receive a string
+        or a verdict. Unknown names raise KeyError, like any other mapping.
+        """
+        if name not in _COUNTERS:
+            raise KeyError(name)
+        return getattr(self, name)
 
     @property
     def recorded(self) -> bool:
@@ -112,9 +130,7 @@ def count_friction(entries, label: str) -> Friction:
     two slices sharing a label merge into one row. That limitation is named on
     the rendered page rather than hidden here.
     """
-    tally = dict.fromkeys(
-        ("freezes", "approvals", "retakes", "windows", "ships",
-         "refusals", "verify_failures"), 0)
+    tally = dict.fromkeys(_COUNTERS, 0)
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -170,6 +186,12 @@ def render_friction(friction: Friction, heading_wrap=("", "")) -> str:
 
     fields = (
         ("retakes", friction.retakes, "approvals replaced after the contract changed"),
+        # Counted from the slice that made it cheap, and counted for exactly
+        # that reason. A re-pin costs two commands where a retake cost six, and
+        # an act nobody counts is how a weakened enforcer stops being
+        # noticeable: the 21 enforcer retakes in the ledger were loud precisely
+        # because they were expensive. This row is what the price used to say.
+        ("repins", friction.repins, "enforcer bytes re-pinned under a held lock"),
         ("windows", friction.windows, "mid-slice releases, each one a contract corrected"),
         ("refusals", friction.refusals, "the gate declining an approve or a release"),
         ("verify failures", friction.verify_failures, "the frozen contract had moved"),

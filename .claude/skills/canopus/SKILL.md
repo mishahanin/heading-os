@@ -249,9 +249,15 @@ python scripts/canopus.py release --window --reason "<why>"
 An open window makes every pytest session start print an amber line saying no
 lock is held, so a green suite proves nothing while it is open. Close it fast.
 
-**Coming back is six commands, not one.** The enforcer bytes moved, so the root
-moved with them, and the committed approval still records the previous root —
-precisely what `freeze` refuses. `approve --replace --reason "<why>" --cause
+**An enforcer edit does not need a window at all.** Its bytes are hashed outside
+the contract root, so `git commit` them and run `python scripts/canopus.py repin
+--reason "<why>"`. The re-pin refuses while they are uncommitted, naming the
+files, and it clears the attestation, so the suite runs again. An un-repinned
+enforcer edit reddens the lock and `verify` names it with `cure: repin`.
+
+**Coming back from a window is six commands, not one.** The contract bytes moved,
+so the root moved with them, and the committed approval still records the
+previous root — precisely what `freeze` refuses. `approve --replace --reason "<why>" --cause
 <contract-strengthened | enforcer-moved | lint | frozen-set-wrong>`, a fresh
 COMMIT of the artifact, then the identical `freeze`, then `verify`. Releasing a
 freeze clears the attestation with it, so step 9 is run again.

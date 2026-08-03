@@ -200,6 +200,20 @@ Three ways to name a path, and they mean different things:
 would guard `scripts/` and `scripts/utils/`, and a build that cannot create a
 file there cannot build anything.
 
+Those bytes land in the manifest's `content` map, which is hashed on its own as
+the ENFORCER PIN and is deliberately absent from the root-hash payload. One
+manifest hash used to cover two unrelated claims — what the builder is measured
+against, and the code doing the measuring — so a single enforcer byte moved the
+root and cost a whole re-approval. Measured over the 39 retakes in the ledger on
+2026-08-03: 21 of them were exactly that. `canopus repin --reason "<why>"`
+re-records the pin under the freeze already held, refusing while the changed
+bytes are uncommitted; it never touches `files`, `dirs`, `baseline` or `root`, so
+a contract edit stays red through any number of re-pins. Recipe
+`canopus-freeze-v6` names the split, and a v5 manifest is refused by name rather
+than reading as a silent loss of lock. The PreToolUse deny no longer refuses a
+write to an enforcer path: detection at `verify` replaced prevention, which is
+the same asymmetry recorded for watched directories below.
+
 `canopus probe DIR` runs a contract set and prints its per-test outcomes without
 freezing anything. `canopus pack` prints the Fix 2 evidence page: all three axes
 (lock, attestation, approval), collected against baseline, the `interpreter`
@@ -1245,7 +1259,7 @@ prints `1 skipped` and exits 5, while the same command on
 nothing is indistinguishable from one that never happened, and inside the frozen
 contract the pattern cannot be fixed at all until the contract is retired.
 
-**Freeze the enforcers, all nine of them.** A freeze that omits them protects the
+**Freeze the enforcers, all ten of them.** A freeze that omits them protects the
 contract while leaving the thing that checks the contract editable.
 
 | File | Why it is in the set |
@@ -1258,9 +1272,10 @@ contract while leaving the thing that checks the contract editable.
 | `tests/conftest.py` | the other, at pytest session start |
 | `scripts/utils/atomic.py` | writes the manifest, so it is the write path of the guarantee |
 | `scripts/utils/venv.py` | re-execs the interpreter, so it chooses which Python runs the gate |
+| `scripts/utils/production_shape.py` | reached by `canopus_gate`, and it can WITHHOLD an attestation |
 | `scripts/utils/colors.py` | imported by both of the above |
 
-The last three are the transitive import tail: leaving them out put the write
+The last four are the transitive import tail: leaving them out put the write
 path of the guarantee outside the guarantee. A closure test in
 `tests/test_canopus_freeze.py` recomputes the tail and fails when a new import
 escapes the set.

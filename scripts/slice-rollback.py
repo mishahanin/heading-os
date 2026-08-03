@@ -114,10 +114,18 @@ def _contained(root: Path, base: Path, rel: str):
 
 
 def _frozen_paths(manifest) -> list:
-    files = manifest.get("files") or {}
-    if isinstance(files, dict):
-        return sorted(files)
-    return sorted(files or [])
+    """Every path the freeze recorded bytes for, contract and enforcer alike.
+
+    Both maps, because this reader asks what a rollback must consider and the
+    answer does not depend on which of the two hashes a path feeds. The split
+    made an enforcer edit cheap to RE-PIN; it did not make it invisible to a
+    rollback.
+    """
+    paths: set = set()
+    for key in ("files", "content"):
+        recorded = manifest.get(key) or {}
+        paths.update(recorded if isinstance(recorded, dict) else (recorded or []))
+    return sorted(paths)
 
 
 def _resolves(root: Path, sha: str) -> bool:

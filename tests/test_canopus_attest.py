@@ -162,12 +162,12 @@ def test_state_handles_absent_unknown_and_unqualified_records():
 def test_round_trip_through_disk(tmp_path):
     record = _build({"tests/test_alpha.py": _tests()})
     cf.write_attestation(tmp_path, record)
-    assert cf.attest_state_path(tmp_path).is_file()
+    assert cf.attestation_state_path(tmp_path).is_file()
     assert cf.read_attestation(tmp_path) == record
 
 
 def test_a_damaged_attestation_reads_as_absent_and_never_raises(tmp_path, capsys):
-    path = cf.attest_state_path(tmp_path)
+    path = cf.attestation_state_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"\xff\xfe not json at all")
     assert cf.read_attestation(tmp_path) is None
@@ -212,7 +212,7 @@ def test_absent_attestation_is_none_and_silent(tmp_path, capsys):
 def test_written_record_is_sorted_and_newline_terminated(tmp_path):
     record = _build({"tests/test_beta.py": _tests(), "tests/test_alpha.py": _tests()})
     cf.write_attestation(tmp_path, record)
-    raw = cf.attest_state_path(tmp_path).read_text(encoding="utf-8")
+    raw = cf.attestation_state_path(tmp_path).read_text(encoding="utf-8")
     assert raw.endswith("\n")
     assert list(json.loads(raw)["frozen_tests"]) == [
         "tests/test_alpha.py", "tests/test_beta.py",
@@ -840,7 +840,7 @@ def test_clearing_the_freeze_removes_the_attestation(tmp_path):
     cf.clear_freeze(tmp_path)
 
     assert cf.freeze_state_path(tmp_path).exists() is False
-    assert cf.attest_state_path(tmp_path).exists() is False
+    assert cf.attestation_state_path(tmp_path).exists() is False
     assert cf.read_attestation(tmp_path) is None
 
 

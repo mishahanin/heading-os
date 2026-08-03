@@ -71,7 +71,23 @@ def loss_of_lock_sentences(report: dict, resolution: AnchorResolution) -> list[s
     otherwise vulnerable to.
     """
     sentences: list[str] = []
-    if not report["held"]:
+    # BEFORE the general sentence, and narrowing it rather than joining it: an
+    # enforcer edit reddens `held` without moving the contract, so "the frozen
+    # contract moved" is false of it and sends the operator to a per-file report
+    # that lists their own edit under a heading that does not describe it. The
+    # cure is different too — `repin`, not a re-approval — which is the whole
+    # reason the two claims were split apart.
+    moved = report.get("enforcer_moved") or []
+    if moved:
+        sentences.append(f"The ENFORCER moved, not the contract: {', '.join(moved)}. "
+                         f"Commit those bytes, then run `python scripts/canopus.py "
+                         f"repin --reason \"<why>\"`.")
+    # Suppressed ONLY when the enforcer is the sole cause. When both moved, both
+    # sentences are said: the contract move is the graver of the two, and a
+    # reader told about the cheap cure and not the expensive one would take the
+    # cheap one and find the lock still red.
+    if not report["held"] and (report["changed"] or report["added"]
+                               or report["removed"] or not moved):
         sentences.append("The frozen contract moved; run "
                          "`python scripts/canopus.py verify` for the per-file "
                          "report.")

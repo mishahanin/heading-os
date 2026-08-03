@@ -1020,7 +1020,11 @@ def test_content_only_file_installs_no_parent_guard(tmp_path):
         content_only=[target],
     )
 
-    assert "scripts/run-tests.py" in manifest["files"]
+    # In the ENFORCER map, not in `files`: the split is what keeps an enforcer
+    # edit off the contract root. The guard on `scripts/` is still absent, which
+    # is what this test was written for.
+    assert "scripts/run-tests.py" in manifest["content"]
+    assert "scripts/run-tests.py" not in manifest["files"]
     assert "scripts" not in manifest["dirs"]
 
 
@@ -1041,7 +1045,11 @@ def test_content_only_ignores_a_new_sibling_but_catches_an_edit(tmp_path):
     target.write_text("print('moved')\n", encoding="utf-8")
     report = verify_manifest(manifest, tmp_path)
     assert report["held"] is False
-    assert report["changed"] == ["scripts/run-tests.py"]
+    # Reported on its OWN axis. The edit is still caught -- that is what this
+    # test has always been for -- and it is named as the enforcer moving rather
+    # than as the contract moving, because the two have different cures.
+    assert report["enforcer_moved"] == ["scripts/run-tests.py"]
+    assert report["changed"] == []
 
 
 def test_content_only_refuses_a_directory(tmp_path):
@@ -1565,7 +1573,8 @@ def test_a_manifest_missing_the_binding_is_refused(tmp_path):
     path.write_text(json.dumps({
         "recipe": RECIPE, "label": "x",
         "frozen_at": "2026-01-01T00:00:00+00:00", "anchor": "", "git_sha": "",
-        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {}, "plugins": [],
+        "root": "e" * 64, "files": {}, "content": {}, "dirs": {}, "baseline": {},
+        "plugins": [],
     }))
 
     with pytest.raises(FreezeCorrupt, match="anchor_repo"):
@@ -1584,8 +1593,8 @@ def test_a_binding_with_a_wrong_typed_field_is_refused(tmp_path):
     path.write_text(json.dumps({
         "recipe": RECIPE, "label": "x",
         "frozen_at": "2026-01-01T00:00:00+00:00", "anchor": "", "git_sha": "",
-        "root": "e" * 64, "files": {}, "dirs": {}, "baseline": {}, "plugins": [],
-        "anchor_repo": {"in_repo": "yes", "identity": ""},
+        "root": "e" * 64, "files": {}, "content": {}, "dirs": {}, "baseline": {},
+        "plugins": [], "anchor_repo": {"in_repo": "yes", "identity": ""},
     }))
 
     with pytest.raises(FreezeCorrupt, match="in_repo"):

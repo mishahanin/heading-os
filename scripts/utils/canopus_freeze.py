@@ -26,14 +26,22 @@ this catches is tampering by helpfulness: the model hits a red assertion,
 concludes in good faith that the assertion is wrong, and edits it. A verification
 that merely runs catches that completely.
 
-Recipe `canopus-freeze-v5`, named in every manifest so a future algorithm change
+Recipe `canopus-freeze-v6`, named in every manifest so a future algorithm change
 breaks loudly instead of silently:
 
-    file digest = sha256(LF-normalized bytes)
-    dir digest  = sha256("".join(f"{relpath}\\n" for relpath in sorted members))
-    root hash   = sha256(canonical JSON of
-                         {recipe, anchor, anchor_repo, files, dirs, baseline,
-                          plugins})
+    file digest  = sha256(LF-normalized bytes)
+    dir digest   = sha256("".join(f"{relpath}\\n" for relpath in sorted members))
+    root hash    = sha256(canonical JSON of
+                          {recipe, anchor, anchor_repo, files, dirs, baseline,
+                           plugins})
+    enforcer pin = sha256(canonical JSON of the `content` map)
+
+TWO hashes, because the manifest carries two claims that have nothing to do with
+each other. The root is the CONTRACT: what the builder is measured against, and
+what a human commits an approval over. The pin is the ENFORCER: the bytes of the
+code that does the measuring. An enforcer edit moves the pin and leaves the root
+alone, so it costs a `repin` rather than a whole re-approval, and it is still
+never silent — see CONTENT_KEY.
 
 where a directory's members are those whose BASENAME matches one of the entry's
 recorded `names` patterns, and a member that is itself a directory is rendered
@@ -64,12 +72,31 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 from scripts.utils.atomic import atomic_write_text
 
-# v5 from wire 2.3: the plugin baseline joined the root-hash payload. The bump is
-# what turns a v4 manifest into a NAMED refusal at `read_freeze` ("carries recipe
-# canopus-freeze-v4") instead of a silent LOSS OF LOCK on a tree where nothing
-# moved, which is what a new hash field without a bump produces. Same reasoning
-# as v2, which added the per-file baseline.
-RECIPE = "canopus-freeze-v5"
+# v6 from the manifest-split slice: the enforcer bytes LEFT the root-hash payload
+# for a map of their own. Same reasoning as v5, which added the plugin baseline,
+# and as v2, which added the per-file baseline — a new payload shape without a
+# bump reads as LOSS OF LOCK on a tree where nothing moved, and sends an operator
+# hunting a file that never changed. The bump turns that into a NAMED refusal at
+# `read_freeze` ("carries recipe canopus-freeze-v5").
+RECIPE = "canopus-freeze-v6"
+
+# The manifest key holding the ENFORCER map: the bytes of the code that does the
+# measuring, hashed per file exactly like `files`, and deliberately OUTSIDE the
+# root-hash payload.
+#
+# One manifest hash used to cover two claims that have nothing to do with each
+# other. The CONTRACT is what the builder is measured against; the ENFORCER is
+# what does the measuring. Both lived in `files`, so touching a single enforcer
+# byte moved the root, the approval a human COMMITTED stopped matching, and
+# `freeze` refused until the whole approve/commit/freeze cycle was repeated.
+# Measured over the 39 `anchor_replaced` records in the ledger on 2026-08-03:
+# 21 of them were exactly that, the largest class of retake in the standard's
+# history, and not one was a contract that had changed.
+#
+# Split, not dropped. `enforcer_pin` digests this map, `verify_manifest` reports
+# `enforcer_moved` beside `changed`, and a moved enforcer with no re-pin does NOT
+# read LOCK HELD. What the split removes is the price, not the detection.
+CONTENT_KEY = "content"
 FREEZE_DIRNAME = ".canopus"
 FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
@@ -456,8 +483,34 @@ def manifest_plugins(manifest: dict) -> list:
     return sorted({str(name) for name in plugins})
 
 
-def root_hash(manifest: dict) -> str:
-    """sha256 over recipe, anchor, anchor_repo, files, dirs, baseline, plugins.
+def enforcer_map(manifest: dict) -> dict:
+    """The manifest's enforcer map, as a plain sorted dict, never raising.
+
+    ONE accessor, for the reason `anchor_binding` states at length beside it: a
+    guard written into the function in front of its author and not into the one
+    beside it is this project's most-repeated defect. Every reader of
+    CONTENT_KEY comes through here, so a manifest carrying a string, a list or
+    nothing at all reads as an EMPTY enforcer set in all of them at once.
+
+    Empty rather than raising, because two of the readers sit under `freeze_gate`
+    and under the PreToolUse dispatcher, where a raise fails OPEN. Nothing is
+    softened by answering: an empty recorded map compared against a disk that
+    has the files reports every one of them moved, which is the red direction.
+    """
+    content = manifest.get(CONTENT_KEY)
+    if not isinstance(content, dict):
+        return {}
+    return dict(sorted((str(k), str(v)) for k, v in content.items()))
+
+
+def root_hash_payload(manifest: dict) -> dict:
+    """Exactly what the contract root is computed over, as a dict.
+
+    Split out of `root_hash` so the payload can be ASSERTED rather than inferred
+    from two hashes comparing equal. A test that only compares roots passes over
+    an implementation that stopped hashing the enforcer for any reason at all,
+    including dropping both maps; naming the payload is what tells "the enforcer
+    left the hash" from "the hash stopped covering anything".
 
     The baseline is in here deliberately. Outside the hash it could be edited
     down to 1 with no indicator moving, and a per-file expected item count that
@@ -473,8 +526,11 @@ def root_hash(manifest: dict) -> str:
     set every later attestation is compared against, so outside the hash a
     builder appends the name of the plugin that skips the contract and no
     indicator moves.
+
+    CONTENT_KEY is NOT in here, and that is the whole of the manifest-split
+    slice. Everything else that was in the payload stays in it.
     """
-    payload = {
+    return {
         "recipe": manifest["recipe"],
         "anchor": manifest.get("anchor") or "",
         "anchor_repo": anchor_binding(manifest),
@@ -483,8 +539,30 @@ def root_hash(manifest: dict) -> str:
         "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
         "plugins": manifest_plugins(manifest),
     }
+
+
+def _canonical_digest(payload) -> str:
+    """sha256 over the canonical JSON of *payload*. One spelling, two hashes."""
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def root_hash(manifest: dict) -> str:
+    """The CONTRACT digest: sha256 over `root_hash_payload`."""
+    return _canonical_digest(root_hash_payload(manifest))
+
+
+def enforcer_pin(manifest: dict) -> str:
+    """The ENFORCER digest: sha256 over the content map alone.
+
+    The second of the two hashes. It moves when an enforcer byte moves and at no
+    other time, which is what makes `repin` a statement about one thing.
+
+    An empty content map still yields a digest rather than "", because a caller
+    comparing pins must be able to tell "the enforcer set is empty" from "this
+    manifest has no pin at all", and an empty string collapses the two.
+    """
+    return _canonical_digest(enforcer_map(manifest))
 
 
 # ============================================================
@@ -656,8 +734,11 @@ def build_manifest(
     composition would deny every new top-level file and make the tool something
     people route around.
 
-    A `content_only` path freezes its BYTES and installs no composition guard on
-    its parent. This is how the enforcer files are frozen. Freezing
+    A `content_only` path freezes its BYTES into the `content` map, NOT into
+    `files`, and installs no composition guard on its parent. That map is
+    outside the root-hash payload, so an edit to an enforcer moves the pin and
+    leaves the contract root alone; `verify_manifest` still reports it, by name,
+    as `enforcer_moved`. This is how the enforcer files are frozen. Freezing
     scripts/run-tests.py as an ordinary file would guard scripts/, and a build
     that cannot create a file under scripts/ cannot build anything, so the
     required practice would be unenforceable. A new file appearing beside
@@ -676,6 +757,7 @@ def build_manifest(
     """
     resolved_root = Path(root).resolve()
     files: dict[str, str] = {}
+    content: dict[str, str] = {}
     dirs: dict[str, dict] = {}
 
     for raw in paths:
@@ -700,8 +782,7 @@ def build_manifest(
             )
 
     # Positional paths are processed first, deliberately: a path given BOTH ways
-    # keeps the parent guard its positional form installed, and the digest
-    # written twice is the same value.
+    # keeps the parent guard its positional form installed.
     for raw in content_only:
         target = validate_freeze_path(Path(raw), resolved_root)
         if target.is_dir():
@@ -709,7 +790,16 @@ def build_manifest(
                 f"{target} is a directory; --content freezes file bytes only. "
                 f"Pass it positionally to freeze it recursively."
             )
-        files[target.relative_to(resolved_root).as_posix()] = file_digest(target)
+        content[target.relative_to(resolved_root).as_posix()] = file_digest(target)
+        # The conftest chain lands in `files`, never in `content`, and the
+        # OVERLAP that produces is deliberate. A conftest is where a good-faith
+        # edit changes what the contract measures, so it belongs to the contract
+        # root; an enforcer path passed with --content is also on the chain of
+        # its own conftests. A file reached both ways is therefore carried in
+        # BOTH maps and reddens the lock through both, which is the strict
+        # direction: letting --content REMOVE a path from `files` would let a
+        # conftest edit stop moving the root, and that is the hole the standard
+        # exists to hold shut.
         for conftest in _conftest_chain(target, resolved_root):
             files.setdefault(
                 conftest.relative_to(resolved_root).as_posix(), file_digest(conftest)
@@ -730,6 +820,7 @@ def build_manifest(
         # per-file baseline beside it is carried for the same reason.
         "plugins": manifest_plugins({"plugins": plugins}),
         "files": dict(sorted(files.items())),
+        CONTENT_KEY: dict(sorted(content.items())),
         "dirs": dict(sorted(dirs.items())),
     }
     manifest["root"] = root_hash(manifest)
@@ -778,11 +869,23 @@ def recompute(manifest: dict, root: Path) -> dict:
                 if alive else []
             ),
         }
+    # The enforcer map, re-measured from disk exactly like `files`. Absent from
+    # the root-hash payload, so it changes no digest here; it is what
+    # `verify_manifest` diffs to answer `enforcer_moved`, and recomputing it in
+    # the ONE place that already re-measures the tree keeps the two maps read by
+    # the same rules (symlinks skipped, a vanished file simply absent).
+    content: dict[str, str] = {}
+    for rel in enforcer_map(manifest):
+        candidate = resolved_root / rel
+        if candidate.is_file() and not candidate.is_symlink():
+            content[rel] = file_digest(candidate)
+
     return {
         "recipe": manifest["recipe"],
         "anchor": manifest.get("anchor") or "",
         "anchor_repo": anchor_binding(manifest),
         "files": dict(sorted(files.items())),
+        CONTENT_KEY: dict(sorted(content.items())),
         "dirs": dict(sorted(dirs.items())),
         # Carried through verbatim, all three: the baseline and the plugin set
         # are recorded expectations, the binding is a recorded measurement, and
@@ -807,6 +910,18 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
     member list, never against the file map. A guard on a frozen file's parent
     deliberately covers siblings that were not frozen individually, so a file
     map comparison would report every pre-existing sibling as newly added.
+
+    `enforcer_moved` is the enforcer map's own diff, reported as its OWN list
+    beside `changed` and `removed` rather than merged into them. That separation
+    is the whole point of the split: an operator who cannot tell "the enforcer
+    moved" from "your contract moved" is back to one undifferentiated red, and
+    the two have different cures — `repin` for the first, a re-approval for the
+    second. It is folded into `held` and NOT into the recomputed root, so drift
+    reddens the lock while the committed approval keeps matching.
+
+    A DELETED enforcer counts as moved. The natural implementation hashes what
+    it finds and reports nothing for a file that is gone, which would make
+    removing the checker quieter than editing it.
     """
     resolved_root = Path(root).resolve()
     current = recompute(manifest, resolved_root)
@@ -814,6 +929,13 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
     changed = sorted(
         rel for rel, digest in current["files"].items()
         if manifest["files"][rel] != digest
+    )
+
+    recorded_content = enforcer_map(manifest)
+    current_content = current[CONTENT_KEY]
+    enforcer_moved = sorted(
+        rel for rel, digest in recorded_content.items()
+        if current_content.get(rel) != digest
     )
 
     added: set[str] = set()
@@ -832,7 +954,13 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
         "changed": changed,
         "added": sorted(added),
         "removed": removed,
-        "held": recomputed == manifest["root"] and not (changed or added or removed),
+        "enforcer_moved": enforcer_moved,
+        # `enforcer_moved` is listed here EXPLICITLY and cannot be inferred from
+        # the root comparison, because by construction it does not move the root.
+        # Leaving it out is the one way this split becomes a weakening: the lock
+        # would read green over a checker somebody edited.
+        "held": (recomputed == manifest["root"]
+                 and not (changed or added or removed or enforcer_moved)),
     }
 
 
@@ -1034,8 +1162,26 @@ def repo_binding_state(
     return (BINDING_INTACT, "")
 
 
-def lock_state(report: dict, anchor_status: str, anchor_value: Optional[str]) -> str:
+def lock_state(
+    report: dict,
+    anchor_status: Optional[str] = None,
+    anchor_value: Optional[str] = None,
+) -> str:
     """Resolve the three-state indicator from a verify report plus the anchor.
+
+    Omitting the anchor asks the CONTENT question alone: has anything the
+    manifest recorded moved on disk. Every caller in this repository passes all
+    three and gets the full answer; the two-axis reading exists for a caller
+    holding a report and no anchor resolution, which is the shape a library user
+    and every unit test have.
+
+    Say the hazard rather than trust the default. The content-only reading is
+    the GREENER of the two — it cannot see a missing anchor or one recording a
+    different hash — so a caller that has an anchor and forgets to pass it is
+    told LOCK HELD over a freeze nobody approved. `None` is the sentinel rather
+    than ANCHOR_NONE precisely so that "no anchor was recorded" (amber, and a
+    real state a manifest can carry) stays distinguishable from "the caller did
+    not ask about the anchor".
 
     No prefix comparison anywhere: a truncated digest that looks rigorous and is
     not is worse than a full one, because a builder with a shell can brute-force
@@ -1048,6 +1194,8 @@ def lock_state(report: dict, anchor_status: str, anchor_value: Optional[str]) ->
     """
     if not report["held"]:
         return LOSS_OF_LOCK
+    if anchor_status is None:
+        return LOCK_HELD
     if anchor_status in (ANCHOR_MISSING, ANCHOR_UNBOUND):
         return LOSS_OF_LOCK
     if anchor_status in (ANCHOR_NONE, ANCHOR_UNRECORDED):
@@ -1138,6 +1286,16 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
     when it sits inside a recursively frozen directory, or when its own basename
     would join a guard's watched composition. A path whose FIRST component does
     not exist yet is not this function's business.
+
+    ENFORCER paths are deliberately NOT refused, from the manifest-split slice
+    onward. They live in CONTENT_KEY, which this function does not read, so an
+    edit to the code that does the measuring reaches disk and is caught by
+    `verify_manifest` as `enforcer_moved` instead. That is the trade the split
+    makes on purpose: denying the write made every enforcer fix cost a release
+    window plus a full re-approval, which is what 21 of the ledger's 39 retakes
+    were. The change still cannot pass unnoticed, and the cure (`repin`) refuses
+    until the new bytes are COMMITTED, so it lands as a readable diff in git
+    rather than as a hash line in a gitignored directory.
     """
     if rel_posix in manifest["files"]:
         return f"{rel_posix} is a frozen contract file"
@@ -1218,8 +1376,8 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
     exactly those two and denies fail-closed; anything else falls through its
     outer catch-all, logs an advisory, and continues -- fail OPEN).
     """
-    for key in (*_STR_SCALAR_KEYS, "files", "dirs", "baseline", "plugins",
-                "anchor_repo"):
+    for key in (*_STR_SCALAR_KEYS, "files", CONTENT_KEY, "dirs", "baseline",
+                "plugins", "anchor_repo"):
         _require(key in manifest, f"freeze manifest at {path} is missing {key!r}")
 
     for key in _STR_SCALAR_KEYS:
@@ -1230,23 +1388,29 @@ def _validate_manifest_shape(manifest: dict, path: Path) -> None:
             f"({type(value).__name__}), expected a string",
         )
 
-    files = manifest["files"]
-    _require(
-        isinstance(files, dict),
-        f"freeze manifest at {path} has a non-dict 'files' value "
-        f"({type(files).__name__}), expected a dict",
-    )
-    for rel, digest in files.items():
+    # Both digest maps, checked by ONE loop rather than by a copy each. The
+    # enforcer map reaches `enforcer_map`, which answers EMPTY for anything that
+    # is not a mapping — the right posture where a raise fails open, and the
+    # wrong one here, where an empty map would quietly stop `verify` reporting
+    # any enforcer at all. read_freeze is the layer that gets to refuse.
+    for key in ("files", CONTENT_KEY):
+        digests = manifest[key]
         _require(
-            isinstance(rel, str),
-            f"freeze manifest at {path} has a non-string key in 'files' "
-            f"({type(rel).__name__}), expected a string",
+            isinstance(digests, dict),
+            f"freeze manifest at {path} has a non-dict {key!r} value "
+            f"({type(digests).__name__}), expected a dict",
         )
-        _require(
-            isinstance(digest, str),
-            f"freeze manifest at {path} has a non-string value for files[{rel!r}] "
-            f"({type(digest).__name__}), expected a string",
-        )
+        for rel, digest in digests.items():
+            _require(
+                isinstance(rel, str),
+                f"freeze manifest at {path} has a non-string key in {key!r} "
+                f"({type(rel).__name__}), expected a string",
+            )
+            _require(
+                isinstance(digest, str),
+                f"freeze manifest at {path} has a non-string value for "
+                f"{key}[{rel!r}] ({type(digest).__name__}), expected a string",
+            )
 
     dirs = manifest["dirs"]
     _require(
@@ -1413,7 +1577,7 @@ def clear_freeze(root: Path) -> None:
     waiting for a coincidence.
     """
     freeze_state_path(root).unlink(missing_ok=True)
-    attest_state_path(root).unlink(missing_ok=True)
+    attestation_state_path(root).unlink(missing_ok=True)
 
 
 def append_history(
@@ -1424,7 +1588,8 @@ def append_history(
     label: str,
     reason: str = "",
     kind: str = "",
-) -> None:
+    extra: Optional[dict] = None,
+) -> dict:
     """Append one line to the ledger. Never rewrites, never truncates.
 
     A separate file from the manifest on purpose: the logged escape has to work
@@ -1432,7 +1597,7 @@ def append_history(
 
     WHAT THE LEDGER RECORDS, stated so the gap is a known property rather than
     a discovered one. It records operator intent through the CLI: `freeze`,
-    `release`, `force_release`, and a failing `verify`. It does NOT record the
+    `release`, `force_release`, `repin`, and a failing `verify`. It does NOT record the
     test gate. A passing gate writes nothing, so the ABSENCE of a `verify_fail`
     line is ambiguous between "verified clean many times" and "never verified
     at all" — the gate's evidence is its exit code in the test output, not a
@@ -1457,6 +1622,13 @@ def append_history(
         # on the difference and the gate stayed silent over an unlocked tree.
         "kind": kind,
     }
+    # `extra` carries the fields ONE event kind needs and the others have no use
+    # for: a `repin` records the pin it replaced, the pin it took, the enforcer
+    # files that moved and the commit carrying them. Merged UNDER the six common
+    # keys rather than over them, so a caller cannot overwrite the timestamp,
+    # the event name or the label — the three fields every reader of this ledger
+    # keys on.
+    entry = {**(extra or {}), **entry}
     path = history_state_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     # Deliberately not atomic_write_text: that primitive is a full-file
@@ -1464,6 +1636,110 @@ def append_history(
     # append-only is the entire point of this ledger.
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    return entry
+
+
+REPIN_EVENT = "repin"
+
+
+def repin_enforcer(root: Path, *, reason: str, git_sha: str = "") -> dict:
+    """Re-record the ENFORCER map under the freeze that is already held.
+
+    The cheap half of what used to be a six-command retake. It recomputes the
+    content map from disk, writes it into the freeze state, appends one `repin`
+    line to the ledger, and clears the attestation. It does NOT touch `files`,
+    `dirs`, `baseline` or `root`.
+
+    That last sentence is the security property, not a description of the
+    implementation's shape. A `repin` that also refreshed the contract digests
+    would let a builder edit a frozen test, run one command, and hold a green
+    lock over a contract nobody re-approved — the one thing the whole standard
+    exists to prevent, delivered by its own convenience feature. The contract
+    root is left exactly as the committed approval recorded it, so a contract
+    edit stays red through a re-pin and every re-pin after it.
+
+    The attestation goes, and that is correct rather than merely tolerable. The
+    enforcer set holds the test runner, the interpreter chooser and
+    `conftest.py`: a green run recorded before those bytes changed was produced
+    by a DIFFERENT checker, so keeping it would let an edited enforcer inherit
+    the previous run's word. The suite runs again. That cost is irreducible
+    while the runner is inside the set, and the saving is the other five
+    commands.
+
+    Refused without a REASON. An unexplained re-pin is indistinguishable from a
+    re-baseline, which is the sentence `approve --replace` already uses for the
+    same act one layer up; a recorded pin with no account of why is a log entry,
+    not evidence.
+
+    Refused when a recorded enforcer file is GONE. Rewriting the map from what
+    is on disk would silently drop the missing path out of the enforcer set, so
+    the checker somebody deleted would stop being watched from then on — the
+    silent narrowing this module refuses everywhere else. A genuinely changed
+    enforcer set is a new freeze, and the ledger already has a cause for it
+    (`frozen-set-wrong`).
+
+    ACCEPTED when nothing moved. The pin simply does not change, and the line
+    still lands. Refusing would be the tidier rule and the wrong one: `repin` is
+    what an operator reaches for when they believe the enforcer moved, and
+    telling them "nothing to do" on a tree they have not looked at closely is a
+    worse answer than recording that they checked.
+
+    *git_sha* is passed IN, never derived. This module is imported by the
+    PreToolUse dispatcher on every write and may never reach for subprocess; the
+    caller that can run git (`scripts/canopus.py`) is also the caller that
+    refuses the re-pin while the changed bytes are uncommitted.
+    """
+    reason = " ".join((reason or "").split())
+    if not reason:
+        raise FreezeError(
+            "a re-pin needs a reason: it re-records the bytes of the code that "
+            "does the measuring, and an unexplained one is indistinguishable "
+            "from a quiet re-baseline"
+        )
+    manifest = read_freeze(root)
+    if manifest is None:
+        raise FreezeError(
+            "no freeze is held here, so there is no enforcer pin to replace; "
+            "`repin` corrects a held lock and cannot create one"
+        )
+
+    resolved_root = Path(root).resolve()
+    recorded = enforcer_map(manifest)
+    current: dict[str, str] = {}
+    missing: list[str] = []
+    for rel in recorded:
+        candidate = resolved_root / rel
+        if candidate.is_file() and not candidate.is_symlink():
+            current[rel] = file_digest(candidate)
+        else:
+            missing.append(rel)
+    if missing:
+        raise FreezeError(
+            f"the freeze records an enforcer file that is not on disk: "
+            f"{', '.join(missing)}. Re-pinning would drop it out of the "
+            f"enforcer set and stop watching it; restore it, or take a new "
+            f"freeze if the set itself is wrong."
+        )
+
+    previous_pin = enforcer_pin(manifest)
+    updated = dict(manifest)
+    updated[CONTENT_KEY] = dict(sorted(current.items()))
+    pin = enforcer_pin(updated)
+    changed = sorted(rel for rel, digest in recorded.items() if current[rel] != digest)
+
+    # The ledger first, then the state, for the reason `cmd_release` states: an
+    # unwritable ledger must leave the tree exactly as it was rather than move
+    # the pin with no line saying it moved.
+    event = append_history(
+        root, REPIN_EVENT,
+        digest=manifest.get("root", ""), label=manifest.get("label", ""),
+        reason=reason,
+        extra={"previous_pin": previous_pin, "pin": pin, "changed": changed,
+               "git_sha": git_sha},
+    )
+    write_freeze(root, updated)
+    attestation_state_path(root).unlink(missing_ok=True)
+    return event
 
 
 def read_ledger(root: Path) -> list[dict]:
@@ -1600,7 +1876,7 @@ NOT_ATTESTED = "NOT ATTESTED"
 TREE_RECIPE = "canopus-tree-v1"
 
 
-def attest_state_path(root: Path) -> Path:
+def attestation_state_path(root: Path) -> Path:
     """Where the attestation record lives, beside the manifest it attests."""
     return Path(root).resolve() / FREEZE_DIRNAME / ATTEST_FILENAME
 
@@ -1847,7 +2123,7 @@ def read_attestation(root: Path) -> Optional[dict]:
     make a state greener than NOT ATTESTED, so treating damage as absence is both
     safe and quieter than raising on a path that only ever reports.
     """
-    path = attest_state_path(root)
+    path = attestation_state_path(root)
     try:
         data = json.loads(path.read_bytes().decode("utf-8"))
     except FileNotFoundError:
@@ -1867,7 +2143,7 @@ def read_attestation(root: Path) -> Optional[dict]:
 
 def write_attestation(root: Path, attestation: dict) -> None:
     """Persist the record atomically, beside the manifest."""
-    path = attest_state_path(root)
+    path = attestation_state_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, json.dumps(attestation, indent=2, sort_keys=True) + "\n")
 

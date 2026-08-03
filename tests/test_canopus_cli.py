@@ -352,7 +352,10 @@ def test_root_defaults_to_the_engine_root_not_the_shell_cwd():
     while it was inert. The default is the script's own repository root."""
     parser = canopus.build_parser()
     args = parser.parse_args(["status"])
-    assert Path(args.root) == canopus.ENGINE_ROOT
+    # Asserted through the resolver rather than off the parsed attribute: the
+    # default lives in `_root_for` since `repin` needed a different one, and a
+    # test reading `args.root` would pass over a resolver that ignored it.
+    assert canopus._root_for(args) == canopus.ENGINE_ROOT
     assert (canopus.ENGINE_ROOT / "scripts" / "run-tests.py").is_file()
 
 
@@ -638,7 +641,7 @@ def test_a_damaged_attestation_changes_no_exit_code(tree, anchor, capsys):
 
     _freeze(tree, anchor)
     anchor.write_text(f"# gate\n\ncanopus-anchor: {_root_of(tree)}\n")
-    cf.attest_state_path(tree).write_text("{ not json", encoding="utf-8")
+    cf.attestation_state_path(tree).write_text("{ not json", encoding="utf-8")
     assert _run(["verify"], tree) == 0
     assert _run(["status"], tree) == 0
     assert "NOT ATTESTED" in capsys.readouterr().out
@@ -651,7 +654,7 @@ def test_freeze_accepts_content_only_with_no_positional_paths(tree, anchor):
                  "--content", "scripts/helper.py"], tree) == 0
 
     manifest = json.loads((tree / ".canopus" / "freeze.json").read_text())
-    assert "scripts/helper.py" in manifest["files"]
+    assert "scripts/helper.py" in manifest["content"]
     assert "scripts" not in manifest["dirs"]
 
 
@@ -874,7 +877,7 @@ def test_pack_never_raises_on_damaged_state(tree, anchor, capsys):
     from scripts.utils import canopus_freeze as cf
 
     assert _freeze(tree, anchor) == 0
-    cf.attest_state_path(tree).write_text("{ not json", encoding="utf-8")
+    cf.attestation_state_path(tree).write_text("{ not json", encoding="utf-8")
     capsys.readouterr()
 
     assert _run(["pack"], tree) == 0

@@ -276,6 +276,19 @@ itself. Nobody types a digest and nobody compares one by eye.</p>
 <p><code>--content</code> is how the enforcer files are frozen. Frozen as ordinary files they
 would guard <code>scripts/</code> and <code>scripts/utils/</code>, and a build that cannot create a
 file there cannot build anything.</p>
+<p>Those bytes land in the manifest&rsquo;s <code>content</code> map, which is hashed on its own as
+the ENFORCER PIN and is deliberately absent from the root-hash payload. One
+manifest hash used to cover two unrelated claims — what the builder is measured
+against, and the code doing the measuring — so a single enforcer byte moved the
+root and cost a whole re-approval. Measured over the 39 retakes in the ledger on
+2026-08-03: 21 of them were exactly that. <code>canopus repin --reason "&lt;why&gt;"</code>
+re-records the pin under the freeze already held, refusing while the changed
+bytes are uncommitted; it never touches <code>files</code>, <code>dirs</code>, <code>baseline</code> or <code>root</code>, so
+a contract edit stays red through any number of re-pins. Recipe
+<code>canopus-freeze-v6</code> names the split, and a v5 manifest is refused by name rather
+than reading as a silent loss of lock. The PreToolUse deny no longer refuses a
+write to an enforcer path: detection at <code>verify</code> replaced prevention, which is
+the same asymmetry recorded for watched directories below.</p>
 <p><code>canopus probe DIR</code> runs a contract set and prints its per-test outcomes without
 freezing anything. <code>canopus pack</code> prints the Fix 2 evidence page: all three axes
 (lock, attestation, approval), collected against baseline, the <code>interpreter</code>
@@ -1370,7 +1383,7 @@ prints <code>1 skipped</code> and exits 5, while the same command on
 <code>tests/test_run_tests_runner.py</code> prints ZERO bytes and exits 0. A run that prints
 nothing is indistinguishable from one that never happened, and inside the frozen
 contract the pattern cannot be fixed at all until the contract is retired.</p>
-<p><strong>Freeze the enforcers, all nine of them.</strong> A freeze that omits them protects the
+<p><strong>Freeze the enforcers, all ten of them.</strong> A freeze that omits them protects the
 contract while leaving the thing that checks the contract editable.</p>
 <table>
 <thead>
@@ -1413,12 +1426,16 @@ contract while leaving the thing that checks the contract editable.</p>
 <td>re-execs the interpreter, so it chooses which Python runs the gate</td>
 </tr>
 <tr>
+<td><code>scripts/utils/production_shape.py</code></td>
+<td>reached by <code>canopus_gate</code>, and it can WITHHOLD an attestation</td>
+</tr>
+<tr>
 <td><code>scripts/utils/colors.py</code></td>
 <td>imported by both of the above</td>
 </tr>
 </tbody>
 </table>
-<p>The last three are the transitive import tail: leaving them out put the write
+<p>The last four are the transitive import tail: leaving them out put the write
 path of the guarantee outside the guarantee. A closure test in
 <code>tests/test_canopus_freeze.py</code> recomputes the tail and fails when a new import
 escapes the set.</p>

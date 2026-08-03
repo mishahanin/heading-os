@@ -101,7 +101,9 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     read_anchor_waiver,
     read_attestation,
     read_freeze,
+    enforcer_map,
     read_ledger,
+    repin_enforcer,
     tree_drift,
     unreleased_freeze,
     validate_anchor_path,
@@ -231,23 +233,60 @@ def _ledger_reason(*parts: str) -> str:
 
 
 def _print_root(digest: str, manifest: dict) -> None:
+    """The root line, counting BOTH maps.
+
+    The enforcer count is printed beside the contract count rather than folded
+    into it or dropped. Folded, the line claims the root covers bytes it does
+    not; dropped, the line under-reports what the freeze is watching by ten
+    files on this repository's own slices, and a number that quietly shrank
+    from 11 to 2 the day the maps were split is exactly how an operator stops
+    trusting the line.
+    """
     count = len(manifest["files"])
     noun = "file" if count == 1 else "files"
+    enforcers = len(enforcer_map(manifest))
+    tail = f", {enforcers} enforcer" if enforcers else ""
     print(f"{BOLD}CANOPUS  root {digest}{RESET}  "
-          f"(label: {manifest['label']}, {count} {noun})")
+          f"(label: {manifest['label']}, {count} {noun}{tail})")
+
+
+# Which tree a subcommand acts on when --root is not given. Every other command
+# takes PATH arguments and resolves them against the root, so defaulting to this
+# script's own repository is what keeps those arguments meaningful. `repin` takes
+# no paths at all: it corrects a freeze that is already held, and the tree it
+# should correct is the one the operator is standing in. The cwd default fails
+# LOUDLY there (`_root_for`'s caller refuses a tree with no test gate, and
+# `cmd_repin` refuses a tree with no freeze), which is the opposite of the silent
+# inert lock the engine-root default was introduced to prevent.
+_CWD_ROOTED = ("repin",)
+
+
+def _root_for(args) -> Path:
+    """The tree an invocation acts on, unresolved and unchecked.
+
+    One rule, in one place, because `_resolve_root` and `_record_raised` both
+    need it and a second spelling is how a refusal gets recorded in a different
+    tree than the one that refused.
+    """
+    if args.root:
+        return Path(args.root)
+    if getattr(args, "command", "") in _CWD_ROOTED:
+        return Path.cwd()
+    return ENGINE_ROOT
 
 
 def _resolve_root(args) -> Path:
     """Resolve --root and refuse a tree that has no test gate.
 
-    --root defaults to the engine root rather than the shell's cwd. Defaulting
-    to the cwd meant `cd tests && python ../scripts/canopus.py freeze ...`
-    printed a root hash, exited 0, and wrote the state to tests/.canopus/ —
-    where neither the PreToolUse dispatcher nor the gate ever looks. The
-    operator was told the lock was on while it was inert, which is the worst
-    thing a discipline tool can do.
+    --root defaults to the engine root rather than the shell's cwd (see
+    `_root_for` for the one exception and why). Defaulting to the cwd meant
+    `cd tests && python ../scripts/canopus.py freeze ...` printed a root hash,
+    exited 0, and wrote the state to tests/.canopus/ — where neither the
+    PreToolUse dispatcher nor the gate ever looks. The operator was told the
+    lock was on while it was inert, which is the worst thing a discipline tool
+    can do.
     """
-    root = Path(args.root).resolve()
+    root = _root_for(args).resolve()
     if not (root / GATE_SCRIPT).is_file():
         raise FreezeError(
             f"{root} has no {GATE_SCRIPT.as_posix()}; a tree with no test gate "
@@ -1414,6 +1453,12 @@ def cmd_verify(args) -> int:
         print(f"  added    {rel}")
     for rel in report["removed"]:
         print(f"  removed  {rel}")
+    for rel in report["enforcer_moved"]:
+        # Its OWN label, and its own cure. Listed as `changed` it would read as
+        # a moved contract, which is a re-approval; it is a `repin`, which is
+        # one command over bytes that have to be committed first.
+        print(f"  enforcer {rel}\n           expected "
+              f"{enforcer_map(manifest)[rel]}, cure: repin")
     if status == ANCHOR_UNBOUND:
         # The path and the STATE, not the reason. `_print_approval` a few lines
         # below already prints the reason on the approval axis, because the
@@ -1520,6 +1565,69 @@ def cmd_release(args) -> int:
     return 0
 
 
+def cmd_repin(args) -> int:
+    """Re-record the enforcer bytes under a held freeze. Two commands, not six.
+
+    The whole of the manifest-split slice reaches the operator here. Editing the
+    code that does the measuring used to move the contract root with it, so the
+    committed approval stopped matching and `freeze` refused until the entire
+    approve/commit/freeze cycle was repeated: 21 of the ledger's 39 retakes were
+    exactly that, and none of them was a contract that had changed.
+
+    The git check is the reason this is not a security trade, and it is here
+    rather than in the library because `canopus_freeze` may never call
+    subprocess. The old design's real benefit was never a human decision — all
+    39 retakes were run by the assistant, `git commit` included. It was that the
+    new enforcer state landed in GIT at all, as a hash line inside a committed
+    artifact. Requiring the COMMIT directly delivers that better: a readable
+    diff with an author and a timestamp, in the public engine repository, with
+    the ledger event naming the sha so the diff is one command away.
+
+    A tree git cannot describe is allowed through, and that limit is stated
+    rather than hidden: there is no repository for the change to land in, and
+    refusing would make the lifecycle unusable for the plain-folder operator
+    `repo_binding_state` already accommodates. Every other surface reads that
+    operator amber for the same reason.
+    """
+    root = _resolve_root(args)
+    manifest = read_freeze(root)
+    if manifest is None:
+        reason = ("no freeze is held here, so there is no enforcer pin to "
+                  "replace; `repin` corrects a held lock and cannot create one")
+        print(f"canopus: {reason}", file=sys.stderr)
+        _record_refusal(root, "repin", "no_active_freeze", reason=reason)
+        return 1
+
+    moved = verify_manifest(manifest, root)["enforcer_moved"]
+    tree = tree_state(root)
+    if tree is not None:
+        uncommitted = [rel for rel in moved if rel in (tree.get("dirty") or {})]
+        if uncommitted:
+            reason = (f"these enforcer files have moved and are not committed: "
+                      f"{', '.join(uncommitted)}. A re-pin records new bytes for "
+                      f"the code that does the measuring, so those bytes have to "
+                      f"be readable as a diff with an author on it: `git commit` "
+                      f"them, then run this again.")
+            print(f"canopus: NOT RE-PINNED - {reason}", file=sys.stderr)
+            _record_refusal(root, "repin", "enforcer_uncommitted", reason=reason,
+                            label=manifest["label"])
+            return 1
+
+    event = repin_enforcer(root, reason=args.reason,
+                           git_sha=(tree or {}).get("head", ""))
+    count = len(event["changed"])
+    noun = "file" if count == 1 else "files"
+    print(f"repin  {event['previous_pin'][:12]} to {event['pin'][:12]}  "
+          f"({count} enforcer {noun} re-recorded)")
+    if event["changed"]:
+        for rel in event["changed"]:
+            print(f"  {rel}")
+    print(f"The contract root {manifest['root'][:12]} is untouched, so the "
+          f"committed approval still stands. The attestation is cleared: the "
+          f"enforcer set holds the test runner, so the suite runs again.")
+    return 0
+
+
 def cmd_status(args) -> int:
     root = _resolve_root(args)
     manifest = read_freeze(root)
@@ -1560,6 +1668,12 @@ def cmd_status(args) -> int:
     print(f"anchor    {anchor or '(none)'}  [{status}]")
     for rel in manifest["files"]:
         print(f"  file  {rel}")
+    for rel in enforcer_map(manifest):
+        # Named `enforcer`, never `file`. The two are frozen the same way and
+        # cost different things to move: this one is a `repin`, and a listing
+        # that spelled both the same would hide that distinction on the one
+        # surface an operator reads to find out what is frozen.
+        print(f"  enforcer  {rel}")
     for rel, entry in manifest["dirs"].items():
         # The filter is printed because it is the guard's actual scope. A line
         # reading "dir tests/" without it invites the reading that everything
@@ -1706,9 +1820,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="canopus",
         description="Freeze the test contract so the builder cannot move the target.",
     )
-    parser.add_argument("--root", default=str(ENGINE_ROOT),
+    parser.add_argument("--root", default=None,
                         help="working tree root (default: this script's own repository "
-                             "root, NOT the shell's cwd)")
+                             "root, NOT the shell's cwd; `repin` defaults to the cwd)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     freeze = sub.add_parser("freeze", help="lock a set of paths")
@@ -1805,6 +1919,17 @@ def build_parser() -> argparse.ArgumentParser:
                       help="the slice is over")
     release.set_defaults(func=cmd_release)
 
+    repin = sub.add_parser(
+        "repin",
+        help="re-record the ENFORCER bytes under the freeze already held; "
+             "leaves the contract root and the committed approval alone",
+    )
+    repin.add_argument("--reason", required=True,
+                       help="why the enforcer moved. Required: an unexplained "
+                            "re-pin is indistinguishable from a quiet "
+                            "re-baseline of the code that does the measuring.")
+    repin.set_defaults(func=cmd_repin)
+
     status = sub.add_parser("status", help="show the active freeze")
     status.set_defaults(func=cmd_status)
 
@@ -1829,10 +1954,9 @@ def _record_raised(args, cause: str, exc: Exception) -> None:
     without its author doing anything.
     """
     command = getattr(args, "command", "") or ""
-    if command not in ("approve", "freeze", "release"):
+    if command not in ("approve", "freeze", "release", "repin"):
         return
-    _record_refusal(Path(getattr(args, "root", ".")), command, cause,
-                    reason=str(exc))
+    _record_refusal(_root_for(args), command, cause, reason=str(exc))
 
 
 def main(argv: list[str] | None = None) -> int:

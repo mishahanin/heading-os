@@ -164,12 +164,12 @@ def test_refusal_reasons_rejects_a_file_that_collected_nothing():
 
 def test_run_contract_does_not_write_an_attestation(tmp_path, monkeypatch):
     from scripts.utils.canopus_contract import run_contract
-    from scripts.utils.canopus_freeze import attest_state_path
+    from scripts.utils.canopus_freeze import attestation_state_path
 
     _write(tmp_path, "c/test_one.py", "def test_a():\n    assert False\n")
     run_contract([tmp_path / "c"], tmp_path)
 
-    assert not attest_state_path(tmp_path).exists()
+    assert not attestation_state_path(tmp_path).exists()
 
 
 def test_recorder_writes_nothing_when_attestation_is_disabled(tmp_path, monkeypatch):

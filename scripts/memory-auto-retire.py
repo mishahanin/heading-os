@@ -26,7 +26,7 @@ from scripts.utils.colors import GRAY, GREEN, RESET, YELLOW
 from scripts.utils.memory_expiry import find_expired, strip_index_pointers
 from scripts.utils.memory_stores import retire_memory
 from scripts.utils.workspace import get_auto_memory_dir, get_default_tz
-from scripts.utils.paths import log_dir
+from scripts.utils.paths import load_env, log_dir
 
 INDEX_NAME = "MEMORY.md"
 LOG_PATH = log_dir("memory-auto-retire.log")
@@ -44,6 +44,13 @@ def _log_line(msg: str) -> None:
 
 
 def main() -> int:
+    # First, before anything reads the clock. `get_default_tz()` reads os.environ
+    # ONLY, and HEADING_OS_TZ lives in the gitignored .env, which nothing exports
+    # -- so without this the run compares an `expires:` date against a UTC
+    # "today" while the timer fires on local time. Expiry is date-granular, so a
+    # single day's error retires a memory early or keeps a dead one alive.
+    load_env()
+
     ap = argparse.ArgumentParser(description="Auto-retire memories past their expires: date")
     ap.add_argument("--dry-run", action="store_true", help="show candidates, mutate nothing")
     args = ap.parse_args()

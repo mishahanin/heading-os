@@ -33,7 +33,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -44,7 +44,8 @@ from scripts.calibrate import (  # noqa: E402
     parse_jsonl,
 )
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.workspace import get_data_root  # noqa: E402
+from scripts.utils.paths import load_env  # noqa: E402
+from scripts.utils.workspace import get_data_root, get_default_tz  # noqa: E402
 
 # ============================================================
 # Configuration
@@ -194,7 +195,13 @@ def select_sessions(sessions_dir: Path, since: str | None, backfill: bool, limit
     elif since:
         cutoff = since
     else:
-        cutoff = read_marker() or (date.today() - timedelta(days=DEFAULT_WINDOW_DAYS)).isoformat()  # noqa: DTZ011 - local today-window
+        # The operator's today, not libc's. This was `date.today()` under a
+        # DTZ011 waiver, which reads the HOST's zone -- and the two hosts in the
+        # fleet disagree by four hours, so the same nightly fire computed a
+        # catch-up window starting a day apart on each. `get_default_tz()` reads
+        # HEADING_OS_TZ, which `main` loads from .env before anything gets here.
+        today = datetime.now(get_default_tz()).date()
+        cutoff = read_marker() or (today - timedelta(days=DEFAULT_WINDOW_DAYS)).isoformat()
 
     files = sorted(
         sessions_dir.glob("*.jsonl"),  # non-recursive: excludes <id>/subagents/*.jsonl
@@ -590,6 +597,13 @@ def cmd_personal_recall(args: argparse.Namespace) -> int:
 # ============================================================
 
 def main(argv: list[str] | None = None) -> int:
+    # First, before anything reads the clock. `select_sessions` derives the
+    # catch-up window from `get_default_tz()`, which reads HEADING_OS_TZ from
+    # os.environ ONLY -- and that variable lives in the gitignored .env, which
+    # nothing exports. Without this the window is computed in UTC while the
+    # timer fires on local time.
+    load_env()
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 

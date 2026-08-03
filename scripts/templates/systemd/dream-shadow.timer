@@ -1,12 +1,15 @@
 [Unit]
-Description=Nightly 31C dream-shadow scan (03:10, host local)
+Description=Nightly 31C dream-shadow scan (03:10, configured timezone)
 
 [Timer]
 # Daily cadence, before memory-index-refresh.timer (03:30). No embedding call
 # is needed for the prune pass (parses frontmatter directly); scan_redundancy
 # embeds its own pair-comparison texts independently, so this detector needs no
-# fresh index to run against. Persistent=true runs a missed night on next boot.
-OnCalendar=*-*-* 03:10:00
+# fresh index to run against. The zone is named rather than inherited from the
+# host: the scan dates its own report, and 03:10 sits inside the window where a
+# host on another zone files it under the previous day. Persistent=true runs a
+# missed night on next boot.
+OnCalendar=*-*-* 03:10:00 {{TZ}}
 Persistent=true
 
 [Install]

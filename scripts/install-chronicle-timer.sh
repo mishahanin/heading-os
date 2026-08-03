@@ -3,6 +3,7 @@
 #
 # Usage:
 #   scripts/install-chronicle-timer.sh
+#   HEADING_OS_TZ=America/New_York scripts/install-chronicle-timer.sh   # pin a TZ
 #   PYTHON=/path/to/python scripts/install-chronicle-timer.sh   # override interpreter
 #
 # Renders scripts/templates/systemd/chronicle.{service,timer} (substituting
@@ -36,6 +37,12 @@ if [[ -z "${PYTHON:-}" ]]; then
         PYTHON="$(command -v python3 || command -v python || true)"
     fi
 fi
+
+# Unit timezone: resolved through the workspace resolver rather than read from
+# the environment alone. HEADING_OS_TZ lives in the gitignored .env and is
+# exported by nothing, so an environment-only read renders UTC on a machine
+# whose timezone is correctly configured. An explicit HEADING_OS_TZ=X still wins.
+TZ_VALUE="${HEADING_OS_TZ:-$("$PYTHON" "$WORKSPACE/scripts/utils/paths.py" tz || echo UTC)}"
 
 TEMPLATE_DIR="$WORKSPACE/scripts/templates/systemd"
 DEST_DIR="$HOME/.config/systemd/user"
@@ -81,8 +88,20 @@ mkdir -p "$DEST_DIR"
 for unit in chronicle.service chronicle.timer; do
     sed -e "s|{{WORKSPACE}}|${WORKSPACE}|g" \
         -e "s|{{PYTHON}}|${PYTHON}|g" \
+        -e "s|{{TZ}}|${TZ_VALUE}|g" \
         "$TEMPLATE_DIR/$unit" > "$DEST_DIR/$unit"
 done
+
+# Validate the RENDERED calendar expression before enabling, so a too-old systemd
+# that rejects a timezone suffix fails here with an explanation rather than
+# opaquely at enable time.
+RENDERED_CAL="$(grep -m1 '^OnCalendar=' "$DEST_DIR/chronicle.timer" | sed 's|^OnCalendar=||')"
+if ! systemd-analyze calendar "$RENDERED_CAL" >/dev/null 2>&1; then
+    echo "[warn] this systemd rejects the calendar expression: $RENDERED_CAL" >&2
+    echo "       Drop the trailing timezone from $DEST_DIR/chronicle.timer and set" >&2
+    echo "       the host timezone to ${TZ_VALUE}, then re-run." >&2
+    exit 6
+fi
 
 systemctl --user daemon-reload
 systemctl --user enable --now chronicle.timer

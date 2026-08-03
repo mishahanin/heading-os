@@ -32,6 +32,7 @@ from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RESET, YELLOW  # noqa:
 from scripts.utils.markdown import parse_frontmatter  # noqa: E402
 from scripts.utils.memory_health import STALE_DAYS, scan_redundancy  # noqa: E402
 from scripts.utils.salience import composite_salience  # noqa: E402
+from scripts.utils.paths import load_env  # noqa: E402
 from scripts.utils.workspace import get_auto_memory_dir, get_default_tz, get_outputs_dir  # noqa: E402
 
 PRUNE_SALIENCE_THRESHOLD = 0.6  # first-cut default; tune after real reports
@@ -187,6 +188,12 @@ def write_report(text: str, generated_dt: datetime) -> Path:
 
 
 def main() -> int:
+    # First, before anything reads the clock. `get_default_tz()` reads os.environ
+    # ONLY, and HEADING_OS_TZ lives in the gitignored .env, which nothing exports
+    # -- so without this the 03:10 fire dates its report, and every memory mtime
+    # it ages, in UTC. The report filename would land under the previous day.
+    load_env()
+
     parser = argparse.ArgumentParser(description="Nightly salience-ranked memory consolidation worklist")
     parser.add_argument("--json", action="store_true", help="Emit the structured result as JSON")
     parser.add_argument("--quiet", action="store_true", help="Print only the one-line summary")

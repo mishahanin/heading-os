@@ -1,14 +1,16 @@
 [Unit]
-Description=Daily 31C associative-memory index refresh (03:30, host local)
+Description=Daily 31C associative-memory index refresh (03:30, configured timezone)
 
 [Timer]
-# Daily incremental refresh. No timezone suffix: the build does no date math, so
-# the exact wall-clock hour is cosmetic -- 03:30 is simply a low-traffic slot.
+# Daily incremental refresh. This build genuinely does no date math, so the hour
+# is cosmetic -- 03:30 is simply a low-traffic slot. The zone is still named:
+# "low-traffic" is a claim about the operator's night, not the host's, and a
+# machine on another zone would run this in the middle of a working afternoon.
 # Persistent=true runs a missed fire on next boot, which also covers the
 # "refresh after the machine was off / rebooted" case without a separate
 # OnBootSec trigger (and avoids an immediate fire racing a manual build at
 # install time).
-OnCalendar=*-*-* 03:30:00
+OnCalendar=*-*-* 03:30:00 {{TZ}}
 Persistent=true
 
 [Install]

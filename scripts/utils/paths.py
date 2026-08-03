@@ -290,5 +290,32 @@ def load_env(workspace_root: Path = None) -> None:
 # ============================================================
 # Running this module directly prints the resolved workspace root, so .sh
 # scripts can do:  ROOT="$(python3 scripts/utils/paths.py)"
+#
+# With the `tz` argument it prints the operator's timezone instead:
+#   TZ_VALUE="$(python3 scripts/utils/paths.py tz)"
+#
+# The timer installers need this because they are bash and cannot read `.env`,
+# where HEADING_OS_TZ actually lives. Reading the environment alone -- which is
+# what they did -- renders UTC on a machine whose timezone is correctly
+# configured, because nothing exports that variable. Measured 2026-08-03: it is
+# unset even in an interactive login shell.
+#
+# Precedence is load_env's, unchanged: an explicit `HEADING_OS_TZ=X install.sh`
+# still wins over `.env`, because load_env uses setdefault.
 if __name__ == "__main__":
-    print(get_workspace_root())
+    import sys as _sys
+
+    if _sys.argv[1:2] == ["tz"]:
+        load_env()
+        _tz = os.environ.get("HEADING_OS_TZ")
+        if not _tz:
+            # Announced, never silent. A silent UTC default is the root of every
+            # defect this resolver exists to end: an installer rendered UTC while
+            # the operator believed the unit was local, and nothing said so.
+            # stdout stays clean for the shell that consumes it.
+            print("HEADING_OS_TZ resolved from neither the environment nor .env; "
+                  "falling back to UTC", file=_sys.stderr)
+            _tz = "UTC"
+        print(_tz)
+    else:
+        print(get_workspace_root())

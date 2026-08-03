@@ -21,6 +21,20 @@ The installer substitutes:
 
 - `{{WORKSPACE}}` — absolute path to the workspace root
 - `{{PYTHON}}` — absolute path to the Python interpreter (typically `/usr/bin/python3` or a venv)
+- `{{TZ}}` — the operator's timezone, for the `OnCalendar` suffix and for `Environment=TZ=`
+
+The timer installers resolve `{{TZ}}` through `python3 scripts/utils/paths.py tz`,
+which loads `.env` before reading `HEADING_OS_TZ`. Reading the environment alone
+is not enough: nothing exports that variable, so an environment-only read renders
+`UTC` on a machine whose timezone is correctly configured. An explicit
+`HEADING_OS_TZ=X scripts/install-...-timer.sh` still wins, and a value resolvable
+from neither source falls back to `UTC` with an announcement on stderr.
+
+**Never add `Environment=HEADING_OS_TZ=` to a unit.** `load_env` uses
+`setdefault`, so a value pinned into the unit at install time can never be
+corrected by `.env` afterwards — the unit becomes a second, staler source of
+truth. `Environment=TZ=` is fine: nothing reads `TZ` from `.env`, and it is what
+steers libc for a naive `date.today()`.
 
 ## Install (Linux)
 

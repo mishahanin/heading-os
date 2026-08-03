@@ -1,13 +1,15 @@
 [Unit]
-Description=Daily 31C memory auto-retire (07:20, host local)
+Description=Daily 31C memory auto-retire (07:20, configured timezone)
 
 [Timer]
-# Daily cadence. Expiry is date-granular, so the exact minute is cosmetic; 07:20
-# host-local (Asia/Dubai +04) runs it after the 06:30 cold-sweep and before the
-# weekly 07:34 Monday hygiene scan, so the Monday report already reflects any
-# same-day retire. Persistent=true runs a missed day on next boot, covering the
-# machine-was-off case without a separate OnBootSec trigger.
-OnCalendar=*-*-* 07:20:00
+# Daily cadence. Expiry is date-granular, and 07:20 in the configured zone runs
+# it after the morning cold-sweep and before the weekly 07:34 Monday hygiene
+# scan, so the Monday report already reflects any same-day retire. The zone is
+# named rather than inherited from the host: comparing an `expires:` date
+# against today is exactly the date math a host on another zone gets wrong.
+# Persistent=true runs a missed day on next boot, covering the machine-was-off
+# case without a separate OnBootSec trigger.
+OnCalendar=*-*-* 07:20:00 {{TZ}}
 Persistent=true
 
 [Install]

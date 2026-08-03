@@ -3,7 +3,7 @@
 #
 # Usage:
 #   scripts/install-odin-cadence-timer.sh
-#   HEADING_OS_TZ=Asia/Dubai scripts/install-odin-cadence-timer.sh   # pin a TZ
+#   HEADING_OS_TZ=America/New_York scripts/install-odin-cadence-timer.sh   # pin a TZ
 #
 # Renders scripts/templates/systemd/odin-cadence.{service,timer} (substituting
 # {{WORKSPACE}}, {{PYTHON}}, {{TZ}}) into ~/.config/systemd/user/, then enables the
@@ -31,8 +31,12 @@ WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
 
 # Cadence timezone: externalized so no operating locale is baked into the engine.
-# Defaults to UTC; pin via HEADING_OS_TZ (e.g. Asia/Dubai) for a local fire time.
-TZ_VALUE="${HEADING_OS_TZ:-UTC}"
+# Defaults to UTC; pin via HEADING_OS_TZ (e.g. America/New_York) for a local fire time.
+# Unit timezone: resolved through the workspace resolver rather than read from
+# the environment alone. HEADING_OS_TZ lives in the gitignored .env and is
+# exported by nothing, so an environment-only read renders UTC on a machine
+# whose timezone is correctly configured. An explicit HEADING_OS_TZ=X still wins.
+TZ_VALUE="${HEADING_OS_TZ:-$("$PYTHON" "$WORKSPACE/scripts/utils/paths.py" tz || echo UTC)}"
 
 TEMPLATE_DIR="$WORKSPACE/scripts/templates/systemd"
 DEST_DIR="$HOME/.config/systemd/user"

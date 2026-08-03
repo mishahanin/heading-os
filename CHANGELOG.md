@@ -39,6 +39,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **The fleet's scheduled jobs had no single source of truth for the operator's
+  timezone, and fell back to UTC in silence.** Three defect classes, measured
+  2026-08-03 after the router-accuracy nightly stamped its first record under the
+  previous day. (1) Five `.timer` templates declared `OnCalendar` with no timezone
+  suffix, so they fired on the HOST's zone — and the two hosts disagree: one
+  resolves `/etc/localtime` to a `+04` zone, the other to `Etc/UTC`, so the same
+  unit fired four hours apart. (2) `HEADING_OS_TZ` lives only in the gitignored
+  `.env` and is exported by nothing, so the shell installers rendered `UTC` and
+  `get_default_tz_name()` answered `UTC` for every caller that had not called
+  `load_env()` first; three timer entrypoints had not. (3) Two templates and ten
+  installers named the operator's actual timezone in the PUBLIC engine, which is
+  exactly what `get_default_tz_name()` exists to externalize.
+  `scripts/utils/paths.py` gains a `tz` argument on its documented shell-callable
+  resolver, so bash reads the same `.env` the runtime layer does; every timer
+  installer resolves through it and validates the rendered calendar expression;
+  `chronicle.py` swaps a naive `date.today()` (under a DTZ011 waiver) for the
+  configured zone. `Environment=HEADING_OS_TZ=` is deliberately NOT used and is
+  now forbidden by test: `load_env` uses `setdefault`, so a unit-pinned value
+  could never be corrected by `.env`. A new frozen guard fails any `OnCalendar`
+  without the token, any installer that does not substitute it, any timer
+  entrypoint that reads local time without loading `.env` first (resolving
+  intra-module callees, so an indirect read is caught), and any geographic
+  literal on the template surface.
+
 - **A Tier-B alert reported "ok" for every day its producer was dead.**
   `classify_router_accuracy(None, None)` answered `due=False, severity="ok"`,
   summary `"router-accuracy: no trend data"`. The nightly runner it watches had

@@ -14,6 +14,14 @@ WorkingDirectory={{WORKSPACE}}
 # cannot summarize and the next fire resumes -- no corruption. Personal tagging
 # fails toward "personal", so an unattended run can only over-wall.
 ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/chronicle.py build
+# The catch-up window is derived from a naive `date.today()`, which reads libc,
+# which reads TZ. Without this line the build inherits the HOST's zone, and the
+# two hosts in the fleet disagree -- so the same nightly fire computes a window
+# starting a day apart. Note this is TZ and NOT HEADING_OS_TZ: nothing reads TZ
+# from `.env`, so it cannot become a staler second copy of the operator's zone,
+# whereas a unit-pinned HEADING_OS_TZ could never be corrected by `.env` again
+# (load_env uses setdefault).
+Environment=TZ={{TZ}}
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal
 StandardError=journal

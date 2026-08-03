@@ -3,7 +3,7 @@
 #
 # Usage:
 #   scripts/install-odin-propose-timer.sh
-#   HEADING_OS_TZ=Asia/Dubai scripts/install-odin-propose-timer.sh   # pin a TZ
+#   HEADING_OS_TZ=America/New_York scripts/install-odin-propose-timer.sh   # pin a TZ
 #   scripts/install-odin-propose-timer.sh --uninstall                # remove the timer
 #
 # Renders scripts/templates/systemd/odin-propose.{service,timer} (substituting
@@ -32,8 +32,11 @@ WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 # Honor PYTHON env override so callers can point at a venv interpreter.
 PYTHON="${PYTHON:-$(command -v python3 || command -v python || true)}"
 
-# Runner timezone: externalized so no operating locale is baked into the engine.
-TZ_VALUE="${HEADING_OS_TZ:-UTC}"
+# Unit timezone: resolved through the workspace resolver rather than read from
+# the environment alone. HEADING_OS_TZ lives in the gitignored .env and is
+# exported by nothing, so an environment-only read renders UTC on a machine
+# whose timezone is correctly configured. An explicit HEADING_OS_TZ=X still wins.
+TZ_VALUE="${HEADING_OS_TZ:-$("$PYTHON" "$WORKSPACE/scripts/utils/paths.py" tz || echo UTC)}"
 
 TEMPLATE_DIR="$WORKSPACE/scripts/templates/systemd"
 DEST_DIR="$HOME/.config/systemd/user"

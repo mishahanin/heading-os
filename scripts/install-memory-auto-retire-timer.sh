@@ -39,7 +39,12 @@ fi
 # the environment alone. HEADING_OS_TZ lives in the gitignored .env and is
 # exported by nothing, so an environment-only read renders UTC on a machine
 # whose timezone is correctly configured. An explicit HEADING_OS_TZ=X still wins.
-TZ_VALUE="${HEADING_OS_TZ:-$("$PYTHON" "$WORKSPACE/scripts/utils/paths.py" tz || echo UTC)}"
+# Invoked as a MODULE, from the workspace root. Running the file directly puts
+# scripts/utils/ on sys.path[0], where operator.py shadows the stdlib operator
+# that collections imports -- measured fatal on Python 3.12 (the service host)
+# and silently fine on 3.11 (the laptop), so the || echo UTC fallback below was
+# swallowing it as a plain "no timezone configured".
+TZ_VALUE="${HEADING_OS_TZ:-$(cd "$WORKSPACE" && "$PYTHON" -m scripts.utils.paths tz || echo UTC)}"
 
 TEMPLATE_DIR="$WORKSPACE/scripts/templates/systemd"
 DEST_DIR="$HOME/.config/systemd/user"

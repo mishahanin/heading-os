@@ -1,0 +1,153 @@
+"""Run mutations against a test command, and refuse a verdict without a control.
+
+Canopus step 11 asks whether a green contract is STRONG: break the code on
+purpose, and a contract worth having goes red. The trap is that a mutation which
+does not do what its author thinks produces a confident, wrong "SURVIVED", and
+the author then weakens or rewrites a guard that was fine.
+
+That happened twice in one slice on 2026-08-03. One mutation anchored on a
+four-space indent and landed inside the wrong function, so the contract went red
+for a reason unrelated to the hypothesis. Another inserted an import into a
+middle module without a CALL, so the chain it was meant to test was broken by
+construction and its survival meant nothing. Both were caught by re-reading the
+mutation afterwards, which is luck rather than method.
+
+So every mutation here carries a CONTROL: a predicate over the mutated sources
+that must hold for the mutation to be the thing its label claims. A failing
+control yields `invalid` -- never `survived`, never `killed`. The verdict a
+reader most wants to trust is the one this makes impossible to fake.
+
+Usage:
+
+    from scripts.utils.mutation_probe import Mutation, run_mutations
+
+    def _calls_the_helper(sources):
+        body = sources["scripts/a.py"].split("def main")[1]
+        return None if "helper(" in body else "main never calls helper"
+
+    results = run_mutations(
+        [Mutation(label="drop the guard",
+                  edits=(("scripts/a.py", "if not ok:\\n        return", ""),),
+                  control=_calls_the_helper)],
+        command=[".venv/bin/python", "-m", "pytest", "tests/contract/x/", "-q"],
+        root=Path("."),
+    )
+
+Every file is restored and its sha256 re-verified before the next mutation runs;
+a restore that does not match raises rather than continuing, because a mutation
+harness that leaves the tree dirty corrupts every verdict after it.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Iterable, Sequence
+
+KILLED = "killed"
+SURVIVED = "survived"
+INVALID = "invalid"
+
+# A control returns None when the mutation is what it claims, or a one-line
+# reason why it is not. It receives the MUTATED source of every edited file,
+# keyed by the path as given.
+Control = Callable[[dict], "str | None"]
+
+
+@dataclass(frozen=True)
+class Mutation:
+    """One deliberate break, with the control that proves it is really that break.
+
+    `edits` are (relative path, exact old text, new text) triples, applied once
+    each. An anchor that is not present is itself an invalid mutation: it means
+    the author is describing code that is not there.
+    """
+
+    label: str
+    edits: Sequence[tuple]
+    control: Control
+
+
+@dataclass(frozen=True)
+class Result:
+    label: str
+    verdict: str
+    detail: str = ""
+
+    @property
+    def trustworthy(self) -> bool:
+        """A verdict a reader may act on. `invalid` is not one."""
+        return self.verdict in (KILLED, SURVIVED)
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run_mutations(mutations: Iterable[Mutation], command: Sequence[str],
+                  root: Path, timeout: int = 600) -> list:
+    """Apply each mutation, run `command`, restore, and verify the restore.
+
+    `PYTHONDONTWRITEBYTECODE=1` is forced for the child: a stale .pyc from a
+    previous mutation once produced a false SURVIVED, and the run had to be
+    repeated twice to notice.
+    """
+    root = Path(root)
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    results = []
+
+    for mutation in mutations:
+        saved = {}
+        invalid = None
+        try:
+            for relpath, old, new in mutation.edits:
+                path = root / relpath
+                if path not in saved:
+                    # ONCE per file, not once per edit. Snapshotting per edit
+                    # reads the already-mutated text as the "original" for a
+                    # second edit to the same file, and the restore then puts
+                    # that partially-mutated text back and calls it clean.
+                    # Measured: two edits to one file left the first edit in the
+                    # tree, and the harness reported a successful restore.
+                    saved[path] = (path.read_text(encoding="utf-8"), _digest(path))
+                current = path.read_text(encoding="utf-8")
+                if old not in current:
+                    invalid = f"anchor not found in {relpath}"
+                    break
+                path.write_text(current.replace(old, new, 1), encoding="utf-8")
+
+            if invalid is None:
+                mutated = {relpath: (root / relpath).read_text(encoding="utf-8")
+                           for relpath, _old, _new in mutation.edits}
+                invalid = mutation.control(mutated)
+
+            if invalid is None:
+                proc = subprocess.run(command, cwd=str(root), env=env,
+                                      capture_output=True, text=True, timeout=timeout)
+                verdict = KILLED if proc.returncode != 0 else SURVIVED
+                results.append(Result(mutation.label, verdict))
+            else:
+                results.append(Result(mutation.label, INVALID, invalid))
+        finally:
+            for path, (original, digest) in saved.items():
+                path.write_text(original, encoding="utf-8")
+                if _digest(path) != digest:
+                    raise RuntimeError(
+                        f"restore of {path} does not match its pre-mutation digest; "
+                        f"the tree is dirty and every later verdict is worthless"
+                    )
+
+    return results
+
+
+def render(results: Sequence[Result]) -> str:
+    """A table for the gate artifact. `invalid` is shouted, not tucked away."""
+    width = max((len(r.label) for r in results), default=0)
+    lines = []
+    for r in results:
+        mark = "  " if r.verdict == KILLED else "!!"
+        detail = f"  ({r.detail})" if r.detail else ""
+        lines.append(f"{mark} {r.verdict:<9} {r.label:<{width}}{detail}")
+    return "\n".join(lines)

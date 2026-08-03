@@ -91,9 +91,12 @@ def _timer_driven_scripts() -> list[Path]:
         if not service.exists():
             continue
         script = _execstart_script(service)
-        if script and script.exists():
+        # Deduped: `odin-cadence-notify.py` is driven by TWO timers (the cadence
+        # nudge and the propose-only run), and parametrizing it twice would run
+        # the same probe twice under two confusingly-numbered ids.
+        if script and script.exists() and script not in out:
             out.append(script)
-    return out
+    return sorted(out)
 
 
 # ---------------------------------------------------------------------------
@@ -327,194 +330,6 @@ def test_no_service_template_pins_the_zone_variable_the_runtime_layer_reads():
     )
 
 
-@pytest.mark.parametrize("script_name", ["dream-shadow.py", "memory-auto-retire.py"])
-def test_the_two_measured_offenders_load_the_env_first_thing_in_main(script_name):
-    """SC-3, named, and asserting ORDER rather than mere presence: a `load_env`
-    called after the first zone read leaves that read on UTC and fixes nothing.
-
-    Order is checked on the AST of `main`, not on source offsets. Textual order
-    would be the wrong instrument and would fail code that is already CORRECT:
-    `odin-cadence-notify.py` reads the zone at line 184 inside a helper and loads
-    `.env` at line 233 in `main`, which runs first.
-
-    The rule enforced is exactly this and no more: **no statement in `main`
-    before the `load_env` call may reach a local-time read**, directly or through
-    any function defined in the same module. It is deliberately NOT "load_env
-    must be the first call": that would forbid the correct
-    `odin-cadence-notify.py` shape, which resolves the workspace root first.
-
-    Strengthened at step 11 after mutation M10b survived the first version. That
-    version collected only the CALL NAMES appearing before `load_env` and matched
-    them against the local-time pattern, so `load_env()` moved below
-    `result = gather()` passed -- while `gather` reaches
-    `compute_prune_candidates`, which reads the zone. The harmful reordering was
-    invisible and the docstring claimed a guarantee the code did not give. The
-    callee walk below closes it, bounded to this module (a cross-module read is
-    named as not covered in the gate artifact).
-    """
-    import ast
-
-    tree = ast.parse((_ROOT / "scripts" / script_name).read_text(encoding="utf-8"))
-    functions = {n.name: n for n in tree.body
-                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    main = functions.get("main")
-    assert main is not None, f"{script_name} has no module-level main()"
-
-    def _called_names(node) -> list[str]:
-        out = []
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Call):
-                name = getattr(sub.func, "id", None) or getattr(sub.func, "attr", None)
-                if name:
-                    out.append(name)
-        return out
-
-    def _reaches_local_time(node, seen: set) -> bool:
-        """True when `node` reads local time, directly or via a module function."""
-        for name in _called_names(node):
-            if _READS_LOCAL_TIME.search(name):
-                return True
-            callee = functions.get(name)
-            if callee is not None and name not in seen:
-                seen.add(name)
-                if _reaches_local_time(callee, seen):
-                    return True
-        return False
-
-    offenders = []
-    for statement in main.body:
-        if "load_env" in _called_names(statement):
-            break
-        if _reaches_local_time(statement, set()):
-            offenders.append(ast.unparse(statement).splitlines()[0])
-    else:
-        pytest.fail(f"{script_name}: main() never calls load_env")
-
-    assert not offenders, (
-        f"{script_name}: main() reaches a local-time read before load_env, via: "
-        + "; ".join(offenders)
-    )
-
-
-# ---------------------------------------------------------------------------
-# SC-3 (extended) - the callee walk crosses module boundaries
-# ---------------------------------------------------------------------------
-
-
-def _module_for(name: str, source: str) -> tuple[Path, str] | None:
-    """The workspace module a name was imported from, and its name THERE.
-
-    Only `scripts.*` imports are followed. A third-party or stdlib name is not
-    the workspace's to reason about, and following it would make this test a
-    whole-program analyser.
-
-    Returns the ORIGINAL name alongside the module, not the local one. An
-    earlier version returned only the path and then looked the callee up by the
-    LOCAL name, so `from scripts.utils.x import reads_the_zone as _rz` resolved
-    the module correctly and then found nothing in it, and the walk stopped
-    there. Measured: a two-hop chain through an aliased import survived while a
-    three-hop chain without one was caught -- so the limit was never depth, as
-    the gate artifact had claimed, but aliasing at ANY depth.
-    """
-    import ast
-
-    for node in ast.walk(ast.parse(source)):
-        if not (isinstance(node, ast.ImportFrom)
-                and node.module
-                and node.module.startswith("scripts.")):
-            continue
-        for alias in node.names:
-            if alias.asname == name or (alias.asname is None and alias.name == name):
-                return _ROOT / Path(*node.module.split(".")).with_suffix(".py"), alias.name
-    return None
-
-
-@pytest.mark.parametrize("script_name", ["dream-shadow.py", "memory-auto-retire.py", "chronicle.py"])
-def test_nothing_before_load_env_reaches_a_zone_read_in_any_workspace_module(script_name):
-    """SC-3, and the first of the three limits conceded at step 12 and then
-    withdrawn.
-
-    The previous guard resolved callees only within the entrypoint's OWN module,
-    so a helper imported from `scripts/utils/` that reads the zone before
-    `load_env` ran would pass. That limit was written into the artifact as "not
-    covered" and it should not have been: the walk simply needed to follow
-    `from scripts.... import name` one module further, which is bounded work
-    over a closed set of files.
-
-    Still bounded on purpose: only `scripts.*` imports are followed, memoised per
-    module, and a name that resolves to neither a local function nor a workspace
-    module is ignored rather than guessed at.
-    """
-    import ast
-
-    cache: dict[Path, tuple[str, dict]] = {}
-
-    def _load(path: Path):
-        if path not in cache:
-            src = path.read_text(encoding="utf-8")
-            tree = ast.parse(src)
-            cache[path] = (src, {n.name: n for n in ast.walk(tree)
-                                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))})
-        return cache[path]
-
-    entry = _ROOT / "scripts" / script_name
-    src, functions = _load(entry)
-
-    main = functions.get("main")
-    assert main is not None, f"{script_name} has no main()"
-
-    def _called_names(node):
-        out = []
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Call):
-                name = getattr(sub.func, "id", None) or getattr(sub.func, "attr", None)
-                if name:
-                    out.append(name)
-        return out
-
-    def _reaches(node, home: Path, home_src: str, home_funcs: dict, seen: set) -> bool:
-        for name in _called_names(node):
-            if _READS_LOCAL_TIME.search(name):
-                return True
-            key = (home, name)
-            if key in seen:
-                continue
-            seen.add(key)
-            callee = home_funcs.get(name)
-            if callee is not None:
-                if _reaches(callee, home, home_src, home_funcs, seen):
-                    return True
-                continue
-            resolved = _module_for(name, home_src)
-            if resolved is None:
-                continue
-            other, original = resolved
-            if not other.exists():
-                continue
-            other_src, other_funcs = _load(other)
-            # By the ORIGINAL name: an aliased import names the callee one way
-            # here and another way there, and looking it up by the alias finds
-            # nothing and silently ends the walk.
-            target = other_funcs.get(original)
-            if target is not None and _reaches(target, other, other_src, other_funcs, seen):
-                return True
-        return False
-
-    offenders = []
-    for statement in main.body:
-        if "load_env" in _called_names(statement):
-            break
-        if _reaches(statement, entry, src, functions, set()):
-            offenders.append(ast.unparse(statement).splitlines()[0])
-    else:
-        pytest.fail(f"{script_name}: main() never calls load_env")
-
-    assert not offenders, (
-        f"{script_name}: main() reaches a zone read before load_env, via: "
-        + "; ".join(offenders)
-    )
-
-
 # ---------------------------------------------------------------------------
 # SC-2 (extended) - the RENDERED unit is executed, not merely substituted
 # ---------------------------------------------------------------------------
@@ -614,3 +429,389 @@ def test_the_configured_zone_decides_which_DAY_a_run_computes(tmp_path):
         "both zones computed the same day, so the configured zone is not reaching "
         f"the date the run compares `expires:` against (both {east})"
     )
+
+
+# ---------------------------------------------------------------------------
+# SC-3 (static) - one walk, over every unit-driven entrypoint
+# ---------------------------------------------------------------------------
+
+
+def _unit_driven_scripts() -> list[Path]:
+    """Every workspace script any unit template runs -- timer AND daemon.
+
+    The daemons were excluded from this contract's first draft "by design", on
+    the argument that a long-lived process's clock handling belongs to the
+    APScheduler misfire rule. Measured before the exclusion was kept: all five
+    already call `load_env`, so including them costs nothing and removes an
+    exclusion that was protecting nothing. An exclusion that no longer excludes
+    anything is a claim the next reader has to re-derive.
+    """
+    out = []
+    for service in _service_templates():
+        script = _execstart_script(service)
+        if script and script.exists() and script not in out:
+            out.append(script)
+    return sorted(out)
+
+
+def _dotted(node) -> str | None:
+    """The full dotted name of a call target: `f`, `x.f`, or `a.b.c.f`."""
+    import ast
+
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return ".".join(reversed(parts)) if parts else None
+
+
+def _import_map(source: str) -> dict:
+    """Local name -> (module path, name in that module) for `scripts.*` imports.
+
+    Both forms are resolved, because both appear in real code and the first
+    draft handled only one of them:
+
+    - `from scripts.utils.x import f` / `... import f as g`  -> callee form `f()`
+    - `import scripts.utils.x` / `... as x`                  -> callee form `x.f()`
+
+    For the module form the value carries `None` as the name, meaning "resolve
+    the callee from the attribute at the call site".
+    """
+    import ast
+
+    out = {}
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom):
+            if not (node.module and node.module.startswith("scripts.")):
+                continue
+            path = _ROOT / Path(*node.module.split(".")).with_suffix(".py")
+            for alias in node.names:
+                # By the ORIGINAL name: an aliased import names the callee one
+                # way here and another way there, and looking it up by the alias
+                # finds nothing and silently ends the walk.
+                out[alias.asname or alias.name] = (path, alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if not alias.name.startswith("scripts."):
+                    continue
+                path = _ROOT / Path(*alias.name.split(".")).with_suffix(".py")
+                out[alias.asname or alias.name] = (path, None)
+    return out
+
+
+def _load_module(path: Path, cache: dict):
+    """(source, module-level functions by name, import map) for a workspace file."""
+    import ast
+
+    if path not in cache:
+        src = path.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        funcs = {n.name: n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        cache[path] = (src, funcs, _import_map(src))
+    return cache[path]
+
+
+def _is_zone_read(call, dotted: str) -> bool:
+    """Is this call a read of local time?
+
+    Two shapes, and the second needs the ARGUMENTS to tell them apart:
+
+    - `get_default_tz()` / `get_default_tz_name()` -- the configured zone.
+    - `date.today()` / `datetime.now()` with NO arguments -- the naive libc read,
+      which answers in the HOST's zone. `datetime.now(get_default_tz())` is the
+      correct form and is not a naive read; its inner call is caught on its own.
+
+    The first version of this matched a regex carrying parentheses against a bare
+    call NAME, so it could never match `date.today()` at all -- the naive form,
+    which is exactly the one `chronicle.py` had been using under a waiver.
+    """
+    last = dotted.rsplit(".", 1)[-1]
+    if last in ("get_default_tz", "get_default_tz_name"):
+        return True
+    return last in ("today", "now") and not call.args and not call.keywords
+
+
+def _resolve(dotted: str, home: Path, cache: dict):
+    """(module, function node) for a call target, or None when unresolvable."""
+    _src, funcs, imports = _load_module(home, cache)
+
+    local = funcs.get(dotted)
+    if local is not None:
+        return home, local
+
+    resolved = imports.get(dotted)                       # `from ... import f`
+    if resolved is None and "." in dotted:               # `import mod` + `mod.f()`
+        prefix, attr = dotted.rsplit(".", 1)
+        module = imports.get(prefix)
+        if module is not None:
+            resolved = (module[0], attr)
+    if resolved is None:
+        return None
+
+    other, original = resolved
+    if not other.exists():
+        return None
+    _o_src, o_funcs, _o_imports = _load_module(other, cache)
+    target = o_funcs.get(original)
+    return (other, target) if target is not None else None
+
+
+def _reads_before_load(node, home: Path, cache: dict, state: dict, seen: set,
+                       trail: list | None = None) -> bool:
+    """True when executing `node` reads the zone while `.env` is still unloaded.
+
+    ORDER-aware, which the first version was not. That version asked only
+    "is a zone read REACHABLE from here", and so flagged `eval-drift-daemon.py`,
+    whose `run_iteration` loads `.env` and only then reads -- correct code, and a
+    guard that cries wolf on correct code is a guard that gets muted. It also
+    could not have told that case apart from `router-accuracy-nightly.py`, where
+    one branch genuinely reads before any load.
+
+    So this walks children in SOURCE order (which is evaluation order closely
+    enough for arguments-then-call), threads a single mutable `loaded` flag
+    through every callee, and answers the question that actually matters. It is
+    deliberately conservative about branches: a read before a load on ANY path
+    counts, because a scheduled job takes every path eventually.
+    """
+    import ast
+
+    for child in ast.iter_child_nodes(node):
+        if _reads_before_load(child, home, cache, state, seen, trail):
+            return True
+
+    if not isinstance(node, ast.Call):
+        return False
+
+    dotted = _dotted(node.func)
+    if not dotted:
+        return False
+    last = dotted.rsplit(".", 1)[-1]
+
+    if last == "load_env":
+        state["loaded"] = True
+        return False
+    if _is_zone_read(node, dotted):
+        if not state["loaded"]:
+            if trail is not None:
+                trail.append(f"{home.name}:{dotted}")
+            return True
+        return False
+
+    key = (home, dotted)
+    if key in seen:
+        return False
+    seen.add(key)
+    target = _resolve(dotted, home, cache)
+    if target is None:
+        return False
+    other, func = target
+    hit = _reads_before_load(func, other, cache, state, seen, trail)
+    if hit and trail is not None:
+        trail.append(f"{home.name}:{dotted}")
+    return hit
+
+
+@pytest.mark.parametrize("script", _unit_driven_scripts(), ids=lambda p: p.name)
+def test_no_unit_entrypoint_reads_the_zone_before_loading_the_env(script):
+    """SC-3, the static net, over EVERY unit-driven entrypoint -- timer AND
+    daemon.
+
+    The rule is an ORDER, not a shape: executing `main` must not reach a zone
+    read while `.env` is still unloaded. Deliberately NOT "load_env must be the
+    first call", which would forbid the correct `odin-cadence-notify.py` shape
+    (resolve the workspace root, then load), and deliberately not "a read must
+    not be REACHABLE", which flagged the correct `eval-drift-daemon.py` whose
+    `run_iteration` loads first and reads after.
+
+    This is the cheap net. It follows named calls through workspace source and
+    cannot follow a method on an object, a dynamic dispatch, or a callable held
+    in a variable -- that is what static analysis is, not a defect in the walk.
+    The runtime probe below asks the same question of the running process, where
+    none of those limits apply.
+    """
+    cache: dict = {}
+    src, funcs, _imports = _load_module(script, cache)
+    main = funcs.get("main")
+    if main is None:
+        pytest.skip(f"{script.name} has no module-level main()")
+    if not _READS_LOCAL_TIME.search(src):
+        return          # nothing to order; the surface test owns the rest
+
+    state = {"loaded": False}
+    trail: list = []
+    hit = _reads_before_load(main, script, cache, state, set(), trail)
+    assert not hit, (
+        f"{script.name}: main() reaches a zone read while .env is still unloaded, "
+        f"so its dates are UTC while its unit fires on local time.\n"
+        f"  path: " + " <- ".join(reversed(trail))
+    )
+
+
+# ---------------------------------------------------------------------------
+# SC-3 (runtime) - what static analysis cannot prove, the process proves
+# ---------------------------------------------------------------------------
+
+
+# Every timer-driven entrypoint, the argv that reaches its behaviour, and
+# whether it is expected to read the zone at all. The table is asserted COMPLETE
+# below: a new timer entrypoint with no entry fails rather than slipping through.
+_PROBE_PLAN = {
+    "chronicle.py": (["build", "--sessions-dir", "{SESSIONS}", "--dry-run"], True),
+    "council-models-notify.py": ([], False),
+    "dream-shadow.py": (["--no-report", "--quiet"], True),
+    "memory-auto-retire.py": (["--dry-run"], True),
+    "memory-hygiene.py": ([], True),
+    "memory-index.py": (["build"], False),
+    # Its ONLY zone read sits after a `subprocess.run` that spawns a headless
+    # call, and the probe refuses every outbound transport by design. So the
+    # process cannot be driven to a read without lifting a safety control to test
+    # a timezone, which is the wrong trade. The static walk above covers it.
+    "odin-cadence-notify.py": ([], False),
+    "ops-radar-notify.py": ([], False),
+    "reminders-notify.py": ([], True),
+    "router-accuracy-nightly.py": (["--dry-run"], False),
+    "update-manager.py": (["check"], False),
+}
+
+# Run inside a scratch process, ahead of the entrypoint. Answers one question --
+# had `.env` been loaded by the time the zone was first read? -- and answers it
+# by OBSERVING the process rather than by reasoning about its source, so a
+# dynamic dispatch, a method on an object or a callable held in a variable is
+# caught the same as a plain call.
+_PROBE = '''
+import os, runpy, sys
+
+sys.path.insert(0, sys.argv[1])
+import scripts.utils.paths as _paths
+import scripts.utils.workspace as _ws
+
+_loaded = []
+
+def _wrap(real):
+    def _inner(*a, **k):
+        _loaded.append(True)
+        return real(*a, **k)
+    return _inner
+
+_paths.load_env = _wrap(_paths.load_env)
+_ws.load_env = _paths.load_env
+
+def _verdict(word):
+    sys.stdout.write("VERDICT:" + word + "\\n")
+    sys.stdout.flush()
+    os._exit(0)
+
+def _tz_name():
+    _verdict("READ_AFTER_LOAD" if _loaded else "READ_BEFORE_LOAD")
+
+_ws.get_default_tz_name = _tz_name
+
+# Nothing may leave this process. The two notify entrypoints are send-capable,
+# and a probe that could deliver a message would be a probe that violates the
+# outbound-send control to test a timezone.
+def _forbidden(*a, **k):
+    raise AssertionError("the probe blocked an outbound call")
+
+try:
+    import scripts.utils.telegram_notify as _tg
+    for _name in dir(_tg):
+        if callable(getattr(_tg, _name, None)) and not _name.startswith("__"):
+            setattr(_tg, _name, _forbidden)
+except Exception:
+    pass
+import subprocess as _sp
+_sp.run = _forbidden
+_sp.Popen = _forbidden
+_sp.check_output = _forbidden
+import urllib.request as _ur
+_ur.urlopen = _forbidden
+
+sys.argv = [sys.argv[2]] + sys.argv[3:]
+try:
+    runpy.run_path(sys.argv[0], run_name="__main__")
+except BaseException:
+    pass
+_verdict("NO_READ")
+'''
+
+
+@pytest.mark.parametrize("script", _timer_driven_scripts(), ids=lambda p: p.name)
+def test_the_process_itself_never_reads_the_zone_before_loading_the_env(script, tmp_path):
+    """SC-3, the runtime proof, and the answer to the limit static analysis
+    cannot lift.
+
+    The walk above follows named calls through workspace source. It cannot
+    follow a method on an object, a dynamic dispatch, or a callable held in a
+    variable -- that is not a defect in the walk, it is what static analysis is.
+    So the question is asked of the RUNNING process instead: `load_env` is
+    wrapped to record that it ran, `get_default_tz_name` is replaced with a
+    reporter, and the entrypoint is executed until the zone is first read. The
+    first read reports whether the load had happened and exits the process
+    immediately, so nothing downstream runs.
+
+    Safe by construction: a scratch workspace root and data root, and every
+    outbound transport replaced with a raise -- the two notify entrypoints are
+    send-capable, and a probe that could deliver a message would break the
+    outbound-send control in order to test a timezone.
+    """
+    import os
+
+    plan = _PROBE_PLAN.get(script.name)
+    assert plan is not None, (
+        f"{script.name} is timer-driven but has no probe plan; add one rather "
+        f"than leaving it unobserved"
+    )
+    argv, expect_read = plan
+
+    workspace = tmp_path / "ws"
+    (workspace / "scripts").mkdir(parents=True)
+    (workspace / ".env").write_text("HEADING_OS_TZ=Etc/GMT-14\n", encoding="utf-8")
+    data = tmp_path / "data"
+    (data / "auto-memory").mkdir(parents=True)
+
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    argv = [a.replace("{SESSIONS}", str(sessions)) for a in argv]
+
+    probe = tmp_path / "probe.py"
+    probe.write_text(_PROBE, encoding="utf-8")
+
+    env = dict(os.environ)
+    env.pop("HEADING_OS_TZ", None)
+    env["WORKSPACE_ROOT"] = str(workspace)
+    env["HEADING_OS_DATA"] = str(data)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+    proc = subprocess.run(
+        [sys.executable, str(probe), str(_ROOT), str(script), *argv],
+        capture_output=True, text=True, env=env, timeout=180)
+
+    verdicts = [line.split(":", 1)[1] for line in proc.stdout.splitlines()
+                if line.startswith("VERDICT:")]
+    assert verdicts, f"the probe produced no verdict\nstdout:\n{proc.stdout[-2000:]}\nstderr:\n{proc.stderr[-2000:]}"
+    verdict = verdicts[0]
+
+    assert verdict != "READ_BEFORE_LOAD", (
+        f"{script.name} read the zone before loading .env, so its dates are UTC "
+        f"while its unit fires on local time"
+    )
+    if expect_read:
+        assert verdict == "READ_AFTER_LOAD", (
+            f"{script.name} was expected to read the zone and did not ({verdict}). "
+            f"Either the argv in _PROBE_PLAN no longer reaches its behaviour, in "
+            f"which case this test is proving nothing, or the script changed."
+        )
+
+
+def test_the_probe_plan_covers_every_timer_entrypoint():
+    """A plan with a missing entry is an unobserved entrypoint. Asserted in both
+    directions so a retired timer leaves no stale row behind either."""
+    driven = {p.name for p in _timer_driven_scripts()}
+    planned = set(_PROBE_PLAN)
+
+    assert driven - planned == set(), f"timer entrypoints with no probe plan: {driven - planned}"
+    assert planned - driven == set(), f"probe plans for scripts no timer runs: {planned - driven}"

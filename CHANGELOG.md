@@ -63,6 +63,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   intra-module callees, so an indirect read is caught), and any geographic
   literal on the template surface.
 
+  That guard, extended to answer ORDER rather than reachability, then found a
+  defect in the slice before it: `router-accuracy-nightly.py` loaded `.env`
+  inside `_run_harness`, which a REFUSAL never reaches, so every refusal record
+  was dated UTC while the unit fires on local time. The load moved to the top of
+  `run`. A runtime probe now asks the same question of the running process --
+  wrapping `load_env`, replacing `get_default_tz_name` with a reporter, and
+  exiting at the first zone read -- which catches what no static walk can (a
+  method on an object, a dynamic dispatch, a callable in a variable). It runs
+  with scratch roots and every outbound transport replaced by a raise, and its
+  plan is asserted complete against the timer set in both directions.
+
+- **`scripts/utils/mutation_probe.py`** (with `tests/test_mutation_probe.py`):
+  mutation runs now carry a mandatory positive CONTROL, so a mutation that is
+  not what its label claims reports `invalid` rather than a confident, wrong
+  `survived`. Two such mutations occurred in one slice on 2026-08-03 -- one
+  anchored on an indent and landed in the wrong function, one inserted an import
+  with no call -- and both were caught by re-reading them afterwards, which is
+  luck rather than method. Files are snapshotted once per mutation, not once per
+  edit; the per-edit version left real residue in the tree while reporting a
+  successful restore.
+
 - **A Tier-B alert reported "ok" for every day its producer was dead.**
   `classify_router_accuracy(None, None)` answered `due=False, severity="ok"`,
   summary `"router-accuracy: no trend data"`. The nightly runner it watches had

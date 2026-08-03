@@ -115,16 +115,16 @@ def _run_harness(model: str) -> int:
     the real call site rather than on a flag.
     """
     # The operator's timezone lives in the gitignored .env, and `get_default_tz()`
-    # reads os.environ ONLY -- it never loads that file. Without this the dated
+    # reads os.environ ONLY -- it never loads that file. Without it the dated
     # artifact and the trend record are stamped UTC while the timer fires on local
-    # time, so a 03:00 Dubai run lands under YESTERDAY's date. Measured on the
+    # time, so a 03:00 local run lands under YESTERDAY's date. Measured on the
     # first live run: the timer fired 2026-08-03 03:00:02 and the record read
-    # 2026-08-02. `load_env` uses setdefault, so a value already in the
-    # environment (a unit's Environment=, a test's monkeypatch) still wins.
+    # 2026-08-02.
     #
-    # Called HERE rather than in `run` on purpose: every frozen contract test that
-    # drives a refusal monkeypatches `_run_harness` away, so none of them reaches
-    # the real .env and the contract stays hermetic.
+    # Kept here as well as in `run` deliberately. It is idempotent (`setdefault`),
+    # `run` is not the only caller a future edit may give this function, and the
+    # cost of a second call is one stat of a file that is already in page cache.
+    # The version that lived ONLY here is what left refusal records dated in UTC.
     load_env()
 
     require_writable_data_root()
@@ -179,6 +179,17 @@ def run(model: str) -> int:
     Every exit here is 0. A refusal is not a failure, and a nightly unit that
     reports failed is a nightly unit the operator learns to ignore.
     """
+    # Before anything below can read the clock. The previous slice put this
+    # inside `_run_harness` so its frozen contract tests stayed hermetic, and
+    # that left a hole its own subject was about: a REFUSAL never reaches
+    # `_run_harness`, so `_record_refusal` stamped its date with .env unloaded --
+    # UTC, while the unit fires on local time. Found by the timer-timezone
+    # contract's order walk, which reported the exact path
+    # `run -> _record_refusal -> get_default_tz`. That contract has since been
+    # retired into the ordinary suite, so the hermeticity argument no longer
+    # applies; the tests that drive a refusal patch this call directly.
+    load_env()
+
     if sensitivity_is_declared():
         reason = ("sensitivity was declared for this session, which outranks any "
                   "payload proof")

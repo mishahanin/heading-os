@@ -39,6 +39,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **The Canopus sign-off page asserted, as fact, that mutation testing had not
+  run.** `canopus.py pack` printed that line unconditionally, in the one section
+  of the page whose purpose is to name what the evidence does NOT cover. Nothing
+  on the machine records whether mutations ran, so the sentence was never an
+  observation; on 2026-08-03 it was printed on the sign-off page of a slice whose
+  mutations had run twice, including one that found a real leak path and one the
+  harness refused as invalid. An operator reads that section to learn what is
+  missing, so a false entry there argues for work already done. The page now
+  states the blind spot it actually has, and `tests/test_canopus_cli.py` forbids
+  the old claim by text rather than only asserting the new one. Recording a
+  mutation run into `.canopus/` remains unbuilt and is named as such on the page.
+
 - **The fleet's scheduled jobs had no single source of truth for the operator's
   timezone, and fell back to UTC in silence.** Three defect classes, measured
   2026-08-03 after the router-accuracy nightly stamped its first record under the
@@ -73,6 +85,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   method on an object, a dynamic dispatch, a callable in a variable). It runs
   with scratch roots and every outbound transport replaced by a raise, and its
   plan is asserted complete against the timer set in both directions.
+
+  Shipped 2026-08-03. The frozen contract retired verbatim into
+  `tests/test_timer_timezone.py` (39 tests): every one of them pins a standing
+  invariant that a new timer, installer or entrypoint can break at any time, so
+  none of it was slice-specific and none was dropped.
 
 - **`scripts/utils/mutation_probe.py`** (with `tests/test_mutation_probe.py`):
   mutation runs now carry a mandatory positive CONTROL, so a mutation that is

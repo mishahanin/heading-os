@@ -1,4 +1,10 @@
-"""The frozen contract for the timer-timezone slice.
+"""Every scheduled unit fires on the operator's zone, and no engine file names it.
+
+Promoted verbatim from the frozen contract of the timer-timezone slice when that
+slice shipped on 2026-08-03, because none of it is slice-specific: each test
+pins a standing invariant that a new timer, a new installer or a new entrypoint
+can break at any time. The contract directory is gone; left in place it would
+have bound every later slice to this one's freeze.
 
 A scheduled job must fire at the operator's local moment and stamp its records
 in the operator's local day, on every host in the fleet, without any engine file
@@ -43,7 +49,7 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parents[3]
+_ROOT = Path(__file__).resolve().parents[1]
 _TEMPLATES = _ROOT / "scripts" / "templates" / "systemd"
 _PATHS_MODULE = _ROOT / "scripts" / "utils" / "paths.py"
 

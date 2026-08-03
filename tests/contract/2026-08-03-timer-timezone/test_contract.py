@@ -394,3 +394,207 @@ def test_the_two_measured_offenders_load_the_env_first_thing_in_main(script_name
         f"{script_name}: main() reaches a local-time read before load_env, via: "
         + "; ".join(offenders)
     )
+
+
+# ---------------------------------------------------------------------------
+# SC-3 (extended) - the callee walk crosses module boundaries
+# ---------------------------------------------------------------------------
+
+
+def _module_for(name: str, source: str) -> Path | None:
+    """The workspace module a name was imported from, if any.
+
+    Only `scripts.*` imports are followed. A third-party or stdlib name is not
+    the workspace's to reason about, and following it would make this test a
+    whole-program analyser.
+    """
+    import ast
+
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.ImportFrom)
+                and node.module
+                and node.module.startswith("scripts.")):
+            continue
+        if any(a.asname == name or (a.asname is None and a.name == name) for a in node.names):
+            return _ROOT / Path(*node.module.split(".")).with_suffix(".py")
+    return None
+
+
+@pytest.mark.parametrize("script_name", ["dream-shadow.py", "memory-auto-retire.py", "chronicle.py"])
+def test_nothing_before_load_env_reaches_a_zone_read_in_any_workspace_module(script_name):
+    """SC-3, and the first of the three limits conceded at step 12 and then
+    withdrawn.
+
+    The previous guard resolved callees only within the entrypoint's OWN module,
+    so a helper imported from `scripts/utils/` that reads the zone before
+    `load_env` ran would pass. That limit was written into the artifact as "not
+    covered" and it should not have been: the walk simply needed to follow
+    `from scripts.... import name` one module further, which is bounded work
+    over a closed set of files.
+
+    Still bounded on purpose: only `scripts.*` imports are followed, memoised per
+    module, and a name that resolves to neither a local function nor a workspace
+    module is ignored rather than guessed at.
+    """
+    import ast
+
+    cache: dict[Path, tuple[str, dict]] = {}
+
+    def _load(path: Path):
+        if path not in cache:
+            src = path.read_text(encoding="utf-8")
+            tree = ast.parse(src)
+            cache[path] = (src, {n.name: n for n in ast.walk(tree)
+                                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))})
+        return cache[path]
+
+    entry = _ROOT / "scripts" / script_name
+    src, functions = _load(entry)
+
+    main = functions.get("main")
+    assert main is not None, f"{script_name} has no main()"
+
+    def _called_names(node):
+        out = []
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                name = getattr(sub.func, "id", None) or getattr(sub.func, "attr", None)
+                if name:
+                    out.append(name)
+        return out
+
+    def _reaches(node, home: Path, home_src: str, home_funcs: dict, seen: set) -> bool:
+        for name in _called_names(node):
+            if _READS_LOCAL_TIME.search(name):
+                return True
+            key = (home, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            callee = home_funcs.get(name)
+            if callee is not None:
+                if _reaches(callee, home, home_src, home_funcs, seen):
+                    return True
+                continue
+            other = _module_for(name, home_src)
+            if other is not None and other.exists():
+                other_src, other_funcs = _load(other)
+                target = other_funcs.get(name)
+                if target is not None and _reaches(target, other, other_src, other_funcs, seen):
+                    return True
+        return False
+
+    offenders = []
+    for statement in main.body:
+        if "load_env" in _called_names(statement):
+            break
+        if _reaches(statement, entry, src, functions, set()):
+            offenders.append(ast.unparse(statement).splitlines()[0])
+    else:
+        pytest.fail(f"{script_name}: main() never calls load_env")
+
+    assert not offenders, (
+        f"{script_name}: main() reaches a zone read before load_env, via: "
+        + "; ".join(offenders)
+    )
+
+
+# ---------------------------------------------------------------------------
+# SC-2 (extended) - the RENDERED unit is executed, not merely substituted
+# ---------------------------------------------------------------------------
+
+
+def test_every_template_renders_to_a_unit_systemd_accepts(tmp_path):
+    """SC-2, and the second limit withdrawn. Proving the installer CONTAINS the
+    substitution said nothing about whether the result is a valid unit: an
+    installer could substitute the token into a calendar expression this systemd
+    rejects, and the first sign would be an opaque failure at enable time.
+
+    So every template is rendered here and the calendar expression is handed to
+    the real `systemd-analyze`. This also covers `dream-shadow.timer`, whose
+    template was fixed by this slice but is not deployed on this host -- the
+    third conceded limit, for the part of it that is a TEST gap rather than a
+    deployment decision.
+    """
+    import shutil
+
+    analyze = shutil.which("systemd-analyze")
+    zone = "Etc/GMT-14"   # a real zone, and not the operator's
+
+    for template in _timer_templates() + _service_templates():
+        rendered = (template.read_text(encoding="utf-8")
+                    .replace("{{WORKSPACE}}", str(tmp_path))
+                    .replace("{{PYTHON}}", sys.executable)
+                    .replace("{{TZ}}", zone))
+
+        assert "{{" not in rendered, (
+            f"{template.name} still carries an unrendered token after substitution: "
+            + next(line for line in rendered.splitlines() if "{{" in line)
+        )
+
+        for line in rendered.splitlines():
+            if not line.startswith("OnCalendar="):
+                continue
+            expression = line[len("OnCalendar="):]
+            assert expression.endswith(zone), (
+                f"{template.name}: the rendered calendar does not name the zone: {expression}"
+            )
+            if analyze:
+                proc = subprocess.run([analyze, "calendar", expression],
+                                      capture_output=True, text=True)
+                assert proc.returncode == 0, (
+                    f"{template.name}: systemd rejects {expression!r}\n{proc.stderr}"
+                )
+
+
+# ---------------------------------------------------------------------------
+# SC-3 (extended) - the day boundary, proved end to end on a real entrypoint
+# ---------------------------------------------------------------------------
+
+
+def test_the_configured_zone_decides_which_DAY_a_run_computes(tmp_path):
+    """SC-3, and the third limit withdrawn. Everything else in this contract is
+    structural: it proves the zone REACHES the read. This proves the zone
+    CHANGES the answer, by running a real entrypoint twice.
+
+    Deterministic without freezing any clock. `Etc/GMT-14` (UTC+14) and
+    `Etc/GMT+12` (UTC-12) are 26 hours apart, so their local dates differ at
+    every instant -- there is no hour of the day at which this test is
+    accidentally green. Measured while it was written: 2026-08-03 against
+    2026-08-02.
+
+    `memory-auto-retire --dry-run` is the subject because it mutates nothing and
+    prints the date it decided on, and because a one-day error there retires a
+    memory early or keeps a dead one alive. The zone is supplied ONLY through a
+    scratch `.env`, never through the environment, so a pass means `load_env`
+    genuinely ran before the date was computed.
+    """
+    import os
+    import re as _re
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    data = tmp_path / "data"
+    (data / "auto-memory").mkdir(parents=True)
+
+    def _day(zone: str) -> str:
+        (workspace / ".env").write_text(f"HEADING_OS_TZ={zone}\n", encoding="utf-8")
+        env = dict(os.environ)
+        env.pop("HEADING_OS_TZ", None)          # only .env may supply it
+        env["WORKSPACE_ROOT"] = str(workspace)
+        env["HEADING_OS_DATA"] = str(data)
+        proc = subprocess.run(
+            [sys.executable, str(_ROOT / "scripts" / "memory-auto-retire.py"), "--dry-run"],
+            capture_output=True, text=True, env=env)
+        assert proc.returncode == 0, proc.stderr
+        found = _re.search(r"checked (\d{4}-\d{2}-\d{2})", proc.stdout)
+        assert found, f"the run printed no date it could be judged on:\n{proc.stdout}"
+        return found.group(1)
+
+    east = _day("Etc/GMT-14")    # UTC+14
+    west = _day("Etc/GMT+12")    # UTC-12
+
+    assert east != west, (
+        "both zones computed the same day, so the configured zone is not reaching "
+        f"the date the run compares `expires:` against (both {east})"
+    )

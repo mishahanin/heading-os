@@ -8,7 +8,11 @@ empty, or garbage ``SENSITIVE_MODE`` must degrade to "no telemetry", never to
 
 import pytest
 
-from scripts.utils.sensitive import is_sensitive, sanitize_prompt_guidance
+from scripts.utils.sensitive import (
+    is_sensitive,
+    sanitize_prompt_guidance,
+    sensitivity_is_declared,
+)
 from scripts.utils import observability as obs
 
 
@@ -38,6 +42,41 @@ def test_truthy_is_sensitive(monkeypatch):
 def test_explicit_clear_is_not_sensitive(monkeypatch, cleared):
     monkeypatch.setenv("SENSITIVE_MODE", cleared)
     assert is_sensitive() is False
+
+
+# --- sensitivity_is_declared(): the additive sibling ------------------------
+#
+# Added by the egress-proof slice (2026-08-03). `is_sensitive()` cannot tell an
+# unset flag from a typed one -- both answer True -- and that is correct for
+# every consumer above, which must fail closed. A caller holding a per-payload
+# PROOF needs the narrower question: did a person actually say be careful?
+# Unset is the machine's default and a proof may govern it; a typed value is a
+# human knowing something no denylist can, and a machine proof must not overrule
+# it. Nothing here may change what `is_sensitive()` answers.
+
+def test_unset_sensitivity_was_not_declared(monkeypatch):
+    monkeypatch.delenv("SENSITIVE_MODE", raising=False)
+    assert sensitivity_is_declared() is False
+
+
+def test_empty_sensitivity_was_not_declared(monkeypatch):
+    """Empty is still fail-closed for `is_sensitive`, but it is not a person
+    typing a value, so it does not outrank a proof."""
+    monkeypatch.setenv("SENSITIVE_MODE", "")
+    assert sensitivity_is_declared() is False
+    assert is_sensitive() is True
+
+
+@pytest.mark.parametrize("declared", ["on", "1", "yes", "maybe"])
+def test_a_typed_sensitivity_is_declared(monkeypatch, declared):
+    monkeypatch.setenv("SENSITIVE_MODE", declared)
+    assert sensitivity_is_declared() is True
+
+
+@pytest.mark.parametrize("cleared", ["off", "0", "false", "no", "cleared"])
+def test_an_explicit_clear_is_not_a_declaration_of_sensitivity(monkeypatch, cleared):
+    monkeypatch.setenv("SENSITIVE_MODE", cleared)
+    assert sensitivity_is_declared() is False
 
 
 # --- observability.is_enabled() inherits the fail-closed gate ----------------

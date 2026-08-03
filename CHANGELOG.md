@@ -26,6 +26,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `ENFORCEMENT_SURFACE`; they were missing, so a change to the workspace's
   egress control classified as `standard` depth.
 
+  Shipped 2026-08-03. The capability's first night produced the first
+  router-accuracy measurement ever taken: 701/710 = 98.73% across 69 skills,
+  surfacing genuine weak spots that had never been visible (`competitor-intel`
+  78.6%, `meeting-prep` 84.6%, `email-respond` 87.5%, `zk` 87.5%). The frozen
+  contract retired into `tests/test_egress_proof.py` (18 IDs) and
+  `tests/test_sensitive_mode.py` (11 new IDs for `sensitivity_is_declared`); the
+  remaining 12 contract IDs were duplicates already held by
+  `tests/test_sensitive_mode.py` and `tests/test_router_accuracy_nightly.py`, and
+  the one assertion those lacked (a refusal record must carry its REASON) was
+  added there rather than dropped.
+
 ### Fixed
 
 - **A Tier-B alert reported "ok" for every day its producer was dead.**

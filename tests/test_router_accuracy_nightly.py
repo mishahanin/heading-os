@@ -141,6 +141,10 @@ def test_a_refused_run_writes_no_measurement(wired_runner, monkeypatch):
     assert not (out / "2026-07-08.json").exists()
     record = json.loads((out / "trend.jsonl").read_text().splitlines()[-1])
     assert record["status"] == "refused"
+    # The reason is the half that makes the record worth writing. A typed
+    # refusal with no cause is the sibling daemon's journal WARNING again, just
+    # in a file the operator does read.
+    assert record["reason"] == "no denylist"
 
 
 def test_a_declared_sensitivity_outranks_a_clear_payload(wired_runner, monkeypatch):

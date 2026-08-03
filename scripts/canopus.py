@@ -760,6 +760,17 @@ def cmd_approve(args) -> int:
             _record_refusal(root, "approve", "retake_cause_missing",
                             reason="--replace without a declared --cause")
             return 1
+    elif getattr(args, "cause", ""):
+        # A first approval is not a retake, so there is nothing for a cause to
+        # classify and nowhere for it to be written. Accepting it silently is the
+        # worse outcome: the operator typed a flag, saw exit 0, and recorded
+        # nothing. Same fail-loud posture as `--replace` without `--reason`.
+        print("canopus: --cause classifies a RETAKE and means nothing without "
+              "--replace; a first approval records no anchor_replaced entry for "
+              "it to land on.", file=sys.stderr)
+        _record_refusal(root, "approve", "retake_cause_missing",
+                        reason="--cause given without --replace")
+        return 1
     manifest, contract_note, waived = _candidate_manifest(args, root, anchor_path)
     if manifest is None:
         _record_refusal(root, "approve", "candidate_refused",

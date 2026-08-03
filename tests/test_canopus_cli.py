@@ -1279,6 +1279,24 @@ def test_approve_replace_requires_a_reason(tree: Path, anchor: Path, capsys):
     assert replaced and replaced[-1]["kind"] == "frozen-set-wrong", replaced
 
 
+def test_a_cause_without_replace_is_refused_rather_than_silently_dropped(
+        tree: Path, anchor: Path, capsys):
+    """A first approval writes no `anchor_replaced`, so a cause has nowhere to go.
+
+    Accepting it silently is the worse failure: the operator types the flag, sees
+    exit 0, and has recorded nothing. Found at step 11 of the yield-axes slice by
+    reading the branch rather than by a mutation, because a silent no-op breaks no
+    assertion anywhere.
+    """
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "--cause", "contract-strengthened",
+                 "tests/test_alpha.py"], tree) == 1
+    err = capsys.readouterr().err
+    assert "--replace" in err
+    assert not [e for e in _ledger(tree) if e["event"] == "approve"], (
+        "the refused approval still reached the ledger")
+
+
 def test_approve_replace_appends_and_keeps_the_earlier_approval(tree: Path, anchor: Path):
     """A replacement appends. Overwriting would erase the trail the artifact is
     for, and leave `read_committed_anchor`'s last-line-wins rule nothing to be

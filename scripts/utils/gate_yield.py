@@ -531,6 +531,10 @@ def summarise(*, ledger, denials, since: dict, now, hand_classified=None) -> dic
     for name, entry in caught.items():
         days = windows.get(entry["source"], 0)
         entry["days"] = days
+        # Carried explicitly rather than inferred from the verdict, because the
+        # verdict loses it: a wall that HAS caught something reads CATCHING like
+        # any gate, so `--json` would give a consumer no way to tell that this
+        # mechanism must never be judged by that count.
         entry["wall"] = is_wall(name)
         entry["verdict"] = _verdict(name, entry["caught"], days)
 

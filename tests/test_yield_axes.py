@@ -1,4 +1,16 @@
-"""The frozen contract for the yield-axes slice (v3 Change 1).
+"""The two axes of gate yield: a wall and a gate are not the same kind of thing.
+
+Promoted whole from `tests/contract/2026-08-03-yield-axes/` when the yield-axes
+slice shipped on 2026-08-03. All 18 IDs kept, none dropped; the only change is
+`_ROOT`, which moved from `parents[3]` to `parents[1]` with the file.
+
+Two things it deliberately does NOT cover, both named at step 12 rather than
+discovered later. The CLI wiring of `--cause` is proven by
+`tests/test_canopus_cli.py`, not here: mutations M11 and M12 (approve accepting a
+retake with no cause; the cause never reaching the ledger) SURVIVE this file
+alone, because it pins `retake_cause_or_error` as a function and nothing in it
+reaches `cmd_approve`. And nothing here makes the hand classification RIGHT; it
+makes it auditable.
 
 `gate-yield.py` measures every mechanism with one instrument, and the two things
 it measures are not the same kind of thing. Two consequences, both measured on
@@ -48,7 +60,7 @@ Every test imports the code under test INSIDE its body.
 import json
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[3]
+_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _row(event, label="s", kind="", reason="", ts="2026-08-03T00:00:00+00:00"):

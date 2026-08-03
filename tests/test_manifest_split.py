@@ -1,19 +1,20 @@
-"""The frozen contract for the manifest-split slice (v3 Change 2).
+"""The manifest CONTRACT/ENFORCER split, promoted from its frozen contract.
 
-One manifest hash covers two claims that have nothing to do with each other: the
-CONTRACT (what the builder is measured against) and the ENFORCER bytes (the code
-that does the measuring). Because both live in `files` and both feed `root_hash`,
-touching a single enforcer byte moves the root, so the approval a human COMMITTED
-stops matching, and `freeze` refuses until the whole approve/commit/freeze cycle
-is repeated.
+Shipped 2026-08-03 as v3 Change 2 and retired here: a contract left in
+`tests/contract/` binds every later slice to this one's behaviour. Every ID is
+kept, and two things changed in the move.
 
-Measured over the 39 `anchor_replaced` records in the lifecycle ledger on
-2026-08-03: **21 were the enforcer bytes moving**. Not one of them was a contract
-that changed. That is the single largest class of retake in the standard's whole
-history, and every one of those retakes was ceremony over a target that never
-moved.
+`_ROOT` is re-anchored one level up, and every `lock_state` call now passes the
+anchor axis EXPLICITLY. The one-argument form asks the content question alone
+and returns the greener reading, blind to a missing or disagreeing anchor;
+`/scrutinize` raised that as M3 on 2026-08-03 and it is right. The defaults stay
+in the signature because tightening them is an enforcement-surface change the
+depth gate prices at a full slice, but after this promotion NOTHING in the
+repository uses them, and
+`test_every_production_call_of_lock_state_passes_the_anchor_axis` is what keeps
+it that way.
 
-WHAT THIS CONTRACT REFUSES TO ALLOW, each pinned by test rather than promised:
+WHAT THIS PINS, each of it by test rather than by promise:
 
 - The contract root must NOT move when only enforcer bytes move. That is the
   whole slice, and it is the first test.
@@ -30,13 +31,16 @@ WHAT THIS CONTRACT REFUSES TO ALLOW, each pinned by test rather than promised:
   hash shape without a recipe bump reads as LOSS OF LOCK on a tree where nothing
   moved -- the module's own stated reason for every previous bump.
 
-Every test imports the code under test INSIDE its body.
+Measured over the 39 `anchor_replaced` records in the ledger on 2026-08-03:
+21 were the enforcer bytes moving, and not one was a contract that changed.
+That was the largest class of retake in the standard's whole history.
 """
 
 from pathlib import Path
 
 import pytest
 
+_ROOT = Path(__file__).resolve().parents[1]
 STAMP = "2026-01-01T00:00:00+00:00"
 
 
@@ -59,6 +63,19 @@ def anchor(tmp_path: Path) -> Path:
     path.parent.mkdir(parents=True)
     path.write_text("# gate artifact\n", encoding="utf-8")
     return path
+
+
+def _lock(report: dict) -> str:
+    """`lock_state` with an anchor that AGREES, so only the content can redden it.
+
+    Spelled here rather than at four call sites, and never left to the default.
+    The two-axis default is the greener reading; passing an agreeing anchor makes
+    every assertion below strictly stronger, because the lock has no second
+    reason to be red.
+    """
+    from scripts.utils.canopus_freeze import ANCHOR_RECORDED, lock_state
+
+    return lock_state(report, ANCHOR_RECORDED, report["recomputed_root"])
 
 
 def _manifest(tree: Path, anchor: Path):
@@ -135,14 +152,14 @@ def test_an_unpinned_enforcer_edit_reddens_the_lock(tree, anchor):
     code that decides whether the contract moved, so a silently edited enforcer
     is a lock reporting on itself.
     """
-    from scripts.utils.canopus_freeze import LOCK_HELD, lock_state, verify_manifest
+    from scripts.utils.canopus_freeze import LOCK_HELD, verify_manifest
 
     manifest = _manifest(tree, anchor)
     (tree / "scripts" / "run-tests.py").write_text(
         "# weakened\n", encoding="utf-8")
     report = verify_manifest(manifest, tree)
 
-    assert lock_state(report) != LOCK_HELD
+    assert _lock(report) != LOCK_HELD
     assert report["enforcer_moved"] == ["scripts/run-tests.py"], (
         "the report does not name which enforcer file moved")
 
@@ -165,12 +182,12 @@ def test_the_contract_half_of_the_report_stays_green_under_enforcer_drift(tree, 
 def test_a_clean_tree_reports_no_enforcer_drift(tree, anchor):
     """SC-2c. The negative control for SC-2. A drift flag that is always set is a
     flag nobody reads, and it would make every held lock red."""
-    from scripts.utils.canopus_freeze import LOCK_HELD, lock_state, verify_manifest
+    from scripts.utils.canopus_freeze import LOCK_HELD, verify_manifest
 
     report = verify_manifest(_manifest(tree, anchor), tree)
 
     assert report["enforcer_moved"] == []
-    assert lock_state(report) == LOCK_HELD
+    assert _lock(report) == LOCK_HELD
 
 
 def test_a_deleted_enforcer_file_is_drift_and_not_an_exception(tree, anchor):
@@ -278,8 +295,7 @@ def test_the_repin_reaches_the_command_an_operator_types(tree, anchor):
     write_freeze(tree, _manifest(tree, anchor))
     (tree / "scripts" / "run-tests.py").write_text("# edited\n", encoding="utf-8")
     done = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve().parents[3] / "scripts"
-                             / "canopus.py"), "repin", "--reason", "why"],
+        [sys.executable, str(_ROOT / "scripts" / "canopus.py"), "repin", "--reason", "why"],
         cwd=str(tree), capture_output=True, text=True, check=False)
 
     assert done.returncode == 0, done.stderr
@@ -306,14 +322,14 @@ def test_editing_the_CONTRACT_still_moves_the_contract_root(tree, anchor):
 
 def test_a_contract_edit_still_reddens_the_lock(tree, anchor):
     """SC-4b. The same guarantee at the report layer, where the gate reads it."""
-    from scripts.utils.canopus_freeze import LOCK_HELD, lock_state, verify_manifest
+    from scripts.utils.canopus_freeze import LOCK_HELD, verify_manifest
 
     manifest = _manifest(tree, anchor)
     (tree / "tests" / "contract" / "test_c.py").write_text(
         "def test_c():\n    assert False\n", encoding="utf-8")
     report = verify_manifest(manifest, tree)
 
-    assert lock_state(report) != LOCK_HELD
+    assert _lock(report) != LOCK_HELD
     assert report["changed"] == ["tests/contract/test_c.py"]
 
 
@@ -342,7 +358,6 @@ def test_a_repin_cannot_be_used_to_move_the_contract(tree, anchor):
     """
     from scripts.utils.canopus_freeze import (
         LOCK_HELD,
-        lock_state,
         read_freeze,
         repin_enforcer,
         verify_manifest,
@@ -356,7 +371,7 @@ def test_a_repin_cannot_be_used_to_move_the_contract(tree, anchor):
     repin_enforcer(tree, reason="trying to launder a contract edit")
 
     report = verify_manifest(read_freeze(tree), tree)
-    assert lock_state(report) != LOCK_HELD
+    assert _lock(report) != LOCK_HELD
     assert report["changed"] == ["tests/contract/test_c.py"]
 
 
@@ -452,7 +467,7 @@ def test_the_repin_reaches_the_command_an_operator_types_only_when_committed(
     write_freeze(tree, _manifest(tree, anchor))
     (tree / "scripts" / "run-tests.py").write_text("# edited\n", encoding="utf-8")
 
-    cli = str(Path(__file__).resolve().parents[3] / "scripts" / "canopus.py")
+    cli = str(_ROOT / "scripts" / "canopus.py")
     refused = subprocess.run([sys.executable, cli, "repin", "--reason", "why"],
                              cwd=str(tree), capture_output=True, text=True,
                              check=False)
@@ -495,3 +510,42 @@ def test_the_repin_count_is_per_label_like_every_other_friction_count(tree, anch
     ]
 
     assert count_friction(ledger, "mine")["repins"] == 1
+
+
+def test_every_production_call_of_lock_state_passes_the_anchor_axis():
+    """M3 from the `/scrutinize` pass of 2026-08-03, closed where it can be.
+
+    `lock_state(report)` answers the CONTENT question alone and returns the
+    greener reading: `LOCK_HELD` with no view of a missing or a disagreeing
+    anchor. Its sibling `attestation_state` refuses exactly that shape nine
+    functions away — "required rather than defaulted. A default would let a
+    caller that forgot it skip the comparison and print green."
+
+    The right fix is to make the parameters required again. That is an
+    enforcement-surface edit to `canopus_freeze.py`, which `slice-depth.py`
+    prices at a full slice with a held freeze, and taking that price under some
+    LATER slice's freeze would be gaming the gate rather than paying it. So the
+    signature keeps its defaults and this guard keeps them unused: every call in
+    `scripts/` passes all three arguments, and a future caller that forgets the
+    anchor fails HERE, by name, instead of printing green.
+
+    Walked with `ast` rather than grepped, so a call split across lines or
+    nested inside an f-string is counted the same way the interpreter counts it.
+    """
+    import ast
+
+    offenders = []
+    for path in sorted((_ROOT / "scripts").rglob("*.py")):
+        tree_ast = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree_ast):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name != "lock_state":
+                continue
+            if len(node.args) + len(node.keywords) < 3:
+                offenders.append(f"{path.relative_to(_ROOT)}:{node.lineno}")
+
+    assert not offenders, (
+        f"these calls take the two-axis default, which cannot see a missing or "
+        f"disagreeing anchor and reports the greener state: {offenders}")

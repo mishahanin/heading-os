@@ -174,3 +174,25 @@ def test_decontaminated_code_now_engine():
     # and the instance topology values stay private data
     assert get_routing_destination("deploy/service-host/install.sh") == "private"
     assert get_routing_destination("config/service-host.json") == "private"
+
+
+def test_output_of_a_retired_daemon_stays_private_after_its_code_is_gone():
+    """The routing map's default is `engine`, which is PUBLIC. So an explicit
+    private rule is the only thing standing between real operational output and a
+    shareable classification, and that rule has to outlive the code that wrote
+    it.
+
+    `datastore/operations/eval-drift/` is the live case: the daemon was retired on
+    2026-08-03, and 72 days of reports plus its state file remain on the service
+    host and in the DATA overlay. A tidy-up that removes the rule for the
+    "unused" directory alongside the "unused" code silently reclassifies all of
+    it. Deleting a producer must not un-protect what it produced.
+
+    The same argument covers every future retirement; this one is pinned because
+    it is the one that has already happened.
+    """
+    assert get_routing_destination("datastore/operations/eval-drift/") == "private"
+    assert get_routing_destination(
+        "datastore/operations/eval-drift/state.json") == "private"
+    assert get_routing_destination(
+        "outputs/operations/eval-drift/2026-05-23_eval-drift_daily.md") == "private"

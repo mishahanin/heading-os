@@ -61,6 +61,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   mentions in an always-on rule and a skill reference. New in
   `tests/test_watchdog_expected_set.py`: every name in `EXPECTED_DAEMONS` must
   have an installable unit template, which catches this drift in both directions.
+  The frozen contract's other keeper landed in `tests/test_routing_map.py`: the
+  output of a retired daemon must stay private after its code is gone, because
+  the routing default is `engine`, which is PUBLIC.
 
   **Kept, deliberately:** the eval CASES (ten skills, 35 files) and
   `run-skill-eval.py`, the harness a human drives from `/scrutinize` -- the

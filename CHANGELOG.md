@@ -87,6 +87,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **The timezone resolver shipped this morning could not run on Python 3.12, and
+  reported UTC.** Twelve timer installers invoked it as a FILE
+  (`"$PYTHON" ".../scripts/utils/paths.py" tz`), which puts `scripts/utils/` at
+  `sys.path[0]` -- where `operator.py` shadows the stdlib `operator` that
+  `collections` imports during `functools`. Fatal on 3.12 (the service host),
+  silent on 3.11 (a laptop, where `operator` is already cached by the time it
+  matters). The `|| echo UTC` fallback then rendered that crash as "no timezone
+  is configured", which is precisely the condition the resolver exists to detect
+  and announce: a guard that fails into its own error case reports the wrong
+  answer with confidence. All twelve now use `-m scripts.utils.paths` from the
+  workspace root, so nothing under `scripts/utils/` can shadow a stdlib name.
+  New `tests/test_tz_resolver_invocation.py` drives it exactly as an installer
+  does, keeps the shadow itself executable so the reason cannot rot into
+  folklore, and holds both jaws: no installer may reach a `scripts/utils` file by
+  path, and every installer must still resolve the zone.
+
 - **The Canopus sign-off page asserted, as fact, that mutation testing had not
   run.** `canopus.py pack` printed that line unconditionally, in the one section
   of the page whose purpose is to name what the evidence does NOT cover. Nothing

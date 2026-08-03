@@ -52,6 +52,17 @@ from types import ModuleType
 
 MODULES_VAR = "CANOPUS_AST_MODULES"
 VALUES_VAR = "CANOPUS_STUB_VALUES"
+# Which PASS-CANDIDATE this child carries, if any. Absent or empty means the
+# ordinary null stub, so every existing caller keeps its behaviour without
+# knowing this variable exists.
+CANDIDATE_VAR = "CANOPUS_CANDIDATE"
+# The greedy candidate's whole payload, already joined by the parent. ONE string
+# rather than the literal set, deliberately: an environment value carrying a NUL
+# raises `ValueError: embedded null byte` out of `subprocess`, which is not the
+# `ContractError` the parent promises its callers, so a literal carrying one is
+# dropped on the parent side before this is built. Joining there also keeps the
+# rule for what crosses the boundary in ONE place, beside the claim set's.
+GREEDY_PAYLOAD_VAR = "CANOPUS_CANDIDATE_PAYLOAD"
 
 # The wire format between the parent and this child, defined HERE because this
 # side is the one that has to parse it, and imported by the parent rather than
@@ -195,9 +206,138 @@ def _values():
     return STUB_VALUES[os.environ.get(VALUES_VAR, "A")]
 
 
+# ============================================================
+# Pass candidates: implementations that EXIST and are WRONG
+# ============================================================
+#
+# The null stub above asks whether a contract test passes while the code under
+# test is ABSENT. These ask the other question: whether it passes while the code
+# is PRESENT and wrong. Both install through the same finder, over the same claim
+# set; only the leaf object differs, which is what keeps the two probes measuring
+# one import graph rather than two.
+#
+# THREE, and the design's fourth and fifth are deliberately absent because they
+# already run. `constant-return` IS the null stub, which is two constant-return
+# modules carrying deliberately disagreeing constants; `import-only` IS the null
+# stub at import time, where the names resolve and nothing is called, and a test
+# satisfied by that is already labelled vacuous. Shipping either would spend a
+# whole pytest session per probe re-measuring what is measured. `echo` is not in
+# the design and is here because a pass-through satisfies the "it did something
+# to the input" assertion that neither of the other two touches.
+CANDIDATES = ("none", "echo", "greedy")
+
+# Prepended to the greedy payload so the joined string can never EQUAL any single
+# literal the contract wrote. That is the property the whole candidate rests on:
+# `assert "refused" in render()` is satisfied and `assert render() == "refused"`
+# is not, which is exactly the difference between a substring grep and an
+# assertion about a value. It also names the instrument, so a payload that leaks
+# into a failure message tells its reader where it came from.
+GREEDY_MARKER = "canopus-pass-candidate"
+
+
+class Candidate:
+    """A stand-in for an implementation that EXISTS and is wrong.
+
+    Deliberately NOT a `Stub` subclass, and the separation is the point. `Stub`
+    carries a differential value set, because the null stub's whole verdict is
+    "did this outcome move when the value moved". A candidate carries no such
+    axis: it is ONE wrong implementation and the question is simply whether the
+    contract accepts it. Sharing a class would put a `_values` dict on an object
+    that has nothing to vary, and the first reader to see it would wire a
+    verdict to it.
+
+    Dunder ATTRIBUTE access raises, exactly as `Stub` refuses it and for the
+    identical reason: the import machinery reads dunders to decide HOW to
+    import, so a stand-in answering `__path__` masquerades as a package and the
+    candidate runs would resolve a different import graph from the stub runs
+    they are compared against.
+
+    Attribute access returns a SIBLING rather than the mode's value, so
+    `module.thing.other()` reaches a call. Only a call answers, because a
+    contract reads the subject's behaviour through calls; an attribute that
+    already answered `None` would make `mod.CONST` unusable in the same
+    expression that calls `mod.func()`.
+    """
+
+    __slots__ = ("_mode", "_payload")
+
+    def __init__(self, mode: str, payload: str):
+        # Validated HERE rather than in `candidate_value` alone, so both doors
+        # into this object are gated by one rule. The child builds candidates
+        # straight from its environment, and a typo on the parent side arrives
+        # there; an unvalidated mode would fall through `__call__` to the greedy
+        # branch and produce a full table under a candidate nobody ran. Raising
+        # kills the probe child, which returns no report, which the parent
+        # already reads as a measurement that did not happen.
+        if mode not in CANDIDATES:
+            raise KeyError(mode)
+        object.__setattr__(self, "_mode", mode)
+        object.__setattr__(self, "_payload", payload)
+
+    def _sibling(self):
+        return Candidate(
+            object.__getattribute__(self, "_mode"),
+            object.__getattribute__(self, "_payload"),
+        )
+
+    def __getattr__(self, name):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return self._sibling()
+
+    def __getitem__(self, key):
+        return self._sibling()
+
+    def __call__(self, *args, **kwargs):
+        mode = object.__getattribute__(self, "_mode")
+        if mode == "none":
+            return None
+        if mode == "echo":
+            # The first positional argument, unchanged. With no positional
+            # argument there is nothing to echo and `None` is the honest answer:
+            # inventing a value here would make `echo` a second constant-return
+            # candidate on exactly the calls where it has no input to pass
+            # through.
+            return args[0] if args else None
+        return object.__getattribute__(self, "_payload")
+
+
+def greedy_payload(literals) -> str:
+    """Every string the contract wrote, joined, behind a marker.
+
+    Built from the contract's OWN literals and nothing else. A candidate
+    carrying an alphabet, or a random blob, would satisfy substring assertions
+    the contract never wrote and manufacture refusals against honest tests; this
+    one satisfies exactly the greps the contract itself performs.
+
+    Sorted and de-duplicated so the payload is a function of the SET alone. Two
+    runs of one contract that differed only in iteration order would otherwise be
+    two different probes.
+    """
+    return "\n".join([GREEDY_MARKER, *sorted(set(literals))])
+
+
+def candidate_value(name: str, literals):
+    """The stand-in one named candidate installs. Raises on a name it lacks.
+
+    A silent default would be a run that measured a candidate nobody chose: the
+    child reads its candidate from the environment, so a typo on the parent side
+    arrives here, and defaulting to `none` would produce a full green table under
+    a candidate the report then names as something else.
+    """
+    if name not in CANDIDATES:
+        raise KeyError(name)
+    return Candidate(name, greedy_payload(literals))
+
+
 def _stub_attribute(name: str):
     if name.startswith("__") and name.endswith("__"):
         raise AttributeError(name)
+    candidate = os.environ.get(CANDIDATE_VAR, "")
+    if candidate:
+        # The payload arrives already joined, so this child never re-derives it
+        # and cannot disagree with the parent about what the contract wrote.
+        return Candidate(candidate, os.environ.get(GREEDY_PAYLOAD_VAR, ""))
     return Stub(_values())
 
 

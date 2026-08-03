@@ -285,6 +285,55 @@ once per stub run. That is the two runs each reporting, not a second fault, and
 deduplicating it would hide the more interesting case where only one of the two
 runs hit it.
 
+**Absent is not the same as wrong.** The stub runs ask whether a test passes
+while the code under test is ABSENT. A test can be red for a perfectly real
+reason and still be satisfied by an implementation nobody would accept, so the
+same three commands also run three PASS-CANDIDATES: implementations that EXIST
+and are wrong, installed through the same finder over the same claim set, one
+pytest session each.
+
+| candidate | what it does | what its refusal means |
+|---|---|---|
+| `none` | returns nothing from every call | the contract checks that the code RAN, not what it returned |
+| `echo` | hands back its first argument unchanged | the contract accepts a pass-through |
+| `greedy` | answers with every string the contract itself wrote | the contract is satisfied by a grep for a word |
+
+The design named four; two of them already run. A constant-return module IS the
+null stub, which is two of them carrying deliberately disagreeing constants, and
+an import-only module IS the null stub at import time, where a test satisfied by
+it is already labelled vacuous. Shipping either would spend a whole pytest
+session per probe re-measuring what is measured. `echo` is the addition, and it
+covers the "something was done to the input" assertion neither of the others
+touches.
+
+The greedy payload is built from the contract's OWN string literals and its own
+import names, joined behind a `canopus-pass-candidate` marker. The marker is what
+keeps the payload from ever EQUALLING a single literal, which is the whole
+property: `assert "refused" in render()` is satisfied and `assert render() ==
+"refused"` is not. A candidate carrying an alphabet or the repository's
+vocabulary would satisfy greps the contract never wrote and manufacture refusals
+against honest tests.
+
+The refusal is WHOLE-CONTRACT, like the vacuity one: one legitimate substring
+assertion beside one equality assertion is never refused. It names only the
+candidate that took the contract, because the cure differs per candidate and a
+refusal reciting the glossary puts the reader back to working out which line
+applies. `probe` prints the per-candidate tally whatever the verdict
+(`candidates  none 0  echo 0  greedy 2   (of 3 red)`), so a contract that
+survives still tells the operator how much of it is a grep.
+
+**What this does NOT reach.** It stands in only for modules the contract imports
+and that do not resolve. A contract test driving a real entry point whose
+internals are wrong, or reaching the subject through a child process, is outside
+it entirely; measured on a reconstructed CLI-wiring test of that shape, all
+three candidates took nothing. The discipline that closes it inside a contract is
+writing wiring tests as PAIRS — a refusal beside a non-refusal — because a
+constant satisfies either one alone.
+
+The price is stated rather than hidden: three more pytest sessions per probe, so
+`probe` goes from three to six. Measured on a two-test contract, 1.20s to 2.28s.
+`approve` and `freeze` skip them entirely once a refusal is already earned.
+
 **A criterion nobody tests is not a criterion.** Each success criterion stated in
 the gate artifact must be named in the DOCSTRING of at least one contract test.
 `python scripts/sc-trace.py --anchor <artifact> --contract <dir>` prints the

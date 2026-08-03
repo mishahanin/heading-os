@@ -21,6 +21,26 @@ import escapes the set.
 - **A contract that is not red for a reason that means something.** A contract
   file collecting nothing is refused; so is a set whose every red test passes
   against a null stub, which proves it asserts nothing.
+- **A contract any WRONG implementation satisfies.** Three pass-candidates are
+  built and run: `none` returns nothing from every call, `echo` hands back its
+  first argument unchanged, and `greedy` answers with every string the contract
+  itself wrote. A contract whose every red test passes against ONE of them is
+  refused, and the refusal names that one, because the cure differs — a contract
+  taken by `none` wants a value assertion, one taken by `echo` wants a value the
+  input alone cannot produce, and one taken by `greedy` wants its substring check
+  replaced by an equality against the whole value.
+
+  Whole-contract, like the vacuity refusal and for the same reason: one
+  legitimate substring assertion beside one equality assertion is never refused,
+  and "these three tests assert too little" is a judgement for a human.
+
+  **What it does NOT reach, stated rather than implied.** It stands in only for
+  modules the contract IMPORTS and that do not resolve. A contract test driving a
+  real entry point whose internals are wrong is outside it, and so is anything
+  reached through a child process. Measured on a reconstructed CLI-wiring test of
+  exactly that shape: all three candidates took nothing. Inside a contract, the
+  discipline that closes it is writing wiring tests as PAIRS — a refusal must
+  stand beside a non-refusal, or a constant satisfies both.
 - **A root the COMMITTED gate artifact contradicts.** Be exact: that refusal
   fires only when the commit records a hash AND neither the committed nor the
   working copy carries the root being frozen. Two states therefore pass it: a

@@ -126,6 +126,13 @@ Four things in it decide whether the slice is worth anything:
    red test is vacuous is refused at approve and freeze time, and `vacuity was
    NOT measured` is not a clean bill.
 
+   The same command also runs three PASS-CANDIDATES — wrong implementations that
+   EXIST (`none`, `echo`, `greedy`) — and prints what each took of the red set. A
+   contract whose every red test passes against one of them is refused, at
+   `probe`, `approve` and `freeze` alike. Read that line even when nothing is
+   refused: `greedy 2 of 3` says two of the contract's checks are greps for a
+   word rather than assertions about a value.
+
 3. **A fixture must produce the shape the real source produces.** Check every
    fabricated input against a real sample before freezing. Measured 2026-08-02:
    a 28-test contract missed that a report could not parse its own log's

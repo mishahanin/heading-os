@@ -6,6 +6,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **A contract could be red for a perfectly real reason and still be satisfied
+  by an implementation nobody would accept, and nothing measured that until the
+  code was already written.** The existing null-stub probe asks whether a
+  contract test passes while the code under test is ABSENT. `canopus probe`,
+  `approve` and `freeze` now also ask the other question: whether it passes while
+  the code is PRESENT and WRONG. Three pass-candidates are synthesized and run,
+  one pytest session each, through the same finder over the same claim set:
+  `none` returns nothing from every call, `echo` hands back its first argument
+  unchanged, and `greedy` answers with every string the contract itself wrote.
+  A contract whose every red test passes against one of them is refused, and the
+  refusal names that one, because the cure differs per candidate.
+
+  The design named four candidates; two of them already ran. A constant-return
+  module IS the null stub, which is two of them carrying deliberately
+  disagreeing constants, and an import-only module IS the null stub at import
+  time, where a test satisfied by it is already labelled vacuous. `echo` is not
+  in the design and is here because a pass-through satisfies the "something was
+  done to the input" assertion neither of the others touches.
+
+  The greedy payload is built from the contract's OWN literals behind a
+  `canopus-pass-candidate` marker, and the marker is the whole property: the
+  joined string can never EQUAL a single literal, so `assert "refused" in
+  render()` is satisfied and `assert render() == "refused"` is not. A candidate
+  carrying an alphabet would satisfy greps the contract never wrote and
+  manufacture refusals against honest tests.
+
+  **What it does not reach, measured rather than assumed.** It stands in only
+  for modules the contract imports and that do not resolve, so a test driving a
+  real entry point whose internals are wrong is outside it; on a reconstructed
+  CLI-wiring test of exactly that shape, all three candidates took nothing. The
+  discipline that closes that inside a contract is writing wiring tests as
+  PAIRS, a refusal beside a non-refusal.
+
+  The price is stated rather than hidden: `probe` goes from three pytest sessions
+  to six, measured 1.20s to 2.28s on a two-test contract, and `approve` and
+  `freeze` still skip every probe session once a refusal is already earned.
+
+  The instrument found four defects in its own contract before that contract
+  could be frozen. Three at `probe` (one vacuous, two already green against
+  refusals the assertion could not tell apart) and one at step 8, where a fixture
+  imported its absent subject at module scope, killed collection for the whole
+  file, and asserted about a test that appeared in no population any run could
+  report. Three step-11 mutations then survived the frozen contract, all of them
+  the same shape the slice exists to refuse: two assertions written against a
+  word rather than a value, and one guard covered only at the door the contract
+  happened to use. All three are closed by regression tests in the ordinary
+  suite.
+
 ### Changed
 
 - **One manifest hash covered two claims that have nothing to do with each

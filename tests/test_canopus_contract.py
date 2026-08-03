@@ -2377,3 +2377,56 @@ def test_the_cli_does_not_exit_0_having_measured_nothing_on_an_exiting_ancestor(
     assert isinstance(exit_code, int)
     captured = capsys.readouterr()
     assert captured.out or captured.err
+
+
+def test_the_greedy_payload_carries_nothing_the_contract_did_not_write(tmp_path):
+    """Step 11 mutation SC-3 M7, which survived the frozen contract.
+
+    That contract asserted two literals were PRESENT in the collected set, which
+    is satisfied while the set also carries a vocabulary the contract never
+    wrote. It is the "a word appears somewhere" shape this whole probe exists to
+    refuse, in the probe's own contract.
+
+    Exclusion is what has to hold, because inclusion is what a candidate
+    manufacturing refusals would also satisfy: a payload carrying strings from
+    anywhere but the contract turns every honest substring assertion into a
+    refusal the instrument invented.
+    """
+    from scripts.utils.canopus_contract import contract_literals
+
+    _write(tmp_path, "c/test_one.py",
+           "def test_a():\n"
+           "    from absent_thing import render\n"
+           "    assert 'the exact sentence' in render()\n")
+
+    literals = contract_literals([tmp_path / "c"], tmp_path)
+
+    assert literals == {"absent_thing", "the exact sentence"}
+
+
+def test_the_refusal_carries_one_candidates_cure_and_not_the_others(tmp_path):
+    """Step 11 mutation SC-4 M12, which survived the frozen contract.
+
+    That contract asserted the word "none" was absent from a refusal naming
+    `greedy`. The cure sentences deliberately avoid each other's NAMES, so
+    joining all three introduced no "none" and the assertion held while the
+    refusal recited the whole glossary. A test written against a word cannot see
+    a regression the words were chosen to avoid.
+
+    Asserted against the cure TEXT, which is the thing that must not be
+    recited, rather than against a token that happens to appear in it.
+    """
+    from scripts.utils.canopus_contract import (
+        _CANDIDATE_CURE,
+        pass_candidate_refusal,
+    )
+
+    reasons = pass_candidate_refusal(
+        [("c/t.py", "test_one", "failure")],
+        {"none": set(), "echo": set(), "greedy": {("c/t.py", "test_one")}},
+    )
+
+    assert len(reasons) == 1
+    assert _CANDIDATE_CURE["greedy"] in reasons[0]
+    assert _CANDIDATE_CURE["none"] not in reasons[0]
+    assert _CANDIDATE_CURE["echo"] not in reasons[0]

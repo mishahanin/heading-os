@@ -62,13 +62,19 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     contract_files,
     parse_failure_modes,
     parse_junit,
+    pass_candidate_refusal,
     read_plugin_dump,
     refusal_reasons,
     run_null_stub,
+    run_pass_candidates,
     run_pytest_report,
     vacuity_refusal,
 )
 from scripts.utils.canopus_friction import count_friction, render_friction
+# The candidate NAMES only, so the summary line names every candidate that was
+# run rather than only the ones that took something. Importing the plugin module
+# registers no pytest hook: hooks come from `-p`, not from import.
+from scripts.utils.canopus_nullstub import CANDIDATES
 from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_MISSING,
     ANCHOR_NONE,
@@ -684,6 +690,29 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
                 )
             else:
                 reasons.extend(vacuity_refusal(outcomes, vacuous))
+            # The second probe, on the same terms as the first. It asks whether
+            # a wrong implementation satisfies this contract, and it runs HERE
+            # rather than only in `probe` because `probe` is advisory: a
+            # refusal that never reaches the command writing the manifest lets
+            # a contract any wrong implementation satisfies bind the whole
+            # slice.
+            #
+            # Skipped once a refusal is already earned, exactly like the stub
+            # runs above and for the same arithmetic: a further verdict can only
+            # add to a refusal already taken, and these are three more whole
+            # pytest sessions.
+            if not reasons:
+                try:
+                    taken = run_pass_candidates(
+                        contracts, root, expected_population=outcomes
+                    )
+                except ContractError as exc:
+                    reasons.append(
+                        f"the contract was not measured against wrong "
+                        f"implementations: {exc}"
+                    )
+                else:
+                    reasons.extend(pass_candidate_refusal(outcomes, taken))
         if reasons:
             print("canopus: the contract was refused:", file=sys.stderr)
             for reason in reasons:
@@ -1134,6 +1163,17 @@ def cmd_probe(args) -> int:
         vacuous = run_null_stub(paths, root, expected_population=outcomes)
     except ContractError as exc:
         probe_failed = f"the contract's vacuity could not be measured: {exc}"
+    # BOUND before the call for the reason the line above carries: the summary
+    # twenty lines down reads this on every path, and an except branch that only
+    # printed left it unbound.
+    taken: dict[str, set[tuple[str, str]]] = {}
+    candidates_failed = ""
+    try:
+        taken = run_pass_candidates(paths, root, expected_population=outcomes)
+    except ContractError as exc:
+        candidates_failed = (
+            f"the contract was not measured against wrong implementations: {exc}"
+        )
     modes = parse_failure_modes(xml_text)
     for rel in expected:
         print(f"{BOLD}{rel}{RESET}  {counts.get(rel, 0)} collected")
@@ -1190,7 +1230,28 @@ def cmd_probe(args) -> int:
             else:
                 note = ""
             print(f"  {colour}{outcome:8}{RESET} {name}{mode}{note}")
+    # One line per candidate, printed whatever the verdict, because a table that
+    # named only the candidate that WON would leave the operator unable to tell a
+    # contract three wrong implementations failed to satisfy from a run where
+    # only one candidate was ever put in front of it. The count is per candidate
+    # against the red set, which is the population the refusal weighs.
+    red_set = {(rel, name) for rel, name, outcome in outcomes
+               if outcome in RED_OUTCOMES}
+    if candidates_failed:
+        print(f"{YELLOW}candidates{RESET}  not measured")
+    else:
+        summary = "  ".join(
+            f"{name} {len(taken.get(name, set()) & red_set)}"
+            for name in CANDIDATES
+        )
+        print(f"{BOLD}candidates{RESET}  {summary}   "
+              f"(of {len(red_set)} red; each is an implementation that EXISTS "
+              f"and is wrong)")
     reasons = refusal_reasons(counts, outcomes, expected)
+    if candidates_failed:
+        reasons.append(candidates_failed)
+    else:
+        reasons.extend(pass_candidate_refusal(outcomes, taken))
     if probe_failed:
         reasons.append(probe_failed)
     else:

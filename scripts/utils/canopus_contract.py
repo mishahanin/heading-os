@@ -36,11 +36,15 @@ from scripts.utils.canopus_gate import pytest_child_env
 # Importing the plugin module runs no pytest hook: hooks are registered by
 # `-p`, not by import, and this module is stdlib-only.
 from scripts.utils.canopus_nullstub import (
+    CANDIDATE_VAR,
+    CANDIDATES,
+    GREEDY_PAYLOAD_VAR,
     MODULES_VAR,
     NULLSTUB_STDERR_MARKER,
     STUB_NAME_SEPARATOR,
     VALUES_VAR,
     _expand_claims,
+    greedy_payload,
 )
 
 DEFAULT_PATTERNS = ("test_*.py",)
@@ -233,6 +237,247 @@ def contract_imports(paths: Sequence[Path], root: Path) -> set[str]:
                         ):
                             modules.add(value_node.value)
     return modules
+
+
+def contract_literals(paths: Sequence[Path], root: Path) -> set[str]:
+    """Every string the contract's own source names, for the greedy candidate.
+
+    Two sources, unioned, and both are strings the contract WROTE. Every `str`
+    `ast.Constant` in its source, which is what a substring assertion greps for;
+    and the module names `contract_imports` reads, because a contract that greps
+    for the subject's own name is grepping for a string it wrote too, and the
+    import statement is where it wrote it.
+
+    Read from the contract and NOWHERE else. A candidate carrying an alphabet,
+    or a random blob, or the repository's vocabulary would satisfy substring
+    assertions the contract never made, and every refusal it then produced would
+    be manufactured by the instrument. Here the payload can only satisfy a grep
+    the contract itself performs.
+
+    It over-reports on purpose, exactly as `contract_imports` does: a docstring's
+    prose and a fixture's file name are collected alongside the assertions'
+    needles. Over-reporting can only make the greedy payload satisfy MORE, which
+    can only refuse a contract, and the refusal is whole-contract, so a single
+    incidental match cannot produce one on its own.
+
+    Raises on a file that will not parse, like `contract_imports`, and for the
+    same reason: an empty set is a real answer that a caller must be able to tell
+    apart from a file it could not read.
+    """
+    literals: set[str] = set(contract_imports(paths, root))
+    for rel in contract_source_files(paths, root):
+        path = Path(root) / rel
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError) as exc:
+            raise ContractError(
+                f"the contract file {rel} could not be parsed, so the strings it "
+                f"names could not be read: {exc}"
+            ) from exc
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                literals.add(node.value)
+    return literals
+
+
+def passable_literals(literals) -> list[str]:
+    """The literals that can survive the trip to the child, sorted.
+
+    The greedy payload crosses the process boundary as ONE environment value, so
+    a literal carrying a NUL would make that value carry one, and an environment
+    value holding a NUL raises `ValueError: embedded null byte` out of
+    `subprocess` — not the `ContractError` this module promises its callers, so
+    the CLI that catches `ContractError` would die with a traceback instead of a
+    refusal. Dropped rather than escaped, on the same rule and for the same
+    reason `_passable_claims` drops one from the claim set.
+
+    The separator is NOT a drop rule here, and that is the difference between
+    this function and its neighbour. A claim set is joined on a comma because no
+    importable dotted name can contain one; a literal can contain anything, so
+    the payload is joined on a newline and never split apart again — the child
+    receives the finished string and re-derives nothing.
+
+    Dropping can only make the greedy candidate satisfy LESS, so it can only
+    fail to refuse a weak contract, never refuse an honest one. That is the
+    direction this instrument is allowed to err in.
+    """
+    return sorted(value for value in literals if "\x00" not in value)
+
+
+def run_pass_candidates(
+    paths: Sequence[Path],
+    root: Path,
+    *,
+    timeout: int = 900,
+    expected_population: Optional[Sequence[tuple[str, str, str]]] = None,
+) -> dict[str, set[tuple[str, str]]]:
+    """For each candidate, the (file, test) pairs it turned green.
+
+    The null-stub probe asks whether a contract test passes while the code under
+    test is ABSENT. This asks the other question: whether it passes while the
+    code is PRESENT AND WRONG. A test red for a perfectly real reason before the
+    implementation exists can still be satisfied by an implementation nobody
+    would accept, and until this ran the only instrument that saw that was
+    mutation at step 11 — after the code is written, after the contract is
+    frozen, when correcting it costs a window and a retake.
+
+    ONE claim set, computed once and shared with the stub runs, because two
+    probes standing in for different names would print two verdicts about two
+    different contracts on one page.
+
+    ONE pytest session per candidate and no more. The cost is stated because an
+    instrument whose cost drifts upward unmeasured is one the operator stops
+    running, and this one runs inside `approve` and `freeze` as well as `probe`.
+
+    `expected_population` is the REAL run's triples. Supplied, it saves a
+    session; omitted, this function runs its own unstubbed baseline rather than
+    weighing a candidate against a population nobody measured. Identical to the
+    contract `run_null_stub` carries, deliberately: two probes with two dialects
+    of one parameter is a defect waiting for whichever caller passes it to only
+    one of them.
+
+    A candidate run that collected FEWER of the real run's red tests is reported
+    on stderr and does not refuse. The arithmetic already errs safe there — a
+    test missing from a candidate's passed set breaks the whole-contract subset,
+    so a loss can only make refusal LESS likely, never manufacture one — and
+    that asymmetry is why this reports where `run_null_stub` raises. Its loss
+    reads as a clean vacuity verdict; this one reads as a contract no candidate
+    took, which is the status quo before this probe existed. Silence would still
+    let a probe that measured half a contract print the same page as one that
+    measured all of it, so the loss is named.
+    """
+    modules = _passable_claims(contract_imports(paths, root))
+    if not modules:
+        # The identical posture `run_null_stub` takes, one step earlier and for
+        # the identical reason: nothing was stood in for, so no wrong
+        # implementation was ever put in front of this contract, and the empty
+        # verdict a caller would receive is the same value a completed
+        # measurement that found nothing returns.
+        raise ContractError(
+            "the contract's source names no module this probe could stand in "
+            "for, so no wrong implementation was ever put in front of it and "
+            "the pass-candidate check measured NOTHING. Import the code under "
+            "test inside the test body or a fixture, so this probe can read the "
+            "name and replace it."
+        )
+    payload = greedy_payload(passable_literals(contract_literals(paths, root)))
+    engine_root = str(Path(__file__).resolve().parent.parent.parent)
+    base_env = {
+        MODULES_VAR: STUB_NAME_SEPARATOR.join(modules),
+        GREEDY_PAYLOAD_VAR: payload,
+        "PYTHONPATH": os.pathsep.join(
+            [engine_root, str(Path(root).resolve()),
+             os.environ.get("PYTHONPATH", "")]
+        ).rstrip(os.pathsep),
+    }
+    if expected_population is None:
+        _real_counts, real_outcomes = run_contract(paths, root, timeout=timeout)
+    else:
+        real_outcomes = list(expected_population)
+    real_red = {
+        (rel, name) for rel, name, outcome in real_outcomes
+        if outcome in RED_OUTCOMES
+    }
+    taken: dict[str, set[tuple[str, str]]] = {}
+    for name in CANDIDATES:
+        xml_text = run_pytest_report(
+            paths, root, timeout=timeout,
+            extra_env={**base_env, CANDIDATE_VAR: name},
+            extra_args=("-p", "scripts.utils.canopus_nullstub"),
+            allowed_returncodes=PROBE_RETURNCODES,
+        )
+        _counts, outcomes = parse_junit(xml_text)
+        collected = {(rel, test) for rel, test, _o in outcomes}
+        taken[name] = {
+            (rel, test) for rel, test, outcome in outcomes if outcome == "passed"
+        }
+        lost = sorted(f"{rel}::{test}" for rel, test in real_red - collected)
+        if lost:
+            print(
+                f"canopus: the {name} pass-candidate never collected these tests "
+                f"the real run recorded red, so it did not measure them and they "
+                f"cannot be called taken or cleared: " + ", ".join(lost)
+                + ". Most often a module-scope statement reads a value this probe "
+                "stands in for; move it inside the test body.",
+                file=sys.stderr,
+            )
+    return taken
+
+
+# What each candidate DID, and what the contract has to gain to survive it. One
+# sentence per candidate, and the refusal prints exactly one of them: naming the
+# candidate is only useful if the reader is spared the other two.
+#
+# The wording avoids the other candidates' names deliberately. `none` is an
+# ordinary English word, so a sentence about `greedy` that reached for "none of
+# them" would put the wrong candidate's name in a refusal about this one, and
+# every reader who greps the text would be misled. The contract pins that.
+_CANDIDATE_CURE = {
+    "none": (
+        "That candidate returns nothing from every call, so the contract never "
+        "reads a value at all: it checks that the code RAN. Assert what a call "
+        "returns."
+    ),
+    "echo": (
+        "That candidate hands back its first argument unchanged, so the "
+        "contract accepts a pass-through: it checks that something came out, "
+        "not that anything was done to it. Assert a value the input alone "
+        "cannot produce."
+    ),
+    "greedy": (
+        "That candidate answers with every string this contract itself wrote, "
+        "so the contract is satisfied by a grep: it checks that a word appears "
+        "somewhere rather than what the value IS. Replace the substring check "
+        "with an equality against the whole value."
+    ),
+}
+
+
+def pass_candidate_refusal(
+    outcomes: Sequence[tuple[str, str, str]],
+    taken: dict[str, set[tuple[str, str]]],
+) -> list[str]:
+    """The one refusal the pass-candidate probe raises: a candidate took it all.
+
+    WHOLE-CONTRACT, mirroring `vacuity_refusal`, and the mirror is deliberate
+    rather than tidy. "These three tests assert too little" is a judgement for a
+    human, and a contract legitimately carrying one substring assertion beside
+    one equality assertion would be refused by any per-test rule. "Every single
+    thing this contract checks is satisfied by an implementation that returns
+    None" is not a judgement call.
+
+    Only tests the real run recorded RED are weighed, which is the evidence rule
+    the rest of this module follows. A test that PASSED for real had no absent
+    import for a candidate to satisfy, so its pass under one has another
+    explanation; counting it would let a single green test drag a genuinely loose
+    contract out of the refusal.
+
+    The empty-red-set guard is load-bearing and is written here rather than
+    inherited, because `set() <= anything` is True. Without it an all-green
+    contract would be refused with a sentence about wrong implementations
+    instead of by `refusal_reasons`, which owns that case and says why.
+
+    ONLY the candidate that took the contract is named, and the other two are
+    not so much as mentioned. The operator's next action depends on WHICH
+    wrongness sufficed, and a refusal that recited the whole glossary would put
+    the reader back to working out which line applied to them — which is the
+    work the naming exists to save. A first draft did recite all three and the
+    frozen contract caught it.
+    """
+    red = {(rel, name) for rel, name, outcome in outcomes
+           if outcome in RED_OUTCOMES}
+    if not red:
+        return []
+    for candidate in CANDIDATES:
+        if red <= taken.get(candidate, set()):
+            return [
+                f"every contract test that is red passes against the "
+                f"`{candidate}` pass-candidate, an implementation that EXISTS "
+                f"and is wrong, so the contract's redness measures that the code "
+                f"is absent rather than that the tests check what it does. "
+                + _CANDIDATE_CURE[candidate]
+            ]
+    return []
 
 
 def _outcome(case: ElementTree.Element) -> str:

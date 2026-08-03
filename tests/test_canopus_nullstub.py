@@ -157,6 +157,35 @@ def test_stub_hash_is_identity_based():
     assert hash(first) != hash(second)
 
 
+def test_a_candidate_validates_its_mode_at_the_door_the_child_uses(monkeypatch):
+    """The CHILD's door, which `candidate_value` does not stand in front of.
+
+    Step 11 mutation SC-1 M1: disabling the guard inside `Candidate.__init__`
+    survived the frozen contract, because that contract reaches the object only
+    through `candidate_value`, which carries its own check. The child does not:
+    `_stub_attribute` builds a `Candidate` straight out of the environment, so a
+    mistyped `CANOPUS_CANDIDATE` would fall through `__call__` to the greedy
+    branch and produce a full table under a candidate that was never run.
+
+    The guard is asserted at BOTH doors here, so removing either one fails.
+    """
+    from scripts.utils.canopus_nullstub import (
+        CANDIDATE_VAR,
+        Candidate,
+        _stub_attribute,
+        candidate_value,
+    )
+
+    with pytest.raises(KeyError):
+        Candidate("constant", "")
+    with pytest.raises(KeyError):
+        candidate_value("constant", ())
+
+    monkeypatch.setenv(CANDIDATE_VAR, "constant")
+    with pytest.raises(KeyError):
+        _stub_attribute("anything")
+
+
 @pytest.fixture
 def clean_imports():
     """Restore sys.meta_path, sys.modules AND the plugin's install ledger.

@@ -249,7 +249,7 @@ The 5 eligibility rules (target is appropriate type, dir exists or will be scaff
 
 ## OUTCOME cases (R13, 2026-06-06)
 
-An OUTCOME case grades a **side-effect**, not the model's prose. It lives in a SEPARATE directory - `.claude/skills/{name}/evals/outcomes/` - that the prose harness never globs (`run-skill-eval.py` and the eval-drift daemon read only `evals/cases/*.json`), so an outcome case can never trigger a model call, pollute `benchmark.json`, or be replayed against an empty check set. It is graded by `scripts/eval-outcomes.py` (`--skill NAME` / `--all`, `--render` to opt into a real render, `--no-write` to skip the `evals/benchmark-outcomes.json` sidecar). No model call - binary pass/fail.
+An OUTCOME case grades a **side-effect**, not the model's prose. It lives in a SEPARATE directory - `.claude/skills/{name}/evals/outcomes/` - that the prose harness never globs (`run-skill-eval.py` reads only `evals/cases/*.json`), so an outcome case can never trigger a model call, pollute `benchmark.json`, or be replayed against an empty check set. It is graded by `scripts/eval-outcomes.py` (`--skill NAME` / `--all`, `--render` to opt into a real render, `--no-write` to skip the `evals/benchmark-outcomes.json` sidecar). No model call - binary pass/fail.
 
 A case is a prose case (`evals/cases/`, carries `checks`) OR an outcome case (`evals/outcomes/`, carries `outcome`) - separated by directory, never colliding.
 

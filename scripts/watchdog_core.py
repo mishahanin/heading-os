@@ -48,11 +48,17 @@ DEFAULT_REALERT_MIN = 30
 
 # The full fleet the spine knows about. This is the fallback expected set when a
 # host declares no `daemon.watchdog.expect` scope. The fleet is split across
-# hosts (see load_expected): the bridge runs on the CEO workspace; fireside,
-# sync-exchange, eval-drift, and sentinel were migrated to the service host on
-# 2026-05-23. A daemon in the *host's expected set* with no heartbeat file
+# hosts (see load_expected): the bridge runs on the CEO workspace; fireside and
+# sentinel were migrated to the service host on 2026-05-23, and sync-exchange is
+# the laptop's. A daemon in the *host's expected set* with no heartbeat file
 # resolves to "missing" (a genuine down state), not silence.
-EXPECTED_DAEMONS = ("bridge", "fireside", "sync-exchange", "eval-drift", "sentinel")
+#
+# eval-drift was removed on 2026-08-03 with the daemon itself. A name kept here
+# after its code is gone resolves "missing" forever, which is a genuine down
+# state raised every ten minutes for a process nobody intends to run. A test now
+# fails any name here with no installable unit template under
+# scripts/templates/systemd/, which catches that drift in both directions.
+EXPECTED_DAEMONS = ("bridge", "fireside", "sync-exchange", "sentinel")
 
 HEARTBEATS_DIR = ".daemon-state/heartbeats"
 LEGACY_BRIDGE_HEARTBEAT = ".daemon-state/heartbeat.json"
@@ -96,11 +102,11 @@ def load_expected(workspace_root: Path) -> tuple[str, ...]:
 
     Reads ``daemon.watchdog.expect`` (a list of daemon names) from the merged
     bridge config. The fleet is split across hosts since the 2026-05-23 service-host
-    migration: the CEO workspace runs only the bridge, while fireside,
-    sync-exchange, eval-drift, and sentinel are supervised on the service host.
-    A watchdog only sees heartbeat files on its own filesystem, so each host
-    scopes itself to the daemons that actually beat there - otherwise the four
-    off-host daemons resolve "missing" and fire false criticals.
+    migration: the CEO workspace runs only the bridge, while fireside and sentinel
+    are supervised on the service host. A watchdog only sees heartbeat files on its
+    own filesystem, so each host scopes itself to the daemons that actually beat
+    there - otherwise the off-host daemons resolve "missing" and fire false
+    criticals.
 
     When ``expect`` is present and non-empty, it is the authoritative scope.
     Absent or empty falls back to ``EXPECTED_DAEMONS`` (the full fleet) for

@@ -214,7 +214,13 @@ def test_no_scheduler_in_the_tree_is_built_without_job_defaults():
 
 def test_the_tree_walk_actually_reaches_the_daemons():
     """A tree guard that silently matched nothing would pass forever. This
-    asserts the walk really finds the schedulers it is supposed to hold."""
+    asserts the walk really finds the schedulers it is supposed to hold.
+
+    The floor is 3, lowered from 4 on 2026-08-03 when the eval-drift daemon and
+    its scheduler were retired. It is a floor and not an equality on purpose: it
+    exists to catch the walk matching NOTHING, and a number that has to be
+    updated every time a daemon lands would be raised without thought.
+    """
     found = 0
     for path in sorted((ENGINE / "scripts").rglob("*.py")):
         src = path.read_text(encoding="utf-8")
@@ -222,4 +228,4 @@ def test_the_tree_walk_actually_reaches_the_daemons():
             continue
         found += sum(1 for _ in scheduler_constructions(src, path.name))
 
-    assert found >= 4, f"expected at least 4 scheduler constructions, saw {found}"
+    assert found >= 3, f"expected at least 3 scheduler constructions, saw {found}"

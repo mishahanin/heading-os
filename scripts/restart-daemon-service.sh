@@ -10,7 +10,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <name>" >&2
-    echo "  bridge | sentinel | fireside-bot | sync-exchange | eval-drift" >&2
+    echo "  bridge | sentinel | fireside-bot | sync-exchange" >&2
     exit 1
 fi
 
@@ -19,7 +19,6 @@ case "$1" in
     sentinel)                          UNIT="sentinel" ;;
     fireside|fireside-bot|fireside-bot-daemon) UNIT="fireside-bot-daemon" ;;
     sync-exchange|sync-exchange-daemon) UNIT="sync-exchange-daemon" ;;
-    eval-drift|eval-drift-daemon)      UNIT="eval-drift-daemon" ;;
     *)
         echo "Unknown daemon: $1" >&2
         exit 2

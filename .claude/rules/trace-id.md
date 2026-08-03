@@ -18,7 +18,7 @@ The ID correlates **one process tree** - a daemon boot plus the subprocesses tha
 
 Call `trace.mint()` once at process entry, before any logging is configured:
 
-- Daemons: inside each `_setup_logging()` (fireside, sync-exchange, eval-drift, sentinel) or at the top of `start_daemon()` (bridge). All five do this today.
+- Daemons: inside each `_setup_logging()` (fireside, sync-exchange, sentinel) or at the top of `start_daemon()` (bridge). All four do this today.
 - New CLI scripts that log: mint at the top of `main()` (or call `trace.ensure()` to adopt an inherited ID if present, else mint).
 
 A fresh UUID4 per boot means no cross-restart contamination.
@@ -31,7 +31,7 @@ The ID lives in `os.environ["X31C_TRACE_ID"]`. Every `subprocess.run([...])` a d
 
 Install the record factory once per process (`install_log_factory()` from `trace_filter`), which gives **every** `LogRecord` a `trace_id` attribute (defaulting to `"-"`), then include `[%(trace_id)s]` in the formatter. The factory means a formatter referencing `%(trace_id)s` never raises `KeyError`, even on records emitted by third-party loggers. New single-logger CLI scripts can use `trace_filter.attach(logger)` to do all of this in one call.
 
-Direct file appends that bypass the logging module (e.g. eval-drift's `errors.log`) should prepend `trace.get()` manually so they correlate with the formatted lines.
+Direct file appends that bypass the logging module (an `errors.log` written straight from a daemon, say) should prepend `trace.get()` manually so they correlate with the formatted lines.
 
 ## Langfuse bridge
 

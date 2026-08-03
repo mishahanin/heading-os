@@ -50,12 +50,17 @@ def test_write_env_appends_then_replaces_idempotently(tmp_path, monkeypatch):
 
 
 def test_daemon_checks_wellformed():
+    # Two, not three: the eval-drift check went with its daemon on 2026-08-03.
+    # A deadman check whose daemon cannot run alerts forever, so the entry is
+    # removed in the same change as the code it watched. Uniqueness is asserted
+    # against the list's own length rather than a repeated literal, so the next
+    # daemon retirement does not have to edit three numbers in step.
     checks = _load_daemon_checks()
-    assert len(checks) == 3
+    assert len(checks) == 2
     env_keys = {c["env_key"] for c in checks}
     names = {c["name"] for c in checks}
-    assert len(env_keys) == 3, "env_keys must be unique"
-    assert len(names) == 3, "check names must be unique"
+    assert len(env_keys) == len(checks), "env_keys must be unique"
+    assert len(names) == len(checks), "check names must be unique"
     for c in checks:
         for field in ("env_key", "name", "tags", "desc", "grace"):
             assert c.get(field), f"{c.get('name')} missing {field}"

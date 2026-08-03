@@ -37,6 +37,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   the one assertion those lacked (a refusal record must carry its REASON) was
   added there rather than dropped.
 
+### Removed
+
+- **The eval-drift daemon, 1015 lines that could not produce anything.** It
+  replayed Langfuse traces of skill runs against the current `SKILL.md` and
+  compared today's pass rate to a rolling baseline. It could not do that here for
+  two independent reasons, either one fatal: its input is Langfuse traces and
+  `observability.is_enabled()` is False, so the input set is empty by
+  construction; and it refused to run at all under the fail-closed
+  `SENSITIVE_MODE` default. Measured on the service host 2026-08-03: the unit
+  loaded, enabled and **active**, its heartbeat 60 seconds old, its newest report
+  dated 2026-05-23 -- **72 days** -- and a nightly journal WARNING nobody reads.
+  Every health surface called it healthy for all 72 days. The four reports it did
+  produce, back when it ran, recorded 0 traces and a 100% pass rate for all ten
+  skills, which is what dividing zero by zero looks like once rendered as a
+  percentage.
+
+  Removed with it: its `.service` template, its supervision arms in
+  `install-/restart-/uninstall-daemon-service.sh`, its `EXPECTED_DAEMONS` entry
+  (left behind it would resolve `missing` -- a genuine down state -- every ten
+  minutes forever), its Healthchecks.io deadman entry, its `state_dirs` row in
+  `service-host.example.json`, its `.lint-baseline.json` allowance, and its
+  mentions in an always-on rule and a skill reference. New in
+  `tests/test_watchdog_expected_set.py`: every name in `EXPECTED_DAEMONS` must
+  have an installable unit template, which catches this drift in both directions.
+
+  **Kept, deliberately:** the eval CASES (ten skills, 35 files) and
+  `run-skill-eval.py`, the harness a human drives from `/scrutinize` -- the
+  daemon was one consumer of that harness, never its owner. And the private
+  routing rule plus both gitignore entries for `datastore/operations/eval-drift/`,
+  because deleting a producer must not un-protect 72 days of what it produced.
+
+  **Fixed on the way out, unasked:** `setup-daemon-healthchecks.py` read the zone
+  at module scope with `.env` unloaded, and the eval-drift entry was the only
+  consumer of the result -- so that deadman was registered in UTC while the daemon
+  fired at local 02:00. The same defect class the timer slice closed, in a script
+  no timer-entrypoint walk covers because it is not one. The call site died with
+  the entry.
+
+  **Not fixed, and named:** deleting this daemon removes the instance of the
+  disease, not the class. A supervised process that lives but produces nothing is
+  still indistinguishable, from every surface, from a healthy one. Measured on
+  the same host: `steward-email-triage.service` is the only daemon producing
+  daily output, and it is neither in `EXPECTED_DAEMONS` nor writing a heartbeat --
+  so the watchdog watches three daemons and misses the one that works.
+
 ### Fixed
 
 - **The Canopus sign-off page asserted, as fact, that mutation testing had not

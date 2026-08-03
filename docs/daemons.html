@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Daemons &amp; scheduled tasks — HEADING OS</title>
-<meta name="description" content="Install and manage every HEADING OS daemon (bridge, sync-exchange, sentinel, fireside, eval-drift, watchdog) and every scheduled task and timer.">
+<meta name="description" content="Install and manage every HEADING OS daemon (bridge, sync-exchange, sentinel, fireside, watchdog) and every scheduled task and timer.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -86,8 +86,8 @@
   </div>
 
   <h2>The generic install driver</h2>
-  <p>The five primary daemons install through one driver, which renders the matching template in <code>scripts/templates/systemd/</code> (substituting workspace + interpreter) into <code>~/.config/systemd/user/</code> and enables it:</p>
-  <pre><code># &lt;name&gt; is one of: bridge | sentinel | fireside-bot | sync-exchange | eval-drift
+  <p>The four primary daemons install through one driver, which renders the matching template in <code>scripts/templates/systemd/</code> (substituting workspace + interpreter) into <code>~/.config/systemd/user/</code> and enables it:</p>
+  <pre><code># &lt;name&gt; is one of: bridge | sentinel | fireside-bot | sync-exchange
 bash scripts/install-daemon-service.sh &lt;name&gt;
 bash scripts/uninstall-daemon-service.sh &lt;name&gt;   # idempotent disable + remove
 bash scripts/restart-daemon-service.sh &lt;name&gt;     # restart + status tail</code></pre>
@@ -147,13 +147,7 @@ python scripts/fireside-bot-daemon.py stop</code></pre>
   </div>
   <p><strong>Config / state.</strong> Schedule from <code>config/fireside-schedule.json</code> (ship <code>scripts/fireside-schedule.example.json</code> as the template). Runtime state under the data root is <strong>gitignored and daemon-owned</strong> — never re-track it, or a live host daemon's writes break <code>git pull --ff-only</code>. Webhook host/IP, bot token, and member names/usernames are all instance config.</p>
 
-  <h2>5. Eval-drift — nightly regression detector</h2>
-  <p><strong>Purpose.</strong> A nightly trace-replay regression detector (daily at 02:00 local). For each skill with an <code>evals/</code> folder, it replays the last 24h of traces against the current <code>SKILL.md</code> and flags pass-rate regressions. Sensitivity-aware: it auto-skips when sensitive mode is active, and needs <code>SENSITIVE_MODE=off</code> in its service env to emit anything.</p>
-  <pre><code>bash scripts/install-daemon-service.sh eval-drift
-python scripts/eval-drift-daemon.py daemon
-python scripts/eval-drift-daemon.py --once        # also: --dry-run, --skill &lt;name&gt;, status</code></pre>
-
-  <h2>6. Watchdog</h2>
+  <h2>5. Watchdog</h2>
   <p><strong>Purpose.</strong> Classifies each daemon's liveness beat against its configured cadence + grace and routes a deduped tiered alert on a missed beat. It runs <strong>in-process inside the bridge daemon</strong>, config-gated by <code>daemon.watchdog.enabled</code> (default off). Importable core: <code>scripts/watchdog_core.py</code>.</p>
   <pre><code>python scripts/daemon-watchdog.py --once [--json] [--stale-default N]</code></pre>
   <div class="callout warn">
@@ -175,7 +169,7 @@ python scripts/eval-drift-daemon.py --once        # also: --dry-run, --skill &lt
   <p>A common production split (present all hostnames/IPs as your own):</p>
   <ul>
     <li><strong>Laptop host</strong> (where the dashboard is read): owns <strong>bridge</strong> + <strong>sync-exchange</strong>.</li>
-    <li><strong>Always-on Linux VM</strong>: owns <strong>fireside</strong>, <strong>sentinel</strong>, <strong>eval-drift</strong>, plus a <strong>watchdog</strong>. It runs from fresh engine + data clones (siblings, so the data root resolves). systemd repoints use drop-in overrides under <code>/etc/systemd/system/&lt;unit&gt;.d/override.conf</code>.</li>
+    <li><strong>Always-on Linux VM</strong>: owns <strong>fireside</strong> and <strong>sentinel</strong>, plus a <strong>watchdog</strong>. It runs from fresh engine + data clones (siblings, so the data root resolves). systemd repoints use drop-in overrides under <code>/etc/systemd/system/&lt;unit&gt;.d/override.conf</code>.</li>
   </ul>
   <div class="callout warn">
     <span class="ttl">Capacity</span>
@@ -216,8 +210,8 @@ systemctl --user disable --now &lt;name&gt;.timer    # cancel</code></pre>
   <h3>D. Healthcheck pings (deadman monitoring)</h3>
   <p>Not a scheduler — best-effort deadman pings via <code>scripts/utils/healthchecks.py</code>. Idempotent setup writes ping URLs back as gitignored <code>.env</code> keys:</p>
   <pre><code>python scripts/setup-fireside-healthchecks.py    # fireside checks (needs HEALTHCHECKS_API_KEY)
-python scripts/setup-daemon-healthchecks.py      # sentinel / eval-drift deadman checks</code></pre>
-  <p>Daemons ping at runtime (fireside every minute, sentinel each ~15-min cycle, eval-drift after the 02:00 run). The API key and all ping URLs are gitignored <code>.env</code> values — never commit them.</p>
+python scripts/setup-daemon-healthchecks.py      # sentinel / email-triage deadman checks</code></pre>
+  <p>Daemons ping at runtime (fireside every minute, sentinel each ~15-min cycle). The API key and all ping URLs are gitignored <code>.env</code> values — never commit them.</p>
 
   <div class="callout warn">
     <span class="ttl">Retired — do not install an hourly workspace-sync</span>
@@ -233,7 +227,6 @@ python scripts/setup-daemon-healthchecks.py      # sentinel / eval-drift deadman
       <tr><td>2</td><td>sync-exchange</td><td>every 2h + boot</td><td><code>install-daemon-service.sh sync-exchange</code></td><td><code>sync-exchange-pulse.py</code></td></tr>
       <tr><td>3</td><td>sentinel</td><td>every 15 min</td><td><code>install-daemon-service.sh sentinel</code></td><td>deadman ping</td></tr>
       <tr><td>4</td><td>fireside-bot</td><td>webhook + 1-min heartbeat</td><td><code>install-daemon-service.sh fireside-bot</code></td><td><code>getWebhookInfo</code> / <code>fireside-pulse.py</code></td></tr>
-      <tr><td>5</td><td>eval-drift</td><td>daily 02:00</td><td><code>install-daemon-service.sh eval-drift</code></td><td>deadman ping</td></tr>
       <tr><td>—</td><td>watchdog</td><td>in-process (bridge)</td><td>config flag</td><td><code>daemon-watchdog.py --once</code></td></tr>
     </tbody>
   </table>

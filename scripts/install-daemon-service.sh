@@ -9,7 +9,6 @@
 #     sentinel
 #     fireside | fireside-bot | fireside-bot-daemon
 #     sync-exchange | sync-exchange-daemon
-#     eval-drift | eval-drift-daemon
 #
 # Substitutes {{WORKSPACE}} and {{PYTHON}} placeholders in the matching
 # template at scripts/templates/systemd/<unit>.service, writes the unit
@@ -27,7 +26,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <name>" >&2
-    echo "  bridge | sentinel | fireside-bot | sync-exchange | eval-drift" >&2
+    echo "  bridge | sentinel | fireside-bot | sync-exchange" >&2
     exit 1
 fi
 
@@ -44,12 +43,9 @@ case "$1" in
     sync-exchange|sync-exchange-daemon)
         UNIT="sync-exchange-daemon"
         ;;
-    eval-drift|eval-drift-daemon)
-        UNIT="eval-drift-daemon"
-        ;;
     *)
         echo "Unknown daemon: $1" >&2
-        echo "Expected one of: bridge sentinel fireside-bot sync-exchange eval-drift" >&2
+        echo "Expected one of: bridge sentinel fireside-bot sync-exchange" >&2
         exit 2
         ;;
 esac
@@ -110,7 +106,6 @@ case "$UNIT" in
     sentinel)              mkdir -p "$WORKSPACE/.sentinel" ;;
     fireside-bot-daemon)   mkdir -p "$WORKSPACE/.fireside" ;;
     sync-exchange-daemon)  mkdir -p "$WORKSPACE/.sync-exchange" ;;
-    eval-drift-daemon)     mkdir -p "$WORKSPACE/.eval-drift" ;;
 esac
 
 systemctl --user daemon-reload

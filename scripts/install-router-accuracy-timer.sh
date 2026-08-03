@@ -9,11 +9,14 @@
 # Renders scripts/templates/systemd/router-accuracy.{service,timer} (substituting
 # {{WORKSPACE}}, {{PYTHON}}, {{TZ}}) into ~/.config/systemd/user/, then enables the
 # nightly timer. The timer fires 03:00 in the configured timezone (HEADING_OS_TZ,
-# default UTC) -- deliberately after the eval-drift 02:00 run so the two judge-heavy
-# jobs do not overlap -- and runs scripts/router-accuracy-nightly.py, which writes a
-# dated artifact + a trend.jsonl line into the DATA overlay. The runner skips under
-# SENSITIVE_MODE; a > 10-point single-skill drop is surfaced separately by the
-# ops-radar router_accuracy signal on the ops-radar timer, not here.
+# default UTC) and runs scripts/router-accuracy-nightly.py, which writes a dated
+# artifact + a trend.jsonl line into the DATA overlay. The 03:00 slot was chosen to
+# sit after a 02:00 sibling that has since been retired; nothing now competes for it.
+# The runner no longer skips on the SENSITIVE_MODE default: it proves its own payload
+# with scripts/utils/egress_proof.py and records a typed refusal when the proof
+# refuses. A DECLARED sensitivity still stops it outright. A > 10-point single-skill
+# drop is surfaced separately by the ops-radar router_accuracy signal on the ops-radar
+# timer, not here.
 #
 # This is a STANDALONE installer mirroring install-ops-radar-timer.sh's template+sed
 # render convention. The timezone is read from the environment (no hardcoded locale),

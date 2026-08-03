@@ -13,7 +13,6 @@ Consumed by: `scripts/install-daemon-service.sh`, `scripts/uninstall-daemon-serv
 | Sentinel (comms monitor) | `sentinel.service` | (none — foreground) | persistent, Restart=on-failure |
 | Fireside-bot (Telegram polling) | `fireside-bot-daemon.service` | `daemon` | persistent, Restart=on-failure |
 | Sync-Exchange (Exchange + calendar) | `sync-exchange-daemon.service` | `daemon` | persistent, Restart=on-failure |
-| Eval-Drift (nightly trace replay) | `eval-drift-daemon.service` | `daemon` | persistent (APScheduler @02:00 local time) |
 
 ## Placeholders
 
@@ -43,7 +42,6 @@ scripts/install-daemon-service.sh bridge        # bridge daemon
 scripts/install-daemon-service.sh sentinel      # comms monitor
 scripts/install-daemon-service.sh fireside-bot  # Telegram bot
 scripts/install-daemon-service.sh sync-exchange # Exchange + calendar sync
-scripts/install-daemon-service.sh eval-drift    # nightly eval replay
 ```
 
 For unattended boot (so daemons start without an active login):

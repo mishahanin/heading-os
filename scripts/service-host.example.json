@@ -5,7 +5,6 @@
   "fireside_unit": "fireside.service",
   "mirror_dir": "datastore/operations/service-mirror",
   "state_dirs": [
-    ["eval-drift", "data", "datastore/operations/eval-drift"],
     ["fireside-state", "data", "datastore/operations/tribe/fireside-state"],
     ["steward", "engine", "datastore/operations/steward"],
     ["sentinel", "engine", ".sentinel"]

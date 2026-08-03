@@ -44,8 +44,8 @@ lines above them said the opposite.
 A call site may still override any key explicitly, and an explicit value wins.
 
 This module imports nothing, deliberately, so it is safe to import at module
-scope or beside a local optional-dependency import (which is what
-``scripts/eval-drift-daemon.py`` needs).
+scope or beside a local optional-dependency import, which is what a daemon that
+defers its APScheduler import until it knows it will run needs.
 
 Guarded by ``tests/test_scheduler_misfire_guard.py``, which fails any scheduler
 construction under ``scripts/`` that omits ``job_defaults``.

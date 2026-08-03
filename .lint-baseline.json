@@ -62,7 +62,6 @@
   "scripts/docparse.py::SIM108": 2,
   "scripts/draft-critique.py::S310": 1,
   "scripts/email-intelligence.py::B905": 2,
-  "scripts/eval-drift-daemon.py::SIM105": 4,
   "scripts/eval-flag.py::S310": 1,
   "scripts/eval-outcomes.py::SIM108": 1,
   "scripts/firecrawl.py::A001": 5,

@@ -454,15 +454,41 @@ def test_the_wall_declaration_carries_its_reason_not_just_its_name():
 
 def test_the_committed_history_file_is_valid_json_and_uses_declared_causes():
     """SC-5d. The bridge file is data the report trusts. A typo'd cause in it
-    would create a silent bucket nobody counts."""
+    would create a silent bucket nobody counts.
+
+    Asserted against the RAW file, never through `load_hand_classified`. The
+    loader DROPS any entry whose cause is not in `RETAKE_CAUSES` — that is the
+    right posture for a reporter that must render over damaged history, and it
+    is the wrong lens for this test: a loop over the loader's output asking
+    `cause in RETAKE_CAUSES` cannot fail, because the loader already removed
+    every value that would have failed it. Measured, not reasoned: writing
+    `contract-strengthend` over one entry in a copy of the file left 38 loaded
+    entries instead of 39 and not one undeclared cause for the loop to see.
+    That is the exact stub-satisfiable shape this slice spent step 11 closing in
+    `cmd_repin`, in the test written to guard the file the slice is named after.
+
+    The two lenses are both kept, and they answer different questions: the raw
+    pass is whether the committed data is well-formed, the loader pass is
+    whether anything survives it at all.
+    """
     from scripts.utils.gate_yield import RETAKE_CAUSES, load_hand_classified
 
-    hand = load_hand_classified(_ROOT)
-    assert isinstance(hand, dict) and hand
-    for key, cause in hand.items():
-        assert "|" in key, f"the key {key!r} is not ts|label"
-        assert cause in RETAKE_CAUSES, f"{key} carries undeclared cause {cause!r}"
-    # And it parses as JSON on disk, not only through the loader.
     raw = json.loads((_ROOT / "config" / "canopus-retake-history.json")
                      .read_text(encoding="utf-8"))
     assert isinstance(raw, dict)
+
+    for key, value in raw.items():
+        # The same `_`-prefixed prose entries the loader steps over. JSON has no
+        # comments, so the file documents itself in keys nothing reads back.
+        if str(key).startswith("_"):
+            continue
+        assert "|" in key, f"the key {key!r} is not ts|label"
+        cause = value.get("cause") if isinstance(value, dict) else value
+        assert cause in RETAKE_CAUSES, f"{key} carries undeclared cause {cause!r}"
+
+    # And every well-formed entry survives the loader, so a file that passes the
+    # pass above is a file the report can actually count.
+    hand = load_hand_classified(_ROOT)
+    assert isinstance(hand, dict) and hand
+    assert len(hand) == len([k for k in raw if not str(k).startswith("_")]), (
+        "the loader dropped an entry the raw pass accepted")

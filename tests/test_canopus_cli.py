@@ -697,6 +697,73 @@ def test_repin_moves_the_pin_in_the_state_file_and_leaves_the_root_alone(
     assert "scripts/helper.py" in capsys.readouterr().out
 
 
+def test_repin_refuses_when_git_cannot_describe_a_tree_that_IS_a_repository(
+        tree, anchor, monkeypatch, capsys):
+    """The commit requirement must not be skipped by a git FAILURE.
+
+    `cmd_repin` guards its uncommitted-bytes check with `if tree is not None`,
+    and `tree_state` answers None for two facts that are not the same one: the
+    tree is not in a repository, and git could not answer. `git_output` returns
+    None on a non-zero exit, a timeout and an OSError alike, so an index.lock
+    held by a concurrent process or a `git status` that times out on a large
+    tree read exactly like the plain-folder operator the accommodation was
+    written for -- and dropped the one control the slice's own rationale rests
+    on ("the commit requirement is why this is not a security trade").
+
+    The two are told apart by asking a cheaper question. `repo_identity` runs
+    `rev-parse --show-toplevel`, which survives the failures `git status` does
+    not, so REPO_PRESENT plus an undescribable tree is a git failure and is
+    refused, while REPO_ABSENT keeps the accommodation intact (the test above
+    exercises that arm: its tree is a plain folder).
+    """
+    from scripts.utils.canopus_freeze import build_manifest, write_freeze
+
+    (tree / "scripts" / "helper.py").write_text("x = 1\n")
+    write_freeze(tree, build_manifest(
+        [tree / "tests"], tree, label="demo", frozen_at="2026-01-01T00:00:00+00:00",
+        anchor=anchor, content_only=[tree / "scripts" / "helper.py"]))
+    (tree / "scripts" / "helper.py").write_text("x = 2\n")
+
+    monkeypatch.setattr(canopus, "tree_state", lambda root: None)
+    monkeypatch.setattr(canopus, "repo_identity",
+                        lambda directory: (canopus.REPO_PRESENT, "a" * 64))
+
+    assert _run(["repin", "--reason", "the helper was fixed"], tree) == 1
+    assert "git could not describe" in capsys.readouterr().err
+
+    # Its own cause, not the committed-bytes one. The two refusals have
+    # different cures -- `git commit` there, find out why git is failing here --
+    # and one token covering both makes the counter this table exists for read
+    # two kinds as two of one.
+    row = [r for r in read_ledger(tree) if r["event"] == "refuse_repin"][-1]
+    assert row["kind"] == "enforcer_unverifiable"
+
+
+def test_repin_over_an_unmoved_enforcer_set_survives_an_undescribable_tree(
+        tree, anchor, monkeypatch):
+    """The guard above must not deny a no-op.
+
+    `repin_enforcer` accepts a re-pin that changes nothing on purpose: it is
+    what an operator reaches for when they BELIEVE the enforcer moved, and
+    recording that they checked beats telling them there was nothing to do. No
+    enforcer byte has moved here, so there are no uncommitted bytes for the
+    commit requirement to be about, and a git failure is irrelevant to a re-pin
+    that records the digests already recorded.
+    """
+    from scripts.utils.canopus_freeze import build_manifest, write_freeze
+
+    (tree / "scripts" / "helper.py").write_text("x = 1\n")
+    write_freeze(tree, build_manifest(
+        [tree / "tests"], tree, label="demo", frozen_at="2026-01-01T00:00:00+00:00",
+        anchor=anchor, content_only=[tree / "scripts" / "helper.py"]))
+
+    monkeypatch.setattr(canopus, "tree_state", lambda root: None)
+    monkeypatch.setattr(canopus, "repo_identity",
+                        lambda directory: (canopus.REPO_PRESENT, "a" * 64))
+
+    assert _run(["repin", "--reason", "checking the enforcer set"], tree) == 0
+
+
 def test_freeze_requires_at_least_one_path(tree, anchor, capsys):
     assert _run(["freeze", "--label", "demo", "--anchor", str(anchor)], tree) == 1
     assert "at least one path" in capsys.readouterr().err

@@ -80,6 +80,13 @@ CAUSE_RETAKE_CAUSE_MISSING = "retake_cause_missing"
 # The one refusal the manifest-split slice adds, and the reason that slice is not
 # a security trade: the cheap path still makes the change land in git.
 CAUSE_ENFORCER_UNCOMMITTED = "enforcer_uncommitted"
+# `repin` refusing because it could not ESTABLISH whether those bytes are
+# committed: the tree is inside a repository and git could not describe it.
+# A class of its own rather than a second reading of the one above, for the
+# reason this whole table exists — "two refusals of one kind count as two of one
+# thing" is false the moment one token covers two kinds. The cures differ too:
+# the first is `git commit`, this one is finding out why git is failing here.
+CAUSE_ENFORCER_UNVERIFIABLE = "enforcer_unverifiable"
 # The four that RAISE rather than return. Half the lifecycle's refusals never
 # reach a `return 1` -- an anchor that is not a file, a contract that is not red,
 # a damaged manifest -- and counting only the returns would have measured half
@@ -91,6 +98,7 @@ CAUSE_UNREADABLE = "unreadable"
 
 CAUSES = frozenset({
     CAUSE_ENFORCER_UNCOMMITTED,
+    CAUSE_ENFORCER_UNVERIFIABLE,
     CAUSE_FREEZE_ALREADY_ACTIVE,
     CAUSE_ANCHOR_ALREADY_RECORDED,
     CAUSE_REPLACE_WITHOUT_REASON,

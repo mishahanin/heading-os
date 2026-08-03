@@ -1583,11 +1583,27 @@ def cmd_repin(args) -> int:
     diff with an author and a timestamp, in the public engine repository, with
     the ledger event naming the sha so the diff is one command away.
 
-    A tree git cannot describe is allowed through, and that limit is stated
-    rather than hidden: there is no repository for the change to land in, and
+    A tree that is not in a repository is allowed through, and that limit is
+    stated rather than hidden: there is nothing for the change to land in, and
     refusing would make the lifecycle unusable for the plain-folder operator
     `repo_binding_state` already accommodates. Every other surface reads that
     operator amber for the same reason.
+
+    A tree git cannot DESCRIBE is refused, and the two are not the same fact.
+    `tree_state` answers None for both, because `git_output` returns None on a
+    non-zero exit, a timeout and an OSError alike — so an index.lock held by a
+    concurrent process, or a `git status` that times out on a large tree, read
+    exactly like the plain-folder operator and dropped the whole commit
+    requirement, which is the control this docstring's second paragraph calls
+    the reason the slice is not a security trade. Skipping a check because the
+    thing that runs it broke is the fail-OPEN shape this module refuses
+    everywhere else.
+
+    Told apart by asking a CHEAPER question. `repo_identity` runs `rev-parse
+    --show-toplevel`, which survives the failures `git status` does not, so
+    REPO_PRESENT beside an undescribable tree is a git failure and REPO_ABSENT
+    (or REPO_UNKNOWN, where there is no git binary at all) is the operator the
+    accommodation was written for.
     """
     root = _resolve_root(args)
     manifest = read_freeze(root)
@@ -1600,6 +1616,20 @@ def cmd_repin(args) -> int:
 
     moved = verify_manifest(manifest, root)["enforcer_moved"]
     tree = tree_state(root)
+    # Only when something actually MOVED. A re-pin over an unchanged enforcer set
+    # records that the operator checked and changes no byte, which
+    # `repin_enforcer` accepts on purpose; refusing it because git is briefly
+    # unavailable would deny a no-op for a control it does not need.
+    if moved and tree is None and repo_identity(root)[0] == REPO_PRESENT:
+        reason = ("this tree is inside a repository and git could not describe "
+                  "it, so whether the moved enforcer bytes are committed cannot "
+                  "be established. A re-pin without that answer is a re-pin with "
+                  "its one control skipped: re-run it once git answers here "
+                  "(`git status` in this tree will say why).")
+        print(f"canopus: NOT RE-PINNED - {reason}", file=sys.stderr)
+        _record_refusal(root, "repin", "enforcer_unverifiable", reason=reason,
+                        label=manifest["label"])
+        return 1
     if tree is not None:
         uncommitted = [rel for rel in moved if rel in (tree.get("dirty") or {})]
         if uncommitted:

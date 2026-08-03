@@ -344,7 +344,15 @@ def _print_attestation(root: Path, recomputed_root: str, current_tree=None) -> N
         # to sign off: a local ATTESTED record is evidence about a specific
         # tree, not a timeless fact about the code.
         tree = record.get("tree") or {}
-        bound = (f", bound to {tree['head'][:12]}+{len(tree.get('dirty') or {})} dirty"
+        # `+0 dirty` said "this record was taken over an unclean tree" on the one
+        # line an operator signs off from, for the CLEANEST possible case. The
+        # count was right and the word was a lie, which is the harder kind to
+        # notice. Found at step 11 of the yield-axes slice, on that slice's own
+        # evidence page, and the same shape as the unconditional "Mutation
+        # testing has not run" the friction-counters slice removed a day earlier.
+        soiled = len(tree.get("dirty") or {})
+        bound = (f", bound to {tree['head'][:12]}"
+                 + (f"+{soiled} dirty" if soiled else ", clean tree")
                  if tree.get("head") else "")
         print(f"{GREEN}{BOLD}{ATTESTED}{RESET}  {passed} frozen tests passed, none "
               f"deselected, at "

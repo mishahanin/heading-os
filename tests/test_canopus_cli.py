@@ -522,6 +522,13 @@ def test_verify_reports_attested_when_the_run_matches(tree, anchor, capsys):
     assert "NOT ATTESTED" not in out
     assert "ATTESTED" in out
     assert "3 frozen tests passed" in out
+    # The sign-off line said "+0 dirty" for the cleanest tree there is: the count
+    # was right and the word was a lie, on the one line an operator reads to
+    # approve. Found at step 11 of the yield-axes slice on that slice's own
+    # evidence page. Both halves are asserted, because dropping the word while
+    # keeping a zero would read as an omission rather than as a clean tree.
+    assert "clean tree" in out
+    assert "dirty" not in out
 
     # The CLI must compare the record against the REAL current tree, not
     # against the tree the record itself carries -- that comparison would

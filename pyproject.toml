@@ -28,16 +28,16 @@ requires-python = ">=3.11"
 # Core: light, broadly-imported packages installed on every `uv sync`. Heavy
 # integration packages live in [project.optional-dependencies] below (F-7.1).
 dependencies = [
-    "anthropic==0.120.0",
+    "anthropic==0.120.2",
     "requests==2.34.2",
     "httpx==0.28.1",
     "pyyaml==6.0.3",
     "python-dotenv==1.2.2",
-    "markdown==3.10.2",
+    "markdown==3.10.3",
     "pymdown-extensions==11.0.1",
     "lxml==6.1.1",
     "Pillow==12.3.0",
-    "liteparse==2.9.0",
+    "liteparse==2.10.1",
     "watchdog==6.0.0",
     "apscheduler==3.11.3",
     # numpy powers the memory-index / recall engine (scripts/memory-index.py), a
@@ -66,7 +66,7 @@ documents = [
     "python-docx==1.2.0",
     "python-pptx==1.0.2",
     "openpyxl==3.1.5",
-    "markitdown[pdf,docx,pptx,xlsx,outlook]==0.1.6",
+    "markitdown[pdf,docx,pptx,xlsx,outlook]==0.1.7",
 ]
 media = [
     "youtube-transcript-api==1.2.4",
@@ -79,22 +79,22 @@ media = [
     "faster-whisper==1.2.1",
 ]
 dashboard = [
-    "fastapi==0.140.7",
-    "uvicorn[standard]==0.51.0",
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.0",
 ]
 ai-extra = [
     "google-api-python-client==2.198.0",
     "google-auth==2.56.2",
     "google-auth-oauthlib==1.4.0",
     "google-auth-httplib2==0.4.0",
-    "openai==2.48.0",
+    "openai==2.52.0",
 ]
 observability = [
-    "langfuse==4.14.1",
+    "langfuse==4.14.2",
 ]
 research = [
     "apify-client==3.1.0",
-    "firecrawl-py==4.33.1",   # added per F-H4; never silently missing again
+    "firecrawl-py==4.34.0",   # added per F-H4; never silently missing again
 ]
 # Meta-extra: the full integration surface (operator/CI parity). Self-references
 # the project's own extras so it stays in sync automatically.
@@ -114,7 +114,7 @@ dev = [
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
     "bandit==1.9.4",
-    "ruff==0.16.0",
+    "ruff==0.16.1",
     "pre-commit==4.6.1",
     "detect-secrets==1.5.0",
     "pip-audit==2.10.1",

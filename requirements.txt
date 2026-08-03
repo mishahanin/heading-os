@@ -6,11 +6,11 @@ aiohttp==3.14.3
     # via firecrawl-py
 aiosignal==1.4.0
     # via aiohttp
-annotated-doc==0.0.4
+annotated-doc==0.0.5
     # via fastapi
 annotated-types==0.8.0
     # via pydantic
-anthropic==0.120.0
+anthropic==0.120.2
     # via heading-os-engine
 anyio==4.14.2
     # via
@@ -90,13 +90,13 @@ et-xmlfile==2.0.0
     # via openpyxl
 exchangelib==5.6.0
     # via heading-os-engine
-fastapi==0.140.7
+fastapi==0.141.1
     # via heading-os-engine
 faster-whisper==1.2.1
     # via heading-os-engine
-filelock==3.32.0
+filelock==3.32.2
     # via huggingface-hub
-firecrawl-py==4.33.1
+firecrawl-py==4.34.0
     # via heading-os-engine
 flatbuffers==25.12.19
     # via onnxruntime
@@ -104,7 +104,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-fsspec==2026.6.0
+fsspec==2026.7.0
     # via huggingface-hub
 google-api-core==2.33.0
     # via google-api-python-client
@@ -153,7 +153,7 @@ httpx==0.28.1
     #   huggingface-hub
     #   langfuse
     #   openai
-huggingface-hub==1.25.1
+huggingface-hub==1.26.0
     # via
     #   faster-whisper
     #   tokenizers
@@ -174,9 +174,9 @@ jiter==0.16.0
     # via
     #   anthropic
     #   openai
-langfuse==4.14.1
+langfuse==4.14.2
     # via heading-os-engine
-liteparse==2.9.0
+liteparse==2.10.1
     # via heading-os-engine
 lxml==6.1.1
     # via
@@ -189,13 +189,13 @@ magika==0.6.3
     # via markitdown
 mammoth==1.11.0
     # via markitdown
-markdown==3.10.2
+markdown==3.10.3
     # via
     #   heading-os-engine
     #   pymdown-extensions
 markdownify==1.2.3
     # via markitdown
-markitdown==0.1.6
+markitdown==0.1.7
     # via heading-os-engine
 more-itertools==11.1.0
     # via apify-client
@@ -224,7 +224,7 @@ onnxruntime==1.20.1
     # via
     #   faster-whisper
     #   magika
-openai==2.48.0
+openai==2.52.0
     # via heading-os-engine
 openpyxl==3.1.5
     # via
@@ -422,7 +422,7 @@ uritemplate==4.2.0
     # via google-api-python-client
 urllib3==2.7.0
     # via requests
-uvicorn==0.51.0
+uvicorn==0.52.0
     # via heading-os-engine
 uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
     # via uvicorn

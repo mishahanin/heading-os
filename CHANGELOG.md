@@ -8,6 +8,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **The page an operator signs off from now says how hard the green was to
+  get.** `pack` rendered `25 of 25`, `LOCK HELD`, `APPROVED` identically for a
+  slice that went green first time and one that went green on the sixth attempt.
+  The ledger had held the difference line by line the whole time and nothing read
+  it. Measured across the whole ledger on 2026-08-03: 254 records, 19 shipped
+  slices, **23 windows and 37 retakes**, almost all of it concentrated in six
+  slices. `timer-timezone` shipped that morning with five windows and six retakes
+  behind it, and the operator approving it saw none of that on the page.
+
+  `scripts/utils/canopus_friction.py` counts one label's friction out of the
+  ledger's STRUCTURE (`release` + `kind`, `anchor_replaced`, `refuse_*`,
+  `verify_fail`) and renders it into `pack`. Three refusals are pinned by test
+  rather than promised in prose: it never grades (a window is the sanctioned way
+  to correct a wrong contract, and a page that scolds the count teaches the
+  builder to suppress windows, which means editing a frozen contract in place);
+  it never counts what is not structural (waivers live in a free-text `reason`,
+  and a counter built on a substring lies quietly the first time somebody
+  rewords); and it never presents a floor as a total, because `.canopus/` is
+  gitignored and one `rm -rf` takes the ledger with it. A row of zeroes is
+  therefore ambiguous, and `recorded` resolves exactly that one ambiguity: a held
+  freeze always wrote a `freeze` line.
+
+  Shipped 2026-08-03 after a window of its own. Three mutations survived in
+  sequence and each changed something: SC-4's `"render_friction" in source` was
+  satisfied by the `import` line alone, its AST replacement was satisfied by a
+  call whose value was discarded, and the render could drop its heading entirely.
+  The fix for the second changed the CODE rather than the test -- `render_friction`
+  gained an optional `heading_wrap` so the whole section is ONE expression inside
+  the `print`, making "is it wired" and "does it reach the page" a single claim.
+  Eleven mutations, eleven killed, none invalid. The frozen contract retired into
+  `tests/test_canopus_friction.py` (all 12 IDs, none dropped) plus one end-to-end
+  assertion in `tests/test_canopus_cli.py` that the contract could not make: a
+  `pack` test written before the code existed ended in a skip, and nothing
+  refuses a skipped contract test.
+
 - **A scheduled job can now EARN the right to send, instead of guessing from a
   flag that answers the same thing every night.** `scripts/utils/egress_proof.py`
   classifies an assembled outbound payload into `egress_clear`,

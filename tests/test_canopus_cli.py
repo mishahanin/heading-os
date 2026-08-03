@@ -844,6 +844,14 @@ def test_pack_reports_all_three_axes_and_the_uncovered_list(tree, anchor, capsys
     assert "evidence rather than proof" in out
     assert "outside the state" in out
     assert "is not a git working" in out
+    # The friction section, end to end. Its own unit tests call the renderer
+    # directly, and the wiring test in tests/test_canopus_friction.py can only
+    # reach the AST of scripts/canopus.py; neither reads what the operator sees.
+    # The frozen contract could not make this claim at all -- a pack test written
+    # before the code existed ended in a skip, and nothing refuses a skipped
+    # contract test, so it would have shipped as a criterion that never ran.
+    assert "friction" in out
+    assert "A floor, not a total" in out
 
 
 def test_pack_never_raises_on_damaged_state(tree, anchor, capsys):

@@ -1222,8 +1222,15 @@ def cmd_pack(args) -> int:
     # a clean bill of health. Short lines, because a list nobody finishes reading
     # covers nothing either.
     print(f"\n{BOLD}not covered{RESET}")
-    print("  Mutation testing has not run; the contract is proven to be red "
-          "before the code existed, not proven to be strong.")
+    # Not "mutation testing has not run". Nothing here records whether it did,
+    # and on 2026-08-03 that sentence was printed on the sign-off page of a slice
+    # whose mutations had run twice under scripts/utils/mutation_probe.py. A page
+    # that states as fact something it cannot observe is worse than one that
+    # admits the blind spot: the false version is the one an operator acts on.
+    print("  Whether mutation testing ran is not recorded here. This page cannot "
+          "tell a contract proven red before the code existed from one also "
+          "proven strong; read the slice's gate artifact for any mutation run it "
+          "reports.")
     print("  A local record is evidence rather than proof: it lives on the "
           "machine that produced it, and anyone with write access to that "
           "disk can hand-edit it.")

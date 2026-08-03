@@ -814,6 +814,11 @@ def test_pack_reports_all_three_axes_and_the_uncovered_list(tree, anchor, capsys
     # distribution reaches the greenest reading this page produces. An operator
     # signs off from here, so it has to be here and not only in docs/EXTENDING.md.
     assert "by top-level module NAME" in out
+    # The page may say it does not KNOW whether mutations ran. It may never say
+    # they did not: nothing on this machine records either answer, and the claim
+    # was measurably false the one time it mattered.
+    assert "Whether mutation testing ran is not recorded here" in out
+    assert "Mutation testing has not run" not in out
     assert "continuity" in out
     assert "staleness" in out
     # The interpreter section is wired into pack by ONE line. Every unit test

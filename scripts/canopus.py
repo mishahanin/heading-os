@@ -68,6 +68,7 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     run_pytest_report,
     vacuity_refusal,
 )
+from scripts.utils.canopus_friction import count_friction, render_friction
 from scripts.utils.canopus_freeze import (  # noqa: E402
     ANCHOR_MISSING,
     ANCHOR_NONE,
@@ -1211,6 +1212,19 @@ def cmd_pack(args) -> int:
               "longer exists.")
     else:
         print(f"  {GREEN}the attestation is the freshest artifact here{RESET}")
+
+    # Reuses the `entries` already read for the continuity window above, so the
+    # two sections cannot describe different ledgers on the same render -- the
+    # same argument the continuity read itself carries.
+    #
+    # ONE expression on purpose. The first version assigned the rendered text to
+    # a local and printed a slice of it, and a mutation that kept the call but
+    # dropped the print survived the contract: the section left the page while
+    # every test stayed green. With the call inside the `print`, "is it wired"
+    # and "does it reach the page" are the same question, and one AST assertion
+    # answers both.
+    print("\n" + render_friction(count_friction(entries, manifest["label"]),
+                                 heading_wrap=(BOLD, RESET)))
 
     stat = diff_stat(root, base)
     if stat:

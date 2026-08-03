@@ -186,9 +186,26 @@ python scripts/canopus.py pack        # the evidence page for step 12
 
 The verdict at step 9 is mechanical and nothing else counts: the locked tests
 pass, none deselected, bound to a commit. Then steps 10 and 11 are the human
-half — measure against the sentence from step 1, and attack the built thing with
-`/scrutinize` until it returns nothing new. Green is not the same as right, and
-step 10 is the only place "passed but wrong" is visible.
+half — measure against the sentence from step 1, and attack the built thing until
+the attack stops finding anything. Green is not the same as right, and step 10 is
+the only place "passed but wrong" is visible.
+
+**Step 11 does not run `/scrutinize` from inside a slice.** That skill carries
+`disable-model-invocation: true`, so only the operator can fire it; an instruction
+to invoke it is an instruction to do something the harness forbids. The assistant's
+adversarial pass is `scripts/utils/mutation_probe.py`: break the code on purpose,
+and a contract worth having goes red. Every mutation carries a CONTROL proving it
+is the break its label claims, because a mutation that does not do what its author
+thinks yields a confident, wrong SURVIVED and gets a working guard weakened.
+
+Run the mutations TWICE and report both: against the whole suite, and against the
+frozen contract ALONE. The second run is the honest one — it is what tells you
+which properties the contract itself does not hold. Measured on the yield-axes
+slice, 2026-08-03: twelve killed against the suite, two of those SURVIVING the
+contract alone, both of them CLI wiring the contract pinned only as a function.
+And two defects that no mutation could reach were found by reading the branch,
+because a silent no-op breaks no assertion anywhere. The operator may still run
+`/scrutinize` himself; this is what the slice does when he does not.
 
 `pack` is not optional and it is the LAST thing before Approval 2, not the
 first. It records the render, and `release --ship` refuses without one. Run it

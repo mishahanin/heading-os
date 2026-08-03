@@ -47,8 +47,16 @@ x-heading-capability:
 The standard for building anything here. Thirteen moments, four acts, and two of
 those moments are the operator's own.
 
-**The one thing this exists to prevent:** a test contract that moves under the
-code. Everything else is scaffolding around that.
+**The one thing this exists to prevent:** a contract too weak to decide anything,
+passing as one that decided. Everything else is scaffolding around that.
+
+Read that as a correction, not a slogan. Until 2026-08-03 this line said the
+standard exists to stop a contract MOVING under the code. Classifying all 62
+window-and-retake records said otherwise: across 20 shipped slices a contract was
+never once weakened after the fact, and was born too weak thirty times. So the
+green to distrust is the one no wrong implementation was ever made to fail.
+The freeze still holds — it keeps the contract from weakening BETWEEN the two
+approvals — it is simply no longer what the standard is about.
 
 ## Bare `/canopus` — where am I
 

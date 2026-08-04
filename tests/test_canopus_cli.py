@@ -3476,6 +3476,44 @@ def test_status_names_the_cause_of_a_red_lock_instead_of_the_wrong_one(
     assert "per-file report" not in out
 
 
+def test_a_report_that_cannot_say_whether_the_root_moved_is_read_as_moved():
+    """The fail-open direction, closed where the frozen contract could not reach.
+
+    `loss_of_lock_sentences` reads `root_moved` with a default, because it sits
+    on a gate that fails OPEN and may not raise on a report shaped by an older
+    producer. The DEFAULT is the whole guard: read it as False and a report
+    missing the key silently restores the defect the field was added to fix — the
+    enforcer sentence alone over a tree whose contract root disagrees, naming the
+    cheap cure while the expensive one is also owed.
+
+    Found at step 11 of the `enforcer-set-bound` slice as the one mutation its
+    frozen contract could not kill. Every contract test passes a report built by
+    `verify_manifest`, which always carries the key, so none of them could tell
+    the two defaults apart. This one hands over a report without it.
+    """
+    from scripts.utils.canopus_freeze import ANCHOR_RECORDED
+    from scripts.utils.canopus_gate import loss_of_lock_sentences
+    from scripts.utils.canopus_git import AnchorResolution
+
+    legacy = {
+        "recomputed_root": "a" * 64,
+        "changed": [], "added": [], "removed": [],
+        "enforcer_moved": ["scripts/utils/colors.py"],
+        "held": False,
+    }
+    assert "root_moved" not in legacy, "the fixture defeats its own purpose"
+    resolution = AnchorResolution(anchor=Path("/nonexistent/gate.md"),
+                                  status=ANCHOR_RECORDED, value="a" * 64,
+                                  approval="", approval_reason="", source="")
+
+    said = " ".join(loss_of_lock_sentences(legacy, resolution))
+
+    assert "ENFORCER moved" in said
+    assert "The frozen contract moved" in said, (
+        "a report that cannot say whether the root moved was read as though it "
+        "had not, so the operator is told only to re-pin")
+
+
 def test_status_names_an_open_release_window(tree, anchor, capsys):
     """The gate reports it at every session start; `status` said "no active
     freeze" and stopped there, which is true and is not the whole state."""

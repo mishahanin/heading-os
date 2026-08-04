@@ -6,6 +6,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **The frozen enforcer SET was not bound by the approved root, so an enforcer
+  could be dropped out of the guarantee without any indicator moving.** The
+  manifest-split slice took the enforcer bytes out of the root-hash payload so
+  that editing one costs a `repin` instead of a six-command retake. It took the
+  enforcer NAMES out with them. Measured 2026-08-04 on a synthetic tree: a freeze
+  over ten enforcers and a freeze over nine compute the SAME root, so `release
+  --window` followed by a `freeze` with a shorter `--content` list drops a file
+  out of the frozen set, leaves the COMMITTED approval matching, and reads `LOCK
+  HELD` and `APPROVED`. From that moment the dropped file was editable under a
+  green lock, and editing it changed nothing anywhere. `enforcer_moved` could not
+  see it either: it diffs the RECORDED map against disk, and a name that was
+  never recorded is in neither.
+
+  Recipe **`canopus-freeze-v7`** puts the names back inside the payload and
+  leaves the digests outside it, so a change to the SET costs a re-approval and a
+  change to the BYTES still costs only a `repin`. A recorded enforcer that is
+  gone from disk is recomputed as a named absent sentinel rather than dropped, so
+  the recomputed name set is always the RECORDED one: deleting an enforcer stays
+  on its own `enforcer_moved` axis instead of masquerading as a moved contract.
+  The guarantee is a comparison, not a rule — it binds a freeze to the set its
+  committed approval recorded, which is why the CLI still refuses an anchorless
+  freeze.
+
+  **A v6 manifest is refused BY NAME**, at every write and at every pytest
+  session start. A clone still holding one clears it with `python
+  scripts/canopus.py release --force --window --reason "<why>"`, the logged
+  escape. That manifest is obsolete rather than damaged and `read_freeze` cannot
+  tell the two apart, which is left open and written down in `docs/EXTENDING.md`
+  rather than fixed here: telling them apart changes what a corrupt manifest IS,
+  and this slice's approval did not cover that.
+
+- **`repin` cleared the attestation even when no enforcer byte had moved**, and
+  said so on the terminal either way. A re-pin is accepted over an unchanged set
+  on purpose, because it is what an operator reaches for when they BELIEVE the
+  enforcer moved; charging a full suite re-run for having checked taxed the one
+  behaviour the command exists to make cheap. The recorded run was produced by
+  exactly those bytes, so it now stands, and the closing line says which of the
+  two happened.
+
+- **`loss_of_lock_sentences` decided whether the CONTRACT had moved from the
+  file lists rather than from the root comparison.** Measured: with a stored root
+  the tree does not compute and one enforcer byte edited, the only sentence said
+  was "The ENFORCER moved, not the contract", which was false of that tree and
+  named the cheap cure, so the operator re-pinned and the lock stayed red. That
+  is the exact failure the branch's own comment forbids. `verify_manifest` now
+  reports `root_moved` as a named field and the sentences read it, defaulting to
+  the red direction when a report cannot answer.
+
 ### Added
 
 - **A contract could be red for a perfectly real reason and still be satisfied

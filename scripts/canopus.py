@@ -1742,9 +1742,19 @@ def cmd_repin(args) -> int:
     if event["changed"]:
         for rel in event["changed"]:
             print(f"  {rel}")
-    print(f"The contract root {manifest['root'][:12]} is untouched, so the "
-          f"committed approval still stands. The attestation is cleared: the "
-          f"enforcer set holds the test runner, so the suite runs again.")
+    # The closing line has to agree with the disk, and it did not. It announced a
+    # cleared attestation unconditionally, so an operator whose re-pin moved
+    # NOTHING was told a full suite re-run was owed -- the exact cost `repin`
+    # exists to remove, put back by a print statement. Both halves are said
+    # plainly rather than one being left implied.
+    standing = (f"The contract root {manifest['root'][:12]} is untouched, so the "
+                f"committed approval still stands.")
+    if event["changed"]:
+        print(f"{standing} The attestation is cleared: the enforcer set holds "
+              f"the test runner, so the suite runs again.")
+    else:
+        print(f"{standing} No enforcer byte moved, so the attestation stands "
+              f"too: the run it records was produced by exactly these bytes.")
     return 0
 
 

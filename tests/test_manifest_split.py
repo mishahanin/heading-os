@@ -397,18 +397,23 @@ def test_the_recipe_is_bumped_so_an_old_manifest_is_refused_by_name(tree, anchor
         write_freeze,
     )
 
-    assert RECIPE == "canopus-freeze-v6", (
+    # Advanced to v7 by the `enforcer-set-bound` slice, which put the enforcer
+    # NAMES back into the payload this one took them out of. The literal is
+    # deliberate and is meant to be edited by hand at every bump: a test that
+    # read RECIPE from the module would agree with any value the module happened
+    # to hold, which is the one thing this test exists not to do.
+    assert RECIPE == "canopus-freeze-v7", (
         f"the root-hash payload changed and the recipe is still {RECIPE}")
 
     write_freeze(tree, _manifest(tree, anchor))
     path = freeze_state_path(tree)
     stale = json.loads(path.read_text(encoding="utf-8"))
-    stale["recipe"] = "canopus-freeze-v5"
+    stale["recipe"] = "canopus-freeze-v6"
     path.write_text(json.dumps(stale), encoding="utf-8")
 
     with pytest.raises(FreezeCorrupt) as caught:
         read_freeze(tree)
-    assert "canopus-freeze-v5" in str(caught.value)
+    assert "canopus-freeze-v6" in str(caught.value)
 
 
 # ============================================================

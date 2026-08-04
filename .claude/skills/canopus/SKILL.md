@@ -179,6 +179,12 @@ list is not decoration and it is checked —
 `tests/test_canopus_freeze.py::test_the_documented_enforcer_set_covers_its_import_closure`
 recomputes the closure and fails if this command has fallen behind it.
 
+**Pass the same ten to `freeze` that you passed to `approve`.** The root hash
+carries the enforcer NAMES, so a freeze over a shorter list is refused against
+the committed approval rather than accepted with a file quietly outside the
+guarantee. Their BYTES stay outside the hash, so editing one still costs only a
+`repin`.
+
 `freeze` refuses a contract that is not red for a reason that means something,
 and refuses a root the COMMITTED artifact contradicts. Both refusals and their
 exceptions are in `references/canopus-gate.md`. Read it before the first retake.
@@ -265,7 +271,7 @@ enforcer edit reddens the lock and `verify` names it with `cure: repin`.
 **Coming back from a window is six commands, not one.** The contract bytes moved,
 so the root moved with them, and the committed approval still records the
 previous root — precisely what `freeze` refuses. `approve --replace --reason "<why>" --cause
-<contract-strengthened | enforcer-moved | lint | frozen-set-wrong>`, a fresh
+<contract-strengthened | enforcer-moved | lint | recipe-bumped | frozen-set-wrong>`, a fresh
 COMMIT of the artifact, then the identical `freeze`, then `verify`. Releasing a
 freeze clears the attestation with it, so step 9 is run again.
 

@@ -290,11 +290,22 @@ CAUSE_CONTRACT_STRENGTHENED = "contract-strengthened"
 CAUSE_ENFORCER_MOVED = "enforcer-moved"
 CAUSE_LINT = "lint"
 CAUSE_SET_WRONG = "frozen-set-wrong"
+# The slice changed the manifest RECIPE, so the root computed under the new
+# payload shape cannot match the approval committed under the old one, whatever
+# else did or did not move. Added by the slice that first hit it, and added
+# rather than folded into a neighbour for the reason this whole block exists.
+# `enforcer-moved` was the tempting one and is the wrong one twice over: it was
+# true of that slice only incidentally, and filing the record there would inflate
+# the very class the manifest-split change claims to have closed, in the counter
+# used to argue that it did. A cause that flatters the change it is measuring is
+# worse than no cause. `frozen-set-wrong` is equally untrue: the set was right.
+CAUSE_RECIPE_BUMPED = "recipe-bumped"
 
 RETAKE_CAUSES = frozenset({
     CAUSE_CONTRACT_STRENGTHENED,
     CAUSE_ENFORCER_MOVED,
     CAUSE_LINT,
+    CAUSE_RECIPE_BUMPED,
     CAUSE_SET_WRONG,
 })
 

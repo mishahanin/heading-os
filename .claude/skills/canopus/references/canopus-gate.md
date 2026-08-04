@@ -91,6 +91,20 @@ the committed approval still matches and no window is needed:
 3. `python scripts/run-tests.py` — the re-pin clears the attestation, because
    the enforcer set holds the test runner and `conftest.py`
 
+Step 3 only when something MOVED. A re-pin that finds every enforcer byte
+identical leaves the attestation standing and says so, because the run it
+records was produced by exactly these bytes. `repin` is what an operator reaches
+for when they BELIEVE the enforcer moved, and charging a full suite re-run for
+having checked is a tax on the one behaviour this command exists to make cheap.
+
+**The enforcer SET is a different act from the enforcer BYTES.** The bytes cost
+a `repin`; changing WHICH files are frozen costs the six commands below, with
+`--cause frozen-set-wrong`. The root hash carries the enforcer names, so a
+`freeze` over a different `--content` list is refused against the committed
+approval. This is true in both directions: NARROWING the set is the dangerous
+one and widening it is safe, but both move the root, because a payload that is
+not a function of its input is not a hash.
+
 The commit is REQUIRED and `repin` refuses without it, naming the files. That
 refusal is the whole reason this is not a security trade: the change lands in
 git as a readable diff with an author, which is strictly better evidence than
@@ -119,7 +133,8 @@ Step 3 is not optional: `--replace` is what appends a second approval line over 
 recorded one, and it demands BOTH `--reason` and `--cause`.
 
 `--cause` takes one of `contract-strengthened`, `enforcer-moved`, `lint`,
-`frozen-set-wrong` (the closed vocabulary in `scripts/utils/gate_yield.py`), and it
+`recipe-bumped`, `frozen-set-wrong` (the closed vocabulary in
+`scripts/utils/gate_yield.py`), and it
 is not a duplicate of the reason. The reason says what happened this once, in
 prose no counter can read; the cause is what makes retakes countable. Measured
 2026-08-03: 39 retakes in the ledger and the yield report saw none of them, while

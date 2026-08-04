@@ -26,14 +26,14 @@ this catches is tampering by helpfulness: the model hits a red assertion,
 concludes in good faith that the assertion is wrong, and edits it. A verification
 that merely runs catches that completely.
 
-Recipe `canopus-freeze-v6`, named in every manifest so a future algorithm change
+Recipe `canopus-freeze-v7`, named in every manifest so a future algorithm change
 breaks loudly instead of silently:
 
     file digest  = sha256(LF-normalized bytes)
     dir digest   = sha256("".join(f"{relpath}\\n" for relpath in sorted members))
     root hash    = sha256(canonical JSON of
                           {recipe, anchor, anchor_repo, files, dirs, baseline,
-                           plugins})
+                           plugins, content_names})
     enforcer pin = sha256(canonical JSON of the `content` map)
 
 TWO hashes, because the manifest carries two claims that have nothing to do with
@@ -42,6 +42,11 @@ what a human commits an approval over. The pin is the ENFORCER: the bytes of the
 code that does the measuring. An enforcer edit moves the pin and leaves the root
 alone, so it costs a `repin` rather than a whole re-approval, and it is still
 never silent — see CONTENT_KEY.
+
+The enforcer NAMES are the one part of the enforcer claim that stays in the root,
+and the split shipped without them. The names say WHICH files are being watched;
+the digests say what those files currently are. Only the second is what a repin
+is for. See `root_hash_payload`.
 
 where a directory's members are those whose BASENAME matches one of the entry's
 recorded `names` patterns, and a member that is itself a directory is rendered
@@ -72,13 +77,15 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 from scripts.utils.atomic import atomic_write_text
 
-# v6 from the manifest-split slice: the enforcer bytes LEFT the root-hash payload
-# for a map of their own. Same reasoning as v5, which added the plugin baseline,
-# and as v2, which added the per-file baseline — a new payload shape without a
-# bump reads as LOSS OF LOCK on a tree where nothing moved, and sends an operator
-# hunting a file that never changed. The bump turns that into a NAMED refusal at
-# `read_freeze` ("carries recipe canopus-freeze-v5").
-RECIPE = "canopus-freeze-v6"
+# v7 from the enforcer-set-bound slice: the enforcer NAMES came back into the
+# root-hash payload, which v6 had taken out along with their bytes. v6 from the
+# manifest-split slice before it: the enforcer bytes LEFT the payload for a map
+# of their own. Same reasoning every time, and as v5 (the plugin baseline) and v2
+# (the per-file baseline) — a new payload shape without a bump reads as LOSS OF
+# LOCK on a tree where nothing moved, and sends an operator hunting a file that
+# never changed. The bump turns that into a NAMED refusal at `read_freeze`
+# ("carries recipe canopus-freeze-v6").
+RECIPE = "canopus-freeze-v7"
 
 # The manifest key holding the ENFORCER map: the bytes of the code that does the
 # measuring, hashed per file exactly like `files`, and deliberately OUTSIDE the
@@ -96,7 +103,30 @@ RECIPE = "canopus-freeze-v6"
 # Split, not dropped. `enforcer_pin` digests this map, `verify_manifest` reports
 # `enforcer_moved` beside `changed`, and a moved enforcer with no re-pin does NOT
 # read LOCK HELD. What the split removes is the price, not the detection.
+#
+# The split took the enforcer NAMES out with the bytes, and that was a hole
+# rather than a trade. Measured 2026-08-04: a freeze over ten enforcers and a
+# freeze over nine compute the SAME root, so `release --window` followed by a
+# `freeze` with a shorter `--content` list drops an enforcer, leaves the
+# COMMITTED approval matching, and reads LOCK HELD and APPROVED. `enforcer_moved`
+# cannot see it either: it diffs the RECORDED map against disk, and a name that
+# was never recorded is in neither. From v7 the names are back inside the
+# root-hash payload while the digests stay outside it, so a change to the SET
+# costs a re-approval and a change to the BYTES still costs only a `repin`.
 CONTENT_KEY = "content"
+
+# What `recompute` records for an enforcer the manifest names and disk no longer
+# has. NOT a digest, and it cannot be mistaken for one: `file_digest` answers 64
+# hex characters and never the empty string, so `verify_manifest` reads this as
+# moved for every recorded file and can never read it as unchanged.
+#
+# It exists so the recomputed enforcer NAME SET is always the RECORDED one. Drop
+# a vanished file instead and the recomputed root stops matching the stored one,
+# so deleting an enforcer would read as a moved CONTRACT and send the operator to
+# a re-approval when the cure is to restore the file or take a new freeze. The
+# name set is a recorded expectation, like the baseline and the plugin set beside
+# it, and not something disk can be re-measured for.
+ABSENT_ENFORCER = ""
 FREEZE_DIRNAME = ".canopus"
 FREEZE_FILENAME = "freeze.json"
 HISTORY_FILENAME = "history.jsonl"
@@ -529,6 +559,22 @@ def root_hash_payload(manifest: dict) -> dict:
 
     CONTENT_KEY is NOT in here, and that is the whole of the manifest-split
     slice. Everything else that was in the payload stays in it.
+
+    The enforcer NAMES are, and that is the whole of the slice after it. The two
+    are not in tension: the names say WHICH files are being watched, the digests
+    say what those files currently ARE, and only the second is what a `repin`
+    corrects. With the names out, a re-freeze over a shorter `--content` list
+    computed the same root as the approval it was checked against, so an enforcer
+    could be dropped out of the set without any indicator moving and edited under
+    a green lock from then on. With them in, the same act computes a different
+    root and `freeze` refuses it against the COMMITTED approval, while an
+    enforcer EDIT still leaves the root exactly where it was.
+
+    Read the guarantee narrowly, because it is a comparison and not a rule: it
+    binds a freeze to the set its committed approval recorded. An anchorless
+    manifest has nothing to be compared against, so nothing there refuses a
+    narrowing — which is equally true of `files`, the baseline and the plugin
+    set, and is the reason the CLI will not take an anchorless freeze.
     """
     return {
         "recipe": manifest["recipe"],
@@ -538,6 +584,11 @@ def root_hash_payload(manifest: dict) -> dict:
         "dirs": dict(sorted(manifest["dirs"].items())),
         "baseline": dict(sorted((manifest.get("baseline") or {}).items())),
         "plugins": manifest_plugins(manifest),
+        # Names ONLY, and derived from the one accessor rather than stored
+        # beside the map. A `content_names` key of its own in the manifest would
+        # be one fact with two spellings, and the two would drift the first time
+        # somebody edited the map without it.
+        "content_names": sorted(enforcer_map(manifest)),
     }
 
 
@@ -839,8 +890,9 @@ LOCK_UNCONFIRMED = "LOCK UNCONFIRMED"
 def recompute(manifest: dict, root: Path) -> dict:
     """Rebuild the manifest's content keys from current disk state.
 
-    Same key set as *manifest*: a file that vanished is simply absent from the
-    result, which is what makes the recomputed root hash differ.
+    Same key set as *manifest*, and for `files` a file that vanished is simply
+    absent from the result, which is what makes the recomputed root hash differ.
+    The enforcer map is the ONE exception and the loop below states why.
     """
     resolved_root = Path(root).resolve()
     files: dict[str, str] = {}
@@ -869,16 +921,23 @@ def recompute(manifest: dict, root: Path) -> dict:
                 if alive else []
             ),
         }
-    # The enforcer map, re-measured from disk exactly like `files`. Absent from
-    # the root-hash payload, so it changes no digest here; it is what
-    # `verify_manifest` diffs to answer `enforcer_moved`, and recomputing it in
-    # the ONE place that already re-measures the tree keeps the two maps read by
-    # the same rules (symlinks skipped, a vanished file simply absent).
+    # The enforcer map, re-measured from disk exactly like `files`, with ONE
+    # deliberate difference: a vanished enforcer is recorded as ABSENT_ENFORCER
+    # rather than dropped, so the recomputed NAME set is always the recorded one.
+    # `files` behaves the opposite way on purpose. For the contract, absence must
+    # move the root, because a frozen test that is gone is a contract that
+    # changed. For an enforcer it must not: from v7 the names are inside the
+    # payload, so dropping a vanished one would make deleting an enforcer read as
+    # a moved CONTRACT and send the operator to a re-approval when the cure is to
+    # restore the file or take a new freeze. The deletion is not softened by
+    # this — it still reddens `enforcer_moved`, by name, on its own axis.
     content: dict[str, str] = {}
     for rel in enforcer_map(manifest):
         candidate = resolved_root / rel
         if candidate.is_file() and not candidate.is_symlink():
             content[rel] = file_digest(candidate)
+        else:
+            content[rel] = ABSENT_ENFORCER
 
     return {
         "recipe": manifest["recipe"],
@@ -905,6 +964,11 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
     changed, was added, or was removed. Both conditions are checked rather than
     inferred from each other, so a future recipe change cannot quietly turn a
     real difference into a pass.
+
+    The first of those two is reported on its own as `root_moved`, because every
+    caller that has to EXPLAIN a red lock needs to tell "the contract moved" from
+    "something the root does not cover moved", and re-deriving that from the file
+    lists gets it wrong: the lists can be empty while the roots disagree.
 
     `added` and `removed` are diffed against each guarded directory's RECORDED
     member list, never against the file map. A guard on a frozen file's parent
@@ -949,8 +1013,17 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
     removed = sorted((set(manifest["files"]) - set(current["files"])) | vanished)
 
     recomputed = root_hash(current)
+    # The root comparison as a NAMED field, not left for each reader to redo.
+    # Three of them ask this question — `lock_state`, the pytest-session gate and
+    # the CLI — and `loss_of_lock_sentences` answered it from the file lists
+    # instead, which is not the same question: it told an operator "the ENFORCER
+    # moved, NOT the contract" over a tree whose stored and recomputed roots
+    # disagreed, so the cure it named was the cheap one and the lock stayed red
+    # after they took it. One fact, one spelling, read by all of them.
+    root_moved = recomputed != manifest["root"]
     return {
         "recomputed_root": recomputed,
+        "root_moved": root_moved,
         "changed": changed,
         "added": sorted(added),
         "removed": removed,
@@ -959,7 +1032,7 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
         # the root comparison, because by construction it does not move the root.
         # Leaving it out is the one way this split becomes a weakening: the lock
         # would read green over a checker somebody edited.
-        "held": (recomputed == manifest["root"]
+        "held": (not root_moved
                  and not (changed or added or removed or enforcer_moved)),
     }
 
@@ -1658,13 +1731,19 @@ def repin_enforcer(root: Path, *, reason: str, git_sha: str = "") -> dict:
     root is left exactly as the committed approval recorded it, so a contract
     edit stays red through a re-pin and every re-pin after it.
 
-    The attestation goes, and that is correct rather than merely tolerable. The
-    enforcer set holds the test runner, the interpreter chooser and
-    `conftest.py`: a green run recorded before those bytes changed was produced
-    by a DIFFERENT checker, so keeping it would let an edited enforcer inherit
-    the previous run's word. The suite runs again. That cost is irreducible
-    while the runner is inside the set, and the saving is the other five
-    commands.
+    The attestation goes WHEN SOMETHING MOVED, and that is correct rather than
+    merely tolerable. The enforcer set holds the test runner, the interpreter
+    chooser and `conftest.py`: a green run recorded before those bytes changed
+    was produced by a DIFFERENT checker, so keeping it would let an edited
+    enforcer inherit the previous run's word. The suite runs again. That cost is
+    irreducible while the runner is inside the set, and the saving is the other
+    five commands.
+
+    When NOTHING moved it stays, and the reason is the same sentence read
+    honestly: the checker's bytes are identical, so the recorded run was produced
+    by exactly this checker and still speaks for it. Clearing it anyway charged a
+    full suite re-run to an operator who had done nothing but CHECK, which is a
+    tax on the one behaviour this command exists to make cheap.
 
     Refused without a REASON. An unexplained re-pin is indistinguishable from a
     re-baseline, which is the sentence `approve --replace` already uses for the
@@ -1738,7 +1817,8 @@ def repin_enforcer(root: Path, *, reason: str, git_sha: str = "") -> dict:
                "git_sha": git_sha},
     )
     write_freeze(root, updated)
-    attestation_state_path(root).unlink(missing_ok=True)
+    if changed:
+        attestation_state_path(root).unlink(missing_ok=True)
     return event
 
 

@@ -208,11 +208,41 @@ root and cost a whole re-approval. Measured over the 39 retakes in the ledger on
 2026-08-03: 21 of them were exactly that. `canopus repin --reason "<why>"`
 re-records the pin under the freeze already held, refusing while the changed
 bytes are uncommitted; it never touches `files`, `dirs`, `baseline` or `root`, so
-a contract edit stays red through any number of re-pins. Recipe
-`canopus-freeze-v6` names the split, and a v5 manifest is refused by name rather
-than reading as a silent loss of lock. The PreToolUse deny no longer refuses a
-write to an enforcer path: detection at `verify` replaced prevention, which is
-the same asymmetry recorded for watched directories below.
+a contract edit stays red through any number of re-pins. The PreToolUse deny no
+longer refuses a write to an enforcer path: detection at `verify` replaced
+prevention, which is the same asymmetry recorded for watched directories below.
+
+The enforcer NAMES are the one part of that claim that stays inside the root
+hash, and the split shipped without them. Measured 2026-08-04: a freeze over ten
+enforcers and a freeze over nine computed the SAME root, so `release --window`
+followed by a `freeze` with a shorter `--content` list dropped an enforcer,
+left the committed approval matching, and read `LOCK HELD` and `APPROVED` — with
+the dropped file editable under a green lock from then on and nothing anywhere
+saying so. `enforcer_moved` could not see it either: it diffs the RECORDED map
+against disk, and a name that was never recorded is in neither. Recipe
+`canopus-freeze-v7` puts the names back, so a change to the SET costs a
+re-approval while a change to the BYTES still costs only a `repin`. Read the
+guarantee as the comparison it is: it binds a freeze to the set its COMMITTED
+approval recorded, which is why the CLI will not take an anchorless freeze.
+Widening the set costs a re-approval too — the payload is a function of the set,
+and a one-directional rule would be a second mechanism beside the root with its
+own way of being wrong.
+
+A v6 manifest is refused by name (`carries recipe 'canopus-freeze-v6'`) rather
+than reading as a silent loss of lock, and that refusal fires on every write and
+at every pytest session start. Any clone still holding a v6 freeze when v7
+arrives clears it with `python scripts/canopus.py release --force --window
+--reason "<why>"`, which is the LOGGED escape.
+
+**Open, and measured by running it.** That manifest is OBSOLETE, not damaged: it
+is valid JSON of a known older shape. `read_freeze` raises the same
+`FreezeCorrupt` for both, so the only exit is the FORCE escape, and the ledger
+records the same `force_release` event for "the operator bumped the recipe
+deliberately" as for "somebody's manifest is unreadable". Those are different
+facts and the evidence cannot tell them apart. Found while shipping v7, which
+invalidated the freeze the slice was itself running under the moment the constant
+changed; left open because separating them changes what a corrupt manifest is,
+and that needs its own approval rather than a widening of this one.
 
 `canopus probe DIR` runs a contract set and prints its per-test outcomes without
 freezing anything. `canopus pack` prints the Fix 2 evidence page: all three axes

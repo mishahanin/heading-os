@@ -1,4 +1,20 @@
-"""The frozen contract for `cures-reachable` — the two-command cure deadlocks.
+"""The retired contract for `cures-reachable` — the two-command cure deadlocked.
+
+Shipped 2026-08-04 and promoted here from
+`tests/contract/2026-08-04-cures-reachable/`, where it was frozen. Every ID it
+held is kept: a contract retired by deletion takes its coverage with it, and the
+deadlock below is the kind of defect that returns the moment nothing watches for
+it.
+
+Two of these overlap with tests added during the slice's `/scrutinize` pass, and
+the overlap is deliberate rather than untidy. SC-3 and SC-3b here call
+`build_attestation` DIRECTLY with the argument handed in, which is what makes
+them a statement about that function; `test_canopus_attest.py`'s
+`test_a_run_taken_under_a_moved_enforcer_does_not_attest` and its sibling drive
+the real pytest hooks, which is what makes them a statement about the RECORDER
+sampling and passing it on. That pair is the defect the scrutiny pass found:
+this file alone stayed green over a recorder that never populated the field.
+Neither test replaces the other.
 
 ONE defect, found by RUNNING the standard on 2026-08-04 rather than by reading
 it. Editing an enforcer reddens the lock; `tests/conftest.py` then refuses to run
@@ -37,7 +53,13 @@ from pathlib import Path
 import pytest
 
 STAMP = "2026-01-01T00:00:00+00:00"
-_CLI = Path(__file__).resolve().parents[3] / "scripts" / "canopus.py"
+# parents[1], not [3]: this file lived two directories deeper while it was the
+# frozen contract. The depth is spelled against THIS file's location rather than
+# carried over, because the promotion is exactly when a path like this goes
+# quietly wrong -- the CLI then resolves outside the repository, subprocess finds
+# no such file, and the end-to-end test fails for a reason that has nothing to do
+# with what it is testing.
+_CLI = Path(__file__).resolve().parents[1] / "scripts" / "canopus.py"
 
 
 def _attestable(**overrides):

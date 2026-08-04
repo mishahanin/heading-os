@@ -47,9 +47,69 @@ from scripts.utils.canopus_nullstub import (
     _expand_claims,
     greedy_payload,
 )
+# `venv_python` ONLY, never `ensure_venv`. The first is a pure path computation;
+# the second re-execs the running process, and this module is imported by the
+# CLI, by the gate's callers and by the suite. An import that could re-exec is a
+# module that cannot be imported from a test.
+from scripts.utils.venv import venv_python
 
 DEFAULT_PATTERNS = ("test_*.py",)
 RED_OUTCOMES = ("failure", "error")
+
+
+def contract_interpreter() -> Path:
+    """The interpreter every Canopus child is launched with.
+
+    The project venv when it exists on disk, and the invoking interpreter
+    otherwise. One function rather than a `sys.executable` at each launch site,
+    because a second spelling of this rule would disagree with the first
+    SILENTLY: both return a path that runs pytest, and the difference only
+    surfaces as a plugin set nothing can match.
+
+    Measured 2026-08-04, at full cost. `freeze` captures its plugin baseline from
+    a pytest CHILD, and that child used to inherit `sys.executable`. Invoked as
+    bare `python` rather than `.venv/bin/python`, on a machine where the two are
+    different interpreters, the freeze recorded a plugin set DISJOINT from the
+    one every run of the suite loads. Nothing refused at capture time; the
+    symptom arrived after a full suite run as seventeen lines naming plugins,
+    which points a reader at plugin injection rather than at the interpreter.
+    `plugins` is inside `root_hash_payload`, so correcting it cost a whole
+    retake.
+
+    The fallback is not a courtesy, it is the case for a public clone that has
+    not run `uv sync` and for an operator on a system-wide install. Preferring
+    the venv only when it EXISTS keeps this from imposing a layout on a tree that
+    does not have one. `scripts/run-tests.py` already re-execs into the same
+    interpreter, so on this repository the two agree by construction, which is
+    the whole point: the baseline has to describe whatever will run the suite.
+
+    Not `ensure_venv`, which re-execs. That is what `run-tests.py` does and what
+    `scripts/canopus.py` cannot: the CLI module is imported by
+    `tests/test_canopus_cli.py`, and a re-exec at import time takes the suite
+    down with it. Choosing the CHILD's interpreter reaches the same end without
+    touching the parent process.
+    """
+    target = venv_python()
+    return target if target.exists() else Path(sys.executable)
+
+
+def interpreter_notice(chosen: Path, invoking: Path) -> str:
+    """One line when the capture used a different interpreter, "" when it did not.
+
+    Pure, so the decision is testable without a subprocess and the CLI keeps only
+    the printing.
+
+    Silence when they agree is half the requirement, not an optimisation. A
+    notice that fires on every invocation is one an operator stops reading, and
+    this line exists precisely to be read on the rare day it appears.
+
+    BOTH paths are named. "A different interpreter" without saying which sends
+    the reader back to the guessing this line was written to end.
+    """
+    if Path(chosen).resolve() == Path(invoking).resolve():
+        return ""
+    return (f"the contract child ran under {chosen}, not the {invoking} that "
+            f"invoked this command; the plugin baseline describes the former")
 
 # The most the greedy candidate's payload may carry across the process boundary.
 # Linux caps ONE `execve` string at MAX_ARG_STRLEN (32 pages, 131072 bytes) and
@@ -755,7 +815,10 @@ def run_pytest_report(
     with tempfile.TemporaryDirectory() as scratch:
         report = Path(scratch) / "contract.xml"
         command = [
-            sys.executable, "-m", "pytest", *rels,
+            # NOT sys.executable. See contract_interpreter: the child's plugin
+            # set becomes the freeze's baseline, so it has to be the interpreter
+            # that will run the suite rather than the one that typed the command.
+            str(contract_interpreter()), "-m", "pytest", *rels,
             "--junit-xml", str(report),
             "-o", "addopts=",
             "--import-mode=importlib",

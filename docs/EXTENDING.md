@@ -1006,6 +1006,17 @@ it. Five things changed, and none of them closes the bypass:
    it captures no baseline, so NO later run of it can ever read `ATTESTED`. That
    is fail-closed by design, and `freeze` says so at the surface the moment it
    happens rather than leaving the operator to discover it days later.
+
+   The child that captures the set is launched with the PROJECT interpreter
+   (`.venv/bin/python` when it exists), never with whichever interpreter invoked
+   the command, and `freeze` prints a line when the two differ. Measured
+   2026-08-04: invoked as bare `python`, the capture inherited the system
+   interpreter and recorded a plugin set DISJOINT from the one every run of the
+   suite loads, so nothing could ever attest that freeze. It refused silently at
+   capture and loudly two and a half minutes later, in wording that named plugins
+   rather than interpreters, and `plugins` being inside the root hash made the
+   correction a whole retake. On a tree with no `.venv` the invoking interpreter
+   is still used, so a clone that has not run `uv sync` keeps working.
 3. **The identity compared is derived from ORIGIN, never from pytest's
    registration name.** A registration name is an absolute path for a conftest
    and a memory address for an anonymous plugin, so comparing those refuses every

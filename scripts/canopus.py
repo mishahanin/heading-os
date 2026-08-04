@@ -60,6 +60,8 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     RED_OUTCOMES,
     ContractError,
     contract_files,
+    contract_interpreter,
+    interpreter_notice,
     parse_failure_modes,
     parse_junit,
     pass_candidate_refusal,
@@ -734,6 +736,15 @@ def _candidate_manifest(args, root: Path, anchor_path: Path):
             1 for _rel, _name, outcome in outcomes if outcome == "passed"
         )
         contract_note = f"{already_green} of {sum(counts.values())} already green"
+        # Said at CAPTURE time, beside the baseline it describes, because the
+        # alternative is where this line came from: the operator learns an hour
+        # later, from seventeen mismatch lines naming plugins, that the problem
+        # was which `python` they typed. Inside the contract branch, since a
+        # freeze over plain paths runs no child and there is no interpreter to
+        # report. Empty when the two agree -- see interpreter_notice.
+        notice = interpreter_notice(contract_interpreter(), Path(sys.executable))
+        if notice:
+            print(f"{YELLOW}plugins{RESET}  {notice}")
     if not plugins:
         # OUTSIDE the contract block, which is where it was first written and
         # where it covered one of the two ways to get here. A freeze over plain

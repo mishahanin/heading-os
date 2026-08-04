@@ -1176,20 +1176,30 @@ it. Five things changed, and none of them closes the bypass:</p>
    it captures no baseline, so NO later run of it can ever read <code>ATTESTED</code>. That
    is fail-closed by design, and <code>freeze</code> says so at the surface the moment it
    happens rather than leaving the operator to discover it days later.</li>
-<li><strong>The identity compared is derived from ORIGIN, never from pytest&rsquo;s
+</ol>
+<p>The child that captures the set is launched with the PROJECT interpreter
+   (<code>.venv/bin/python</code> when it exists), never with whichever interpreter invoked
+   the command, and <code>freeze</code> prints a line when the two differ. Measured
+   2026-08-04: invoked as bare <code>python</code>, the capture inherited the system
+   interpreter and recorded a plugin set DISJOINT from the one every run of the
+   suite loads, so nothing could ever attest that freeze. It refused silently at
+   capture and loudly two and a half minutes later, in wording that named plugins
+   rather than interpreters, and <code>plugins</code> being inside the root hash made the
+   correction a whole retake. On a tree with no <code>.venv</code> the invoking interpreter
+   is still used, so a clone that has not run <code>uv sync</code> keeps working.
+3. <strong>The identity compared is derived from ORIGIN, never from pytest&rsquo;s
    registration name.</strong> A registration name is an absolute path for a conftest
    and a memory address for an anonymous plugin, so comparing those refuses every
    honest run and carries an operator&rsquo;s home directory into a public hash.
    Measured: sixty-six raw names collapse to seven identities, and the
    distribution subset is identical in the freeze probe, the gate controller and
-   every gate worker.</li>
-<li><strong><code>scripts/run-tests.py</code> chooses its child&rsquo;s environment</strong> instead of
+   every gate worker.
+4. <strong><code>scripts/run-tests.py</code> chooses its child&rsquo;s environment</strong> instead of
    inheriting it, dropping every variable whose name begins <code>PYTEST_</code> by prefix
    rather than by a denylist. A bare <code>pytest</code> still inherits whatever the shell
-   holds; the canonical gate does not.</li>
-<li><strong>The tree-root guard sees importable directories, and the deny refuses the
-   write that creates one.</strong> Both halves are above, under the guard table.</li>
-</ol>
+   holds; the canonical gate does not.
+5. <strong>The tree-root guard sees importable directories, and the deny refuses the
+   write that creates one.</strong> Both halves are above, under the guard table.</p>
 <p><code>pack</code> prints an <code>interpreter</code> block beneath the three axes: the launcher, the
 compared identities, the environment names, the parsed plugin option, each
 in-tree plugin marked <code>frozen</code> or <code>NOT FROZEN</code>, the recorded-and-never-compared

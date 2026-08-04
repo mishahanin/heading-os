@@ -8,6 +8,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **The freeze's plugin baseline described whichever interpreter typed the
+  command, not the one that runs the suite.** `freeze --contract` captures the
+  set from a pytest CHILD, and `run_pytest_report` launched that child with
+  `sys.executable`. Measured 2026-08-04: invoked as bare `python` rather than
+  `.venv/bin/python`, on a machine where those are different interpreters, the
+  freeze recorded `['dist:_pytest', 'dist:anyio', 'dist:pytest_asyncio']` while
+  every run of the suite loads `['dist:pytest_cov', 'dist:xdist']` — two DISJOINT
+  sets, so no run could ever attest that freeze. Nothing refused at capture time;
+  the symptom arrived after a full suite run as seventeen lines of `a plugin the
+  freeze did not record was loaded`, wording that points at plugin injection
+  rather than at the interpreter, and `plugins` sits inside `root_hash_payload`
+  so correcting it cost a whole retake.
+
+  The child is now launched by `contract_interpreter()`, which prefers the
+  project venv WHEN IT EXISTS and falls back to the invoking interpreter
+  otherwise, so a public clone that has not run `uv sync` keeps working. One
+  named function rather than a `sys.executable` per launch site: a second
+  spelling would disagree silently, both returning a path that runs pytest.
+  `freeze` also prints one line when the capturing and invoking interpreters
+  differ, and stays silent when they agree — a notice that fires every time is
+  one nobody reads. `scripts/run-tests.py` solved the same problem for itself
+  with `ensure_venv()`; `scripts/canopus.py` cannot copy that, because it is
+  imported by `tests/test_canopus_cli.py` and a re-exec at import time would take
+  the suite down, so the choice moved to the child.
+
 - **The two-command enforcer cure deadlocked, so the manifest split's whole
   saving was unreachable on this repository.** Editing an enforcer reddens the
   lock; `tests/conftest.py` then refused to run ANY pytest session; the

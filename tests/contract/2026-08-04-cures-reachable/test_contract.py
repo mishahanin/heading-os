@@ -40,6 +40,34 @@ STAMP = "2026-01-01T00:00:00+00:00"
 _CLI = Path(__file__).resolve().parents[3] / "scripts" / "canopus.py"
 
 
+def _attestable(**overrides):
+    """Every argument a record needs to reach `attested: True`, bar the one
+    under test.
+
+    Spelled out rather than minimised, because `build_attestation` refuses on
+    each of a process block, a plugin baseline and a tree description
+    independently. A fixture carrying only the interesting argument refuses for
+    three reasons that are not the criterion, and SC-3 would then pass over an
+    implementation that had never read `enforcer_moved` at all.
+    """
+    from scripts.utils.canopus_freeze import TREE_RECIPE
+
+    tree = {"recipe": TREE_RECIPE, "head": "a" * 40, "dirty": {}}
+    kwargs = {
+        "frozen_tests": {"tests/contract/test_c.py": {"collected": 1, "passed": 1}},
+        "exit_status": 0,
+        "attested_at": STAMP,
+        "process": {"plugins": {}, "intree_plugins": [], "other_plugins": [],
+                    "launcher": "pytest", "addopts_p": [], "env": {},
+                    "workers": []},
+        "plugin_baseline": [],
+        "tree_at_start": dict(tree),
+        "tree_at_finish": dict(tree),
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
 # ============================================================
 # Scratch trees
 # ============================================================
@@ -248,10 +276,8 @@ def test_a_run_taken_while_an_enforcer_had_moved_does_not_attest(tree, anchor):
     from scripts.utils.canopus_freeze import build_attestation
 
     manifest = _manifest(tree, anchor)
-    record = build_attestation(
-        root_digest=manifest["root"], frozen_tests={"tests/contract/test_c.py": 1},
-        exit_status=0, attested_at=STAMP,
-        enforcer_moved=["scripts/gate.py"])
+    record = build_attestation(**_attestable(
+        root_digest=manifest["root"], enforcer_moved=["scripts/gate.py"]))
 
     assert record["attested"] is False, (
         "a run under an edited checker recorded itself as attesting the freeze")
@@ -260,13 +286,18 @@ def test_a_run_taken_while_an_enforcer_had_moved_does_not_attest(tree, anchor):
 
 
 def test_a_run_with_the_enforcer_intact_still_attests(tree, anchor):
-    """SC-3b. Without this, SC-3 is satisfied by never attesting at all."""
+    """SC-3b. Without this, SC-3 is satisfied by never attesting at all.
+
+    The pairing matters more than either half. A `build_attestation` that
+    refused a little more readily would pass SC-3 and silently make every
+    ordinary slice unable to reach step 9, which is a worse failure than the one
+    SC-3 closes: it is invisible until somebody is stuck.
+    """
     from scripts.utils.canopus_freeze import build_attestation
 
     manifest = _manifest(tree, anchor)
-    record = build_attestation(
-        root_digest=manifest["root"], frozen_tests={"tests/contract/test_c.py": 1},
-        exit_status=0, attested_at=STAMP, enforcer_moved=[])
+    record = build_attestation(**_attestable(
+        root_digest=manifest["root"], enforcer_moved=[]))
 
     assert record["attested"] is True, record["reasons"]
 
@@ -284,12 +315,10 @@ def test_the_moved_enforcer_answer_is_required_not_defaulted(tree, anchor):
     from scripts.utils.canopus_freeze import build_attestation
 
     manifest = _manifest(tree, anchor)
+    kwargs = _attestable(root_digest=manifest["root"])
 
     with pytest.raises(TypeError):
-        build_attestation(
-            root_digest=manifest["root"],
-            frozen_tests={"tests/contract/test_c.py": 1},
-            exit_status=0, attested_at=STAMP)
+        build_attestation(**kwargs)
 
 
 # ============================================================

@@ -91,16 +91,23 @@ the committed approval still matches and no window is needed:
 3. `python scripts/run-tests.py` — the re-pin clears the attestation, because
    the enforcer set holds the test runner and `conftest.py`
 
-**Step 1 does not currently succeed on this repository, and that is a defect
-rather than a caveat.** Measured 2026-08-04: an enforcer edit reddens the lock,
-`tests/conftest.py` then refuses to run ANY pytest session, and the `always_run`
+**Step 1 deadlocked until 2026-08-04.** An enforcer edit reddens the lock,
+`tests/conftest.py` then refused to run ANY pytest session, and the `always_run`
 `data-root-bypass-guard` pre-commit hook runs one — so the commit `repin` demands
-cannot be made, and `repin` refuses without it. The cure is circular. Until it is
-fixed, the way through is the six commands below with `--cause enforcer-moved`,
-which is the whole ceremony this two-command path exists to avoid. The fix is an
-enforcement-surface change (the gate has to tell a moved CONTRACT, which must
-block, from a moved ENFORCER, whose cure needs the suite to run) and belongs to
-its own slice with its own two approvals.
+could not be made, and `repin` refuses without it. The cure was circular, and the
+only way through was the six commands below with `--cause enforcer-moved`, the
+whole ceremony this two-command path exists to avoid.
+
+The gate now PERMITS a pytest session when a moved enforcer is the SOLE red
+cause, and says so in amber with the file named and the cure offered. Every other
+cause still blocks the session, including a moved enforcer standing beside
+anything else. Permitting the run is not permitting a verdict: `verify` still
+exits red, `status` still reports LOSS OF LOCK, and no run taken while an
+enforcer is moved can ATTEST — `build_attestation` refuses outright, because the
+enforcer set holds the test runner and `conftest.py` and a run under edited bytes
+was produced by a different checker. So between the edit and the `repin` the
+suite runs and nothing it produces can be claimed, which is exactly the window
+step 1 needs and nothing wider.
 
 Step 3 only when something MOVED. A re-pin that finds every enforcer byte
 identical leaves the attestation standing and says so, because the run it

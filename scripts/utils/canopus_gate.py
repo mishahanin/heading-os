@@ -35,6 +35,7 @@ from scripts.utils.canopus_freeze import (
     LOSS_OF_LOCK,
     FreezeCorrupt,
     build_attestation,
+    enforcer_is_sole_cause,
     frozen_test_files,
     lock_state,
     open_release_window,
@@ -295,6 +296,29 @@ def _freeze_gate(root: Path) -> int:
         # an operator told the contract moved when it did not goes looking
         # through a per-file report that lists nothing.
         detail = " ".join(loss_of_lock_sentences(report, resolution))
+        if enforcer_is_sole_cause(report, status, value):
+            # The ONE relaxation in this gate, and the narrowest one that makes
+            # the documented cure takeable. Measured 2026-08-04: an enforcer edit
+            # reddens the lock, this gate refuses every pytest session, an
+            # `always_run` pre-commit hook runs one, so the commit `repin`
+            # demands cannot be made and `repin` refuses without it. The cheap
+            # cure the manifest split was built to deliver was unreachable on
+            # this repository, and both times it was met the escape was a
+            # release window plus a six-command retake -- exactly the cost the
+            # split removed on paper.
+            #
+            # Permitting the RUN is not permitting a VERDICT, and that is what
+            # keeps this from being a hole. The lock stays LOSS OF LOCK on every
+            # other surface: `verify` still exits red, `status` still says so,
+            # and `build_attestation` refuses outright while an enforcer is
+            # moved, so nothing a session taken now produces can be claimed.
+            # Amber rather than red, because amber is what "you may proceed and
+            # this proves nothing yet" already means everywhere else here.
+            print(f"{YELLOW}canopus: {LOSS_OF_LOCK}. {detail} This session is "
+                  f"PERMITTED because a moved enforcer is the only cause: the "
+                  f"cure needs a commit, and the commit needs a session. No run "
+                  f"taken now can attest.{RESET}")
+            return 0
         print(f"{RED}canopus: {LOSS_OF_LOCK}. {detail}{RESET}")
         return 1
     colour = GREEN if state == LOCK_HELD else YELLOW
@@ -727,6 +751,12 @@ class AttestationRecorder:
         # call because it is the FINISH sample that gets compared against it --
         # taking a fresh one on every read would compare the tree to itself.
         self.tree_at_start: dict | None = None
+        # The enforcer files that did NOT match the freeze when this session
+        # read it. Empty here rather than None: a recorder that never reached
+        # `_frozen_names` never found a freeze either, so it writes no record at
+        # all and this value is never read. Every route that DOES write one
+        # passes through `_frozen_names`, which sets it from the live report.
+        self.enforcer_moved: list[str] = []
 
     def _rel(self, candidate) -> str | None:
         """Root-relative POSIX path, or None when it lies outside the tree."""
@@ -746,7 +776,17 @@ class AttestationRecorder:
         self.patterns = config.getini("python_files") or ["test_*.py"]
         self.baseline = manifest.get("baseline") or {}
         self.plugin_baseline = manifest.get("plugins") or None
-        self.root_digest = verify_manifest(manifest, self.root)["recomputed_root"]
+        report = verify_manifest(manifest, self.root)
+        self.root_digest = report["recomputed_root"]
+        # Sampled from the SAME report as the root, at the same moment, because
+        # the two answer one question between them: which freeze, and which
+        # checker. An enforcer edited after this point is caught by the tree
+        # axis instead -- `tree_state` hashes every path git reports dirty and
+        # records HEAD, so a later edit voids the record whether it is committed
+        # or not. This field covers the window that axis cannot: a run that
+        # STARTED with the enforcer already moved, where the recorded tree and
+        # the current tree agree precisely because both are the moved one.
+        self.enforcer_moved = list(report["enforcer_moved"])
         return frozen_test_files(manifest, self.patterns)
 
     def collect(self, session) -> None:
@@ -1047,6 +1087,7 @@ class AttestationRecorder:
             frozen_tests=self.frozen,
             exit_status=int(exitstatus),
             attested_at=datetime.now(timezone.utc).isoformat(),
+            enforcer_moved=self.enforcer_moved,
             baseline=self.baseline,
             process=process,
             plugin_baseline=self.plugin_baseline,

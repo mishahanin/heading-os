@@ -212,13 +212,29 @@ a contract edit stays red through any number of re-pins. The PreToolUse deny no
 longer refuses a write to an enforcer path: detection at `verify` replaced
 prevention, which is the same asymmetry recorded for watched directories below.
 
-**That two-command cure does not currently complete, measured 2026-08-04.** An
-enforcer edit reddens the lock, `tests/conftest.py` then refuses to run any
-pytest session, and an `always_run` pre-commit hook runs one — so the commit
-`repin` requires cannot be made, and `repin` refuses without it. The way through
-today is the full retake with `--cause enforcer-moved`, which is the ceremony the
-split exists to avoid. Open: the gate has to tell a moved CONTRACT, which must
-block the suite, from a moved ENFORCER, whose own cure needs the suite to run.
+**That two-command cure deadlocked until 2026-08-04, and the fix is the one
+relaxation in the whole gate.** An enforcer edit reddens the lock,
+`tests/conftest.py` then refused to run any pytest session, and an `always_run`
+pre-commit hook runs one — so the commit `repin` requires could not be made, and
+`repin` refuses without it. The way through was the full retake with `--cause
+enforcer-moved`, which is the ceremony the split exists to avoid. `freeze_gate`
+now asks `enforcer_is_sole_cause` and PERMITS the session when a moved enforcer
+is the only red cause, printing the cause and the cure in amber rather than
+silently. Every other cause still blocks, including a moved enforcer standing
+beside anything else, and the question is answered by asking `lock_state` what
+the state would be with the enforcer axis emptied rather than by a second copy of
+the redness rule.
+
+Permitting the RUN is not permitting a VERDICT, and that is what keeps it from
+being a hole. `verify` still exits red, `status` still reports LOSS OF LOCK, and
+`build_attestation` takes a REQUIRED `enforcer_moved` argument and refuses
+outright while one has moved — the enforcer set holds the test runner, the
+interpreter chooser and `conftest.py`, so a run taken under edited bytes was
+produced by a different checker and cannot speak for the freeze. The root hash
+cannot carry that refusal: the split took the enforcer digests out of the payload
+on purpose, so a moved enforcer leaves the recomputed root exactly where it was.
+An enforcer edited AFTER a clean attestation is caught by the tree axis instead,
+whether the edit is committed (HEAD moves) or not (the path goes dirty).
 
 The enforcer NAMES are the one part of that claim that stays inside the root
 hash, and the split shipped without them. Measured 2026-08-04: a freeze over ten

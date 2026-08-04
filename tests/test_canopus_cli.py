@@ -472,6 +472,7 @@ def _attest(tree, root_digest, *, qualified=True, deselected=0, passed=3, skippe
         }},
         exit_status=0,
         attested_at="2026-07-25T10:42:11+00:00",
+        enforcer_moved=[],
         # An honest interpreter, and the set the freeze recorded for it. A
         # record with no process block reads as damage from wire 2.3 onward, so
         # a helper about counters still has to describe one.

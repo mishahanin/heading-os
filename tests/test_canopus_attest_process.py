@@ -545,6 +545,7 @@ def _record(process, plugin_baseline=BASELINE):
         frozen_tests={"tests/contract/s/test_a.py": {
             "collected": 2, "passed": 2, "skipped": 0, "failed": 0, "deselected": 0}},
         exit_status=0, attested_at="2026-07-27T00:00:00+00:00",
+        enforcer_moved=[],
         baseline={"tests/contract/s/test_a.py": 2},
         process=process, plugin_baseline=plugin_baseline,
         tree_at_start=dict(_CLEAN_TREE), tree_at_finish=dict(_CLEAN_TREE))

@@ -51,6 +51,10 @@ def _build(frozen_tests, *, exit_status=0, root="a" * 64, **overrides):
     kwargs = {
         "process": _process(), "plugin_baseline": PLUGIN_BASELINE,
         "tree_at_start": dict(CLEAN_TREE), "tree_at_finish": dict(CLEAN_TREE),
+        # In the default set rather than passed at the call, so a test about
+        # enforcer movement overrides it like any other axis and every test that
+        # is about something else says nothing about it.
+        "enforcer_moved": [],
     }
     kwargs.update(overrides)
     return cf.build_attestation(
@@ -892,6 +896,7 @@ def test_a_subset_run_does_not_attest_against_the_baseline():
         frozen_tests={"tests/contract/s/test_a.py": _counts(1, 1)},
         exit_status=0,
         attested_at="2026-07-25T00:00:00+00:00",
+        enforcer_moved=[],
         baseline={"tests/contract/s/test_a.py": 7},
     )
 
@@ -907,6 +912,7 @@ def test_a_full_run_attests_against_the_baseline():
         frozen_tests={"tests/contract/s/test_a.py": _counts(7, 7)},
         exit_status=0,
         attested_at="2026-07-25T00:00:00+00:00",
+        enforcer_moved=[],
         baseline={"tests/contract/s/test_a.py": 7},
         process=_process(), plugin_baseline=PLUGIN_BASELINE,
         tree_at_start=dict(CLEAN_TREE), tree_at_finish=dict(CLEAN_TREE),
@@ -924,6 +930,7 @@ def test_a_frozen_test_file_with_no_baseline_behaves_as_in_wire_1():
         frozen_tests={"tests/test_legacy.py": _counts(1, 1)},
         exit_status=0,
         attested_at="2026-07-25T00:00:00+00:00",
+        enforcer_moved=[],
         baseline={},
         process=_process(), plugin_baseline=PLUGIN_BASELINE,
         tree_at_start=dict(CLEAN_TREE), tree_at_finish=dict(CLEAN_TREE),
@@ -949,6 +956,7 @@ def _green_kwargs(**overrides):
         "plugin_baseline": ["dist:pytest"],
         "tree_at_start": dict(CLEAN_TREE),
         "tree_at_finish": dict(CLEAN_TREE),
+        "enforcer_moved": [],
     }
     kwargs.update(overrides)
     return kwargs

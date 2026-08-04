@@ -1029,20 +1029,65 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
     # disagreed, so the cure it named was the cheap one and the lock stayed red
     # after they took it. One fact, one spelling, read by all of them.
     root_moved = recomputed != manifest["root"]
-    return {
+    report = {
         "recomputed_root": recomputed,
         "root_moved": root_moved,
         "changed": changed,
         "added": sorted(added),
         "removed": removed,
         "enforcer_moved": enforcer_moved,
-        # `enforcer_moved` is listed here EXPLICITLY and cannot be inferred from
-        # the root comparison, because by construction it does not move the root.
-        # Leaving it out is the one way this split becomes a weakening: the lock
-        # would read green over a checker somebody edited.
-        "held": (not root_moved
-                 and not (changed or added or removed or enforcer_moved)),
     }
+    report["held"] = content_held(report)
+    return report
+
+
+def content_held(report: dict) -> bool:
+    """The CONTENT axis's one definition of green, over a verify report.
+
+    One spelling, two readers. `verify_manifest` builds a report and asks it;
+    `enforcer_is_sole_cause` asks it again over a copy with the enforcer axis
+    emptied. A second copy of this arithmetic is how the two come to disagree,
+    and the disagreement would be silent: both would still return a bool.
+
+    `enforcer_moved` is read here EXPLICITLY and cannot be inferred from the root
+    comparison, because by construction it does not move the root. Leaving it out
+    is the one way the manifest split becomes a weakening: the lock would read
+    green over a checker somebody edited.
+
+    `root_moved` defaults to True when absent, which is the fail-red direction
+    for a report built before the field existed. Not proved unmoved is not proved
+    innocent.
+    """
+    return not (report.get("root_moved", True)
+                or report["changed"] or report["added"]
+                or report["removed"] or report["enforcer_moved"])
+
+
+def enforcer_is_sole_cause(report: dict, anchor_status, anchor_value) -> bool:
+    """True when a moved ENFORCER is the only thing keeping this lock red.
+
+    The question `freeze_gate` asks before it permits a pytest session over a
+    broken lock, and the narrowest question that unblocks the documented cure.
+    Answered by asking `lock_state` what the state WOULD be with the enforcer
+    axis emptied, never by re-deriving redness here: a widening of `lock_state`
+    then narrows this automatically, where a second copy would keep permitting
+    what the wider rule had started refusing.
+
+    The whole anchor axis is asked, not just the content report. `lock_state`
+    reaches red from four causes and three of them leave the contract exactly
+    where it was, so a sole-cause test written against the content report alone
+    would call a freeze nobody approved "permitted".
+
+    Both anchor arguments are REQUIRED. `lock_state` shipped its pair as optional
+    and the greener reading became the default, so a caller that forgot them was
+    told LOCK HELD over an unapproved freeze. Repeating that shape here would
+    repeat that defect one axis over.
+    """
+    if not report.get("enforcer_moved"):
+        return False
+    relaxed = dict(report, enforcer_moved=[])
+    relaxed["held"] = content_held(relaxed)
+    return lock_state(relaxed, anchor_status, anchor_value) == LOCK_HELD
 
 
 # ============================================================
@@ -2006,6 +2051,7 @@ def build_attestation(
     frozen_tests: dict,
     exit_status: int,
     attested_at: str,
+    enforcer_moved: Iterable[str],
     baseline: Optional[dict] = None,
     process: Optional[dict] = None,
     plugin_baseline: Optional[Iterable[str]] = None,
@@ -2076,6 +2122,29 @@ def build_attestation(
     `canopus_gate.process_facts`).
     """
     reasons: list[str] = []
+    # First, because it disqualifies the WHOLE record rather than one file. The
+    # enforcer set holds the test runner, the interpreter chooser and
+    # `conftest.py`, so a run taken while those bytes differ from the frozen ones
+    # was produced by a DIFFERENT checker and cannot speak for this freeze.
+    #
+    # This is the price of the gate's one relaxation, and it is the reason that
+    # relaxation is safe. `freeze_gate` now permits a pytest session when a moved
+    # enforcer is the sole red cause, because the documented cure needs a session
+    # to reach a commit. Permitting the RUN while refusing the CLAIM is what
+    # keeps that from being a hole.
+    #
+    # The root hash cannot carry this. `manifest-split` took the enforcer digests
+    # out of the payload on purpose, so a moved enforcer leaves `root_digest`
+    # exactly where it was and the record's root comparison sees nothing.
+    #
+    # REQUIRED, never defaulted: an optional argument here would default every
+    # un-updated caller to "nothing moved", which is the greener reading and the
+    # exact fail-open shape `lock_state`'s optional anchor pair shipped.
+    moved = sorted(enforcer_moved)
+    if moved:
+        reasons.append(
+            "an enforcer file did not match the freeze while this run was in "
+            f"progress, so a different checker produced it: {', '.join(moved)}")
     if not frozen_tests:
         reasons.append("the freeze contains no test files to attest")
     expected_counts = baseline or {}

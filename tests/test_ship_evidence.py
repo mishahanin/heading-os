@@ -129,6 +129,7 @@ def _attest(tree, when: str) -> None:
         frozen_tests={"tests/test_alpha.py": {"collected": 1, "passed": 1}},
         exit_status=0,
         attested_at=when,
+        enforcer_moved=[],
     ))
 
 

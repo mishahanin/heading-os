@@ -8,6 +8,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **The two-command enforcer cure deadlocked, so the manifest split's whole
+  saving was unreachable on this repository.** Editing an enforcer reddens the
+  lock; `tests/conftest.py` then refused to run ANY pytest session; the
+  `always_run` `data-root-bypass-guard` pre-commit hook runs one; so the commit
+  `repin` demands could not be made, and `repin` refuses without it. Measured
+  twice on 2026-08-04, both times escaped by a release window plus a
+  six-command retake — the exact ceremony the split was taken to avoid, and 21
+  of the ledger's 39 recorded retakes were an enforcer edit and nothing else.
+  `freeze_gate` now asks the new `enforcer_is_sole_cause` and PERMITS the
+  session when a moved enforcer is the only red cause, printing the file and the
+  cure in amber instead of failing silently. The question is answered by asking
+  `lock_state` what the state would be with the enforcer axis emptied, never by
+  a second copy of the redness rule, and the CONTENT axis's definition of green
+  now has one spelling (`content_held`) read by both. Every other cause still
+  blocks, including a moved enforcer standing beside anything else, and the
+  whole anchor axis is asked so an unapproved freeze is never called permitted.
+
+  Permitting the RUN is not permitting a VERDICT, and that is what pays for it.
+  `build_attestation` takes a REQUIRED `enforcer_moved` argument and refuses the
+  record outright while one has moved: the enforcer set holds the test runner,
+  the interpreter chooser and `conftest.py`, so a run taken under edited bytes
+  was produced by a different checker. The root hash cannot carry that refusal —
+  the split took the enforcer digests out of the payload on purpose, so a moved
+  enforcer leaves the recomputed root exactly where it was. The argument is
+  required rather than defaulted for the reason `lock_state`'s optional anchor
+  pair is a standing defect: a default is the greener reading, and every
+  un-updated caller would inherit it silently.
+
 - **The frozen enforcer SET was not bound by the approved root, so an enforcer
   could be dropped out of the guarantee without any indicator moving.** The
   manifest-split slice took the enforcer bytes out of the root-hash payload so
@@ -61,17 +89,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Known issues
 
-- **The two-command enforcer cure from the manifest-split change does not
-  complete on this repository.** Measured 2026-08-04 while shipping the fix
-  above: editing an enforcer reddens the lock, `tests/conftest.py` then refuses
-  to run ANY pytest session, and the `always_run` `data-root-bypass-guard`
-  pre-commit hook runs one, so the commit `repin` demands cannot be made and
-  `repin` refuses without it. The cure is circular, and the only way through is
-  the full retake the split was taken to avoid. Documented in
-  `docs/EXTENDING.md` and `.claude/skills/canopus/references/canopus-gate.md`
-  rather than fixed here: the gate must learn to tell a moved CONTRACT, which has
-  to block the suite, from a moved ENFORCER, whose own cure needs the suite to
-  run, and that is an enforcement-surface change owing its own two approvals.
+- **An OBSOLETE freeze manifest is indistinguishable from a DAMAGED one.**
+  `read_freeze` raises the same `FreezeCorrupt` for a valid manifest of a known
+  older recipe as for an unreadable one, so a deliberate recipe bump costs the
+  `--force` escape and records the same `force_release` ledger event as genuine
+  corruption. Met on 2026-08-04 when the `canopus-freeze-v7` bump invalidated
+  the running slice's own freeze one edit after it was taken.
+- **Nothing binds the root-hash payload's SHAPE to `RECIPE`.** `RECIPE` and
+  `root_hash_payload` are two independent edits, so a payload change shipped
+  without a bump reads as LOSS OF LOCK on a tree where nothing moved. No
+  instance has shipped; the exposure is real and untested.
+- **`lock_state`'s `anchor_status` and `anchor_value` are still optional**, with
+  the greener content-only reading as the default, so a caller that forgets them
+  is told LOCK HELD over a freeze nobody approved.
 
 ### Added
 

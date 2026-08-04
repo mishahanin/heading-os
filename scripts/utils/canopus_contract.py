@@ -38,6 +38,7 @@ from scripts.utils.canopus_gate import pytest_child_env
 from scripts.utils.canopus_nullstub import (
     CANDIDATE_VAR,
     CANDIDATES,
+    GREEDY_MARKER,
     GREEDY_PAYLOAD_VAR,
     MODULES_VAR,
     NULLSTUB_STDERR_MARKER,
@@ -49,6 +50,16 @@ from scripts.utils.canopus_nullstub import (
 
 DEFAULT_PATTERNS = ("test_*.py",)
 RED_OUTCOMES = ("failure", "error")
+
+# The most the greedy candidate's payload may carry across the process boundary.
+# Linux caps ONE `execve` string at MAX_ARG_STRLEN (32 pages, 131072 bytes) and
+# answers E2BIG above it; `subprocess` raises that as `OSError`, which is not the
+# `ContractError` this module promises its callers. Set below the real ceiling on
+# purpose: the marker, the newline separators and the platform's own accounting
+# all live inside the same string, and a probe is not worth tuning to the byte.
+# Enforced by `passable_literals`, beside the NUL rule that guards the other half
+# of the identical boundary.
+PAYLOAD_BUDGET = 96 * 1024
 
 # The only two exits a probe run can be READ from. 0 is all green; 1 is tests
 # failed, which is the ordinary state of an unimplemented contract under a stub.
@@ -297,11 +308,56 @@ def passable_literals(literals) -> list[str]:
     the payload is joined on a newline and never split apart again — the child
     receives the finished string and re-derives nothing.
 
+    SIZE is the other half of the same boundary, and it was missing until
+    2026-08-04. Linux caps ONE `execve` string at MAX_ARG_STRLEN — 32 pages,
+    131072 bytes — and answers E2BIG above it, which `subprocess` raises as
+    `OSError`. That is no more a `ContractError` than the NUL is: `canopus.py`
+    catches it under the sentence "the frozen contract could not be read, so it
+    cannot be verified" and files it in the ledger as `unreadable`, so the
+    operator is told the wrong thing about the wrong file and the yield report
+    counts the wrong cause. Measured on this repository the same day: the
+    pass-candidates contract's payload is 11160 bytes, and the whole of `tests/`
+    read as one contract is 798034 — six times over, so the ceiling is reachable
+    by a contract set, not only in theory.
+
+    The budget leaves head-room under the real limit because the marker, the
+    newline separators and the platform's own accounting all sit inside the same
+    string. SMALLEST literals are kept first, deliberately: what a substring
+    assertion greps for is a short needle, and what makes a payload enormous is a
+    docstring paragraph, so spending the budget on the short strings keeps almost
+    all of the probe's reach while bounding the value.
+
     Dropping can only make the greedy candidate satisfy LESS, so it can only
     fail to refuse a weak contract, never refuse an honest one. That is the
-    direction this instrument is allowed to err in.
+    direction this instrument is allowed to err in — both drop rules err in it,
+    which is why neither raises.
     """
-    return sorted(value for value in literals if "\x00" not in value)
+    passable = sorted(value for value in literals if "\x00" not in value)
+    budget = PAYLOAD_BUDGET - len(GREEDY_MARKER.encode("utf-8")) - 1
+    spent = 0
+    kept: list[str] = []
+    dropped = 0
+    for value in sorted(passable, key=lambda text: len(text.encode("utf-8"))):
+        cost = len(value.encode("utf-8")) + 1
+        if spent + cost > budget:
+            dropped += 1
+            continue
+        spent += cost
+        kept.append(value)
+    if dropped:
+        # Named, never silent, on the rule `run_pass_candidates` follows for a
+        # candidate that lost tests: a probe that measured part of a contract
+        # must not print the same page as one that measured all of it.
+        print(
+            f"canopus: the greedy pass-candidate's payload would exceed "
+            f"{PAYLOAD_BUDGET} bytes, which is more than one environment value "
+            f"can carry, so {dropped} of the contract's longest string literal(s) "
+            f"were dropped from it. The candidate therefore satisfies LESS than "
+            f"the contract wrote, which can only make it fail to refuse a weak "
+            f"contract, never refuse an honest one.",
+            file=sys.stderr,
+        )
+    return sorted(kept)
 
 
 def run_pass_candidates(

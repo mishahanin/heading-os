@@ -2430,3 +2430,85 @@ def test_the_refusal_carries_one_candidates_cure_and_not_the_others(tmp_path):
     assert _CANDIDATE_CURE["greedy"] in reasons[0]
     assert _CANDIDATE_CURE["none"] not in reasons[0]
     assert _CANDIDATE_CURE["echo"] not in reasons[0]
+
+
+def test_a_payload_too_large_for_one_environment_value_is_capped_not_raised():
+    """The size half of the boundary `passable_literals` already guards for NUL.
+
+    Linux caps ONE `execve` string at MAX_ARG_STRLEN (32 pages, 131072 bytes)
+    and answers E2BIG above it, which `subprocess` raises as `OSError` -- not
+    the `ContractError` this module promises its callers, so `canopus.py` would
+    catch it under "the frozen contract could not be read" and file it in the
+    ledger as `unreadable`: the wrong sentence about the wrong file, and the
+    wrong cause counted in the yield report.
+
+    Measured on this repository 2026-08-04: the whole of `tests/` read as one
+    contract produced a 798034-byte payload, six times over the ceiling, so this
+    is reachable by a contract SET rather than only in theory.
+
+    Asserts the joined payload -- the thing that actually crosses the boundary
+    -- and not the list length, because a cap that bounded the count while the
+    strings stayed enormous would pass a count assertion and still raise E2BIG.
+    """
+    from scripts.utils.canopus_contract import PAYLOAD_BUDGET, passable_literals
+    from scripts.utils.canopus_nullstub import greedy_payload
+
+    literals = {f"{index:06d}" + "x" * 4096 for index in range(64)}
+    assert sum(len(v) + 1 for v in literals) > PAYLOAD_BUDGET, (
+        "the fixture no longer exceeds the budget, so this test cannot fail"
+    )
+
+    payload = greedy_payload(passable_literals(literals))
+
+    assert len(payload.encode("utf-8")) <= PAYLOAD_BUDGET
+    assert PAYLOAD_BUDGET < 131072, (
+        "the budget must leave head-room under MAX_ARG_STRLEN for the marker, "
+        "the separators and the platform's own accounting"
+    )
+
+
+def test_the_cap_keeps_the_short_needles_a_substring_assertion_greps_for():
+    """Smallest first, because dropping the wrong end guts the probe.
+
+    A substring assertion greps for a short needle; what makes a payload
+    enormous is a docstring paragraph. A cap that dropped the short strings
+    would leave the greedy candidate unable to satisfy the very assertions it
+    exists to expose, so the probe would quietly stop refusing weak contracts
+    while still printing a candidate line.
+    """
+    from scripts.utils.canopus_contract import PAYLOAD_BUDGET, passable_literals
+
+    needle = "refused"
+    literals = {needle} | {
+        f"{index:06d}" + "y" * 8192 for index in range(PAYLOAD_BUDGET // 8192 + 4)
+    }
+
+    kept = passable_literals(literals)
+
+    assert needle in kept, "the cap dropped the short literal, not the long ones"
+
+
+def test_the_cap_reports_itself_rather_than_narrowing_the_probe_in_silence():
+    """A probe that measured part of a contract must not print the same page.
+
+    The rule `run_pass_candidates` already follows for a candidate that lost
+    tests. Dropping can only make the greedy candidate satisfy LESS, so it can
+    only fail to refuse a weak contract -- but an operator reading a clean page
+    still has to be told the instrument was narrowed.
+    """
+    import io
+    from contextlib import redirect_stderr
+
+    from scripts.utils.canopus_contract import PAYLOAD_BUDGET, passable_literals
+
+    small = io.StringIO()
+    with redirect_stderr(small):
+        passable_literals({"ok", "fine"})
+    assert small.getvalue() == "", "a payload under budget reported a drop"
+
+    loud = io.StringIO()
+    with redirect_stderr(loud):
+        passable_literals({f"{i:06d}" + "z" * 8192
+                           for i in range(PAYLOAD_BUDGET // 8192 + 4)})
+    assert "greedy pass-candidate" in loud.getvalue()
+    assert "dropped" in loud.getvalue()

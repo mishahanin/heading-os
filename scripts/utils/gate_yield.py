@@ -76,6 +76,19 @@ CAUSE_NO_ACTIVE_FREEZE = "no_active_freeze"
 CAUSE_EVIDENCE_MISSING = "evidence_missing"
 CAUSE_ATTESTATION_PERISHED = "attestation_perished"
 CAUSE_RETAKE_CAUSE_MISSING = "retake_cause_missing"
+# The two neighbours of the token above, split apart on the rule stated for
+# CAUSE_ENFORCER_UNVERIFIABLE eight lines down and broken in the same slice that
+# wrote it: one token covered a retake that declared NO cause, a retake that
+# declared an unknown one, and a first approval that declared a cause it had
+# nowhere to put. Three kinds counting as one thing, in the one table whose whole
+# premise is that they must not.
+#
+# The cures differ, which is the test this table applies: the first is "type
+# --cause", the second is "type a cause from the closed set", and the third is
+# "you did not mean to approve, you meant to replace" — a mistake about the
+# COMMAND, not about the vocabulary.
+CAUSE_RETAKE_CAUSE_UNKNOWN = "retake_cause_unknown"
+CAUSE_CAUSE_WITHOUT_REPLACE = "cause_without_replace"
 # `repin` refusing because the enforcer bytes it would record are not committed.
 # The one refusal the manifest-split slice adds, and the reason that slice is not
 # a security trade: the cheap path still makes the change land in git.
@@ -111,6 +124,8 @@ CAUSES = frozenset({
     CAUSE_EVIDENCE_MISSING,
     CAUSE_ATTESTATION_PERISHED,
     CAUSE_RETAKE_CAUSE_MISSING,
+    CAUSE_RETAKE_CAUSE_UNKNOWN,
+    CAUSE_CAUSE_WITHOUT_REPLACE,
     CAUSE_FREEZE_CORRUPT,
     CAUSE_FREEZE_ERROR,
     CAUSE_CONTRACT_ERROR,
@@ -313,13 +328,31 @@ def load_hand_classified(root) -> dict:
     A missing or damaged file answers `{}` rather than raising. This is a bridge
     for history, and a report that cannot render because a historical annotation
     is unreadable has turned a footnote into an outage.
+
+    DAMAGED is said out loud, and ABSENT is not, and the two were one silence
+    until 2026-08-04. `{}` from a corrupt file renders exactly like `{}` from a
+    tree that never had one: every historical retake drops to `unclassified` and
+    the page reports "0 were classified BY HAND" with nothing anywhere saying 39
+    classifications were just lost. The absent case IS the ordinary state of any
+    clone that is not this one, so it stays quiet; the damaged case is a fault,
+    and this module's own rule for a check that could not run is that it must not
+    read as a check that found nothing. Reported rather than raised, because the
+    caller is a report and the sentence above still holds.
     """
+    path = Path(root) / HAND_CLASSIFIED_PATH
     try:
-        raw = json.loads((Path(root) / HAND_CLASSIFIED_PATH)
-                         .read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        print(f"gate-yield: the committed retake classification at {path} could "
+              f"not be read, so every retake predating the declared --cause "
+              f"field will count as {UNCLASSIFIED}: {exc}", file=sys.stderr)
         return {}
     if not isinstance(raw, dict):
+        print(f"gate-yield: the committed retake classification at {path} is not "
+              f"an object, so every retake predating the declared --cause field "
+              f"will count as {UNCLASSIFIED}.", file=sys.stderr)
         return {}
     out = {}
     for key, value in raw.items():

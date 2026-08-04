@@ -3500,3 +3500,89 @@ def test_status_names_a_vanished_manifest(tree, anchor, capsys):
     out = capsys.readouterr().out
     assert "MANIFEST GONE" in out
     assert "--force" in out
+
+
+def test_the_three_cause_refusals_are_three_classes_and_not_one_token(
+        tree: Path, anchor: Path, capsys):
+    """One token covered three kinds until 2026-08-04, in the table that forbids it.
+
+    `gate_yield` splits `enforcer_unverifiable` out of `enforcer_uncommitted`
+    with the rule spelled beside it -- "two refusals of one kind count as two of
+    one thing is false the moment one token covers two kinds" -- and the same
+    slice then filed a retake with NO cause, a retake with an UNKNOWN cause, and
+    a first approval carrying a cause it had nowhere to put, all under
+    `retake_cause_missing`. The cures differ: type a cause, type a cause from
+    the closed set, and type `--replace`.
+
+    Asserted on the ledger's `kind`, which is what `summarise` counts, rather
+    than on stderr: the three sentences already differed, and the count was
+    still one bucket.
+    """
+    # All three against an anchor that records NOTHING yet, deliberately. An
+    # anchor carrying an approval is refused by `anchor_already_recorded` several
+    # branches earlier, which is correct -- that IS the first thing wrong -- and
+    # would have this test assert the ordering of a different guard.
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "--cause", "lint", "tests/test_alpha.py"], tree) == 1
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "--replace", "--reason", "why", "tests/test_alpha.py"], tree) == 1
+    assert _run(["approve", "--label", "l", "--anchor", str(anchor),
+                 "--replace", "--reason", "why", "--cause", "not-a-real-cause",
+                 "tests/test_alpha.py"], tree) == 1
+    capsys.readouterr()
+
+    kinds = [e["kind"] for e in _ledger(tree) if e["event"] == "refuse_approve"]
+    assert kinds[-3:] == ["cause_without_replace", "retake_cause_missing",
+                          "retake_cause_unknown"], kinds
+
+
+def test_the_vocabulary_guards_one_blind_spot_stays_the_one_it_declared():
+    """The guard reads `ast`, so a computed cause is SKIPPED, not checked.
+
+    `tests/test_gate_yield.py::test_every_emitted_cause_is_declared_in_the_
+    vocabulary` reads each `_record_refusal` call's cause argument and checks it
+    only when it is a `Constant`, saying so in its own comment: "if one appears,
+    this skips it rather than accusing it". That is a reasonable posture and an
+    unmeasured one -- a refusal spelling its cause as a conditional expression
+    leaves that call site silently outside the vocabulary guard, which is the
+    hole the guard exists to close, and the tidier one-call form is therefore a
+    regression dressed as a simplification. This pass nearly shipped one.
+
+    Exactly ONE such site exists, and it is legitimate: `_record_raised` is the
+    funnel `main`'s four exception handlers pass through, and each of those
+    handlers spells its cause as a literal at ITS call site, so the four names
+    still reach the source-reachability guard. Pinning the blind spot by the
+    ENCLOSING FUNCTION rather than by a count means a new one anywhere else
+    fails here, by name, instead of widening a number nobody reads.
+    """
+    import ast
+
+    from scripts.utils.gate_yield import RECORDER
+
+    source = Path(canopus.__file__).read_text(encoding="utf-8")
+    tree_ast = ast.parse(source)
+
+    enclosing = {}
+    for node in ast.walk(tree_ast):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for child in ast.walk(node):
+                enclosing.setdefault(child, node.name)
+
+    calls, opaque = 0, set()
+    for node in ast.walk(tree_ast):
+        if not isinstance(node, ast.Call):
+            continue
+        if (getattr(node.func, "id", None)
+                or getattr(node.func, "attr", None)) != RECORDER:
+            continue
+        calls += 1
+        cause = node.args[2] if len(node.args) >= 3 else next(
+            (kw.value for kw in node.keywords if kw.arg == "cause"), None)
+        if not (isinstance(cause, ast.Constant) and isinstance(cause.value, str)):
+            opaque.add(f"{enclosing.get(node, '<module>')}:{node.lineno}")
+
+    assert calls, f"no {RECORDER} call site was found at all"
+    assert {site.split(":")[0] for site in opaque} == {"_record_raised"}, (
+        f"a {RECORDER} call outside `_record_raised` spells a computed cause, "
+        f"which the vocabulary guard skips rather than checks: {sorted(opaque)}"
+    )

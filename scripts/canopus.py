@@ -251,7 +251,11 @@ def _print_root(digest: str, manifest: dict) -> None:
     count = len(manifest["files"])
     noun = "file" if count == 1 else "files"
     enforcers = len(enforcer_map(manifest))
-    tail = f", {enforcers} enforcer" if enforcers else ""
+    # Pluralised on the same rule as the contract count beside it. The line read
+    # "2 files, 9 enforcer" until 2026-08-04, which is the kind of small wrongness
+    # that makes a reader wonder what else on the line was not looked at.
+    enforcer_noun = "enforcer" if enforcers == 1 else "enforcers"
+    tail = f", {enforcers} {enforcer_noun}" if enforcers else ""
     print(f"{BOLD}CANOPUS  root {digest}{RESET}  "
           f"(label: {manifest['label']}, {count} {noun}{tail})")
 
@@ -830,11 +834,32 @@ def cmd_approve(args) -> int:
     # countable, and a retake is the standard's largest single output. Measured
     # 2026-08-03: 39 of them in the ledger, and the yield report saw none.
     if args.replace:
-        cause_error = retake_cause_or_error(getattr(args, "cause", ""))
-        if cause_error:
+        declared = getattr(args, "cause", "")
+        cause_error = retake_cause_or_error(declared)
+        # TWO WHOLE REFUSAL BLOCKS, and the shape is dictated by two guards in
+        # `tests/test_gate_yield.py` that pull in different directions. One reads
+        # each `_record_refusal` cause with `ast` and SKIPS anything that is not
+        # a `Constant`, so a single call carrying a conditional expression drops
+        # silently out of the vocabulary check. The other walks each `return 1`'s
+        # OWN statement list for a `_record_refusal` sibling, so hoisting the two
+        # calls into a nested if/else above one shared `return` leaves the
+        # refusal recorded nowhere the guard can see. Both were tried, in that
+        # order, and each was caught by the guard the other satisfied.
+        #
+        # The discriminator is EMPTINESS, not a second copy of the closed
+        # vocabulary: "nothing was typed" and "the wrong word was typed" are told
+        # apart without this file holding an opinion about which words are right.
+        # `retake_cause_or_error` stays the only place that knows the set.
+        if cause_error and not declared:
             print(f"canopus: {cause_error}", file=sys.stderr)
             _record_refusal(root, "approve", "retake_cause_missing",
                             reason="--replace without a declared --cause")
+            return 1
+        if cause_error:
+            print(f"canopus: {cause_error}", file=sys.stderr)
+            _record_refusal(root, "approve", "retake_cause_unknown",
+                            reason="--replace with a --cause outside the "
+                                   "closed set")
             return 1
     elif getattr(args, "cause", ""):
         # A first approval is not a retake, so there is nothing for a cause to
@@ -844,7 +869,11 @@ def cmd_approve(args) -> int:
         print("canopus: --cause classifies a RETAKE and means nothing without "
               "--replace; a first approval records no anchor_replaced entry for "
               "it to land on.", file=sys.stderr)
-        _record_refusal(root, "approve", "retake_cause_missing",
+        # Its OWN token. This is a mistake about the COMMAND -- the operator
+        # meant `--replace` -- while the two above are mistakes about the
+        # vocabulary, and filing all three under one name is the exact shape
+        # `CAUSE_ENFORCER_UNVERIFIABLE` was split out to avoid.
+        _record_refusal(root, "approve", "cause_without_replace",
                         reason="--cause given without --replace")
         return 1
     manifest, contract_note, waived = _candidate_manifest(args, root, anchor_path)

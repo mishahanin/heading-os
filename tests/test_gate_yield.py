@@ -618,3 +618,54 @@ def test_the_recorder_survives_a_failure_that_is_not_an_oserror():
     assert isinstance(failure, str) and failure, "a non-OSError escaped"
     assert "OSError" not in failure, (
         f"the point is that this failure was NOT an OSError: {failure}")
+
+
+def test_a_damaged_classification_file_is_reported_and_an_absent_one_is_not(
+        tmp_path, capsys):
+    """`{}` from a corrupt bridge rendered exactly like `{}` from no bridge.
+
+    `load_hand_classified` answers `{}` for both, which is right -- a report
+    that cannot render because a historical annotation is unreadable has turned
+    a footnote into an outage. What was wrong until 2026-08-04 is that it said
+    nothing either way: a corrupt file dropped all 39 hand classifications, the
+    page then reported "0 were classified BY HAND", and nothing anywhere said
+    they had been lost.
+
+    ABSENT stays silent because it is the ordinary state of every clone that is
+    not this one. DAMAGED speaks, because this module's own rule for a check
+    that could not run is that it must not read as a check that found nothing --
+    the same rule `read_sources` follows with `missing_sources` and `tree_state`
+    follows by answering None.
+    """
+    from scripts.utils.gate_yield import HAND_CLASSIFIED_PATH, load_hand_classified
+
+    assert load_hand_classified(tmp_path) == {}
+    assert capsys.readouterr().err == "", "an absent bridge is not a fault"
+
+    target = tmp_path / HAND_CLASSIFIED_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    target.write_text("{not json", encoding="utf-8")
+    assert load_hand_classified(tmp_path) == {}
+    damaged = capsys.readouterr().err
+    assert str(target) in damaged, damaged
+    assert "unclassified" in damaged, damaged
+
+    target.write_text('["a list is not a mapping"]', encoding="utf-8")
+    assert load_hand_classified(tmp_path) == {}
+    assert "unclassified" in capsys.readouterr().err
+
+
+def test_the_real_committed_classification_still_loads_after_the_split(capsys):
+    """The split must not have made the live bridge noisy or empty.
+
+    A report that shouts on every ordinary run trains its reader to ignore it,
+    which costs exactly the signal the change was made to add.
+    """
+    from scripts.utils.gate_yield import load_hand_classified
+    from scripts.utils.workspace import get_workspace_root
+
+    loaded = load_hand_classified(get_workspace_root())
+
+    assert len(loaded) >= 39, f"the committed bridge lost entries: {len(loaded)}"
+    assert capsys.readouterr().err == "", "the healthy bridge reported a fault"

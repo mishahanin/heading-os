@@ -391,6 +391,95 @@ def test_a_complete_run_attests(frozen_engine):
     assert cf.attestation_state(record, manifest["root"], CLEAN_TREE)[0] == cf.ATTESTED
 
 
+def _frozen_with_enforcer(tmp_path, monkeypatch):
+    """The `frozen_engine` shape plus one ENFORCER, which that fixture has none of.
+
+    Its own builder rather than a parameter on the fixture: the two tests below
+    are about the enforcer axis alone, and every other recorder test in this file
+    should go on describing a freeze that has no enforcers at all.
+    """
+    import scripts.utils.canopus_gate as cg
+
+    monkeypatch.setattr(cg, "tree_state", lambda root: dict(CLEAN_TREE))
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts").mkdir()
+    target = tmp_path / "tests" / "test_frozen.py"
+    target.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    enforcer = tmp_path / "scripts" / "run-tests.py"
+    enforcer.write_text("# the checker\n", encoding="utf-8")
+    anchor = tmp_path.parent / f"anchor-enforcer-{tmp_path.name}.md"
+    anchor.write_text("placeholder\n", encoding="utf-8")
+    manifest = cf.build_manifest(
+        [target], tmp_path,
+        label="enforcer-fixture", frozen_at="2026-07-25T00:00:00+00:00",
+        anchor=anchor, content_only=[enforcer], plugins=PLUGIN_BASELINE,
+    )
+    cf.write_freeze(tmp_path, manifest)
+    return target, enforcer, manifest, AttestationRecorder(tmp_path)
+
+
+def test_a_run_taken_under_a_moved_enforcer_does_not_attest(tmp_path, monkeypatch):
+    """The RECORDER's half of the refusal that pays for the gate's one relaxation.
+
+    `freeze_gate` permits a pytest session when a moved enforcer is the sole red
+    cause, because the documented cure needs a commit and the commit needs a
+    session. What keeps that from being a hole is that the permitted run cannot
+    ATTEST — and that refusal only reaches `build_attestation` if the recorder
+    SAMPLES the moved enforcer and hands it on.
+
+    Tested here and not only where the `cures-reachable` contract tests it. That
+    contract passes `enforcer_moved` in by hand, so it stays green over a
+    recorder that never populated the field, and `AttestationRecorder.__init__`
+    seeds it with the GREEN reading (`[]`). Delete the one line in
+    `_frozen_names` and every record this repository writes would read "nothing
+    moved" while the gate went on permitting the sessions that wrote them —
+    which is the same fail-open shape the required argument was added to forbid,
+    reintroduced one layer in.
+
+    The root is asserted UNCHANGED in the same breath, because that is why a
+    separate signal has to exist at all: `manifest-split` took the enforcer
+    digests out of the root-hash payload, so the record's own root comparison
+    sees nothing here.
+    """
+    target, enforcer, manifest, rec = _frozen_with_enforcer(tmp_path, monkeypatch)
+    enforcer.write_text("# the checker, edited\n", encoding="utf-8")
+
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.report(_Report(str(target), "passed"))
+    rec.finish(session, 0)
+
+    record = cf.read_attestation(tmp_path)
+    assert record["attested"] is False, (
+        "a session taken under an edited checker recorded itself as attesting "
+        "the freeze")
+    assert any("scripts/run-tests.py" in reason for reason in record["reasons"]), (
+        f"no reason names the moved enforcer: {record['reasons']!r}")
+    assert record["root"] == manifest["root"], (
+        "the enforcer edit moved the contract root, so this test would pass "
+        "even with the enforcer axis gone")
+
+
+def test_a_run_with_every_enforcer_intact_still_attests(tmp_path, monkeypatch):
+    """The pairing, without which the test above is satisfied by never attesting.
+
+    The same tree and the same wiring, one byte less edited. A recorder that
+    refused a little more readily would pass the test above and leave every
+    ordinary slice unable to reach sign-off, which is the worse failure of the
+    two because it is invisible until somebody is stuck.
+    """
+    target, _enforcer, manifest, rec = _frozen_with_enforcer(tmp_path, monkeypatch)
+
+    session = _session(tmp_path, target)
+    rec.collect(session)
+    rec.report(_Report(str(target), "passed"))
+    rec.finish(session, 0)
+
+    record = cf.read_attestation(tmp_path)
+    assert record["attested"] is True, record["reasons"]
+    assert record["root"] == manifest["root"]
+
+
 def test_deselection_is_tallied_from_the_hook(frozen_engine):
     tmp_path, target, manifest, rec = frozen_engine
     session = _session(tmp_path, target)

@@ -105,6 +105,69 @@ def test_gate_is_amber_but_passing_without_a_recorded_anchor(tree, anchor, capsy
     assert "LOCK UNCONFIRMED" in capsys.readouterr().out
 
 
+def _with_enforcer(tree: Path, anchor: Path):
+    """A freeze over the same tree, carrying one enforcer by content."""
+    (tree / "scripts").mkdir(parents=True, exist_ok=True)
+    enforcer = tree / "scripts" / "run-tests.py"
+    enforcer.write_text("# the checker\n")
+    manifest = build_manifest([tree / "tests"], tree, label="demo",
+                              frozen_at=STAMP, anchor=anchor,
+                              content_only=[enforcer])
+    write_freeze(tree, manifest)
+    return manifest, enforcer
+
+
+def test_a_moved_enforcer_is_the_sole_cause_under_an_UNRECORDED_anchor_too(
+    tree, anchor, capsys
+):
+    """The amber window, which the sole-cause test first read as red.
+
+    `LOCK UNCONFIRMED` is the documented state between freezing and writing the
+    hash down, it is amber, and the gate ALREADY exits 0 on it -- the test two
+    above this one pins exactly that. So on such a tree the moved enforcer is the
+    only thing turning a permitted session into a refused one, which is the
+    question `enforcer_is_sole_cause` is asked.
+
+    Measured while the answer was `== LOCK_HELD`: this tree exited 0 before the
+    enforcer edit and 1 after it, so the deadlock the `cures-reachable` slice was
+    built to end survived untouched inside the one window an operator is most
+    likely to be in -- between the freeze and the anchor write -- while the
+    function docstring, the CHANGELOG and both documents said it was cured.
+
+    The BEFORE assertion is half the test and not scene-setting: without it a
+    later change that reddened this state outright would leave the AFTER
+    assertion passing for the opposite reason.
+    """
+    _, enforcer = _with_enforcer(tree, anchor)
+    assert freeze_gate(tree) == 0, "the amber window already permits the session"
+    assert "LOCK UNCONFIRMED" in capsys.readouterr().out
+
+    enforcer.write_text("# the checker, edited\n")
+
+    assert freeze_gate(tree) == 0, (
+        "an enforcer edit under an unrecorded anchor still refuses every pytest "
+        "session, so the commit `repin` requires cannot be made")
+    out = capsys.readouterr().out
+    assert "scripts/run-tests.py" in out, "the moved enforcer is not named"
+    assert "repin" in out, "the cure is not offered"
+
+
+def test_a_moved_CONTRACT_under_an_unrecorded_anchor_still_stops_the_suite(
+    tree, anchor
+):
+    """The control the relaxation above must not swallow.
+
+    Widening the sole-cause question from LOCK HELD to "not LOSS OF LOCK" is only
+    safe while the graver cause still governs, and an unrecorded anchor is
+    precisely where a too-eager widening would stop being noticed.
+    """
+    _, enforcer = _with_enforcer(tree, anchor)
+    enforcer.write_text("# the checker, edited\n")
+    (tree / "tests" / "test_alpha.py").write_text("def test_a():\n    assert False\n")
+
+    assert freeze_gate(tree) == 1
+
+
 def test_gate_fails_on_loss_of_lock(tree, anchor, capsys):
     manifest = build_manifest([tree / "tests"], tree, label="demo",
                               frozen_at=STAMP, anchor=anchor)

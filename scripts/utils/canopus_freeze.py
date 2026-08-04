@@ -969,9 +969,17 @@ def verify_manifest(manifest: dict, root: Path) -> dict:
     """Compare disk against *manifest* and report what moved.
 
     `held` is True only when the recomputed root hash matches AND no file
-    changed, was added, or was removed. Both conditions are checked rather than
-    inferred from each other, so a future recipe change cannot quietly turn a
-    real difference into a pass.
+    changed, was added, or was removed AND no enforcer moved. Every condition is
+    checked rather than inferred from the others, so a future recipe change
+    cannot quietly turn a real difference into a pass.
+
+    The enforcer term is named in that sentence rather than left to the paragraph
+    about it further down. This module's own standard, written where `recompute`
+    argues its one exception, is that an absolute sentence with an unstated
+    exception is what the next reader reasons from — and this sentence had been
+    absolute since before the enforcer axis existed. The arithmetic itself now
+    lives in `content_held`, which `enforcer_is_sole_cause` reads too, so the
+    definition has one spelling and the two callers cannot drift apart.
 
     The first of those two is reported on its own as `root_moved`, because every
     caller that has to EXPLAIN a red lock needs to tell "the contract moved" from
@@ -1082,12 +1090,25 @@ def enforcer_is_sole_cause(report: dict, anchor_status, anchor_value) -> bool:
     and the greener reading became the default, so a caller that forgot them was
     told LOCK HELD over an unapproved freeze. Repeating that shape here would
     repeat that defect one axis over.
+
+    The relaxed state is compared against LOSS OF LOCK, never against LOCK HELD,
+    and the difference is a whole reachable state rather than a nicety. The gate
+    refuses a session on exactly one state and permits the other two, so "would
+    this have been permitted without the enforcer" is the question asked here;
+    "would it have been GREEN" is a stricter one nobody needs. LOCK UNCONFIRMED
+    is the documented window between freezing and writing the hash down
+    (`read_anchor`), it is amber, and the gate already exits 0 on it — so on such
+    a tree a moved enforcer IS the only thing turning a permitted session into a
+    refused one. Measured 2026-08-04 against `== LOCK_HELD`: an unrecorded anchor
+    plus one edited enforcer exited 0 before the edit and 1 after it, so the
+    original deadlock survived untouched inside that window while this function,
+    the CHANGELOG and both documents all said it was cured.
     """
     if not report.get("enforcer_moved"):
         return False
     relaxed = dict(report, enforcer_moved=[])
     relaxed["held"] = content_held(relaxed)
-    return lock_state(relaxed, anchor_status, anchor_value) == LOCK_HELD
+    return lock_state(relaxed, anchor_status, anchor_value) != LOSS_OF_LOCK
 
 
 # ============================================================
@@ -2223,8 +2244,13 @@ def build_attestation(
             "against, so this record cannot perish when the code moves")
     else:
         drifted = tree_drift(tree_at_start, tree_at_finish)
-        for moved in drifted[:5]:
-            reasons.append(f"the tree changed while the run was in progress: {moved}")
+        # `path`, not `moved`: `moved` is bound at the top of this function to the
+        # moved-ENFORCER list, and reusing it here would leave one name carrying
+        # two unrelated meanings in one scope. Harmless today, because the first
+        # binding's only reader finishes above -- and that is exactly the kind of
+        # latent trap the next person to add a check down here walks into.
+        for path in drifted[:5]:
+            reasons.append(f"the tree changed while the run was in progress: {path}")
         if len(drifted) > 5:
             # Five is a display bound, not a claim about how many there were --
             # the same rule `_print_attestation` states for its own truncation

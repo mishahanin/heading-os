@@ -23,7 +23,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   a second copy of the redness rule, and the CONTENT axis's definition of green
   now has one spelling (`content_held`) read by both. Every other cause still
   blocks, including a moved enforcer standing beside anything else, and the
-  whole anchor axis is asked so an unapproved freeze is never called permitted.
+  whole anchor axis is asked rather than the content report alone, so a freeze
+  whose anchor disagrees or has vanished stays refused. The test is "would this
+  session have been PERMITTED without the enforcer", not "would it have been
+  green": the gate refuses on one state of three, so asking for LOCK HELD left
+  the original deadlock alive inside LOCK UNCONFIRMED — the documented window
+  between freezing and writing the anchor hash down, where the gate already
+  exits 0. An amber freeze the gate was already letting through keeps going
+  through; the relaxation never turns a refused session into a permitted one.
 
   Permitting the RUN is not permitting a VERDICT, and that is what pays for it.
   `build_attestation` takes a REQUIRED `enforcer_moved` argument and refuses the

@@ -65,9 +65,19 @@ def loss_of_lock_sentences(report: dict, resolution: AnchorResolution) -> list[s
     sentence here and the enumeration is the thing a reader checks against
     `lock_state`.
 
-    Pure string work, and it never raises: the gate that calls it fails OPEN if
-    it does. The closing fallback covers a `lock_state` that reddens for a cause
-    this function does not know, which is exactly the drift the enumeration is
+    Pure string work, and it never raises ON A REPORT `verify_manifest` BUILT.
+    That is the whole of the claim, narrowed from "it never raises" after
+    `/scrutinize` measured the difference on 2026-08-04: four keys are read with
+    brackets, so a hand-built report missing one of them raises `KeyError` here,
+    and `freeze_gate` wraps that and fails closed while `cmd_status` would print
+    a traceback. Those four have been in the report since the first version and
+    have exactly one producer, so guarding them would be defensiveness against an
+    input that does not exist. `root_moved` is the one key an older producer can
+    genuinely lack, and it alone is read with a default. The wording is corrected
+    rather than the code, because the code is right and the sentence was not.
+
+    The closing fallback covers a `lock_state` that reddens for a cause this
+    function does not know, which is exactly the drift the enumeration is
     otherwise vulnerable to.
     """
     sentences: list[str] = []

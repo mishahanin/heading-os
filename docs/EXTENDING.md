@@ -212,6 +212,14 @@ a contract edit stays red through any number of re-pins. The PreToolUse deny no
 longer refuses a write to an enforcer path: detection at `verify` replaced
 prevention, which is the same asymmetry recorded for watched directories below.
 
+**That two-command cure does not currently complete, measured 2026-08-04.** An
+enforcer edit reddens the lock, `tests/conftest.py` then refuses to run any
+pytest session, and an `always_run` pre-commit hook runs one — so the commit
+`repin` requires cannot be made, and `repin` refuses without it. The way through
+today is the full retake with `--cause enforcer-moved`, which is the ceremony the
+split exists to avoid. Open: the gate has to tell a moved CONTRACT, which must
+block the suite, from a moved ENFORCER, whose own cure needs the suite to run.
+
 The enforcer NAMES are the one part of that claim that stays inside the root
 hash, and the split shipped without them. Measured 2026-08-04: a freeze over ten
 enforcers and a freeze over nine computed the SAME root, so `release --window`

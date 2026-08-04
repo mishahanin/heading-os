@@ -91,6 +91,17 @@ the committed approval still matches and no window is needed:
 3. `python scripts/run-tests.py` — the re-pin clears the attestation, because
    the enforcer set holds the test runner and `conftest.py`
 
+**Step 1 does not currently succeed on this repository, and that is a defect
+rather than a caveat.** Measured 2026-08-04: an enforcer edit reddens the lock,
+`tests/conftest.py` then refuses to run ANY pytest session, and the `always_run`
+`data-root-bypass-guard` pre-commit hook runs one — so the commit `repin` demands
+cannot be made, and `repin` refuses without it. The cure is circular. Until it is
+fixed, the way through is the six commands below with `--cause enforcer-moved`,
+which is the whole ceremony this two-command path exists to avoid. The fix is an
+enforcement-surface change (the gate has to tell a moved CONTRACT, which must
+block, from a moved ENFORCER, whose cure needs the suite to run) and belongs to
+its own slice with its own two approvals.
+
 Step 3 only when something MOVED. A re-pin that finds every enforcer byte
 identical leaves the attestation standing and says so, because the run it
 records was produced by exactly these bytes. `repin` is what an operator reaches

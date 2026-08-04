@@ -27,6 +27,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   gone from disk is recomputed as a named absent sentinel rather than dropped, so
   the recomputed name set is always the RECORDED one: deleting an enforcer stays
   on its own `enforcer_moved` axis instead of masquerading as a moved contract.
+  One exception, and it is not a leak: an enforcer the manifest also carries in
+  `files` moves the root when deleted, because it is a frozen contract file as
+  well. `tests/conftest.py` is one on the live engine freeze.
   The guarantee is a comparison, not a rule — it binds a freeze to the set its
   committed approval recorded, which is why the CLI still refuses an anchorless
   freeze.
@@ -55,6 +58,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   is the exact failure the branch's own comment forbids. `verify_manifest` now
   reports `root_moved` as a named field and the sentences read it, defaulting to
   the red direction when a report cannot answer.
+
+### Known issues
+
+- **The two-command enforcer cure from the manifest-split change does not
+  complete on this repository.** Measured 2026-08-04 while shipping the fix
+  above: editing an enforcer reddens the lock, `tests/conftest.py` then refuses
+  to run ANY pytest session, and the `always_run` `data-root-bypass-guard`
+  pre-commit hook runs one, so the commit `repin` demands cannot be made and
+  `repin` refuses without it. The cure is circular, and the only way through is
+  the full retake the split was taken to avoid. Documented in
+  `docs/EXTENDING.md` and `.claude/skills/canopus/references/canopus-gate.md`
+  rather than fixed here: the gate must learn to tell a moved CONTRACT, which has
+  to block the suite, from a moved ENFORCER, whose own cure needs the suite to
+  run, and that is an enforcement-surface change owing its own two approvals.
 
 ### Added
 

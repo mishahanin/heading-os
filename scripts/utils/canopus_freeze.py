@@ -931,6 +931,14 @@ def recompute(manifest: dict, root: Path) -> dict:
     # a moved CONTRACT and send the operator to a re-approval when the cure is to
     # restore the file or take a new freeze. The deletion is not softened by
     # this — it still reddens `enforcer_moved`, by name, on its own axis.
+    #
+    # An enforcer the manifest ALSO carries in `files` is the exception, and it is
+    # not a leak: deleting it moves the root as well, because it is a frozen
+    # contract file too. `build_manifest` puts every `conftest.py` on the chain
+    # into `files` deliberately and says why, so the live engine freeze carries
+    # `tests/conftest.py` in both maps. Stated here because the sentence above
+    # reads absolute without it, and an absolute sentence that has an exception is
+    # what the next reader reasons from.
     content: dict[str, str] = {}
     for rel in enforcer_map(manifest):
         candidate = resolved_root / rel

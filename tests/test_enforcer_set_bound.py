@@ -1,4 +1,31 @@
-"""The frozen contract for `enforcer-set-bound` — v3 Change 2's three loose ends.
+"""The enforcer SET bound by the approved root, promoted from its frozen contract.
+
+Shipped 2026-08-04 and retired here: a contract left in `tests/contract/` binds
+every later slice to this one's behaviour. All fifteen IDs are kept and nothing
+was weakened in the move; `_CLI` is re-anchored one level up, and that is the
+only change.
+
+WHAT THIS FILE CANNOT DECIDE, named rather than implied. Step 11 ran thirteen
+mutations against these fifteen tests and one survived that mattered: flipping
+the missing-key default in `loss_of_lock_sentences` from True to False. Every
+test here hands over a report built by `verify_manifest`, which always carries
+`root_moved`, so none of them can tell the two defaults apart. That one is killed
+by `tests/test_canopus_cli.py::test_a_report_that_cannot_say_whether_the_root_moved_is_read_as_moved`,
+which hands over a report without the key. Do not read this file as covering it.
+
+Two further mutations survived and are EQUIVALENT rather than uncovered: an empty
+name set serialized as `null` instead of `[]`, and the absent-enforcer sentinel
+changed to 64 zeros. Neither changes behaviour, in either exhaustive case.
+
+`test_the_previous_recipe_is_refused_by_name` overlaps with
+`tests/test_manifest_split.py::test_the_recipe_is_bumped_so_an_old_manifest_is_refused_by_name`.
+Both pin the recipe literal by hand at every bump, deliberately: a test that read
+`RECIPE` from the module would agree with whatever the module happened to hold.
+The overlap is left standing rather than resolved by deleting one.
+
+---
+
+The frozen contract for `enforcer-set-bound` — v3 Change 2's three loose ends.
 
 Change 2 took the enforcer BYTES out of the contract root so an enforcer edit
 costs a `repin` instead of a six-command retake. It took the enforcer NAMES out
@@ -27,7 +54,7 @@ from pathlib import Path
 import pytest
 
 STAMP = "2026-01-01T00:00:00+00:00"
-_CLI = Path(__file__).resolve().parents[3] / "scripts" / "canopus.py"
+_CLI = Path(__file__).resolve().parents[1] / "scripts" / "canopus.py"
 
 
 # ============================================================

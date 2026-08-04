@@ -1,4 +1,8 @@
-"""The frozen contract for `pass-candidates` (Canopus v3, Change 3).
+"""Pass candidates: does this contract accept an implementation that is WRONG?
+
+Retired from `tests/contract/2026-08-04-pass-candidates/` when the slice shipped,
+with every one of its nineteen IDs kept. Left in `tests/contract/` it would bind
+every later slice to this one's behaviour; here it is ordinary regression cover.
 
 The null-stub probe asks whether a test passes when the code is ABSENT. This
 slice adds the other question: whether a test passes when the code is PRESENT
@@ -6,8 +10,20 @@ AND WRONG. Different question, so a different instrument, but it reuses the
 null-stub's whole apparatus: the AST claim set, the wire format to the child,
 the JUnit parse, and the population guards.
 
-Every import sits INSIDE a test body, because none of these names exist yet and
-a module-scope import would stop the file collecting.
+Imports still sit INSIDE each test body. That was the contract's authoring rule
+when none of these names existed; it is kept because these tests drive whole
+pytest child processes, and a module-scope import of the subject would make a
+collection failure HERE look like a probe failure THERE.
+
+**What this file does not cover on its own**, carried forward from the slice's
+step 11 rather than left to be rediscovered. Three of these nineteen tests were
+satisfied by a wrong implementation of the very instrument they pin, and the
+mutations that proved it are killed by three tests living elsewhere:
+`tests/test_canopus_nullstub.py::test_a_candidate_validates_its_mode_at_the_door_the_child_uses`,
+and in `tests/test_canopus_contract.py`,
+`test_the_greedy_payload_carries_nothing_the_contract_did_not_write` and
+`test_the_refusal_carries_one_candidates_cure_and_not_the_others`. Delete any of
+those and the coverage this file appears to give is not there.
 """
 import pytest
 

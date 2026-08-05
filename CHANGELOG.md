@@ -33,6 +33,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   imported by `tests/test_canopus_cli.py` and a re-exec at import time would take
   the suite down, so the choice moved to the child.
 
+- **Two interpreter comparisons collapsed a venv onto the system interpreter it
+  symlinks to.** Both compared `Path(...).resolve()` on each side, and a venv
+  built by the stdlib `python -m venv` — a layout `CLAUDE.md` documents as
+  supported — links `.venv/bin/python` straight at the interpreter an operator
+  types. Measured 2026-08-05 on real symlinks: `ensure_venv` read "already
+  there" and skipped its re-exec, so `python3 scripts/run-tests.py` ran the whole
+  suite under the system interpreter with none of the pinned dependencies, which
+  is the precise outcome its own docstring promised to prevent; and the new
+  `interpreter_notice` stayed silent in exactly the case it was written for. Both
+  now ask `venv.interpreter_identity`, which compares the resolved containing
+  DIRECTORY beside the resolved file — `pyvenv.cfg` sits next to `bin/` and is
+  what puts the venv's `site-packages` on the path, so the directory is what
+  decides the environment. Keeping the real file in the comparison makes it
+  strictly narrower than the old one, so `/usr/bin/python3.11` and
+  `/usr/bin/python3.12` are still told apart. One spelling in the lower module,
+  read by both callers.
+
 - **The two-command enforcer cure deadlocked, so the manifest split's whole
   saving was unreachable on this repository.** Editing an enforcer reddens the
   lock; `tests/conftest.py` then refused to run ANY pytest session; the

@@ -2512,3 +2512,80 @@ def test_the_cap_reports_itself_rather_than_narrowing_the_probe_in_silence():
                            for i in range(PAYLOAD_BUDGET // 8192 + 4)})
     assert "greedy pass-candidate" in loud.getvalue()
     assert "dropped" in loud.getvalue()
+
+
+# ============================================================
+# interpreter_notice — the environment question, not the inode question
+# ============================================================
+
+def test_the_notice_fires_when_a_venv_symlinks_to_the_invoking_interpreter(tmp_path):
+    """The layout `python -m venv` produces, which the first spelling read as
+    "the same interpreter" and passed over in silence.
+
+    Built with real symlinks rather than described, because the defect lived
+    ENTIRELY in symlink following: the contract's own SC-3 case compares two
+    paths that do not exist on disk, where `Path.resolve()` has nothing to
+    follow and so cannot expose it. A stdlib venv symlinks `.venv/bin/python`
+    to the very interpreter the operator typed, so resolving both sides
+    collapsed them onto one real file — and the one case this notice exists for
+    is precisely the one it then stopped reporting.
+
+    The two ARE different environments. `pyvenv.cfg` beside `bin/` is what puts
+    the venv's `site-packages` on the child's path, so the plugin set the freeze
+    captures under the left-hand path is not the set the right-hand one loads.
+    That difference is the whole subject of the sentence.
+    """
+    from scripts.utils.canopus_contract import interpreter_notice
+
+    system = tmp_path / "usr" / "bin"
+    system.mkdir(parents=True)
+    real = system / "python3"
+    real.write_text("#!/bin/sh\n", encoding="utf-8")
+    venv_bin = tmp_path / "project" / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(real)
+
+    notice = interpreter_notice(venv_bin / "python", real)
+
+    assert notice, (
+        "a venv whose interpreter symlinks to the invoking one was called the "
+        "same environment, so the capture that reads a different site-packages "
+        "passed in silence")
+    assert str(venv_bin / "python") in notice
+    assert str(real) in notice
+    assert "\n" not in notice
+
+
+def test_two_names_for_one_interpreter_in_one_venv_say_nothing(tmp_path):
+    """The pairing, without which the test above is satisfied by shouting always.
+
+    `python3` beside `python` inside the same `bin/` is the same environment
+    under a second name — the alias every venv ships. A notice here is the noise
+    that trains an operator to stop reading the line.
+    """
+    from scripts.utils.canopus_contract import interpreter_notice
+
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+    (venv_bin / "python3").symlink_to(venv_bin / "python")
+
+    assert interpreter_notice(venv_bin / "python3", venv_bin / "python") == ""
+
+
+def test_two_interpreters_sharing_a_directory_are_still_told_apart(tmp_path):
+    """The narrowing must not become a widening one directory over.
+
+    Comparing the containing directory ALONE would call these two the same, and
+    they are not: distinct real files, distinct standard libraries, distinct
+    plugin sets. The identity carries the real file beside the directory so this
+    stays strictly narrower than the comparison it replaced.
+    """
+    from scripts.utils.canopus_contract import interpreter_notice
+
+    shared = tmp_path / "usr" / "bin"
+    shared.mkdir(parents=True)
+    (shared / "python3.11").write_text("#!/bin/sh\n", encoding="utf-8")
+    (shared / "python3.12").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert interpreter_notice(shared / "python3.11", shared / "python3.12")

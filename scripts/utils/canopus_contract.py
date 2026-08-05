@@ -51,7 +51,7 @@ from scripts.utils.canopus_nullstub import (
 # the second re-execs the running process, and this module is imported by the
 # CLI, by the gate's callers and by the suite. An import that could re-exec is a
 # module that cannot be imported from a test.
-from scripts.utils.venv import venv_python
+from scripts.utils.venv import interpreter_identity, venv_python
 
 DEFAULT_PATTERNS = ("test_*.py",)
 RED_OUTCOMES = ("failure", "error")
@@ -79,9 +79,16 @@ def contract_interpreter() -> Path:
     The fallback is not a courtesy, it is the case for a public clone that has
     not run `uv sync` and for an operator on a system-wide install. Preferring
     the venv only when it EXISTS keeps this from imposing a layout on a tree that
-    does not have one. `scripts/run-tests.py` already re-execs into the same
-    interpreter, so on this repository the two agree by construction, which is
-    the whole point: the baseline has to describe whatever will run the suite.
+    does not have one. `scripts/run-tests.py` re-execs into the same interpreter
+    via `ensure_venv`, so the two agree and the baseline describes whatever will
+    actually run the suite — which is the whole point.
+
+    That sentence read "agree by construction" when it was written on 2026-08-04,
+    and it was false the same day. `ensure_venv` decided "already there" by
+    resolving both paths, and a stdlib `python -m venv` symlinks
+    `.venv/bin/python` to the system interpreter, so on that layout it skipped
+    the re-exec and the suite ran outside the venv. They agree because both now
+    ask `venv.interpreter_identity`, not because the layout guarantees it.
 
     Not `ensure_venv`, which re-execs. That is what `run-tests.py` does and what
     `scripts/canopus.py` cannot: the CLI module is imported by
@@ -103,10 +110,14 @@ def interpreter_notice(chosen: Path, invoking: Path) -> str:
     notice that fires on every invocation is one an operator stops reading, and
     this line exists precisely to be read on the rare day it appears.
 
+    "The same" is `venv.interpreter_identity`, never a resolved-path comparison. See
+    that function: resolving both leaves is what made this notice silent on the
+    commonest venv layout there is.
+
     BOTH paths are named. "A different interpreter" without saying which sends
     the reader back to the guessing this line was written to end.
     """
-    if Path(chosen).resolve() == Path(invoking).resolve():
+    if interpreter_identity(chosen) == interpreter_identity(invoking):
         return ""
     return (f"the contract child ran under {chosen}, not the {invoking} that "
             f"invoked this command; the plugin baseline describes the former")

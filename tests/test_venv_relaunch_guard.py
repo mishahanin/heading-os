@@ -137,3 +137,67 @@ def test_a_run_under_a_foreign_interpreter_still_prints_its_output():
         "the child run printed nothing at all, which is what an ensure_venv "
         "re-exec inside pytest's capture looks like"
     )
+
+
+def test_a_venv_symlinked_to_the_invoking_interpreter_still_re_execs(
+    tmp_path, monkeypatch
+):
+    """A stdlib `python -m venv` layout must not read as "already there".
+
+    Regression for a fail-open measured 2026-08-05. `ensure_venv` compared
+    `Path(sys.executable).resolve()` against `venv_python().resolve()`. A venv
+    built by the stdlib `python -m venv` -- documented in the setup notes as a
+    supported path -- symlinks `.venv/bin/python` to the very system interpreter
+    an operator types, so both sides collapsed onto one real file, the function
+    returned, and the suite ran under the system interpreter with none of the
+    pinned dependencies. The docstring above it promised the opposite.
+
+    Real symlinks, never a monkeypatched comparison: the defect lived entirely in
+    what `resolve()` does to a link, so a test that stubbed resolution would have
+    passed against the broken code. The re-exec itself is stubbed, because
+    `os.execv` replaces this process and there is nothing left to assert in.
+    """
+    base = Path(sys.executable).resolve()
+    fake_venv = tmp_path / ".venv" / "bin"
+    fake_venv.mkdir(parents=True)
+    link = fake_venv / "python"
+    link.symlink_to(base)
+    (tmp_path / ".venv" / "pyvenv.cfg").write_text(
+        f"home = {base.parent}\n", encoding="utf-8")
+
+    calls = []
+    monkeypatch.setattr(_venv, "venv_python", lambda: link)
+    monkeypatch.setattr(_venv.os, "execv", lambda path, argv: calls.append(path))
+    monkeypatch.delenv(_venv._SENTINEL, raising=False)
+    monkeypatch.setattr(sys, "executable", str(base))
+
+    _venv.ensure_venv()
+
+    assert calls == [str(link)], (
+        "ensure_venv treated a venv symlinked to the invoking interpreter as "
+        "the same environment and skipped the re-exec, so the suite would run "
+        "without the pinned dependency set"
+    )
+
+
+def test_the_invoking_interpreter_itself_does_not_re_exec(tmp_path, monkeypatch):
+    """The other half: no loop when it really IS the same interpreter.
+
+    Without this, the test above is satisfied by an `ensure_venv` that re-execs
+    unconditionally -- which the sentinel would stop from looping forever and
+    which would still double the startup cost of every script in the workspace.
+    """
+    fake_venv = tmp_path / ".venv" / "bin"
+    fake_venv.mkdir(parents=True)
+    link = fake_venv / "python"
+    link.symlink_to(Path(sys.executable).resolve())
+
+    calls = []
+    monkeypatch.setattr(_venv, "venv_python", lambda: link)
+    monkeypatch.setattr(_venv.os, "execv", lambda path, argv: calls.append(path))
+    monkeypatch.delenv(_venv._SENTINEL, raising=False)
+    monkeypatch.setattr(sys, "executable", str(link))
+
+    _venv.ensure_venv()
+
+    assert calls == []

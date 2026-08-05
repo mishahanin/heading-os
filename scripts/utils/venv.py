@@ -37,12 +37,55 @@ def venv_python() -> Path:
     return Path(__file__).resolve().parents[2] / ".venv" / "bin" / "python"
 
 
+def interpreter_identity(path: Path) -> tuple:
+    """What makes two interpreter paths the SAME environment, as a comparable.
+
+    The containing directory beside the real file, and the directory is the half
+    that matters. A venv interpreter's environment is decided by where it SITS —
+    `pyvenv.cfg` lies beside `bin/`, and that file is what puts the venv's
+    `site-packages` on the path — not by which base binary its symlink finally
+    lands on.
+
+    Measured 2026-08-05 against a venv built by the stdlib `python -m venv`,
+    which the project's setup notes document as a supported layout:
+    `.venv/bin/python` is a symlink to the very system interpreter an operator
+    types. A comparison that resolved BOTH sides collapsed the two onto one real
+    file and answered "the same".
+
+    The real file is kept in the tuple as well, so this is strictly narrower than
+    a resolved-path comparison rather than merely different: `/usr/bin/python3.11`
+    and `/usr/bin/python3.12` share a directory and are still told apart. Only
+    the parent is resolved for the environment half; resolving the leaf too is
+    what caused the defect above, and is deliberately not done.
+
+    Lives HERE rather than beside either caller. Both `ensure_venv` below and
+    `canopus_contract.interpreter_notice` ask the same question, and a second
+    spelling of it would drift SILENTLY — each returns something comparable, and
+    the disagreement only shows up as a suite that ran under the wrong
+    interpreter. This module is the lower layer, so the dependency points one
+    way.
+    """
+    candidate = Path(path)
+    return (candidate.parent.resolve(), candidate.resolve())
+
+
 def ensure_venv() -> None:
-    """Re-exec the running script under .venv/bin/python if needed; else no-op."""
+    """Re-exec the running script under .venv/bin/python if needed; else no-op.
+
+    The comparison is `interpreter_identity`, never resolved paths, and that is
+    not a refinement. Measured 2026-08-05 on a stdlib `python -m venv` layout:
+    resolving both sides collapsed the venv interpreter and the system one onto
+    a single real file, so this function returned WITHOUT re-execing and the
+    suite ran under the system interpreter with none of the pinned dependencies
+    — the exact outcome the first line of this docstring promises to prevent, on
+    a layout the project supports. A guard that fails open on a documented
+    configuration is worse than no guard, because the promise above is what the
+    next reader relies on.
+    """
     target = venv_python()
     if not target.exists():
         return
-    if Path(sys.executable).resolve() == target.resolve():
+    if interpreter_identity(Path(sys.executable)) == interpreter_identity(target):
         return
     if os.environ.get(_SENTINEL) == "1":
         return

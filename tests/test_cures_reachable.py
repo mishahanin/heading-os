@@ -193,10 +193,13 @@ def test_the_gate_still_says_the_enforcer_moved_while_letting_the_run_through(
     cure; a gate that quietly returns 0 has replaced a deadlock with a hole.
 
     The PAIRING is the assertion, which is why the exit code is checked here as
-    well as in SC-1. Both halves are satisfied today, separately and by different
-    states: the sentence is printed on the way to exit 1. A test asserting only
-    the sentence would stay green through a fix that printed nothing and returned
-    0, which is the exact regression this criterion exists to catch.
+    well as in SC-1. While this was a frozen contract the two halves were
+    satisfied by DIFFERENT states — the sentence was already printed on the way
+    to exit 1, and only the exit code was red — which is why asserting the
+    sentence alone was never enough. That reading is kept now that both halves
+    hold at once: a later change that returned 0 in silence, or one that printed
+    the cause and went on refusing, moves exactly one of these assertions, and
+    either is the regression this criterion exists to catch.
     """
     from scripts.utils.canopus_gate import freeze_gate
 

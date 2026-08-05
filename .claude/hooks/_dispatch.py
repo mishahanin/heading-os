@@ -55,12 +55,14 @@ FREEZE_DIRNAME = None
 FreezeCorrupt = None
 frozen_reason = None
 read_freeze = None
+refused_manifest_notice = None
 _CANOPUS_AVAILABLE = None  # None = import not attempted yet
 
 
 def _load_canopus() -> bool:
     """Import the freeze primitive once per process. Never raises."""
     global FREEZE_DIRNAME, FreezeCorrupt, frozen_reason, read_freeze
+    global refused_manifest_notice
     global _CANOPUS_AVAILABLE
     if _CANOPUS_AVAILABLE is not None:
         return _CANOPUS_AVAILABLE
@@ -71,6 +73,7 @@ def _load_canopus() -> bool:
             FreezeCorrupt as _freeze_corrupt,
             frozen_reason as _frozen_reason,
             read_freeze as _read_freeze,
+            refused_manifest_notice as _refused_manifest_notice,
         )
     except Exception as exc:  # pragma: no cover - defensive
         print(f"[_dispatch] canopus freeze module unavailable ({type(exc).__name__}): {exc}", file=sys.stderr)
@@ -80,6 +83,7 @@ def _load_canopus() -> bool:
     FreezeCorrupt = _freeze_corrupt
     frozen_reason = _frozen_reason
     read_freeze = _read_freeze
+    refused_manifest_notice = _refused_manifest_notice
     _CANOPUS_AVAILABLE = True
     return True
 
@@ -881,11 +885,7 @@ def check_canopus_freeze(payload: dict) -> Optional[dict]:
     try:
         manifest = read_freeze(WORKSPACE)
     except FreezeCorrupt as exc:
-        return _canopus_deny(
-            f"The freeze manifest is damaged, so every write is denied "
-            f"fail-closed: {exc}. Clear it with: python scripts/canopus.py "
-            f"release --force --window --reason \"<why>\""
-        )
+        return _canopus_deny(refused_manifest_notice(exc))
     except OSError as exc:
         return _canopus_deny(f"The freeze state could not be read: {exc}")
     if manifest is None:

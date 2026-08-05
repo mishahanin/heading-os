@@ -1472,16 +1472,50 @@ def frozen_reason(rel_posix: str, manifest: dict) -> Optional[str]:
 class FreezeCorrupt(FreezeError):
     """A freeze manifest exists but is unreadable or carries an unknown recipe.
 
-    Handled fail-closed by the dispatcher: a corrupt manifest denies every write
-    rather than silently unlocking the contract, matching the house convention
-    where a broken routing map forces `private` and an unknown action type floors
-    at `gated`.
+    Handled fail-closed by the dispatcher: a manifest the reader refuses denies
+    every write rather than silently unlocking the contract, matching the house
+    convention where a broken routing map forces `private` and an unknown action
+    type floors at `gated`.
 
     The escape is `release --force`, which is LOGGED. An escape that leaves no
     record turns every false alarm into a routine of unlogged deletions, and
     after the third one the operator stops reading the alarm at all. Alert
     fatigue is the adversary here, not the model.
+
+    The class name says Corrupt and the operator-facing sentence must not,
+    because `read_freeze` raises this for four different reasons and only two of
+    them are damage. `refused_manifest_notice` below is the one place that
+    sentence is built.
     """
+
+
+def refused_manifest_notice(exc: FreezeCorrupt) -> str:
+    """The one sentence every surface prints when `read_freeze` refuses a manifest.
+
+    Cause-neutral on purpose. `read_freeze` refuses for four reasons: the file is
+    unreadable, it is not a JSON object, its recipe is not the current one, or its
+    shape is wrong. Two are damage. The recipe mismatch is the ordinary
+    consequence of a deliberate RECIPE bump, and it happened on 2026-08-04 when
+    the version went v6 to v7 mid-slice: every write was then denied by a headline
+    asserting the manifest was damaged, one sentence above the reader's own
+    accurate `carries recipe 'canopus-freeze-v6', expected 'canopus-freeze-v7'`.
+    The operator was told two contradictory things at once and the false one came
+    first.
+
+    So the headline names only what is true of all four: the manifest was refused
+    and the refusal is fail-closed. The cause travels in `exc`, which the reader
+    already words precisely, and the escape travels with it. Dropping either half
+    is worse than the defect being fixed: a denial with no reason cannot be
+    diagnosed, and one with no way out cannot be cleared.
+
+    Written here rather than at either call site because the defect existed twice
+    for exactly one reason: the sentence was written twice.
+    """
+    return (
+        f"The freeze manifest was refused, so every write is denied fail-closed: "
+        f"{exc}. Clear it with: python scripts/canopus.py release --force "
+        f"--window --reason \"<why>\""
+    )
 
 
 def freeze_state_path(root: Path) -> Path:

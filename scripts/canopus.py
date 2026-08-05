@@ -13,7 +13,7 @@ the builder cannot move the target it is measured against.
     python scripts/canopus.py status
     python scripts/canopus.py release --ship --reason "slice shipped"
     python scripts/canopus.py release --window --reason "mid-build recipe change"
-    python scripts/canopus.py release --force --window --reason "manifest damaged"
+    python scripts/canopus.py release --force --window --reason "manifest refused"
 
 Three layers. The PreToolUse deny is a CONVENIENCE: it sees Write, Edit,
 MultiEdit, and NotebookEdit tool calls only, so a shell `sed -i` walks past it.
@@ -111,6 +111,7 @@ from scripts.utils.canopus_freeze import (  # noqa: E402
     read_freeze,
     enforcer_map,
     read_ledger,
+    refused_manifest_notice,
     repin_enforcer,
     tree_drift,
     unreleased_freeze,
@@ -2045,10 +2046,11 @@ def build_parser() -> argparse.ArgumentParser:
     release = sub.add_parser("release", help="clear the active freeze")
     release.add_argument("--reason", default="", help="why the freeze is being released")
     release.add_argument("--force", action="store_true",
-                         help="clear a damaged manifest without parsing it; the "
-                              "forced release is LOGGED to the ledger, which is "
-                              "what tells it apart from deleting freeze.json by "
-                              "hand")
+                         help="clear a refused manifest without parsing it, "
+                              "whether it is damaged or merely carries a "
+                              "superseded recipe; the forced release is LOGGED "
+                              "to the ledger, which is what tells it apart from "
+                              "deleting freeze.json by hand")
     # Required, and mutually exclusive. Two releases that look identical in the
     # ledger are two different events: one you will close, and the end of a
     # slice. The tool used to record the difference only in free-form prose, so
@@ -2106,11 +2108,7 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except FreezeCorrupt as exc:
         _record_raised(args, "freeze_corrupt", exc)
-        print(f"canopus: {exc}\n"
-              f"         Every write is denied while the manifest is damaged. "
-              f"Clear it with: python scripts/canopus.py release --force "
-              f"--window --reason \"<why>\"",
-              file=sys.stderr)
+        print(f"canopus: {refused_manifest_notice(exc)}", file=sys.stderr)
         return 1
     except FreezeError as exc:
         _record_raised(args, "freeze_error", exc)

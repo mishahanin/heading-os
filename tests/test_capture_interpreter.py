@@ -1,4 +1,18 @@
-"""The frozen contract for `capture-interpreter` — the baseline described the caller.
+"""The retired contract for `capture-interpreter` — the baseline described the caller.
+
+Shipped 2026-08-05 and promoted here from
+`tests/contract/2026-08-04-capture-interpreter/`, where it was frozen. All five
+IDs are kept: a contract retired by deletion takes its coverage with it.
+
+Nothing in this file depends on its own depth in the tree, unlike the previous
+slice's promotion, which carried a `parents[3]` that silently became wrong two
+directories up.
+
+The `/scrutinize` pass on this slice found that SC-3's two paths do not exist on
+disk, so `resolve()` had nothing to follow and the comparison defect hid behind
+them. The tests that close that live in `tests/test_canopus_contract.py` and
+`tests/test_venv_relaunch_guard.py`, on REAL symlinks. Neither set replaces the
+other: these decide the rule, those decide it against the filesystem.
 
 ONE defect, paid for on 2026-08-04 rather than reasoned about. `freeze` captures
 its plugin baseline from a pytest CHILD, and `run_pytest_report` launches that

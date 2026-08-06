@@ -132,6 +132,34 @@ These are enforced by tooling in this repo, not just stated as policy:
   behind such a change. There is no per-commit ceremony gate: the Canopus
   freeze machinery that once refused these commits was retired on 2026-08-07.
 
+**Which files are security-critical here.** The enforcement surface named
+above is this set, and a wrong edit to any of it costs more than a bug: the
+PreToolUse hooks under `.claude/hooks/`; the shared credential vocabulary
+`scripts/utils/secret_patterns.py` and the scanner built on it,
+`scripts/secret-scanner.py`; the push wall `scripts/push-all.py` and its
+detectors `scripts/utils/engine_guard.py` and
+`scripts/utils/content_denylist.py`; the commit-time guards
+`scripts/leak-guard.py` and `scripts/content-guard.py`; the send gate
+`scripts/utils/tool_risk.py` with its ledger `config/tool-risk.json`; the two
+egress controls, `scripts/utils/sensitive.py` (the fail-closed flag deciding
+whether anything leaves for a third party) and `scripts/utils/egress_proof.py`
+(the only sanctioned per-payload exemption from it); the classifier input
+`config/routing-map.yaml`, which decides what counts as private; the test gate
+`scripts/run-tests.py` and `tests/conftest.py`; and the rules those controls
+implement in prose — `.claude/rules/security.md`,
+`.claude/rules/lethal-trifecta.md`, `.claude/rules/tiered-risk.md` — because
+the prose is what an agent reads before it acts.
+
+What actually guards a change to them, and nothing else does: the pre-commit
+gates (`31C secret scanner`, detect-secrets, bandit, ruff, and this repo's own
+guard hooks), the unbypassable push-time content scan in
+`scripts/push-all.py`, and the `sovereignty guards` CI job. This list is a
+reading instruction for a human, not a mechanism. Nothing computes it, nothing
+refuses a commit for being on it, and the classifier that once did was deleted
+on 2026-08-07 with the lifecycle it served. Treat a change to one of these
+files as work that earns a second read and a test, not as work some tool will
+stop you getting wrong.
+
 Full detail: `.claude/rules/security.md`, `SECURITY.md`,
 `docs/SECURITY-MODEL.md`, `docs/engine-data-segregation-contract.md`.
 

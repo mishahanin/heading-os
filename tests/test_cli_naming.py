@@ -22,6 +22,7 @@ SCRIPTS_DIR = ROOT / "scripts"
 # snake_case scripts imported as Python modules elsewhere (must stay snake_case).
 DUAL_ROLE_EXCLUSIONS = {
     "build_engine_repo.py",          # tests/test_build_engine.py
+    "canopus_check.py",              # tests/test_canopus_check.py imports its clauses
     "cold_sweep_core.py",            # bridge-daemon.py, cold-sweep.py, test_cold_sweep_routing.py
     "crm_migrate_to_entity_model.py",  # tests/test_crm_migration.py
     "crm_next.py",                   # tests/test_crm_next.py

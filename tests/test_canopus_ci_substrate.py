@@ -32,18 +32,38 @@ def test_the_guards_job_clones_full_history():
     )
 
 
-def test_the_genesis_commit_is_named_and_is_an_ancestor_of_head():
+def test_the_genesis_commit_resolves_unambiguously_and_is_an_ancestor_of_head():
+    """The epoch names a commit that exists, and HEAD descends from it.
+
+    The ref is deliberately ABBREVIATED rather than a full 40-character sha.
+    A full sha reads to detect-secrets as a hex high-entropy string, and every
+    way to silence that (a baseline entry, an allow-list entry, a pragma) is
+    forbidden here without exception, because those are how a real secret
+    eventually gets through. Git resolves an abbreviated ref natively and
+    ERRORS on ambiguity rather than guessing, so nothing is weakened to buy
+    the quiet: `rev-parse` failing IS the ambiguity check.
+    """
     root = pathlib.Path(__file__).resolve().parents[1]
     cfg = json.loads(
         (root / "config/canopus-genesis.json").read_text(encoding="utf-8")
     )
-    sha = cfg["genesis_sha"]
-    assert len(sha) == 40 and cfg.get("reason"), (
-        "genesis needs a full sha and a stated reason"
+    ref = cfg["genesis_ref"]
+    assert ref and cfg.get("reason"), "genesis needs a ref and a stated reason"
+
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        cwd=root, capture_output=True, text=True, check=False,
     )
+    assert resolved.returncode == 0, (
+        f"the genesis ref {ref!r} does not resolve to exactly one commit: "
+        f"{resolved.stderr.strip()}"
+    )
+    sha = resolved.stdout.strip()
+    assert len(sha) == 40
+
     assert (
         subprocess.run(
             ["git", "merge-base", "--is-ancestor", sha, "HEAD"], cwd=root, check=False
         ).returncode
         == 0
-    )
+    ), "HEAD does not descend from the genesis commit"

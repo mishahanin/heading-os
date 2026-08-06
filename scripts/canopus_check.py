@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import re
 import subprocess
 import sys
@@ -52,11 +53,6 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     parse_junit,
     pytest_child_env,
 )
-# The GIT_ scrub, imported rather than spelled a second time. Its docstring
-# carries the measurement: this runs inside the engine's git hooks, git exports
-# GIT_DIR and GIT_INDEX_FILE to a hook, and a second copy of that rule is one
-# rename away from silently resolving the wrong repository.
-from scripts.utils.canopus_git import _child_env as git_child_env  # noqa: E402
 from scripts.utils.canopus_note import NoteError, note_paths, read_note  # noqa: E402
 
 GIT_TIMEOUT = 60
@@ -64,6 +60,36 @@ PYTEST_TIMEOUT = 900
 # An endpoint that names no commit: empty, or the all-zero sha git uses for
 # "there was nothing before this". See `_range_shas`.
 _NULL_END = re.compile(r"0*")
+
+
+def git_child_env() -> dict:
+    """The parent environment with every GIT_* variable removed.
+
+    A blanket prefix, not a named denylist. Naming the variables you happened to
+    think of is this project's most-repeated defect: a guard that covers the case
+    in front of its author rather than the class. GIT_DIR is merely the cheapest
+    of them, and GIT_WORK_TREE, GIT_COMMON_DIR, GIT_INDEX_FILE,
+    GIT_OBJECT_DIRECTORY, GIT_CEILING_DIRECTORIES and
+    GIT_DISCOVERY_ACROSS_FILESYSTEM redirect discovery just as well. The next
+    release of git may add another, and a prefix covers it in advance.
+
+    This is a CORRECTNESS fix before it is a security one. When this module runs
+    inside a git hook, git itself exports GIT_DIR and GIT_INDEX_FILE pointing at
+    the HOOK's repository. The engine's pre-commit and pre-push hooks run the
+    suite, so an unscrubbed child would ask the wrong repository about a note's
+    approval sha.
+
+    Nothing is lost by the scrub: every command this module runs is a local read
+    (rev-parse, show, rev-list, worktree) and none touches the network.
+
+    It lives here rather than in a module of its own. Its previous home was the
+    freeze lifecycle's git helper, which this module reached into for the
+    PRIVATE name; that helper was deleted with the rest of the lifecycle on
+    2026-08-07, and a private name reached across modules is a seam, not an
+    interface.
+    """
+    return {key: value for key, value in os.environ.items()
+            if not key.startswith("GIT_")}
 
 
 class CheckError(RuntimeError):
@@ -78,9 +104,9 @@ class CheckError(RuntimeError):
 def _git(root: Path, *argv: str) -> subprocess.CompletedProcess:
     """Run git in *root* and hand back the whole result, returncode included.
 
-    Not `canopus_git.git_output`, which collapses every non-zero exit to None:
-    C1 and C2 are exit-code clauses, and 1 (the answer is no) has to be told
-    apart from 128 (the question could not be asked).
+    The whole result, never a collapsed one: C1 and C2 are exit-code clauses,
+    and 1 (the answer is no) has to be told apart from 128 (the question could
+    not be asked). The retired lifecycle's git helper returned None for both.
     """
     try:
         return subprocess.run(

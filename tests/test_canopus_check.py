@@ -54,7 +54,7 @@ IMPLEMENTATION = "def add(left, right):\n    return left + right\n"
 def _git(repo: pathlib.Path, *argv: str, extra_env: dict | None = None) -> str:
     """git in *repo*, with every GIT_* variable out of the child environment.
 
-    The scrub is `scripts/utils/canopus_git._child_env`'s, for its reason: this
+    The scrub is `canopus_check.git_child_env`'s, for its reason: this
     suite runs inside the engine's pre-push hook, and git exports GIT_DIR and
     GIT_INDEX_FILE to a hook, so an unscrubbed `git add -A` here would stage
     against the ENGINE's index instead of the fixture's.
@@ -324,6 +324,65 @@ def test_a_note_missing_the_fields_the_clauses_read_is_reported_not_raised(tmp_p
     _commit(repo, "a note nobody can check")
 
     assert cc.main(["--root", str(repo)]) == 1
+
+
+# ============================================================
+# git_child_env -- ported with the function itself (K6, 2026-08-07)
+# ============================================================
+#
+# `_child_env` lived in the freeze lifecycle's git helper and this module
+# imported the PRIVATE name across the module boundary. That helper was deleted
+# with the rest of the lifecycle and the function moved here.
+#
+# No test in the helper's own file named `_child_env` as its subject. Two named
+# `repo_identity`, and pinned the scrub INDIRECTLY by poisoning one
+# variable at a time and asserting the identity was unchanged; `repo_identity`
+# is deleted, so the indirection has nowhere to land. What is ported is the
+# claim those two were making, asserted on the function that now holds it: the
+# guard is a PREFIX over the family, not a denylist of the two variables that
+# happen to be famous. A denylist naming GIT_DIR and GIT_WORK_TREE passed both
+# of the originals and fails this.
+
+POISONS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_INDEX_FILE",
+    "GIT_CEILING_DIRECTORIES",
+    # Not a real git variable. A prefix scrub removes it; a denylist of the
+    # names somebody thought of cannot, and the next release of git may add it.
+    "GIT_A_VARIABLE_GIT_HAS_NOT_INVENTED_YET",
+)
+
+
+@pytest.mark.parametrize("variable", POISONS)
+def test_no_single_git_variable_reaches_the_child(variable, monkeypatch):
+    monkeypatch.setenv(variable, "/nowhere")
+    monkeypatch.setenv("X31C_TRACE_ID", "trace-for-the-child")
+
+    child = cc.git_child_env()
+
+    assert variable not in child
+    assert not [key for key in child if key.startswith("GIT_")]
+    # The scrub is a prefix, never an emptying: a child with no environment at
+    # all would satisfy the line above and break every caller.
+    assert child.get("X31C_TRACE_ID") == "trace-for-the-child"
+
+
+def test_the_clauses_run_git_through_the_scrubbed_environment(tmp_path, monkeypatch):
+    """The measured reason the scrub exists, end to end.
+
+    This suite runs inside the engine's pre-commit and pre-push hooks, and git
+    exports GIT_DIR and GIT_INDEX_FILE to a hook. An unscrubbed child would ask
+    the HOOK's repository about a note's approval sha, so a clean slice in a
+    scratch tree would answer from the wrong history.
+    """
+    repo, _note = _clean_slice(tmp_path)
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere.git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "nowhere"))
+
+    assert cc.main(["--root", str(repo)]) == 0
 
 
 if __name__ == "__main__":  # pragma: no cover

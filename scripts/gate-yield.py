@@ -4,11 +4,9 @@
     python scripts/gate-yield.py
     python scripts/gate-yield.py --json
 
-Reads two logs and writes nothing: the Canopus lifecycle ledger
-(`.canopus/history.jsonl`) and the A1 denial log. Every mechanism gets its own
-observation window, taken from the source it is recorded in, because the two
-sources did not start on the same day and judging a young mechanism over an old
-window is how something gets called dead before it has had a day to speak.
+Reads the A1 denial log and writes nothing. Every mechanism is judged over the
+window of the source it is recorded in, because judging a young mechanism over an
+old window is how something gets called dead before it has had a day to speak.
 
 It flags. It never recommends a removal, and it cannot: `render` is held to a
 forbidden-verb list by its own test. What happens to a flagged mechanism is the
@@ -27,8 +25,6 @@ sys.path.insert(0, str(ENGINE_ROOT))
 
 from scripts.utils.gate_yield import (  # noqa: E402
     SOURCE_DENIALS,
-    SOURCE_LIFECYCLE,
-    load_hand_classified,
     read_sources,
     render,
     summarise,
@@ -53,10 +49,9 @@ def main(argv=None) -> int:
         description="What each gate has caught, and whether the window is long "
                     "enough to judge it.")
     parser.add_argument("--root", default=str(ENGINE_ROOT),
-                        help="working tree whose LIFECYCLE ledger to read "
-                             "(default: this script's own repository). The denial "
-                             "log is workspace-global and is not moved by this "
-                             "flag, so a non-default root reports two trees")
+                        help="working tree to report over (default: this "
+                             "script's own repository). The denial log is "
+                             "workspace-global and is not moved by this flag")
     parser.add_argument("--json", dest="as_json", action="store_true",
                         help="the summary as JSON")
     args = parser.parse_args(argv)
@@ -65,16 +60,9 @@ def main(argv=None) -> int:
     sources = read_sources(root)
     now = datetime.now(tz=get_default_tz()).isoformat()
     summary = summarise(
-        ledger=sources["ledger"],
         denials=sources["denials"],
-        since={SOURCE_LIFECYCLE: _earliest(sources["ledger"]),
-               SOURCE_DENIALS: _earliest(sources["denials"])},
-        now=now,
-        # Read from the ENGINE root rather than from `--root`, deliberately: the
-        # bridge is a committed engine artifact like the denial log is a
-        # workspace-global one, and following an arbitrary `--root` would silently
-        # answer `{}` and report every historical retake as unclassified.
-        hand_classified=load_hand_classified(ENGINE_ROOT))
+        since={SOURCE_DENIALS: _earliest(sources["denials"])},
+        now=now)
     summary["missing_sources"] = sources["missing"]
 
     if args.as_json:

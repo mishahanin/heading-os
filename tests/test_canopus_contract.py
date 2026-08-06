@@ -162,16 +162,6 @@ def test_refusal_reasons_rejects_a_file_that_collected_nothing():
     assert any("inside the test body" in reason for reason in reasons)
 
 
-def test_run_contract_does_not_write_an_attestation(tmp_path, monkeypatch):
-    from scripts.utils.canopus_contract import run_contract
-    from scripts.utils.canopus_freeze import attestation_state_path
-
-    _write(tmp_path, "c/test_one.py", "def test_a():\n    assert False\n")
-    run_contract([tmp_path / "c"], tmp_path)
-
-    assert not attestation_state_path(tmp_path).exists()
-
-
 def test_no_pytest_variable_reaches_the_contract_child(tmp_path, monkeypatch):
     """The scrub is a blanket prefix, so an invented name is scrubbed too.
 
@@ -201,27 +191,6 @@ def test_no_pytest_variable_reaches_the_contract_child(tmp_path, monkeypatch):
     seen = json.loads((tmp_path / "env.json").read_text(encoding="utf-8"))
     assert not (set(injected) & set(seen))
     assert "X31C_TRACE_ID" in seen
-
-
-def test_an_unusable_plugin_dump_reads_as_no_capture(tmp_path, capsys):
-    """Damage reads as absence, and a freeze with no baseline attests nothing.
-
-    The same posture `read_attestation` takes: this file is a measurement, and
-    an unreadable measurement is one that was not taken. Reported on stderr,
-    because the consequence lands much later as a refusal nobody can account for.
-    """
-    from scripts.utils.canopus_contract import read_plugin_dump
-
-    assert read_plugin_dump(tmp_path / "absent.json") == []
-
-    damaged = _write(tmp_path, "damaged.json", "{not json")
-    assert read_plugin_dump(damaged) == []
-
-    wrong_shape = _write(tmp_path, "wrong.json", '{"dist:xdist": "/a"}')
-    assert read_plugin_dump(wrong_shape) == []
-    err = capsys.readouterr().err
-    assert "unreadable" in err
-    assert "not a list of" in err
 
 
 def test_a_test_that_passes_against_a_mock_asserts_nothing(tmp_path):
@@ -260,8 +229,8 @@ def test_the_stub_does_not_shadow_a_sibling_module_that_exists(tmp_path):
 
     _write(tmp_path, "c/test_one.py",
            "def test_real_module_survives():\n"
-           "    from scripts.utils.canopus_freeze import ANCHOR_PREFIX\n"
-           "    assert ANCHOR_PREFIX == 'canopus-anchor:'\n")
+           "    from scripts.utils.canopus_note import BODY_FIELD\n"
+           "    assert BODY_FIELD == 'body'\n")
 
     passed = run_null_stub([tmp_path / "c"], tmp_path)
 

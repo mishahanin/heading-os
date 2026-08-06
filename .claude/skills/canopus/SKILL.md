@@ -79,7 +79,10 @@ the same as right; act 4 is step 7, where the undo is named before it is needed.
 
 ## Step 3 — what makes a plan worth committing
 
-Four properties, and a plan missing any of them buys nothing at step 4.
+Four properties, and a plan missing any of them buys nothing at step 4. The
+authoring detail behind properties 1 and 4 — the five contract-writing rules,
+each earned by a measured failure, and how to read `probe`'s table — is
+`references/planning-gate.md`. Read it before writing a contract.
 
 1. **Criteria derived from a partition of the input domain.** One row per value
    class, edges included, and the contract is real test files at

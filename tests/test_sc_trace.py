@@ -303,9 +303,9 @@ def test_a_contract_file_that_cannot_be_parsed_does_not_refuse():
     This runs inside the builder shared by `approve` and `freeze`, so a raise
     here refuses every slice in the workspace including the `/canopus back` that
     would repair it. A definite unbound criterion refuses; a parser that could
-    not establish an answer reports and stands aside. The same reasoning as
-    `depth-gate` being deliberately bypassable: process discipline is not a leak
-    wall.
+    not establish an answer reports and stands aside. The same reasoning as the
+    retired commit-time depth gate being deliberately bypassable: process
+    discipline is not a leak wall.
     """
     from scripts.utils.sc_trace import read_claims
 

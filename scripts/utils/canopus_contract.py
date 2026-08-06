@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """Run a Canopus contract test set and read its shape from a JUnit report.
 
-Separate from scripts/utils/canopus_freeze.py, and the separation is the point:
-that module is imported by the PreToolUse dispatcher on every Write/Edit and is
-stdlib-only with no subprocess. This one runs pytest, so it can never be
-imported from there.
+This module runs pytest, so nothing loaded on a PreToolUse path may import it.
+That was the reason it was split out of the retired freeze primitive, and the
+constraint outlives the split.
 
-Two questions are answered here, both by running the contract once before it is
-frozen:
+Two questions are answered here, both by running the contract once:
 
   * How many items does each contract file yield when collected whole? That
-    number becomes the manifest baseline, and it is what closes the node-id
-    subset hole: `pytest file::test_one` then reports 1 against 7.
+    number is what closes the node-id subset hole: `pytest file::test_one`
+    reports 1 against 7.
   * Is the contract red? A test that is green before the implementation exists
-    asserts nothing, and freezing it would cement a contract that cannot fail.
+    asserts nothing, and approving it would cement a contract that cannot fail.
 """
 from __future__ import annotations
 
@@ -62,8 +60,8 @@ def pytest_child_env(**overrides: str) -> dict:
     Blanket prefix, never a denylist. PYTEST_ADDOPTS alone can load a plugin that
     overrides pytest_pyfunc_call and makes every contract test report passed
     without executing, and naming the variables you thought of leaves whichever
-    one you did not. The same shape as canopus_git._child_env, which does this
-    for GIT_.
+    one you did not. The same shape as `canopus_check.git_child_env`, which does
+    this for GIT_.
 
     ONE definition, because the two children it serves are COMPARED against each
     other: `scripts/canopus_check.py` launches the per-file evidence run and this
@@ -84,9 +82,9 @@ def pytest_child_env(**overrides: str) -> dict:
     after a gate that no longer exists is worse than the function sitting beside
     its in-tree consumer.
 
-    The CANOPUS_ names are deliberately NOT scrubbed here. CANOPUS_NO_ATTEST and
-    CANOPUS_PLUGIN_DUMP are how a caller tells a child what it is for, and both
-    are passed in as *overrides* by the callers that need them.
+    The CANOPUS_ names are deliberately NOT scrubbed here. CANOPUS_NO_ATTEST is
+    how a caller tells a child what it is for, and it is passed in as an
+    *override* by the callers that need it.
     """
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("PYTEST_")}
@@ -776,7 +774,6 @@ def run_pytest_report(
     timeout: int = 900,
     extra_env: Optional[dict] = None,
     extra_args: Sequence[str] = (),
-    plugin_dump: Optional[Path] = None,
     allowed_returncodes: Optional[Sequence[int]] = None,
 ) -> str:
     """Run pytest over *paths* once and return the raw JUnit XML.
@@ -832,19 +829,6 @@ def run_pytest_report(
     rule already forbids module-scope imports, but the diagnostic a builder reads
     when they break it should name the one file that broke, not the whole set.
 
-    `plugin_dump` is where the child writes the plugin set it loaded, and it is
-    the whole capture mechanism for the freeze-time plugin baseline: the child
-    is already a real pytest session running the contract, so the set comes from
-    the recorder that computes it anyway rather than from a second run or a
-    second describer. The caller owns the path because this function's own
-    scratch directory is gone by the time it returns.
-
-    Measured before it was relied on: `-o addopts=` above makes this child a
-    different topology from a gate run (no coverage, no `-n auto`), and the two
-    still load the same DISTRIBUTIONS. That is why one capture point serves
-    both, and it is also why the comparison is over distributions rather than
-    over raw plugin names.
-
     The return code is deliberately ignored BY DEFAULT. A contract that has not
     been implemented yet EXITS NONZERO, and that is the state this function
     exists to observe, so the baseline run reads its report whatever the child
@@ -892,14 +876,6 @@ def run_pytest_report(
         env = pytest_child_env(
             CANOPUS_NO_ATTEST="1", PYTHONDONTWRITEBYTECODE="1",
         )
-        if plugin_dump is not None:
-            env["CANOPUS_PLUGIN_DUMP"] = str(plugin_dump)
-        else:
-            # Never inherited. A dump path left in the environment by an outer
-            # freeze would have this child overwrite a capture it knows nothing
-            # about, and the null-stub run below is exactly such a child: its
-            # plugin set carries the stub plugin and is not the contract's.
-            env.pop("CANOPUS_PLUGIN_DUMP", None)
         if extra_env:
             env.update(extra_env)
         try:
@@ -971,34 +947,6 @@ def run_contract(
 ) -> tuple[dict[str, int], list[tuple[str, str, str]]]:
     """Run the contract once and read the report. See run_pytest_report."""
     return parse_junit(run_pytest_report(paths, root, timeout=timeout))
-
-
-def read_plugin_dump(path: Path) -> list[str]:
-    """The plugin identities the contract child recorded, or [] when it did not.
-
-    Empty is the fail-closed answer, not a shrug: a freeze that captures no
-    plugin baseline attests NOTHING afterwards, the same rule a freeze with no
-    test files already gets. The callers say so on the way past, because a
-    baseline that silently failed to capture would only announce itself much
-    later, as an attestation nobody can explain.
-
-    Damage is reported rather than raised for the same reason the attestation
-    reader treats damage as absence: this file is a measurement, and an
-    unreadable measurement is one that was not taken.
-    """
-    try:
-        data = json.loads(Path(path).read_bytes().decode("utf-8"))
-    except FileNotFoundError:
-        return []
-    except (OSError, ValueError) as exc:
-        print(f"canopus: the contract's plugin dump at {path} is unreadable: "
-              f"{exc}", file=sys.stderr)
-        return []
-    if not isinstance(data, list) or any(not isinstance(name, str) for name in data):
-        print(f"canopus: the contract's plugin dump at {path} is not a list of "
-              f"plugin names", file=sys.stderr)
-        return []
-    return sorted(set(data))
 
 
 def refusal_reasons(

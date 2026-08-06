@@ -244,19 +244,6 @@ repos:
         language: system
         pass_filenames: true
 
-      # Canopus A11 -- calibrated depth. Refuses a commit that touches the
-      # enforcement surface (hooks, secret patterns, push walls, the send gate,
-      # the routing map, the policies behind them) while no freeze is held.
-      # Deliberately bypassable and deliberately NOT promoted to the push wall:
-      # depth is a process discipline, not a leak wall. The escape is
-      # HEADING_OS_DEPTH_OVERRIDE="<reason>", which is counted; an empty reason
-      # still refuses. Read the record with `python scripts/denials.py --detail`.
-      - id: depth-gate
-        name: Canopus depth gate (enforcement surface needs a held freeze)
-        entry: python3 scripts/depth-gate.py
-        language: system
-        pass_filenames: true
-
   # Data-root seam guard -- fails the commit if any code joins an engine/workspace
   # root to a DATA dir (get_workspace_root() / "outputs", WORKSPACE_ROOT / "crm",
   # workspace_root / "threads", ...). Those bypass the data-root seam and misroute

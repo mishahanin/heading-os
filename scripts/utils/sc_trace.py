@@ -224,9 +224,10 @@ def gate_refusal(anchor_path, contract_paths) -> str:
 
     So: only a DEFINITE finding refuses. An unreadable artifact, an unparseable
     contract file, an unexpected exception of any kind -- all report on stderr
-    and return no refusal at all. The same reasoning that makes `depth-gate`
-    deliberately bypassable: process discipline is not a leak wall, and the
-    push-time scans that ARE unbypassable exist for a different job.
+    and return no refusal at all. The same reasoning that made the retired
+    commit-time depth gate deliberately bypassable: process discipline is not a
+    leak wall, and the push-time scans that ARE unbypassable exist for a
+    different job.
 
     No contract means no trace. A slice freezing only enforcer content has no
     tests to bind to, and demanding one there would refuse every content-only

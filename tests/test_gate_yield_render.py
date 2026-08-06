@@ -32,10 +32,9 @@ def _render(reason):
     from scripts.utils.gate_yield import render, summarise
 
     summary = summarise(
-        ledger=[], denials=[{"mechanism": "depth-gate", "reason": reason,
-                             "ts": "2026-08-01T00:00:00+00:00"}],
-        since={"lifecycle": "2026-08-01T00:00:00+00:00",
-               "denials": "2026-08-01T00:00:00+00:00"},
+        denials=[{"mechanism": "check_tool_budget", "reason": reason,
+                  "ts": "2026-08-01T00:00:00+00:00"}],
+        since={"denials": "2026-08-01T00:00:00+00:00"},
         now="2026-08-02T00:00:00+00:00")
     return render(summary, now="2026-08-02T00:00:00+00:00")
 
@@ -56,10 +55,9 @@ def test_a_crafted_mechanism_name_cannot_forge_a_row_either():
     from scripts.utils.gate_yield import render, summarise
 
     summary = summarise(
-        ledger=[], denials=[{"mechanism": f"x\n{_FORGERY}",
-                             "ts": "2026-08-01T00:00:00+00:00"}],
-        since={"lifecycle": "2026-08-01T00:00:00+00:00",
-               "denials": "2026-08-01T00:00:00+00:00"},
+        denials=[{"mechanism": f"x\n{_FORGERY}",
+                  "ts": "2026-08-01T00:00:00+00:00"}],
+        since={"denials": "2026-08-01T00:00:00+00:00"},
         now="2026-08-02T00:00:00+00:00")
     out = render(summary, now="2026-08-02T00:00:00+00:00")
     assert not any(line.startswith("FAKE") for line in out.split("\n")), out

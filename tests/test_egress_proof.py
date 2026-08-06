@@ -358,29 +358,6 @@ def test_the_payload_sources_are_all_inside_the_engine_root():
 
 
 # ---------------------------------------------------------------------------
-# The controls that decide egress are themselves on the enforcement surface
-# ---------------------------------------------------------------------------
-
-
-def test_a_change_touching_the_sensitivity_flag_classifies_full_depth():
-    """Found by trying to edit it. The predicate that decides whether prompts
-    ship to Langfuse and whether external-API prompts are sanitized was not on
-    the surface, so the classifier called this slice `standard`. A wrong edit to
-    that one file turns telemetry on for every session."""
-    from scripts.utils.slice_depth import DEPTH_FULL, classify
-
-    assert classify(["scripts/utils/sensitive.py"])["depth"] == DEPTH_FULL
-
-
-def test_the_egress_proof_module_is_also_on_the_enforcement_surface():
-    """It decides whether a payload may leave the machine. A module that can be
-    edited at standard depth to always answer clear is not a control."""
-    from scripts.utils.slice_depth import DEPTH_FULL, classify
-
-    assert classify(["scripts/utils/egress_proof.py"])["depth"] == DEPTH_FULL
-
-
-# ---------------------------------------------------------------------------
 # A refusal is recorded, and is never counted as a measurement
 # ---------------------------------------------------------------------------
 

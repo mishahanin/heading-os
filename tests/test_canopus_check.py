@@ -286,6 +286,35 @@ def test_the_range_keeps_the_expensive_clauses_off_untouched_notes(tmp_path, cap
     assert {row["clause"] for row in rows} == {"C1", "C2"}
 
 
+@pytest.mark.parametrize("shape", ["", "..HEAD", "0" * 40 + "..HEAD"])
+def test_a_push_range_that_names_no_push_scopes_to_nothing_and_does_not_error(
+    tmp_path, capsys, shape
+):
+    """The three shapes CI really produces, none of which may read as a failure.
+
+    `github.event.before` is EMPTY on a pull_request and on workflow_dispatch,
+    and forty zeros on the first push to a new branch, so the workflow's
+    `${{ github.event.before }}..${{ github.sha }}` expands to one of these. The
+    null-sha shape is the one that used to matter: `git rev-list` exits 128 on
+    it, which reached the operator as a report against the slice rather than as
+    what it is -- a range that names no push.
+
+    Scoping to NOTHING is the deliberate answer, and it is not the same as
+    passing no `--range` at all: the flag being present says "scope me to a
+    push", so an unresolvable push scopes the expensive clauses to nothing,
+    while its absence stays the whole-history local reading that runs them all.
+    """
+    repo, _note = _clean_slice(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+
+    status = cc.main(["--root", str(repo), "--range", shape.replace("HEAD", head),
+                      "--json"])
+
+    assert status == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert {row["clause"] for row in rows} == {"C1", "C2"}
+
+
 def test_a_note_missing_the_fields_the_clauses_read_is_reported_not_raised(tmp_path):
     repo = _init(tmp_path)
     (repo / "records" / "slices").mkdir(parents=True)

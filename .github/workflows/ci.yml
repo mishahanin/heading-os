@@ -62,6 +62,29 @@ jobs:
         run: uv run python -m pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py -q
       - name: Skill router registry generated + in sync (F-5.1)
         run: uv run python scripts/generate-skill-router.py --check
+      - name: Canopus record check (reports, does not block a direct push)
+        # The name is the honest limit, and it is not modesty. `enforce_admins`
+        # is false on the only push path in use, so a required check cannot
+        # actually stop a direct push to main; any sentence giving this step a
+        # verb of refusal would be an overclaim. It REPORTS: a red step here is
+        # a loud, dated, permanent record that a slice's note stopped matching
+        # the repository, seen by whoever reads the run.
+        #
+        # The exit code is deliberately NOT swallowed with `|| true`. A step
+        # that can never be observed failing is the exact defect this whole
+        # design exists to remove -- exit 0 would then mean "nothing was
+        # observed", not "the clauses held".
+        #
+        # `github.event.before` is EMPTY on a pull_request and on
+        # workflow_dispatch, and forty zeros on the first push to a new branch,
+        # so this expands to `..<sha>` or `000...000..<sha>` on those events.
+        # canopus_check reads an endpoint that names no commit as a push it
+        # cannot scope, and runs the two cheap clauses over every note while
+        # scoping the two expensive ones (a worktree plus a test run each) to
+        # nothing. It never errors on the shape, which would read as a failure
+        # of the slice rather than of the range. Re-point this to
+        # `scripts/canopus.py check` when that subcommand lands.
+        run: uv run python scripts/canopus_check.py --range "${{ github.event.before }}..${{ github.sha }}"
       - name: Rule split inventory drift guard (D4)
         # No-op until a rule split/compression writes a snapshot under
         # config/rule-split-inventory/; then it fails the build if a later edit drops a

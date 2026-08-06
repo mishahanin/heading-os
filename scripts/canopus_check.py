@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,9 @@ from scripts.utils.canopus_note import NoteError, note_paths, read_note  # noqa:
 
 GIT_TIMEOUT = 60
 PYTEST_TIMEOUT = 900
+# An endpoint that names no commit: empty, or the all-zero sha git uses for
+# "there was nothing before this". See `_range_shas`.
+_NULL_END = re.compile(r"0*")
 
 
 class CheckError(RuntimeError):
@@ -298,9 +302,25 @@ def _row(slug: str, clause: str, ok: bool, message: str) -> dict:
 
 
 def _range_shas(root: Path, commit_range: str | None) -> set | None:
-    """Every commit in `A..B`, or None when no range was given (check them all)."""
-    if not commit_range:
+    """Every commit in `A..B`, or None when no range was given (check them all).
+
+    A range that is PRESENT but names no push scopes to NOTHING, which is not
+    the same answer as no range at all. CI passes
+    `${{ github.event.before }}..${{ github.sha }}`, and `before` is empty on a
+    pull_request and on workflow_dispatch, and forty zeros on the first push to
+    a new branch. `git rev-list` exits 128 on the zero shape, and that reached
+    the operator as a report against a slice rather than as what it is. Widening
+    to the whole history instead would be the other wrong answer: the flag being
+    present says "scope me to this push", so an unknowable push scopes the
+    expensive clauses to nothing, while the flag's ABSENCE keeps the deliberate
+    whole-history local reading that runs them over every note.
+    """
+    if commit_range is None:
         return None
+    if any(_NULL_END.fullmatch(end) for end in commit_range.split("..")):
+        print(f"canopus-check: {commit_range!r} names no push range, so C3 and C4 "
+              "run over nothing; C1 and C2 still run over every note", file=sys.stderr)
+        return set()
     listed = _git(root, "rev-list", commit_range)
     if listed.returncode != 0:
         raise CheckError(f"the range {commit_range} could not be read: "
@@ -329,7 +349,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="repository to check (default: the engine)")
     parser.add_argument("--range", dest="commit_range", metavar="A..B",
                         help="run C3 and C4 only for notes whose approval_sha or "
-                             "retired_sha falls inside this range")
+                             "retired_sha falls inside this range; an endpoint "
+                             "naming no commit (empty, or the all-zero sha) scopes "
+                             "them to nothing rather than to everything")
     parser.add_argument("--json", action="store_true",
                         help="one JSON row per clause on stdout, nothing else")
     args = parser.parse_args(argv)

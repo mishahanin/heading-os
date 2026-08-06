@@ -2069,3 +2069,109 @@ def test_the_drift_comparison_reads_no_disk_and_runs_no_git():
     assert not hasattr(cf, "git_output")
     clean = {"recipe": "canopus-tree-v1", "head": "a" * 40, "dirty": {}}
     assert cf.tree_drift(dict(clean), dict(clean)) == []
+
+
+# ============================================================
+# repin_enforcer -- ported from tests/test_manifest_split.py (K3, 2026-08-07)
+# ============================================================
+#
+# test_manifest_split.py was the frozen contract for the manifest
+# CONTRACT/ENFORCER split; it retired with the rest of the Canopus v3 freeze
+# machinery. Most of its properties duplicated coverage already held here or
+# in test_enforcer_set_bound.py. These four did not: repin_enforcer() itself,
+# which canopus_freeze.py still exports and this retirement does not touch,
+# had no other test of its pin bookkeeping, its two refusals, or its git_sha
+# field. Ported rather than dropped with the file that held them.
+
+def _repin_tree(tmp_path: Path) -> Path:
+    root = tmp_path / "tree"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "run-tests.py").write_text("# enforcer\n", encoding="utf-8")
+    return root
+
+
+def _repin_manifest(root: Path) -> dict:
+    return build_manifest(
+        [], root, label="s", frozen_at=STAMP,
+        content_only=[root / "scripts" / "run-tests.py"],
+    )
+
+
+def test_repin_records_the_new_pin_and_what_changed(tmp_path: Path):
+    from scripts.utils.canopus_freeze import enforcer_pin, repin_enforcer
+
+    root = _repin_tree(tmp_path)
+    manifest = _repin_manifest(root)
+    write_freeze(root, manifest)
+    was = enforcer_pin(manifest)
+    (root / "scripts" / "run-tests.py").write_text("# edited\n", encoding="utf-8")
+
+    event = repin_enforcer(root, reason="the fix belonged inside the enforcer")
+
+    assert event["previous_pin"] == was
+    assert event["pin"] != was
+    assert event["changed"] == ["scripts/run-tests.py"]
+    assert enforcer_pin(read_freeze(root)) == event["pin"], (
+        "the freeze state still carries the old pin, so the lock stays red")
+
+
+def test_repin_refuses_without_a_reason(tmp_path: Path):
+    from scripts.utils.canopus_freeze import repin_enforcer
+
+    root = _repin_tree(tmp_path)
+    write_freeze(root, _repin_manifest(root))
+    with pytest.raises(FreezeError):
+        repin_enforcer(root, reason="")
+
+
+def test_repin_refuses_when_no_freeze_is_held(tmp_path: Path):
+    from scripts.utils.canopus_freeze import repin_enforcer
+
+    root = _repin_tree(tmp_path)
+    with pytest.raises(FreezeError):
+        repin_enforcer(root, reason="why")
+
+
+def test_the_repin_event_records_the_commit_that_carries_the_change(tmp_path: Path):
+    from scripts.utils.canopus_freeze import repin_enforcer
+
+    root = _repin_tree(tmp_path)
+    write_freeze(root, _repin_manifest(root))
+    (root / "scripts" / "run-tests.py").write_text("# edited\n", encoding="utf-8")
+
+    event = repin_enforcer(root, reason="why", git_sha="a" * 40)
+
+    assert event["git_sha"] == "a" * 40
+
+
+# ============================================================
+# lock_state anchor axis -- ported from tests/test_manifest_split.py
+# ============================================================
+#
+# M3 from the /scrutinize pass of 2026-08-03: lock_state(report) alone
+# answers the CONTENT question and returns the greener reading, LOCK_HELD,
+# blind to a missing or disagreeing anchor. The signature keeps its two
+# optional arguments because tightening them is an enforcement-surface edit
+# `slice-depth.py` prices at a full slice; this guard keeps them unused by
+# walking every production call site with `ast` so a future caller that
+# forgets the anchor fails HERE, by name, instead of printing green.
+
+def test_every_production_call_of_lock_state_passes_the_anchor_axis():
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    offenders = []
+    for path in sorted((root / "scripts").rglob("*.py")):
+        tree_ast = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree_ast):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name != "lock_state":
+                continue
+            if len(node.args) + len(node.keywords) < 3:
+                offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+
+    assert not offenders, (
+        f"these calls take the two-axis default, which cannot see a missing or "
+        f"disagreeing anchor and reports the greener state: {offenders}")

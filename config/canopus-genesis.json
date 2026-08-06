@@ -1,0 +1,4 @@
+{
+  "genesis_sha": "fde876aa75611876ecaa88b3b4c84595601306a9",
+  "reason": "This is the last commit that predates the Canopus note format entirely, so no commit at or before it carries a note and none ever will. A check armed without an epoch would walk into its own history and report a violation against every commit that came before the convention existed, condemning the very migration that introduced it."
+}

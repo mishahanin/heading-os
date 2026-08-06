@@ -2,7 +2,9 @@
 
 Retired from `tests/contract/2026-08-05-foreign-recipe/`, all five IDs promoted
 unchanged apart from the root path, which is `parents[1]` here rather than
-`parents[3]`.
+`parents[3]`. Two of the five, SC-1 and SC-4, asserted the sentence at the
+PreToolUse deny path, which was removed with the freeze check itself; the three
+that remain assert it at the CLI surface and in the one function that builds it.
 
 The defect. `read_freeze` raises `FreezeCorrupt` for four reasons: the file is
 unreadable, it is not a JSON object, its `recipe` is not the current one, or its
@@ -13,22 +15,19 @@ headline asserting the manifest was damaged, one line above the reader's own
 accurate `carries recipe 'canopus-freeze-v6', expected 'canopus-freeze-v7'`. The
 operator was told two contradictory things at once and the false one came first.
 
-Why these five stay in the ordinary suite. Each pins a property of the sentence
+Why these three stay in the ordinary suite. Each pins a property of the sentence
 that is easy to lose to a later edit and invisible when lost: that the headline
 does not assert a cause it cannot know, that both recipes still travel with it,
-that the escape survives at BOTH surfaces, that one function builds it, and that
-a genuinely unreadable manifest still says so. The two preservation tests were
-green before the slice and are the whole point afterwards, because both
-properties live in the exact string that was rewritten.
+that the escape survives, and that one function builds it. The preservation
+tests were green before the slice and are the whole point afterwards, because
+both properties live in the exact string that was rewritten.
 """
 
-import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
-HOOK_PATH = Path(__file__).resolve().parents[1] / ".claude" / "hooks" / "_dispatch.py"
 STAMP = "2026-01-01T00:00:00+00:00"
 
 # The vocabulary a refusal may not use unless it is true. Checked as substrings
@@ -85,24 +84,6 @@ def stale_recipe_tree(tmp_path: Path, anchor: Path) -> Path:
     return root
 
 
-def _dispatcher(monkeypatch, root: Path):
-    spec = importlib.util.spec_from_file_location("foreign_recipe_dispatch", HOOK_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    monkeypatch.setattr(module, "WORKSPACE", root)
-    return module
-
-
-def _deny_text(monkeypatch, root: Path) -> str:
-    module = _dispatcher(monkeypatch, root)
-    payload = {"tool_name": "Write",
-               "tool_input": {"file_path": str(root / "tests" / "test_alpha.py"),
-                              "content": "x"}}
-    decision = module.check_canopus_freeze(payload)
-    assert decision is not None, "a manifest the reader refuses did not deny the write"
-    return json.dumps(decision)
-
-
 def _found_damage_words(message: str) -> list:
     lowered = message.lower()
     return [word for word in DAMAGE_WORDS if word in lowered]
@@ -112,37 +93,20 @@ def _found_damage_words(message: str) -> list:
 # SC-1 — a version mismatch is not reported as damage
 # ============================================================
 
-def test_the_write_denial_does_not_call_a_version_mismatch_damage(
-    monkeypatch, stale_recipe_tree
-):
-    """SC-1 [failure-mode]. WHEN the manifest is refused only because its recipe
-    is not the current one, THE SYSTEM SHALL NOT tell the operator the manifest
-    is damaged.
-
-    Both halves are asserted, and the second is the one that matters. Deleting
-    the headline satisfies the first on its own, and a careless deletion would
-    take the recipe sentence with it, leaving a denial that says nothing. The
-    operator must still learn WHICH recipe was found and which was wanted,
-    because that pair is the whole diagnosis.
-    """
-    message = _deny_text(monkeypatch, stale_recipe_tree)
-
-    assert not _found_damage_words(message), (
-        f"the denial claims damage for a deliberate version bump: "
-        f"{_found_damage_words(message)} in {message!r}")
-    assert "canopus-freeze-v6" in message and "canopus-freeze-v7" in message, (
-        f"the denial no longer names both recipes, so the operator cannot tell "
-        f"what was found or what was wanted: {message!r}")
-
-
 def test_the_cli_refusal_does_not_call_a_version_mismatch_damage(
-    monkeypatch, capsys, stale_recipe_tree
+    capsys, stale_recipe_tree
 ):
-    """SC-1b [failure-mode]. The same for the CLI's own refusal.
+    """SC-1b [failure-mode]. WHEN the manifest is refused only because its
+    recipe is not the current one, THE SYSTEM SHALL NOT tell the operator the
+    manifest is damaged.
 
-    Two surfaces print this, and a fix applied to one is the shape of this
-    defect recurring. `verify` is the carrier because it reads the manifest and
-    does little else, so the refusal under test is what produces the output.
+    `verify` is the carrier because it reads the manifest and does little else,
+    so the refusal under test is what produces the output. Both halves are
+    asserted, and the second is the one that matters: deleting the headline
+    satisfies the first on its own, and a careless deletion would take the
+    recipe sentence with it, leaving a refusal that says nothing. The operator
+    must still learn WHICH recipe was found and which was wanted, because that
+    pair is the whole diagnosis.
     """
     from scripts.canopus import main
 
@@ -158,28 +122,26 @@ def test_the_cli_refusal_does_not_call_a_version_mismatch_damage(
 
 
 # ============================================================
-# SC-2 — the escape is still named, at both surfaces
+# SC-2 — the escape is still named
 # ============================================================
 
-def test_both_refusals_still_name_the_way_out(monkeypatch, capsys, stale_recipe_tree):
-    """SC-2 [happy-path]. WHEN either surface refuses, THE SYSTEM SHALL still
-    name the command that clears the manifest.
+def test_the_refusal_still_names_the_way_out(capsys, stale_recipe_tree):
+    """SC-2 [happy-path]. WHEN the surface refuses, THE SYSTEM SHALL still name
+    the command that clears the manifest.
 
     This is the property most at risk from the fix. The false headline and the
-    escape sat in the same string at both surfaces, and the obvious way to
-    delete a wrong sentence is to delete the paragraph it lives in. A refusal
-    that denies every write and does not say how to proceed is a worse defect
-    than the one that was fixed.
+    escape sat in the same string, and the obvious way to delete a wrong
+    sentence is to delete the paragraph it lives in. A refusal that fails every
+    command and does not say how to proceed is a worse defect than the one that
+    was fixed.
     """
     from scripts.canopus import main
 
-    denial = _deny_text(monkeypatch, stale_recipe_tree)
     main(["--root", str(stale_recipe_tree), "verify"])
     cli = capsys.readouterr().err
 
-    for surface, message in (("the write denial", denial), ("the CLI refusal", cli)):
-        assert "release" in message and "--force" in message and "--window" in message, (
-            f"{surface} no longer names the way out: {message!r}")
+    assert "release" in cli and "--force" in cli and "--window" in cli, (
+        f"the CLI refusal no longer names the way out: {cli!r}")
 
 
 # ============================================================
@@ -212,31 +174,3 @@ def test_the_refusal_sentence_is_built_in_one_named_function(stale_recipe_tree):
         f"the notice does not name the way out: {notice!r}")
     assert not _found_damage_words(notice), (
         f"the shared notice hard-codes a cause it cannot know: {notice!r}")
-
-
-# ============================================================
-# SC-4 — real damage is still refused, and still readable
-# ============================================================
-
-def test_a_genuinely_unreadable_manifest_is_still_refused(monkeypatch, tmp_path):
-    """SC-4 [failure-mode]. WHEN the manifest is genuinely unreadable, THE
-    SYSTEM SHALL still deny every write and still carry the reader's reason.
-
-    The fix removed a claim; this is the test that it removed only the claim.
-    One sentence now serves four causes, and the two that ARE damage must not
-    have been made vaguer to accommodate the two that are not. The reader's own
-    sentence says "unreadable", so the operator loses nothing by the headline
-    going cause-neutral.
-    """
-    from scripts.utils.canopus_freeze import freeze_state_path
-
-    root = _tree(tmp_path)
-    path = freeze_state_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{ this is not json", encoding="utf-8")
-
-    message = _deny_text(monkeypatch, root)
-
-    assert "unreadable" in message, (
-        f"the denial no longer says why the manifest could not be read, so real "
-        f"damage now looks like every other refusal: {message!r}")

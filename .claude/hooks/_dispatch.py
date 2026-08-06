@@ -30,74 +30,16 @@ from typing import Optional, Tuple
 
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 
-# The dispatcher's only import from outside .claude/hooks/, and it is both LAZY
-# and guarded.
-#
-# Lazy, because this file runs as a fresh process on every Write, Edit, Bash and
-# Read, while check_canopus_freeze returns None immediately for every non-write
-# tool — which is most calls. Importing canopus_freeze at module level dragged
-# hashlib, datetime and scripts.utils.atomic into all of them for nothing. The
-# import now happens after the _CANOPUS_WRITE_TOOLS gate, once per process, with
-# the outcome cached in _CANOPUS_AVAILABLE.
-#
-# Guarded, because a failure here — not just an ImportError, but any exception
-# raised by top-level code in canopus_freeze.py or a module it imports (e.g. a
-# SyntaxError in scripts/utils/atomic.py) — would take down the WHOLE PreToolUse
-# chain, secret detection included, on every single tool call: a far worse
-# failure than losing the freeze deny. The guard therefore catches Exception
-# broadly, not just ImportError. The layering makes the degradation safe: the
-# deny is only a CONVENIENCE, and the guarantee (the freeze check inside
-# tests/conftest.py and scripts/run-tests.py) is untouched by whether this
-# import resolved. The failure is never silent: it is always printed to stderr,
-# naming the exception, so a disabled deny is visible rather than a silent
-# weakening of the chain.
-FREEZE_DIRNAME = None
-FreezeCorrupt = None
-frozen_reason = None
-read_freeze = None
-refused_manifest_notice = None
-_CANOPUS_AVAILABLE = None  # None = import not attempted yet
-
-
-def _load_canopus() -> bool:
-    """Import the freeze primitive once per process. Never raises."""
-    global FREEZE_DIRNAME, FreezeCorrupt, frozen_reason, read_freeze
-    global refused_manifest_notice
-    global _CANOPUS_AVAILABLE
-    if _CANOPUS_AVAILABLE is not None:
-        return _CANOPUS_AVAILABLE
-    try:
-        sys.path.insert(0, str(WORKSPACE))
-        from scripts.utils.canopus_freeze import (
-            FREEZE_DIRNAME as _freeze_dirname,
-            FreezeCorrupt as _freeze_corrupt,
-            frozen_reason as _frozen_reason,
-            read_freeze as _read_freeze,
-            refused_manifest_notice as _refused_manifest_notice,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        print(f"[_dispatch] canopus freeze module unavailable ({type(exc).__name__}): {exc}", file=sys.stderr)
-        _CANOPUS_AVAILABLE = False
-        return False
-    FREEZE_DIRNAME = _freeze_dirname
-    FreezeCorrupt = _freeze_corrupt
-    frozen_reason = _frozen_reason
-    read_freeze = _read_freeze
-    refused_manifest_notice = _refused_manifest_notice
-    _CANOPUS_AVAILABLE = True
-    return True
-
-
 def _record_denial(mechanism: str, payload: dict, reason: str) -> None:
     """Count one refusal. Telemetry only — it can never change a decision.
 
     Called from main()'s terminal deny path and from nowhere else, so a check
     added tomorrow is counted by construction rather than by its author
-    remembering to add a line. Lazy and guarded for the same reason the canopus
-    import above is: this runs inside the workspace's only synchronous wall
-    between a model mistake and a written credential, and no failure here may
-    take that wall down. It runs on denials only, which are rare, so the
-    overwhelming majority of tool calls never pay for the import.
+    remembering to add a line. Lazy and guarded, because this runs inside the
+    workspace's only synchronous wall between a model mistake and a written
+    credential, and no failure here may take that wall down. It runs on denials
+    only, which are rare, so the overwhelming majority of tool calls never pay
+    for the import.
     """
     try:
         if str(WORKSPACE) not in sys.path:
@@ -839,109 +781,10 @@ def check_tool_budget(payload: dict) -> Optional[dict]:
 
 
 # ============================================================
-# check_canopus_freeze — deny writes to a frozen test contract
-# ============================================================
-# Canopus wire 1. This deny is a CONVENIENCE, not the guarantee: it only sees
-# Write, Edit, MultiEdit and NotebookEdit tool calls, so a Bash `sed -i` or a
-# subagent with its own toolset walks past it. The guarantee is the freeze check
-# that tests/conftest.py runs at pytest session start and scripts/run-tests.py
-# runs before the suite. Never reason that this hook makes the verify optional.
-#
-# TOTALITY IS A REQUIREMENT, NOT A STYLE CHOICE. The dispatcher catches any
-# exception a check raises, emits an advisory, and continues — so a raise here
-# fails OPEN: writes to frozen paths sail through while the hook reports
-# healthy. Every branch below returns.
-#
-# The operator gets the same deny as the builder. Under the standard, changing a
-# contract reopens the approval gate regardless of whose hand changes it, and an
-# exemption for the operator would turn the guarantee back into a promise.
-
-_CANOPUS_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
-
-
-def _canopus_deny(reason: str) -> dict:
-    return {
-        "decision": "block",
-        "reason": f"Canopus freeze — intentional policy block, not an error. {reason}",
-        "_policy_deny": True,
-    }
-
-
-def check_canopus_freeze(payload: dict) -> Optional[dict]:
-    """Deny a write that lands inside the active Canopus freeze."""
-    if payload.get("tool_name") not in _CANOPUS_WRITE_TOOLS:
-        return None
-    # Cheapest gate first, then the import: every Bash and Read call returns
-    # above this line without paying for hashlib or scripts.utils.atomic.
-    if not _load_canopus():
-        return None
-    tool_input = payload.get("tool_input") or {}
-    if not isinstance(tool_input, dict):
-        return None
-    target = tool_input.get("file_path") or tool_input.get("notebook_path")
-    if not isinstance(target, str) or not target:
-        return None
-
-    try:
-        manifest = read_freeze(WORKSPACE)
-    except FreezeCorrupt as exc:
-        return _canopus_deny(refused_manifest_notice(exc))
-    except OSError as exc:
-        return _canopus_deny(f"The freeze state could not be read: {exc}")
-    if manifest is None:
-        return None
-
-    anchor = manifest.get("anchor") or ""
-    try:
-        resolved = Path(target).resolve()
-        workspace_resolved = Path(WORKSPACE).resolve()
-    except (OSError, ValueError):
-        return None
-    if anchor and str(resolved) == anchor:
-        return _canopus_deny(
-            f"{target} is the anchor artifact recording the approved root hash "
-            f"for label {manifest['label']}, and is not editable while the "
-            f"freeze is active."
-        )
-
-    try:
-        rel = resolved.relative_to(workspace_resolved).as_posix()
-    except ValueError:
-        return None
-
-    if rel.split("/", 1)[0] == FREEZE_DIRNAME:
-        return _canopus_deny(
-            f"{FREEZE_DIRNAME}/ holds the freeze state itself and is not editable "
-            f"while a freeze is active (label: {manifest['label']})."
-        )
-
-    reason = frozen_reason(rel, manifest)
-    if reason is None:
-        return None
-    # Two cases, and the second one was missing while it was the ordinary one.
-    # "Fix the code instead" names an action only while the frozen path and the
-    # code being fixed are different files. Whenever this tool is under its own
-    # maintenance the frozen path IS the code — it was, for six of the seven
-    # tasks in wire 2.2 — and an operator told to fix the code instead is told to
-    # do the thing that was just denied. So the real move is named here: open a
-    # release window, make the change, re-freeze.
-    return _canopus_deny(
-        f"{reason} (label: {manifest['label']}). The contract is not editable in "
-        f"place. If the frozen path is a TEST, fix the code instead; a contract "
-        f"that is genuinely wrong reopens the approval gate. If the frozen path "
-        f"IS the code you are fixing (an enforcer under its own maintenance), "
-        f"open a release window first: python scripts/canopus.py release "
-        f"--window --reason \"<why>\", make the change, then re-approve and "
-        f"re-freeze."
-    )
-
-
-# ============================================================
 # Dispatcher main
 # ============================================================
 CHECKS = [
     check_prevent_secrets,
-    check_canopus_freeze,
     check_protect_personal_threads,
     check_protect_corporate,
     check_protect_docs,
@@ -992,7 +835,7 @@ def main():
             continue
         if decision.get("decision") == "block":
             # One call site, ahead of both terminal renderings below, so every
-            # check's refusal is counted the same way and a ninth check inherits
+            # check's refusal is counted the same way and an eighth check inherits
             # the counter without touching this file. A1 of the v2 design.
             _record_denial(check.__name__, payload, decision.get("reason", ""))
             # protect-personal-threads blocks are rendered as a PreToolUse

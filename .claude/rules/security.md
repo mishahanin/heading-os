@@ -69,14 +69,10 @@ because until 2026-08-01 nothing counted a refusal, so a layer that was quietly
 catching real mistakes and a layer that had never fired once looked identical
 from the outside. For the PreToolUse layers the call sits in the dispatcher's
 main loop rather than in the individual checks, so a check added later is counted
-without its author doing anything. Two things are deliberately absent from a
-record: the refused content (both the reason and the path pass through
-`redact()`) and any refusal by the Canopus LIFECYCLE gate — `freeze_gate()` in
-`scripts/utils/canopus_gate.py` and the approve/verify gates in
-`scripts/canopus.py` — which is slice friction, not an attempted policy
-violation, and belongs to the per-slice ledger. Read that exclusion narrowly: the
-PreToolUse freeze check `check_canopus_freeze` is one of the eight dispatcher
-checks and IS counted, like the other seven.
+without its author doing anything. One thing is deliberately absent from a
+record: the refused CONTENT, because both the reason and the path pass through
+`redact()`. Everything else about a refusal is kept — which layer refused, when,
+and against what action.
 
 **Generated artifacts are redacted at birth.** `.claude/hooks/checkpoint-save.py`
 runs the compact summary through `redact()` from `scripts/utils/secret_patterns.py`

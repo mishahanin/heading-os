@@ -574,7 +574,7 @@ def test_a_refused_freeze_candidate_records_the_candidates_own_cause(tmp_path):
 def test_every_pretooluse_guard_is_declared_so_a_silent_one_stays_visible():
     """The declared list exists so a guard that has NEVER fired still appears.
 
-    It omitted the whole PreToolUse family -- eight guards, and the eight least
+    It omitted the whole PreToolUse family -- seven guards, and the seven least
     likely to fire, since each waits on a model mistake. They were therefore
     invisible rather than TOO EARLY, which is the exact confusion the list's own
     comment says it exists to end.
@@ -591,7 +591,7 @@ def test_every_pretooluse_guard_is_declared_so_a_silent_one_stays_visible():
                 and any(getattr(t, "id", "") == "CHECKS" for t in n.targets)]
     assert registry, "no CHECKS registry found in the dispatcher"
     names = [e.id for e in registry[0].value.elts if isinstance(e, ast.Name)]
-    assert len(names) >= 8, names
+    assert len(names) >= 7, names
 
     # The dispatcher's deny path calls `_record_denial(check.__name__, ...)`,
     # so the mechanism name IS the function name.

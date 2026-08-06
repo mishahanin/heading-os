@@ -23,12 +23,14 @@ WHAT THE MODULE REFUSES TO DO, pinned here rather than left to its docstring:
 - Counts are scoped by LABEL, so two slices sharing a label merge into one row,
   and the page may not pretend otherwise.
 
-The end-to-end claim -- that the section reaches the rendered page at all -- is
-`tests/test_canopus_cli.py::test_pack_reports_all_three_axes_and_the_uncovered_list`.
+The end-to-end claim -- that the section reaches a rendered page at all -- had two
+tests, both against `canopus pack`. That command and the evidence page it printed
+were deleted on 2026-08-07 with the rest of the freeze lifecycle, so the module
+now has no caller and the claim has no subject. What is below is unchanged: the
+counters' own behaviour, which is what the twelve tests were always about.
 """
 
 import json
-from pathlib import Path
 
 
 def _row(event, label="s", kind="", reason="", ts="2026-08-03T00:00:00+00:00"):
@@ -184,63 +186,6 @@ def test_the_render_never_grades_the_slice():
 # ============================================================
 # Wired into the page an operator actually approves from
 # ============================================================
-
-def test_scripts_canopus_actually_CALLS_the_renderer():
-    """A module whose own tests pass while the one wiring line is absent is the
-    failure this test exists for.
-
-    Asserted on the AST, not on a substring. The first version read
-    `"render_friction" in text`, and a mutation that deleted the CALL while
-    leaving the `import` line survived it: the section vanished from the page and
-    everything stayed green. That is the substring trap
-    `scripts/utils/mutation_probe.py` documents in its own docstring, reproduced
-    by the harness that module exists to be. An import is not a use.
-
-    A second mutation then kept the call and dropped the print, computing the
-    section and discarding it, so the call must also sit inside a `print`. That
-    makes "wired" and "reaches the page" one claim.
-    """
-    import ast
-
-    from scripts.utils.canopus_friction import FRICTION_HEADING
-
-    assert FRICTION_HEADING, "the page needs a stable heading to render under"
-
-    src = Path(__file__).resolve().parents[1] / "scripts" / "canopus.py"
-    tree = ast.parse(src.read_text(encoding="utf-8"))
-    called = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if isinstance(func, ast.Name):
-            called.add(func.id)
-        elif isinstance(func, ast.Attribute):
-            called.add(func.attr)
-
-    for name in ("render_friction", "count_friction"):
-        assert name in called, (
-            f"scripts/canopus.py never CALLS {name}, so the friction section "
-            f"cannot reach the page regardless of how well the module behaves "
-            f"(an import alone is not a use)"
-        )
-
-    printed = False
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "print"):
-            continue
-        for arg in node.args:
-            for inner in ast.walk(arg):
-                if (isinstance(inner, ast.Call)
-                        and isinstance(inner.func, ast.Name)
-                        and inner.func.id == "render_friction"):
-                    printed = True
-    assert printed, (
-        "render_friction is called but its value never reaches a print; the "
-        "section is computed and discarded"
-    )
-
 
 # ============================================================
 # The reader it depends on is not weakened

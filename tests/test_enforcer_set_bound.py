@@ -1,21 +1,19 @@
 """The enforcer SET bound by the approved root, promoted from its frozen contract.
 
 Shipped 2026-08-04 and retired here: a contract left in `tests/contract/` binds
-every later slice to this one's behaviour. All fifteen IDs are kept and nothing
-was weakened in the move; `_CLI` is re-anchored one level up, and that is the
-only change.
+every later slice to this one's behaviour. All fifteen IDs were kept in that move
+and nothing was weakened by it.
 
-WHAT THIS FILE CANNOT DECIDE, named rather than implied. Step 11 ran thirteen
-mutations against these fifteen tests and one survived that mattered: flipping
-the missing-key default in `loss_of_lock_sentences` from True to False. Every
-test here hands over a report built by `verify_manifest`, which always carries
-`root_moved`, so none of them can tell the two defaults apart. That one is killed
-by `tests/test_canopus_cli.py::test_a_report_that_cannot_say_whether_the_root_moved_is_read_as_moved`,
-which hands over a report without the key. Do not read this file as covering it.
+Narrowed 2026-08-07, when the freeze lifecycle went. Five of the fifteen bound
+`scripts/canopus.py approve`, `freeze` and `repin`, or `loss_of_lock_sentences`
+in the deleted freeze gate; none of the five could be re-pointed at anything,
+because what they measured no longer runs. The ten below are the library's own
+behaviour and are unchanged.
 
-Two further mutations survived and are EQUIVALENT rather than uncovered: an empty
-name set serialized as `null` instead of `[]`, and the absent-enforcer sentinel
-changed to 64 zeros. Neither changes behaviour, in either exhaustive case.
+Two mutations survived step 11 here and are EQUIVALENT rather than uncovered: an
+empty name set serialized as `null` instead of `[]`, and the absent-enforcer
+sentinel changed to 64 zeros. Neither changes behaviour, in either exhaustive
+case.
 
 `test_the_previous_recipe_is_refused_by_name` overlaps with
 `tests/test_manifest_split.py::test_the_recipe_is_bumped_so_an_old_manifest_is_refused_by_name`.
@@ -35,11 +33,8 @@ a freeze over ten enforcers and a freeze over nine compute the SAME root, so a
 an enforcer, leaves the committed approval matching, and reads LOCK HELD and
 APPROVED. From then on that enforcer is editable under a green lock, invisibly.
 
-Two smaller ends from the same slice are closed here rather than left:
-`repin_enforcer` clears the attestation even when nothing moved, and
-`loss_of_lock_sentences` decides whether the CONTRACT moved from the file lists
-instead of from the root comparison, so it can say "the ENFORCER moved, not the
-contract" over a tree whose contract root disagrees.
+One smaller end from the same slice is closed here rather than left:
+`repin_enforcer` clears the attestation even when nothing moved.
 
 Every test imports the code under test INSIDE its body: the behaviour does not
 exist yet, and a module-scope import of a changed signature would stop the file
@@ -47,14 +42,11 @@ collecting.
 """
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
 STAMP = "2026-01-01T00:00:00+00:00"
-_CLI = Path(__file__).resolve().parents[1] / "scripts" / "canopus.py"
 
 
 # ============================================================
@@ -107,41 +99,6 @@ _BOTH = ("scripts/run-tests.py", "scripts/gate.py")
 # CLI helpers. The end-to-end route is the one the hole was found on.
 # ============================================================
 
-def _git(repo: Path, *argv: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *argv], check=True,
-                   capture_output=True, text=True)
-
-
-def _gate_repo(anchor: Path) -> Path:
-    """The anchor's directory as a repository with a SYNTHETIC identity.
-
-    Invented on purpose: this file ships in a public repository and carries no
-    real person or host. The seed commit is empty so no caller's artifact is
-    committed behind its back.
-    """
-    gate = anchor.parent
-    for argv in (["init", "-q", "-b", "main"],
-                 ["config", "user.email", "builder@example.invalid"],
-                 ["config", "user.name", "Builder"],
-                 ["commit", "-q", "--allow-empty", "-m", "seed"]):
-        _git(gate, *argv)
-    return gate
-
-
-def _cli(tree: Path, *argv: str):
-    """The CLI as a subprocess, so `--root` is the only tree it can reach."""
-    return subprocess.run(
-        [sys.executable, str(_CLI), "--root", str(tree), *argv],
-        capture_output=True, text=True, cwd=str(tree))
-
-
-def _content_flags(enforcers):
-    flags = []
-    for rel in enforcers:
-        flags += ["--content", rel]
-    return flags
-
-
 # ============================================================
 # SC-1 — the contract root binds the enforcer NAMES
 # ============================================================
@@ -189,65 +146,6 @@ def test_the_root_payload_carries_the_enforcer_names_explicitly(tree, anchor):
 
     assert payload["content_names"] == ["scripts/gate.py", "scripts/run-tests.py"], (
         "the root payload does not carry the enforcer names as a sorted list")
-
-
-def test_a_freeze_over_a_narrower_enforcer_set_is_refused_by_the_committed_approval(
-    tree, anchor
-):
-    """SC-1d [integration]. The whole hole, end to end through the CLI.
-
-    `approve` over both enforcers, a human COMMIT of the artifact, then `freeze`
-    with one `--content` flag removed. This is the sequence measured on
-    2026-08-04, and today it exits 0 and takes the lock.
-    """
-    gate = _gate_repo(anchor)
-
-    approved = _cli(tree, "approve", "tests/contract", "--label", "s",
-                    "--anchor", str(anchor), *_content_flags(_BOTH))
-    assert approved.returncode == 0, approved.stderr
-    _git(gate, "add", anchor.name)
-    _git(gate, "commit", "-q", "-m", "the approval, over both enforcers")
-
-    narrowed = _cli(tree, "freeze", "tests/contract", "--label", "s",
-                    "--anchor", str(anchor),
-                    *_content_flags(("scripts/run-tests.py",)))
-
-    assert narrowed.returncode == 1, (
-        "a freeze that drops an enforcer was accepted against an approval "
-        f"taken over both:\n{narrowed.stdout}\n{narrowed.stderr}")
-    assert "the committed approval does not match" in narrowed.stderr, (
-        "the freeze was refused for some OTHER reason than the approval "
-        f"disagreeing:\n{narrowed.stderr}")
-    assert not (tree / ".canopus" / "freeze.json").exists(), (
-        "the narrowed freeze was refused and still wrote a manifest")
-
-
-def test_a_freeze_over_the_APPROVED_enforcer_set_is_taken_and_holds(tree, anchor):
-    """SC-1e [integration]. The positive half, and without it SC-1d is satisfied
-    by refusing every freeze there is.
-
-    The same sequence as SC-1d with the `--content` list left alone: the freeze
-    is taken, and `verify` reads LOCK HELD and APPROVED off the committed
-    artifact. An implementation that closes the hole by making the root a
-    function of something the freeze cannot reproduce fails HERE, not there.
-    """
-    gate = _gate_repo(anchor)
-
-    approved = _cli(tree, "approve", "tests/contract", "--label", "s",
-                    "--anchor", str(anchor), *_content_flags(_BOTH))
-    assert approved.returncode == 0, approved.stderr
-    _git(gate, "add", anchor.name)
-    _git(gate, "commit", "-q", "-m", "the approval, over both enforcers")
-
-    taken = _cli(tree, "freeze", "tests/contract", "--label", "s",
-                 "--anchor", str(anchor), *_content_flags(_BOTH))
-    assert taken.returncode == 0, f"{taken.stdout}\n{taken.stderr}"
-    assert (tree / ".canopus" / "freeze.json").is_file()
-
-    checked = _cli(tree, "verify")
-    assert checked.returncode == 0, checked.stderr
-    assert "LOCK HELD" in checked.stdout
-    assert "APPROVED" in checked.stdout
 
 
 # ============================================================
@@ -353,65 +251,6 @@ def test_the_previous_recipe_is_refused_by_name(tree, anchor):
 # SC-5 — the contract sentence is decided by the root, not by the file lists
 # ============================================================
 
-def _resolution(anchor: Path, value: str):
-    from scripts.utils.canopus_freeze import ANCHOR_RECORDED
-    from scripts.utils.canopus_git import AnchorResolution
-
-    return AnchorResolution(anchor=anchor, status=ANCHOR_RECORDED, value=value,
-                            approval="", approval_reason="", source="")
-
-
-def test_a_moved_contract_root_is_said_even_when_an_enforcer_also_moved(tree, anchor):
-    """SC-5. WHEN the recomputed contract root disagrees with the stored root
-    AND an enforcer also moved, THE SYSTEM SHALL say the contract moved too.
-
-    Measured 2026-08-04: with the stored root replaced by a value the tree does
-    not compute and one enforcer byte edited, the only sentence said is "The
-    ENFORCER moved, NOT the contract", which is false of that tree and names the
-    cheap cure. The operator re-pins and the lock stays red.
-    """
-    from scripts.utils.canopus_freeze import verify_manifest
-    from scripts.utils.canopus_gate import loss_of_lock_sentences
-
-    manifest = _manifest(tree, anchor, _BOTH)
-    manifest["root"] = "0" * 64
-    (tree / "scripts" / "gate.py").write_text("# enforcer two, edited\n", encoding="utf-8")
-
-    report = verify_manifest(manifest, tree)
-    assert report["changed"] == [] and report["added"] == [] and report["removed"] == [], (
-        "the fixture moved a contract FILE, so this test would pass on the old "
-        "file-list branch and prove nothing")
-    assert report["enforcer_moved"] == ["scripts/gate.py"]
-
-    said = " ".join(loss_of_lock_sentences(
-        report, _resolution(anchor, report["recomputed_root"])))
-
-    assert "ENFORCER moved" in said, "the enforcer sentence was dropped"
-    assert "The frozen contract moved" in said, (
-        "the contract root disagrees and the operator is told only to re-pin")
-
-
-def test_an_enforcer_moving_ALONE_still_does_not_accuse_the_contract(tree, anchor):
-    """SC-5b. The other half. Without it SC-5 is satisfied by always saying both,
-    which puts back the undifferentiated red the split was taken to remove."""
-    from scripts.utils.canopus_freeze import verify_manifest
-    from scripts.utils.canopus_gate import loss_of_lock_sentences
-
-    manifest = _manifest(tree, anchor, _BOTH)
-    (tree / "scripts" / "gate.py").write_text("# enforcer two, edited\n", encoding="utf-8")
-
-    report = verify_manifest(manifest, tree)
-    assert report["recomputed_root"] == manifest["root"], (
-        "the fixture moved the contract root, so this test is not the ALONE case")
-
-    said = " ".join(loss_of_lock_sentences(
-        report, _resolution(anchor, report["recomputed_root"])))
-
-    assert "ENFORCER moved" in said
-    assert "The frozen contract moved" not in said, (
-        "an enforcer edit alone is being reported as a moved contract again")
-
-
 def test_the_report_names_whether_the_root_moved(tree, anchor):
     """SC-5c. The signal itself, on the report rather than re-derived by each
     reader. `lock_state`, the gate and the CLI all ask this question, and a fact
@@ -460,31 +299,6 @@ def test_a_repin_that_finds_no_change_keeps_the_attestation(tree, anchor):
     assert attestation.is_file(), (
         "a re-pin over identical enforcer bytes still discarded the attestation, "
         "so checking costs a full suite re-run")
-
-
-def test_the_repin_line_does_not_claim_a_clearing_that_did_not_happen(tree, anchor):
-    """SC-6c [integration]. The terminal has to agree with the disk.
-
-    `cmd_repin` closes with "The attestation is cleared" unconditionally, so an
-    operator whose re-pin moved nothing is told a full suite re-run is owed. A
-    fix that keeps the file and keeps the sentence has moved the defect from the
-    disk to the screen rather than closed it.
-    """
-    from scripts.utils.canopus_freeze import attestation_state_path, write_freeze
-
-    write_freeze(tree, _manifest(tree, anchor, _BOTH))
-    attestation_state_path(tree).write_text('{"green": true}\n', encoding="utf-8")
-
-    done = _cli(tree, "repin", "--reason", "checked, believed an enforcer had moved")
-
-    assert done.returncode == 0, done.stderr
-    assert "0 enforcer files re-recorded" in done.stdout
-    assert "attestation is cleared" not in done.stdout, (
-        "nothing moved, the attestation survived, and the operator was still "
-        "told it was cleared")
-    assert "is untouched" in done.stdout, (
-        "the closing paragraph was deleted rather than corrected, so the "
-        "re-pin no longer says the contract root stood still")
 
 
 def test_a_repin_that_finds_a_change_still_discards_the_attestation(tree, anchor):

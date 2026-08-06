@@ -21,7 +21,12 @@ seven criteria were bound to nothing at all. The criteria and the tests that
 decide them are written twice, by hand, and nothing detects a divergence.
 
 This contract fixes the binding: a test claims a criterion in its DOCSTRING, and
-`approve` / `freeze` refuse a contract that leaves a criterion unclaimed.
+`scripts/sc-trace.py` reads the two sides against each other.
+
+Seven of the nineteen tests bound that reading to the `approve` and `freeze`
+gates in `scripts/canopus.py`, which refused a contract leaving a criterion
+unclaimed. Those commands were deleted on 2026-08-07, so the gate half of A12 is
+gone with them and only the report survives. The twelve below are unchanged.
 
 Authoring rule, enforced: every import of the code under test happens INSIDE a
 test body. The implementation does not exist yet, so a module-scope import stops
@@ -39,7 +44,6 @@ from pathlib import Path
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
-_CLI = _ROOT / "scripts" / "canopus.py"
 _TRACE = _ROOT / "scripts" / "sc-trace.py"
 
 
@@ -115,11 +119,6 @@ _ONE_CLAIMED = (
 )
 
 
-def _run(argv, tree):
-    return subprocess.run([sys.executable, str(_CLI), "--root", str(tree), *argv],
-                          capture_output=True, text=True, cwd=str(tree))
-
-
 # ============================================================
 # SC-1 — a fully bound artifact traces clean
 # ============================================================
@@ -178,54 +177,6 @@ def test_a_criterion_no_test_claims_is_named_unbound():
     assert result["unbound"] == ["SC-2"]
 
 
-def test_approve_refuses_when_a_criterion_is_unbound(tree, anchor):
-    """SC-2. The refusal binds at the gate, not in a report nobody runs.
-
-    THE LAW: an optional step that does not pay the operator back immediately is
-    abandoned inside two months unless a machine requires it. This is the
-    machine requiring it.
-    """
-    _contract(tree, _ONE_CLAIMED)
-
-    proc = _run(["approve", "--label", "demo", "--anchor", str(anchor),
-                 "--contract", "tests/contract/slice"], tree)
-
-    assert proc.returncode == 1
-    assert "SC-2" in proc.stderr
-
-
-def test_freeze_refuses_when_a_criterion_is_unbound(tree, anchor):
-    """SC-2. Both commands, because both build the same candidate.
-
-    Refusing at approve alone would leave the sequence approve-then-edit-then-
-    freeze open, which is the hole a shared builder exists to close.
-    """
-    _contract(tree, _ONE_CLAIMED)
-
-    proc = _run(["freeze", "--label", "demo", "--anchor", str(anchor),
-                 "--contract", "tests/contract/slice"], tree)
-
-    assert proc.returncode == 1
-    assert "SC-2" in proc.stderr
-
-
-def test_the_refusal_names_writing_the_test_and_never_deleting_the_criterion(tree, anchor):
-    """SC-2. The second-order failure this check invites, closed in its own text.
-
-    An author facing a refusal has two ways out: write the missing test, or
-    delete the criterion. The cheaper one is the wrong one, and a refusal that
-    does not say so is an invitation to shrink the contract until it passes.
-    """
-    _contract(tree, _ONE_CLAIMED)
-
-    proc = _run(["approve", "--label", "demo", "--anchor", str(anchor),
-                 "--contract", "tests/contract/slice"], tree)
-    message = proc.stderr.lower()
-
-    assert "delet" in message
-    assert "write" in message or "test" in message
-
-
 # ============================================================
 # SC-3 — a claim on an undefined criterion is an orphan
 # ============================================================
@@ -249,65 +200,13 @@ def test_a_claim_on_an_undefined_criterion_is_an_orphan():
     assert result["unbound"] == []
 
 
-def test_approve_refuses_an_orphan_claim(tree, anchor):
-    """SC-3. An orphan refuses at the gate exactly as an unbound criterion does."""
-    _contract(tree, _BOTH_CLAIMED.replace('"""SC-2.', '"""SC-9.'))
-
-    proc = _run(["approve", "--label", "demo", "--anchor", str(anchor),
-                 "--contract", "tests/contract/slice"], tree)
-
-    assert proc.returncode == 1
-    assert "SC-9" in proc.stderr
-
-
 # ============================================================
 # SC-4 — no contract means no trace, and nothing else changes
 # ============================================================
 
-def test_a_run_without_a_contract_is_not_traced(tree, anchor):
-    """SC-4. A slice freezing only enforcer content has no tests to bind to.
-
-    Demanding a trace there would refuse every content-only freeze in the
-    workspace, which is a lockout dressed as strictness.
-    """
-    proc = _run(["approve", "--label", "demo", "--anchor", str(anchor),
-                 "--content", "tests/test_alpha.py"], tree)
-
-    assert proc.returncode == 0
-    assert "SC-1" not in proc.stderr
-
-
 # ============================================================
 # SC-5 — an artifact defining no criterion is refused, never called clean
 # ============================================================
-
-def test_an_artifact_with_no_criteria_section_is_refused(tree, tmp_path):
-    """SC-5. A clean trace over an empty set is the vacuity this slice exists to stop.
-
-    Zero criteria and zero unbound criteria is arithmetically a pass and is the
-    single most misleading answer this tool could give.
-    """
-    bare = tmp_path / "outside" / "bare.md"
-    bare.parent.mkdir(parents=True, exist_ok=True)
-    bare.write_text("# Gate — no criteria anywhere\n\n## Phase 2\n\nNothing.\n")
-    _contract(tree, _BOTH_CLAIMED)
-
-    proc = _run(["approve", "--label", "demo", "--anchor", str(bare),
-                 "--contract", "tests/contract/slice"], tree)
-
-    assert proc.returncode == 1
-
-
-def test_an_empty_criteria_section_is_refused(tree, tmp_path):
-    """SC-5. A present-but-empty section is the same empty set, said differently."""
-    empty = _artifact(tmp_path / "outside" / "empty.md", "Nothing stated yet.")
-    _contract(tree, _BOTH_CLAIMED)
-
-    proc = _run(["approve", "--label", "demo", "--anchor", str(empty),
-                 "--contract", "tests/contract/slice"], tree)
-
-    assert proc.returncode == 1
-
 
 # ============================================================
 # SC-6 — the CLI reports one row per criterion

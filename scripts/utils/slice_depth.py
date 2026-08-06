@@ -85,7 +85,6 @@ ENFORCEMENT_SURFACE = (
     ".claude/rules/tiered-risk.md",
     # The freeze primitive itself: the thing that makes a locked test immovable.
     "scripts/utils/canopus_freeze.py",
-    "scripts/utils/canopus_gate.py",
     # The approve/freeze/verify CLI and the redness-and-vacuity checks behind it.
     # Omitting these was a hole in the floor for the first hour this file
     # existed: the primitives were covered while the command that drives them,

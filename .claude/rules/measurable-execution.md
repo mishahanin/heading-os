@@ -44,7 +44,7 @@ When a fit is signaled, surface only the relevant lines; both are proposals:
 
 - Advisory. It feeds the Phase 1 expansion, which already carries the approval STOP; nothing blocks. Skipping the block on a non-trivial task is a protocol miss, like skipping Phase 1.
 - Proposing `/loop` or `/goal` is a proposal only. Claude never launches them autonomously; the human launches (see `lethal-trifecta.md`).
-- For non-trivial code, the metric seeds the test contract at step 4 of a Canopus slice; run the full chain `/create-plan` then `/canopus plan` (formerly `/pre-impl`) then `/implement` there. Do not duplicate the planning gate's heavy critique here.
+- For non-trivial code, the metric seeds the test contract written at step 3 of a Canopus slice, which the operator's approval commit at step 4 then carries; run the full chain `/create-plan` then `/canopus` then `/implement` there. Do not duplicate the planning gate's heavy critique here.
 
 ## Change control
 

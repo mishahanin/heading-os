@@ -3,11 +3,11 @@ name: canopus
 description: >
   The engineering standard for building anything non-trivial in this workspace: seven
   numbered steps, with the operator's two moments as steps 4 and 7. Bare `/canopus`
-  prints where the current slice is and the whole agenda. Subcommands are thin: `note`
-  writes the slice's committed record, `check` runs the four clauses a CI step runs
-  identically, `where` orients, `probe` measures whether a contract's redness means
+  prints the seven steps and where the operator's two moments sit in them. Subcommands
+  are thin: `note` writes the slice's committed record, `check` runs the four clauses a
+  CI step runs identically, `probe` measures whether a contract's redness means
   anything. Use for any change worth a plan. Skip typo fixes and config-only edits.
-argument-hint: "[note | check | where | probe]  (bare = where am I)"
+argument-hint: "[note | check | probe]  (bare = the seven steps)"
 allowed-tools: "Read, Write, Edit, Bash(python3:*), Bash(git:*), Skill"
 disable-model-invocation: true
 metadata:
@@ -20,18 +20,18 @@ x-heading-orchestration:
   triggers: []
 x-heading-routing:
   category: Operations
-  triggers: ["NEVER auto-trigger. Explicit `/canopus [note | check | where | probe]` only. Bare `/canopus` prints the current position and the full agenda."]
+  triggers: ["NEVER auto-trigger. Explicit `/canopus [note | check | probe]` only. Bare `/canopus` prints the seven steps and the two the operator owns."]
   exclusions: ["N/A"]
   compound: "No"
   router: manual
-  label: "/canopus [note | check | where | probe]"
+  label: "/canopus [note | check | probe]"
 x-heading-capability:
   what: >
-    The workspace's engineering standard as a command. Prints where a slice is in its
-    seven steps, records what a slice froze and shipped, and runs the four clauses that
-    decide whether the contract held between the approval commit and the code.
+    The workspace's engineering standard as a command. Names the seven steps and the two
+    the operator owns, records what a slice approved and shipped, and runs the four
+    clauses that decide whether the contract held between the approval commit and the code.
   how: >
-    Bare `/canopus` for the orientation page. `/canopus note` to write the slice record,
+    Bare `/canopus` for the seven steps. `/canopus note` to write the slice record,
     `check` for the four clauses, `probe` to measure whether a contract is vacuous.
     Records live in `records/slices/`; plans and scope documents live in the operator's
     private overlay and are referenced by digest, never by path.
@@ -52,13 +52,11 @@ passing as one that decided. Across all 62 prior records a contract was never on
 weakened after the fact, and was born too weak thirty times. The green to distrust
 is the one no wrong implementation was ever made to fail.
 
-## Bare `/canopus` — where am I
+## Bare `/canopus` — the seven steps
 
-`.venv/bin/python scripts/canopus.py where`, run first and shown verbatim. It
-prints the current step out of seven, what comes next, HOW that position was worked
-out, and the full agenda. Never summarise it into a status line. Only two of the
-seven leave a trace here, so it says plainly when it is inferring, and that
-admission is the point. `--json` for the same as data.
+Nothing is run. Show the agenda below and say which step the work in hand is at, from
+the conversation rather than from the disk: only steps 4 and 7 leave a trace in this
+repository, so a position read off it would be a guess dressed as a measurement.
 
 ## The seven steps
 

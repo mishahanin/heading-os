@@ -154,7 +154,7 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 | `/bridge-health` | NEVER auto-trigger. Explicit `/bridge-health [--stale N] [--gate] [--json]` only. Wraps `scripts/daemon-fleet-health.py` + `scripts/bridge-daemon.py --health` + the `/telemetry/summary` endpoint. Use when the sync-pill is amber/red, the dashboard feels stale, or before scaling Phase 1 -> Phase 2 (need `--gate`). CEO-only, not synced to executives. |
 | `/burst [N]` | NEVER auto-trigger. Explicit `/burst [N]` or `/burst [N]: <seed>` only. |
 | `/calibrate [light]` | NEVER auto-trigger. Explicit `/calibrate [light]` only. |
-| `/canopus [note \| check \| where \| probe]` | NEVER auto-trigger. Explicit `/canopus [note \| check \| where \| probe]` only. Bare `/canopus` prints the current position and the full agenda. |
+| `/canopus [note \| check \| probe]` | NEVER auto-trigger. Explicit `/canopus [note \| check \| probe]` only. Bare `/canopus` prints the seven steps and the two the operator owns. |
 | `/checkpoint [note]` | NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/` without running /compact. Surfaces from the two-tier checkpoint-offer hook at 25%/30% used context. |
 | `/cold-sweep` | cold sweep, cold-sweep, drain cold contacts, sweep overdue contacts, drain the red debt |
 | `/context7` | context7, look up docs for [library], library documentation |

@@ -11,7 +11,7 @@ def _git(directory: Path, *argv: str):
     Not tidiness. This suite runs inside this repository's pre-push hook, and git
     exports GIT_DIR and GIT_INDEX_FILE to a hook, so an unscrubbed helper would
     resolve the ENGINE's repository instead of the fixture's. The same scrub
-    `tests/test_canopus_gate.py::_git` applies, for the same measured reason.
+    `scripts/utils/canopus_git._child_env` applies, for the same measured reason.
     """
     import os
 

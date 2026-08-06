@@ -9,7 +9,6 @@ See scripts.utils.workspace.get_default_tz().
 This file also holds the re-exec guard for the whole suite; see below.
 """
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -76,41 +75,6 @@ def _isolate_runtime_logs():
     yield
 
 
-def pytest_sessionstart(session):
-    """Canopus wire 1: refuse to run the suite while the freeze gate reads red.
-
-    Red is WIDER than a moved contract, which is why the raise below no longer
-    says otherwise: freeze_gate also returns 1 for a manifest deleted under a
-    held lock, for a broken repository binding, for a vanished anchor, and for
-    an anchor recording a different hash. In three of those nothing moved.
-
-    The gate has to fire from the CLASS of invocations, not from one command.
-    scripts/run-tests.py also calls it, but that runs once at the end of a slice
-    or not at all, while bare `pytest tests/test_thing.py` is the inner loop a
-    build runs dozens of times — and reaching green there with a moved contract
-    is exactly the outcome the freeze exists to prevent. Raising here stops the
-    run before collection.
-
-    Silent on the ordinary day: with no .canopus/ state the gate returns 0 and
-    prints nothing, which is also what a fresh CI checkout sees (.canopus/ is
-    gitignored). Imported inside the hook so a broken import cannot take the
-    whole suite down at collection time.
-    """
-    from scripts.utils.canopus_gate import freeze_gate
-
-    if freeze_gate(_ENGINE_ROOT) != 0:
-        raise pytest.UsageError(
-            "canopus: the freeze gate is red, so the suite will not run. The "
-            "canopus line printed immediately above says WHICH cause fired; it "
-            "is the gate's own sentence, computed from the state it just read, "
-            "and a moved contract is only one of the causes that reach here. "
-            "This message does not restate that sentence, because a second copy "
-            "of the derivation is how the two come to disagree. A contract that "
-            "is genuinely wrong reopens the approval gate; it is never edited "
-            "in place."
-        )
-
-
 def pytest_collection_modifyitems(config, items):
     """Auto-mark tests by top-level directory so the per-push CI filter holds.
 
@@ -130,107 +94,3 @@ def pytest_collection_modifyitems(config, items):
         top = rel.parts[0] if rel.parts else ""
         if top in ("integration", "acceptance"):
             item.add_marker(top)
-
-
-# ============================================================
-# Canopus v3: attestation
-# ============================================================
-#
-# pytest_sessionstart above proves the contract did not MOVE. It cannot prove
-# the contract RAN: -k, --deselect, --ignore, --lf and a bare path argument all
-# reach green with every frozen byte intact, so a builder that cannot edit a
-# frozen test can simply decline to run it. These three hooks record what
-# actually ran, so `canopus status` reports ATTESTED or NOT ATTESTED against the
-# current root hash.
-#
-# They record; they do not gate, and nothing here is fatal. An earlier revision
-# failed a run whose frozen test file collected nothing without an explicit
-# filter, on the reasoning that removal from collection is not iteration.
-# Telling the two apart needs option sniffing, and option sniffing cannot see a
-# bare path argument: the branch fired on `pytest tests/x.py::test_one`, the
-# inner loop it was written to spare. Whole-file removal is now caught the way
-# everything else is, by producing no attestation.
-#
-# Naming a SUBSET by node id was the one case that still attested: it collects an
-# item, reports it, and fires no deselection hook. Closed in wire 2 for any file
-# carrying a freeze-time baseline, because the record compares what was collected
-# against the whole-file item count and a subset reports 1 of 7. A frozen test
-# file with NO baseline entry keeps the wire 1 reading, where ATTESTED means the
-# frozen tests that were collected all passed, not that every frozen test ran.
-#
-# Module-level state is safe here; the root conftest is loaded once per session.
-
-_CANOPUS = None
-
-
-def _canopus_recorder():
-    """One recorder per session, built lazily so an import error is not fatal."""
-    global _CANOPUS
-    if _CANOPUS is None:
-        from scripts.utils.canopus_gate import AttestationRecorder
-
-        _CANOPUS = AttestationRecorder(_ENGINE_ROOT)
-    return _CANOPUS
-
-
-def pytest_collection_finish(session):
-    """Record which frozen tests this run will actually execute.
-
-    Runs after every filter has been applied, so session.items is the real set.
-    """
-    try:
-        _canopus_recorder().collect(session)
-    except Exception as exc:  # noqa: BLE001 - record-keeping never breaks a run
-        print(f"canopus: attestation collection failed: {exc}", file=sys.stderr)
-
-
-def pytest_deselected(items):
-    """Count items filtered out of frozen test files."""
-    try:
-        _canopus_recorder().deselected(items)
-    except Exception as exc:  # noqa: BLE001 - see above
-        print(f"canopus: deselection tally failed: {exc}", file=sys.stderr)
-
-
-def pytest_runtest_logreport(report):
-    """Tally outcomes for frozen test files only."""
-    try:
-        _canopus_recorder().report(report)
-    except Exception as exc:  # noqa: BLE001 - see above
-        print(f"canopus: outcome tally failed: {exc}", file=sys.stderr)
-
-
-def pytest_sessionfinish(session, exitstatus):
-    """Write the attestation, or explain why it could not be written.
-
-    Never changes the run's own exit status: a failure to record is a reporting
-    problem, and turning it into a test failure would make the record-keeping
-    more dangerous than the gap it closes.
-    """
-    try:
-        _canopus_recorder().finish(session, exitstatus)
-    except Exception as exc:  # noqa: BLE001 - see the docstring
-        print(f"canopus: could not write the attestation: {exc}", file=sys.stderr)
-
-
-try:  # pytest-xdist is optional: a bare clone may not have it installed.
-    import xdist  # noqa: F401
-
-    _HAS_XDIST = True
-except ImportError:  # pragma: no cover - exercised only without xdist
-    _HAS_XDIST = False
-
-if _HAS_XDIST:
-    def pytest_xdist_node_collection_finished(node, ids):
-        """Seed the controller's tally; it never runs collection itself."""
-        try:
-            _canopus_recorder().seed_from_ids(node.config, ids)
-        except Exception as exc:  # noqa: BLE001 - record-keeping never breaks a run
-            print(f"canopus: controller seeding failed: {exc}", file=sys.stderr)
-
-    def pytest_testnodedown(node, error):
-        """Fold a finished worker's deselection counts into the controller."""
-        try:
-            _canopus_recorder().merge_worker(getattr(node, "workeroutput", None))
-        except Exception as exc:  # noqa: BLE001 - see above
-            print(f"canopus: worker merge failed: {exc}", file=sys.stderr)

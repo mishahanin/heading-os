@@ -17,16 +17,13 @@ the shortest test in the suite, because its value is that it runs, not that it
 is clever.
 
 **The known gap, stated rather than left to be discovered.** This file can be
-removed from any run by -k, --deselect, --ignore, or a bare path argument, which
-is the same "a builder can decline to run it" hole the attestation hooks in
-tests/conftest.py exist to close. The obvious repair is a sibling canary at
-pytest_sessionstart, before collection, where no filter reaches it. It was
-written and watched go red, and it is NOT here: tests/conftest.py is on the
-enforcement surface in scripts/utils/slice_depth.py, so a change to it carries
-the full Canopus lifecycle and an operator-committed gate artifact. Landing it
-by way of HEADING_OS_DEPTH_OVERRIDE would have bought un-filterable coverage by
-stepping around the one gate that makes coverage mean anything. It waits for the
-lifecycle instead.
+removed from any run by -k, --deselect, --ignore, or a bare path argument: a
+builder who cannot edit it can still decline to run it. A sibling canary at
+pytest_sessionstart, before collection, would sit where no filter reaches it;
+that is not here. What closes the gap in practice is the CI step in the
+`sovereignty guards` job, which runs the suite whole on every push, and
+`scripts/canopus_check.py` clause C4, which reads per-file junit counts rather
+than an exit code.
 """
 
 from scripts.utils.canopus_note import digest_text, read_note, write_note

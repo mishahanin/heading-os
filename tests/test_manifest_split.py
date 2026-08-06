@@ -279,29 +279,6 @@ def test_repin_refuses_when_no_freeze_is_held(tree, anchor):
         repin_enforcer(tree, reason="why")
 
 
-def test_the_repin_reaches_the_command_an_operator_types(tree, anchor):
-    """SC-3e. Wiring, end to end, because the four tests above pin a FUNCTION.
-
-    The friction-counters slice and the yield-axes slice each shipped a correct
-    function whose CLI path no contract test reached, and in both cases the gap
-    was found by mutation rather than by the contract. Named here at step 4
-    instead.
-    """
-    import subprocess
-    import sys
-
-    from scripts.utils.canopus_freeze import write_freeze
-
-    write_freeze(tree, _manifest(tree, anchor))
-    (tree / "scripts" / "run-tests.py").write_text("# edited\n", encoding="utf-8")
-    done = subprocess.run(
-        [sys.executable, str(_ROOT / "scripts" / "canopus.py"), "repin", "--reason", "why"],
-        cwd=str(tree), capture_output=True, text=True, check=False)
-
-    assert done.returncode == 0, done.stderr
-    assert "repin" in (done.stdout + done.stderr).lower()
-
-
 # ============================================================
 # SC-4 -- the old guarantee survives the split
 # ============================================================
@@ -440,53 +417,6 @@ def test_the_evidence_page_counts_the_repins(tree, anchor):
 
     assert counts["repins"] == 2
     assert "repin" in render_friction(counts).lower()
-
-
-def test_the_repin_reaches_the_command_an_operator_types_only_when_committed(
-        tree, anchor):
-    """SC-7. WHEN enforcer bytes are UNCOMMITTED, THE SYSTEM SHALL refuse the
-    re-pin and say which files must be committed first.
-
-    This criterion was added after the operator asked what "trading security for
-    speed" meant in C1, and the answer turned out to be that C1 overstated the
-    loss. The thing the old design was said to protect -- an enforcer change
-    passing through a human-committed record -- was never operator-gated: all 39
-    retakes were run by the assistant, `git commit` included. What the old design
-    really bought was that the new enforcer state landed in git at all.
-
-    So the re-pin keeps that and improves on it. A commit carries a READABLE DIFF
-    with an author and a timestamp, in the public engine repository; the old
-    artifact line carried a hash that says only that something moved. The
-    ceremony still falls from six commands to two, and `.canopus/` stops being
-    the sole record of a change to the code that does the checking.
-    """
-    import subprocess
-    import sys
-
-    from scripts.utils.canopus_freeze import write_freeze
-
-    subprocess.run(["git", "init", "-q"], cwd=str(tree), check=True)
-    subprocess.run(["git", "add", "-A"], cwd=str(tree), check=True)
-    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=t",
-                    "commit", "-qm", "base"], cwd=str(tree), check=True)
-    write_freeze(tree, _manifest(tree, anchor))
-    (tree / "scripts" / "run-tests.py").write_text("# edited\n", encoding="utf-8")
-
-    cli = str(_ROOT / "scripts" / "canopus.py")
-    refused = subprocess.run([sys.executable, cli, "repin", "--reason", "why"],
-                             cwd=str(tree), capture_output=True, text=True,
-                             check=False)
-    assert refused.returncode != 0, "a re-pin over uncommitted enforcer bytes was accepted"
-    assert "scripts/run-tests.py" in refused.stderr, (
-        "the refusal does not name the file that must be committed")
-
-    subprocess.run(["git", "add", "-A"], cwd=str(tree), check=True)
-    subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=t",
-                    "commit", "-qm", "the enforcer change"], cwd=str(tree), check=True)
-    accepted = subprocess.run([sys.executable, cli, "repin", "--reason", "why"],
-                              cwd=str(tree), capture_output=True, text=True,
-                              check=False)
-    assert accepted.returncode == 0, accepted.stderr
 
 
 def test_the_repin_event_records_the_commit_that_carries_the_change(tree, anchor):

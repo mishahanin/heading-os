@@ -1340,82 +1340,31 @@ def test_the_ancestor_guard_does_not_freeze_the_ancestors_contents(tmp_path: Pat
     assert verify_manifest(manifest, root)["held"] is True
 
 
-def test_the_documented_enforcer_set_covers_its_import_closure():
-    """C4, found at the wire 2 intent audit: the enforcers had an unfrozen tail.
-
-    The documented freeze command named four files, but canopus_freeze imports
-    atomic (which WRITES the manifest), run-tests imports venv (which re-execs
-    the interpreter and so chooses which Python runs the gate), and both reach
-    colors. The write path of the guarantee sat outside the guarantee.
-
-    This recomputes the transitive first-party closure rather than pinning the
-    three files that were missing on the day, so a new import cannot escape the
-    documented set silently. It asserts against the SKILL text because that is
-    the command an operator actually copies.
-    """
-    from scripts.utils.production_shape import first_party_closure
-    from scripts.utils.workspace import get_workspace_root
-
-    # The walk this test used to carry inline now lives in production_shape,
-    # which is where the production-shape gate needed the same computation. The
-    # extraction was declared in that slice's gate artifact and left undone, so
-    # the helper shipped with two contract tests and no consumer; completing it
-    # here is what makes those criteria pin live code. The behaviour is
-    # unchanged: both readings of `from X import y` are followed, because
-    # `from scripts.utils import venv as _venv` yields the PACKAGE
-    # `scripts.utils`, which is not a file, and following only `node.module`
-    # dropped venv.py from the set while this test still passed.
-    root = get_workspace_root()
-    seen = {
-        rel for rel in first_party_closure(
-            ["scripts/utils/canopus_freeze.py", "scripts/utils/canopus_gate.py",
-             "scripts/run-tests.py", "tests/conftest.py"],
-            root,
-        )
-        if (root / rel).is_file()
-    }
-
-    # Read against `references/planning-gate.md`, not `SKILL.md`. The skill moved
-    # to the seven steps on 2026-08-06 and stopped documenting `freeze` at all, so
-    # the command an operator copies now lives in the reference. The property is
-    # unchanged and no assertion is loosened; only the document moved.
-    documented = (root / ".claude" / "skills" / "canopus" / "references"
-                  / "planning-gate.md").read_text(encoding="utf-8")
-    missing = sorted(rel for rel in seen if f"--content {rel}" not in documented)
-    assert not missing, (
-        f"the documented freeze command does not freeze {missing}; an enforcer's "
-        f"import tail is outside the guarantee it enforces"
-    )
-
-
-def test_the_canopus_skill_writes_real_contract_files_and_freezes_them():
+def test_the_canopus_skill_writes_real_contract_files_and_approves_them():
     """The gap wire 2 closed, ported here when the wire 2 contract was retired.
 
     Before wire 2 the /pre-impl skill DESCRIBED the contract in prose and
     labelled the description a draft, so what the operator approved at the gate
     was an account of tests rather than the tests themselves. A description
-    cannot be frozen, and an approval over one is an approval of nothing.
+    cannot be approved; an approval over one is an approval of nothing.
 
     The skill therefore has to name the directory the tests are WRITTEN to and
-    the command that freezes them. The dated per-slice directory is asserted
-    rather than the bare prefix: `tests/contract/` alone survives a skill that
-    merely mentions the path in passing, which is the state this test exists to
-    refuse.
+    the act that binds them. The dated per-slice directory is asserted rather
+    than the bare prefix: `tests/contract/` alone survives a skill that merely
+    mentions the path in passing, which is the state this test exists to refuse.
 
-    The skill was `/pre-impl` until 2026-08-02 and is now `/canopus`; the gate it
-    carries moved to `references/planning-gate.md` and the property is unchanged.
-    The freeze command followed it there on 2026-08-06, so the dated contract
-    directory is asserted against the skill (which still names it) and the freeze
-    command against the reference (which still carries it).
+    The binding act was `scripts/canopus.py freeze` until 2026-08-07 and is now
+    the operator's COMMIT of the plan and the red contract, so the second
+    assertion moved with it. What is asserted is unchanged in kind: the skill
+    names real test files and a real act over them, never a description.
     """
     from scripts.utils.workspace import get_workspace_root
 
     skill = get_workspace_root() / ".claude" / "skills" / "canopus" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
-    gate = (skill.parent / "references" / "planning-gate.md").read_text(encoding="utf-8")
 
     assert "tests/contract/{YYYY-MM-DD}-{slug}/" in text
-    assert "scripts/canopus.py freeze" in gate
+    assert "RED contract" in text and "approval" in text
     # The label the prose draft carried. Its return would mean the gate is being
     # asked to approve an unapproved description again.
     assert "CEO-UNAPPROVED DRAFT" not in text

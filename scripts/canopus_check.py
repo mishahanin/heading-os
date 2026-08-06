@@ -50,8 +50,8 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     ContractError,
     contract_interpreter,
     parse_junit,
+    pytest_child_env,
 )
-from scripts.utils.canopus_gate import pytest_child_env  # noqa: E402
 # The GIT_ scrub, imported rather than spelled a second time. Its docstring
 # carries the measurement: this runs inside the engine's git hooks, git exports
 # GIT_DIR and GIT_INDEX_FILE to a hook, and a second copy of that rule is one

@@ -9,9 +9,16 @@ Two numbers, measured 2026-08-02, scope this and pull in opposite directions.
 
 The Canopus ledger holds 152 events and NOT ONE REFUSAL: freeze 49, release 49,
 approve 28, anchor_replaced 20, verify_fail 6, every one a success or a late
-verify failure. `cmd_approve`, `cmd_freeze` and `cmd_release` carry twelve early
-returns between them and none of them touches the ledger. Every time the standard
-has refused the builder, the event vanished.
+verify failure. `cmd_approve`, `cmd_freeze` and `cmd_release` carried twelve
+early returns between them and none of them touched the ledger. Every time the
+standard refused the builder, the event vanished.
+
+Those three commands were deleted on 2026-08-07 with the rest of the freeze
+lifecycle, and nine tests went with them: eight walked their refusal paths or
+drove them through the CLI, and one compared two refusals that are now the same
+argparse error in both runs, so it passed while measuring nothing. The lifecycle
+half of this instrument has no producer left; the denial-log half, the report and
+the vocabulary are untouched below.
 
 The denial counter is one day old and holds exactly one record.
 
@@ -34,12 +41,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 _ROOT = Path(__file__).resolve().parent.parent
-_CLI = _ROOT / "scripts" / "canopus.py"
 _REPORT = _ROOT / "scripts" / "gate-yield.py"
-_GATED = ("cmd_approve", "cmd_freeze", "cmd_release")
 
 # The two sources started on different days, and that is the whole reason
 # `since` is a mapping. Step 5 of this slice caught the single-window version:
@@ -49,47 +52,10 @@ _SINCE = {"lifecycle": "2026-08-01T00:00:00+00:00",
           "denials": "2026-08-02T00:00:00+00:00"}
 
 
-def _functions():
-    """The lifecycle commands that can refuse, as AST."""
-    tree = ast.parse(_CLI.read_text(encoding="utf-8"))
-    found = {n.name: n for n in ast.walk(tree)
-             if isinstance(n, ast.FunctionDef) and n.name in _GATED}
-    assert set(found) == set(_GATED), f"missing {set(_GATED) - set(found)}"
-    return found
-
-
-def _refusals(fn):
-    """Every early return of a failing exit code, by line number."""
-    out = []
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Return) and node.value is not None:
-            try:
-                value = ast.literal_eval(node.value)
-            except (ValueError, TypeError):
-                continue
-            if value in (1, 2):
-                out.append(node)
-    return out
-
-
-def _run(args, cwd=None):
-    return subprocess.run([sys.executable, str(_CLI), *args], capture_output=True,
-                          text=True, cwd=str(cwd or _ROOT), env=dict(os.environ),
-                          timeout=180)
-
-
 def _report(args, env=None):
     return subprocess.run([sys.executable, str(_REPORT), *args], capture_output=True,
                           text=True, cwd=str(_ROOT), timeout=180,
                           env=dict(os.environ, **(env or {})))
-
-
-def _without_root(text, root):
-    """The message with the tree it ran in taken out.
-
-    Everything else is the refusal itself, which is what SC-3 is about.
-    """
-    return str(text).replace(str(root), "<root>")
 
 
 def _payload(proc):
@@ -100,180 +66,13 @@ def _payload(proc):
         raise AssertionError(f"not JSON: {exc}\n{proc.stdout[:400]}") from exc
 
 
-@pytest.fixture
-def scratch(tmp_path):
-    root = tmp_path / "tree"
-    (root / "scripts").mkdir(parents=True)
-    (root / "scripts" / "run-tests.py").write_text("# gate\n", encoding="utf-8")
-    return root
-
-
 # ---------------------------------------------------------------------------
 # Property 1 - every refusal leaves a record, and none can be added silently
 # ---------------------------------------------------------------------------
 
-def test_no_refusal_path_in_the_lifecycle_returns_without_recording():
-    """The point of the slice, and it fails BY NAME.
-
-    A test that merely counts `return 1` proves the count, not the coverage: a
-    refusal returning through a helper would pass while recording nothing. This
-    walks each refusal's own statement list and names the line it found.
-    """
-    from scripts.utils.gate_yield import RECORDER
-
-    unrecorded = []
-    for name, fn in _functions().items():
-        for node in _refusals(fn):
-            block = _enclosing_block(fn, node)
-            recorded = any(
-                isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
-                and _called_name(stmt.value) == RECORDER
-                for stmt in block)
-            if not recorded:
-                unrecorded.append(f"{name} line {node.lineno}")
-    assert not unrecorded, (
-        f"these refusals leave no record, so their yield can never be counted: "
-        f"{unrecorded}")
-
-
-def _enclosing_block(fn, target):
-    """The statement list that directly contains *target*."""
-    for node in ast.walk(fn):
-        for field in ("body", "orelse", "finalbody"):
-            block = getattr(node, field, None)
-            if isinstance(block, list) and any(stmt is target for stmt in block):
-                return block
-    return []
-
-
-def _called_name(call):
-    func = call.func
-    return func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
-
-
-def test_the_recorder_has_exactly_one_name_so_the_guard_above_cannot_be_dodged():
-    from scripts.utils.gate_yield import RECORDER
-
-    assert RECORDER
-    assert RECORDER in _CLI.read_text(encoding="utf-8")
-
-
-def test_a_refused_freeze_appends_one_refusal_event(scratch):
-    """End to end, through the CLI, over a real ledger on disk."""
-    from scripts.utils.canopus_freeze import read_ledger
-
-    proc = _run(["--root", str(scratch), "freeze", "--label", "x",
-                 "--anchor", str(scratch / "missing.md"),
-                 "--content", str(scratch / "scripts" / "run-tests.py")])
-    assert proc.returncode != 0, "this call was supposed to be refused"
-
-    events = [r for r in read_ledger(scratch) if r["event"].startswith("refuse_")]
-    assert len(events) == 1, read_ledger(scratch)
-    assert events[0]["event"] == "refuse_freeze"
-
-
-def test_the_mechanism_is_in_the_event_and_the_cause_is_a_class_not_prose(scratch):
-    """SC-2. Two refusals of one kind must count as two of one thing, so the
-    cause is a declared token; the human sentence stays in `reason`."""
-    from scripts.utils.canopus_freeze import read_ledger
-    from scripts.utils.gate_yield import CAUSES, MECHANISMS
-
-    _run(["--root", str(scratch), "freeze", "--label", "x",
-          "--anchor", str(scratch / "missing.md"),
-          "--content", str(scratch / "scripts" / "run-tests.py")])
-    row = [r for r in read_ledger(scratch) if r["event"].startswith("refuse_")][0]
-
-    assert row["event"].split("refuse_", 1)[1] in MECHANISMS
-    assert row["kind"] in CAUSES, f"{row['kind']!r} is not a declared cause class"
-    assert " " not in row["kind"] and row["kind"] == row["kind"].lower()
-
-
-def test_every_declared_cause_is_reachable_from_the_source():
-    """A vocabulary with entries nothing can emit is a vocabulary that lies."""
-    from scripts.utils.gate_yield import CAUSES
-
-    assert len(CAUSES) >= 4, f"a vocabulary of {len(CAUSES)} classes describes nothing"
-    assert all(isinstance(c, str) and c for c in CAUSES), CAUSES
-    source = _CLI.read_text(encoding="utf-8")
-    unreachable = sorted(c for c in CAUSES if repr(c)[1:-1] not in source)
-    assert not unreachable, f"declared but never emitted: {unreachable}"
-
-
-def test_every_emitted_cause_is_declared_in_the_vocabulary():
-    """The other direction, and the one that was missing.
-
-    The guard above walks from the table outward, so a cause spelled ONLY at a
-    call site drifts in silently: `evidence_missing` reached
-    `cmd_release` on 2026-08-03, never reached `CAUSES`, and every test stayed
-    green because nothing walked inward. The report's own prose says a lifecycle
-    cause is a declared class from `CAUSES`, and the SC-2 test asserts exactly
-    that of whatever the ledger holds -- it just never exercised the release
-    path. An undeclared cause makes both of those false without failing
-    anything.
-
-    Reads the cause argument of every `_record_refusal` call, in BOTH spellings.
-    `cause` is positional-or-keyword, so reading only `args[2]` would leave
-    `_record_refusal(root, "release", cause="x")` unchecked -- a one-keyword
-    bypass of the guard, which is the same class of hole this test exists to
-    close.
-    """
-    from scripts.utils.gate_yield import CAUSES, RECORDER
-
-    tree = ast.parse(_CLI.read_text(encoding="utf-8"))
-    emitted = set()
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and _called_name(node) == RECORDER):
-            continue
-        cause = node.args[2] if len(node.args) >= 3 else next(
-            (kw.value for kw in node.keywords if kw.arg == "cause"), None)
-        # Only a literal can be checked here. A computed cause would need the
-        # value at runtime, and there is none in the CLI today; if one appears,
-        # this skips it rather than accusing it, and the SC-2 assertion over the
-        # written ledger is what catches it instead.
-        if isinstance(cause, ast.Constant) and isinstance(cause.value, str):
-            emitted.add(cause.value)
-
-    assert emitted, f"no {RECORDER} call site spells a literal cause"
-    undeclared = sorted(emitted - set(CAUSES))
-    assert not undeclared, (
-        f"emitted by the CLI but declared in no vocabulary, so the report "
-        f"counts a class nothing named: {undeclared}")
-
-
 # ---------------------------------------------------------------------------
 # Property 2 - recording can never change a refusal
 # ---------------------------------------------------------------------------
-
-def test_an_unwritable_ledger_leaves_the_refusal_exactly_as_it_was(scratch):
-    """The one thing worse than an unrecorded refusal is a refusal that stops
-    refusing because its own logging raised."""
-    clean = _run(["--root", str(scratch), "freeze", "--label", "x",
-                  "--anchor", str(scratch / "missing.md"),
-                  "--content", str(scratch / "scripts" / "run-tests.py")])
-
-    second = scratch.parent / "tree2"
-    (second / "scripts").mkdir(parents=True)
-    (second / "scripts" / "run-tests.py").write_text("# gate\n", encoding="utf-8")
-    state = second / ".canopus"
-    state.mkdir()
-    (state / "history.jsonl").mkdir()          # a directory where a file must go
-
-    blocked = _run(["--root", str(second), "freeze", "--label", "x",
-                    "--anchor", str(second / "missing.md"),
-                    "--content", str(second / "scripts" / "run-tests.py")])
-
-    assert blocked.returncode == clean.returncode
-    assert clean.stderr.strip()
-    # Compared with the root normalised out, because the two runs happen in
-    # different directories and the refusal names the path it refused. Retake,
-    # 2026-08-02: the first version compared raw stderr and so compared where
-    # each ran rather than what each did, which is the second contract test in
-    # two slices to couple itself to its own environment. The invariant SC-3
-    # actually claims is that the refusal is unchanged, not that two runs in two
-    # places print the same string.
-    assert _without_root(clean.stderr, scratch).strip() in _without_root(
-        blocked.stderr, second)
-
 
 def test_the_recorder_returns_its_failure_instead_of_raising(tmp_path):
     from scripts.utils.gate_yield import record_refusal
@@ -299,9 +98,15 @@ def test_a_successful_record_reports_no_failure(tmp_path):
 # Property 3 - the record carries the class of thing refused, never the thing
 # ---------------------------------------------------------------------------
 
-def test_a_refusal_record_never_carries_the_refused_content(scratch):
-    """Same boundary A1 already holds. A refused path is attacker-shaped input."""
-    from scripts.utils.canopus_freeze import read_ledger
+def test_a_refusal_record_never_carries_the_refused_content():
+    """Same boundary A1 already holds. A refused path is attacker-shaped input.
+
+    Read against `redact_reason` directly since 2026-08-07. The end-to-end half
+    drove `scripts/canopus.py freeze` with the value as its label and read the
+    ledger row back; that command is deleted, and there is no other producer of
+    a lifecycle refusal record to put in its place. What is left is the function
+    the writer calls, which is where the redaction actually happens.
+    """
     from scripts.utils.gate_yield import redact_reason
 
     # Named for what it IS: a value somebody tried to push past a guard,
@@ -309,13 +114,9 @@ def test_a_refusal_record_never_carries_the_refused_content(scratch):
     # the commit gate's keyword heuristic and made the whole slice
     # uncommittable, which no allow-list entry was going to fix.
     pushed_value = "sk-" + "A" * 24
-    _run(["--root", str(scratch), "freeze", "--label", pushed_value,
-          "--anchor", str(scratch / "missing.md"),
-          "--content", str(scratch / "scripts" / "run-tests.py")])
-    row = [r for r in read_ledger(scratch) if r["event"].startswith("refuse_")][0]
-    assert pushed_value not in json.dumps(row), (
-        f"the refused value was recorded: {row}")
+
     assert redact_reason(f"refused {pushed_value}") != f"refused {pushed_value}"
+    assert pushed_value not in redact_reason(f"refused {pushed_value}")
 
 
 # ---------------------------------------------------------------------------
@@ -536,39 +337,6 @@ def test_the_last_catch_is_a_date_the_operator_can_read():
         now="2026-08-02T00:00:00+00:00")
 
     assert out["mechanisms"]["depth-gate"]["last_catch"].startswith("2026-")
-
-
-def test_a_refused_freeze_candidate_records_the_candidates_own_cause(tmp_path):
-    """A copy-paste put the lock's cause on the candidate's refusal.
-
-    `cmd_freeze` recorded `freeze_already_active` when `_candidate_manifest`
-    returned None -- prose that control flow has already disproved one branch
-    up. It cost the yield report twice: one cause inflated with refusals it
-    never made, and `candidate_refused` looking like it never fires on this
-    path. Both existing guards passed through it, because one checks that a
-    recorder is CALLED and the other that a cause is EMITTED SOMEWHERE in the
-    file; neither reads the argument. This one reads the argument.
-    """
-    from scripts.utils.canopus_freeze import read_ledger
-
-    root = tmp_path / "tree"
-    (root / "scripts").mkdir(parents=True)
-    (root / "scripts" / "run-tests.py").write_text("# gate\n", encoding="utf-8")
-    (root / "empty").mkdir()
-    anchor = tmp_path / "anchor.md"  # outside the tree, as an anchor must be
-    anchor.write_text("# a\n\n## Success criteria\n\n- **SC-1** thing\n",
-                      encoding="utf-8")
-
-    proc = _run(["--root", str(root), "freeze", "--label", "x",
-                 "--anchor", str(anchor),
-                 "--content", str(root / "scripts" / "run-tests.py"),
-                 "--contract", str(root / "empty")])
-    assert proc.returncode != 0, proc.stdout
-
-    rows = [r for r in read_ledger(root) if r["event"] == "refuse_freeze"]
-    assert len(rows) == 1, rows
-    assert rows[0]["kind"] == "candidate_refused", (
-        f"the freeze recorded {rows[0]['kind']!r} for a refused CANDIDATE")
 
 
 def test_every_pretooluse_guard_is_declared_so_a_silent_one_stays_visible():

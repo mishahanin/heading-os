@@ -20,7 +20,7 @@ from scripts.utils.venv import ensure_venv  # noqa: E402
 
 ensure_venv()  # pytest/pytest-cov live only in .venv; re-exec if launched elsewhere
 
-from scripts.utils.canopus_gate import freeze_gate, pytest_child_env  # noqa: E402
+from scripts.utils.canopus_contract import pytest_child_env  # noqa: E402
 from scripts.utils.colors import GREEN, RED, RESET
 
 
@@ -52,14 +52,14 @@ def build_command(acceptance: bool) -> list[str]:
 def child_env() -> dict[str, str]:
     """The environment the pytest child gets: ours, minus everything PYTEST_.
 
-    The scrub itself lives in canopus_gate.pytest_child_env, with the measurement
-    behind it, because the freeze-time capture child has to get the identical
-    treatment: the two runs are compared against each other, so a discipline
-    applied to one of them alone makes the baseline a photograph of the shell the
-    operator froze from.
+    The scrub itself lives in canopus_contract.pytest_child_env, with the
+    measurement behind it, because the contract child has to get the identical
+    treatment: the two runs are read against each other, so a discipline applied
+    to one of them alone makes the reading a photograph of the shell the operator
+    happened to be standing in.
 
-    CANOPUS_LAUNCHER is stamped so the attestation can record its provenance. It
-    is provenance and not a verdict: a bare `pytest tests/one.py` still attests.
+    CANOPUS_LAUNCHER is stamped so a reader of a child's environment can tell
+    which launcher produced it. It is provenance and not a verdict.
     """
     return pytest_child_env(CANOPUS_LAUNCHER="run-tests")
 
@@ -70,9 +70,6 @@ def main() -> int:
                     help="run only the A+ sign-off gates instead of the regression suite")
     args = ap.parse_args()
     root = Path(__file__).resolve().parent.parent
-    if freeze_gate(root) != 0:
-        print(f"{RED}test gate: FAIL (canopus freeze){RESET}")
-        return 1
     cmd = build_command(args.acceptance)
     proc = subprocess.run(cmd, cwd=str(root), env=child_env())
     if proc.returncode == 0:

@@ -381,7 +381,7 @@ def test_only_tests_that_were_red_for_real_are_weighed():
 
 
 # ----------------------------------------------------------------------------
-# SC-5  Wired into the three commands that decide anything
+# SC-5  Wired into the one command that reads a contract
 # ----------------------------------------------------------------------------
 
 def test_probe_refuses_a_taken_contract_and_leaves_a_strict_one_alone(
@@ -437,26 +437,34 @@ def test_probe_refuses_a_taken_contract_and_leaves_a_strict_one_alone(
     assert "none" in taken_out
 
 
-def test_freeze_refuses_a_contract_a_candidate_takes(tmp_path, capsys,
-                                                     monkeypatch):
-    """SC-5. The gate, not only the report.
+def test_probe_names_the_candidate_that_took_the_contract_and_writes_nothing(
+    tmp_path, capsys, monkeypatch
+):
+    """SC-5. The refusal reaches the operator's surface, naming WHICH candidate.
 
-    `probe` is advisory. The refusal has to reach the command that writes the
-    manifest, or a contract that any wrong implementation satisfies still
-    freezes and binds the whole slice.
+    Promoted from `freeze` on 2026-08-07. It read: the refusal has to reach the
+    command that WRITES the manifest, or a contract any wrong implementation
+    satisfies binds the whole slice anyway. There is no such command now -- the
+    freeze lifecycle is deleted and `probe` is the only surface -- so the
+    assertion moved rather than being dropped, and it is the same assertion:
+    exit non-zero, name `greedy` on the surface the operator reads, and leave
+    nothing behind.
+
+    Distinct from the pair above, which proves the refusal discriminates loose
+    from strict but reads only the candidates summary line. This one reads the
+    REFUSAL, and a refusal that fires without naming its candidate tells the
+    author nothing about which assertion to strengthen.
 
     The fixture greps for a word for the reason argued at the `probe` test
-    above, and the anchor carries a real success-criteria SECTION. The probe
-    found this test ALREADY GREEN twice over: `freeze` was refusing the first
-    draft for vacuity, and the second for an anchor that stated no criteria at
-    all. `assert code != 0` could not tell any of the three refusals apart, so
-    it asserted only that this command fails somehow.
+    above. The probe found this test ALREADY GREEN twice over while it was a
+    freeze test, once for vacuity and once for an anchor stating no criteria at
+    all, and `assert code != 0` could not tell any of the three refusals apart.
+    Naming `greedy` is what tells them apart.
     """
     from scripts.canopus import main
 
     root = tmp_path / "tree"
-    (root / "scripts").mkdir(parents=True)
-    (root / "scripts" / "run-tests.py").write_text("# stub gate\n")
+    root.mkdir()
     directory = root / "tests" / "contract" / "slice"
     directory.mkdir(parents=True)
     (directory / "test_contract.py").write_text(
@@ -466,22 +474,16 @@ def test_freeze_refuses_a_contract_a_candidate_takes(tmp_path, capsys,
         "    assert 'refused' in render()\n",
         encoding="utf-8",
     )
-    anchor = tmp_path / "gate.md"
-    anchor.write_text(
-        "# gate artifact\n\n"
-        "## Phase 1 — Success criteria\n\n"
-        "- **SC-1** WHEN a scratch slice runs, THE SYSTEM SHALL behave as the "
-        "test says.\n",
-        encoding="utf-8",
-    )
     monkeypatch.chdir(root)
 
-    code = main(["--root", str(root), "freeze", "--label", "demo",
-                 "--anchor", str(anchor), "--contract", "tests/contract/slice"])
+    code = main(["--root", str(root), "probe", "tests/contract/slice"])
 
+    out = capsys.readouterr().out
     assert code == 1
-    assert "greedy" in capsys.readouterr().err
-    assert not (root / ".canopus" / "freeze.json").exists()
+    refusals = [line for line in out.splitlines() if "would be refused" in line]
+    assert refusals, out
+    assert any("greedy" in line for line in refusals), refusals
+    assert not (root / ".canopus").exists()
 
 
 # ----------------------------------------------------------------------------

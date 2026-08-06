@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Optional, Sequence
 from xml.etree import ElementTree
 
-from scripts.utils.canopus_gate import pytest_child_env
 # The child's half of the handshake, imported rather than spelled again. Two
 # copies of an environment-variable name is a rename on one side away from a
 # child that claims nothing, two runs that agree on a red the rule never fires
@@ -55,6 +54,44 @@ from scripts.utils.venv import interpreter_identity, venv_python
 
 DEFAULT_PATTERNS = ("test_*.py",)
 RED_OUTCOMES = ("failure", "error")
+
+
+def pytest_child_env(**overrides: str) -> dict:
+    """The environment for a pytest child this codebase launches: ours, minus PYTEST_.
+
+    Blanket prefix, never a denylist. PYTEST_ADDOPTS alone can load a plugin that
+    overrides pytest_pyfunc_call and makes every contract test report passed
+    without executing, and naming the variables you thought of leaves whichever
+    one you did not. The same shape as canopus_git._child_env, which does this
+    for GIT_.
+
+    ONE definition, because the two children it serves are COMPARED against each
+    other: `scripts/canopus_check.py` launches the per-file evidence run and this
+    module launches the contract run, and the check reads the first against the
+    contract the second measured. While only one child was scrubbed, the reading
+    was a photograph of the operator's shell. Measured on a scratch tree: a clean
+    shell captured
+
+        ['dist:_pytest', 'dist:anyio', 'dist:pytest_asyncio', 'dist:pytest_cov',
+         'dist:xdist']
+
+    and the same run with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 exported captured
+    ['dist:_pytest'] alone.
+
+    It lives HERE, in the module that launches the contract child, rather than in
+    a module of its own: its previous home was the freeze gate, and that gate was
+    deleted with the rest of the lifecycle on 2026-08-07. A 14-line module named
+    after a gate that no longer exists is worse than the function sitting beside
+    its in-tree consumer.
+
+    The CANOPUS_ names are deliberately NOT scrubbed here. CANOPUS_NO_ATTEST and
+    CANOPUS_PLUGIN_DUMP are how a caller tells a child what it is for, and both
+    are passed in as *overrides* by the callers that need them.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("PYTEST_")}
+    env.update(overrides)
+    return env
 
 
 def contract_interpreter() -> Path:
@@ -847,13 +884,11 @@ def run_pytest_report(
         # measured symptom was `['__pycache__', 'test_one.py']` where only
         # test_one.py had been written.
         #
-        # The PYTEST_ scrub is the gate child's, taken from the one definition
-        # both share (canopus_gate.pytest_child_env). It is not tidiness either:
-        # this child CAPTURES the plugin baseline the gate child is later held
-        # to, so while it inherited the whole environment an exported
-        # PYTEST_DISABLE_PLUGIN_AUTOLOAD froze the operator's shell into the
-        # baseline and every later gate run refused. The measurement is in that
-        # function's docstring.
+        # The PYTEST_ scrub comes from the one definition every pytest child in
+        # this codebase shares (`pytest_child_env`, above). It is not tidiness:
+        # while this child inherited the whole environment, an exported
+        # PYTEST_DISABLE_PLUGIN_AUTOLOAD made the measurement a photograph of the
+        # operator's shell. The measurement is in that function's docstring.
         env = pytest_child_env(
             CANOPUS_NO_ATTEST="1", PYTHONDONTWRITEBYTECODE="1",
         )

@@ -20,9 +20,9 @@ in this repository: 4 (the approval commit, and the contract files it carries)
 and 7 (the note under `records/slices/`). The rest are human and agent work that
 no file here records; the scope document and the plan live in the operator's
 private overlay and are referenced by digest, never by path, because this
-repository is public. `machine_visible` says which is which, so a position
-display can report what is known and say plainly where it is guessing rather
-than inventing precision.
+repository is public. `machine_visible` says which is which, so a reader of the
+agenda can tell the two steps this repository can evidence from the five it
+cannot.
 """
 
 ACT_DECIDE = "Decide"
@@ -104,54 +104,3 @@ def act_of(step_number: int) -> dict:
 def approvals() -> tuple:
     """The operator's own moments, in order."""
     return tuple(s for s in STEPS if s["approval"])
-
-
-# The ladder from a machine-visible trace to a numbered step. Three rungs,
-# because there are only three states the disk can be in, and each rung names
-# the trace that puts you on it.
-NO_SLICE = 0
-
-
-def position(*, label, attested: bool) -> dict:
-    """Which step the slice is on, given only what the machine can see.
-
-    PURE, and separate from the disk on purpose. It lived inside the CLI until
-    2026-08-02, where the only way to reach the attested rung from a test was to
-    fabricate a qualifying record on disk, which would have welded the position
-    contract to that machinery's shape, two things that change for unrelated
-    reasons. Mutation measured the cost of that: changing the derived step
-    killed no test at all.
-
-    `derived` says whether the step itself was observed or inferred from a
-    NEIGHBOURING trace, and `basis` says in prose which trace that was. Steps 5
-    and 6 leave nothing this tool reads, so the honest answer at those is "the
-    earliest unfinished step", not a measurement. A confident "step 6 of 7"
-    where nothing is knowable is a lie the operator would reasonably act on,
-    which is worse than an admitted gap.
-    """
-    if label is None:
-        return {
-            "slice": None,
-            "number": NO_SLICE,
-            "derived": False,
-            "basis": "nothing is open. This is observed, not inferred: the "
-                     "absence of an open slice is itself a fact.",
-        }
-    if attested:
-        return {
-            "slice": label,
-            "number": 6,
-            "derived": True,
-            "basis": "the slice carries a machine verdict, so the code is "
-                     "written and the suite has run at the target state. Step 6 "
-                     "leaves no trace this tool reads, so this is the earliest "
-                     "unfinished step rather than a measured one.",
-        }
-    return {
-        "slice": label,
-        "number": 5,
-        "derived": True,
-        "basis": "a slice is open and nothing has attested it yet. Writing code "
-                 "leaves no trace this tool reads, so step 5 is inferred from "
-                 "the open slice, not measured.",
-    }

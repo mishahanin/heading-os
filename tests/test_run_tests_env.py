@@ -23,9 +23,9 @@ from scripts.utils.venv import venv_python
 # The re-exec is `[venv_python, sys.argv[0], ...]`, and under pytest sys.argv[0]
 # is the pytest entry point rather than this file.
 #
-# canopus_gate.py's module docstring already states that run-tests.py "is not
-# safely importable from a test"; this guard is what makes the exception to that
-# statement safe rather than lucky.
+# run-tests.py is not safely importable from a test, for exactly that reason;
+# this guard is what makes the exception to that statement safe rather than
+# lucky.
 if Path(sys.executable).resolve() != venv_python().resolve():
     pytest.skip("run-tests.py re-execs at import; importable only under .venv",
                 allow_module_level=True)
@@ -73,9 +73,8 @@ def test_the_runner_hands_that_environment_to_the_child():
     contract cases green too, while the child silently inherits PYTEST_ADDOPTS
     again. This is the only assertion that fails when the wire is cut.
 
-    Source inspection rather than an import, matching the shape of
-    tests/test_canopus_gate.py::test_run_tests_calls_the_gate_before_pytest and
-    for the same reason: run-tests.py calls ensure_venv() at import time. The
+    Source inspection rather than an import, for the reason the module comment
+    above gives: run-tests.py calls ensure_venv() at import time. The
     match is scoped to the call statement rather than the whole file because a
     whole-file substring is satisfiable by a docstring that merely mentions the
     keyword. That scoping assumes the call stays on one line; if it is ever

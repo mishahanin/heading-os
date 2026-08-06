@@ -158,10 +158,18 @@ When the slice ships, it writes one committed markdown record per slice under
 `records/slices/`, engine-relative paths only:
 
 ```bash
-python scripts/canopus.py note --slug <slug> --value "<one sentence>" \
+python scripts/canopus.py note <slug> --value "<one sentence>" \
     --approval-sha <sha> --contract tests/contract/<date>-<slug>/ \
-    --plan-digest sha256:<...> --undo "revert <sha>, restore <baseline>, re-run <cmd>"
+    --plan-digest sha256:<...> --scrutinize-plan "<step 4 findings, all applied>" \
+    --scrutinize-built "<step 6 findings, all applied>" \
+    --undo "revert <sha>, restore <baseline>, re-run <cmd>"
 ```
+
+Every flag there is required by the record's schema, which refuses an incomplete
+note rather than writing one. A slice whose contract has been retired into the
+ordinary suite adds `--retired-sha` and `--promoted-to`, and the schema refuses
+the first without the second: a retirement pointing nowhere cannot be told apart
+from a contract that was simply dropped.
 
 `scripts/canopus_check.py` reads those records back over the repository they are
 committed to, in four clauses. C1: the contract did not move between its approval
@@ -174,9 +182,12 @@ and on 2026-08-06 two of them put an implementation commit nine hours before the
 approval it descends from.
 
 ```bash
-python scripts/canopus_check.py --range origin/main..HEAD
+python scripts/canopus.py check --range origin/main..HEAD
 python scripts/canopus.py probe tests/contract/<date>-<slug>/
 ```
+
+`check` is a passthrough to `scripts/canopus_check.py`, which is the module CI
+runs directly, so the local reading and the CI reading are the same reading.
 
 `probe` measures whether a contract's redness means anything: it null-stubs the
 missing modules, so a test that ERRORS against the stub is vacuous, and it runs

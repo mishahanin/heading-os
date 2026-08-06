@@ -131,30 +131,37 @@ exists. Naming the origin is what keeps a weak contract from surviving its slice
 Ship it, then write the record:
 
 ```
-.venv/bin/python scripts/canopus.py note --slug <slug> --value "<one sentence>" \
+.venv/bin/python scripts/canopus.py note <slug> --value "<one sentence>" \
     --approval-sha <sha> --contract tests/contract/<date>-<slug>/ \
-    --plan-digest sha256:<...> --undo "revert <sha>, restore <baseline>, re-run <cmd>"
+    --plan-digest sha256:<...> --scrutinize-plan "<step 4 findings, all applied>" \
+    --scrutinize-built "<step 6 findings, all applied>" \
+    --undo "revert <sha>, restore <baseline>, re-run <cmd>"
 ```
+
+Every flag above is required by the schema, and the schema refuses the note
+rather than writing a half-formed one. `--show` prints a written note back.
 
 One committed markdown file per slice under `records/slices/`, engine-relative
 paths only. This repository is PUBLIC: a note carries no absolute path and no
 overlay path, which is why the plan and the scope document go in by sha256
 digest. Retiring the contract into the ordinary suite is part of the step, and a
-retirement is RECORDED: `retired_sha` is the commit that removed the contract and
-`promoted_to` the file carrying the coverage now. Without both, the clauses below
+retirement is RECORDED: `--retired-sha` is the commit that removed the contract and
+`--promoted-to` the file carrying the coverage now. Without both, the clauses below
 read a shipped slice as a broken one.
 
 ## `check` — the four clauses
 
 ```
-.venv/bin/python scripts/canopus_check.py --range <A>..<B>
+.venv/bin/python scripts/canopus.py check --range <A>..<B> [--json]
 ```
 
 C1 the contract did not move between the approval sha and the end state. C2 the
 implementation descends from the approval. C3 the contract, checked out at the
 approval sha and RUN there, was red. C4 the target is green at HEAD, with per-file
-junit counts above zero, because collected is not run. A CI step in the `sovereignty
-guards` job runs the same module on every push. It REPORTS. It does not block:
+junit counts above zero, because collected is not run. The subcommand is a
+passthrough to `scripts/canopus_check.py`, and a CI step in the `sovereignty
+guards` job runs that same module on every push, so the local reading and the CI
+reading are one reading. It REPORTS. It does not block:
 `enforce_admins` is false on the only push path in use, and a control that cannot
 enforce must never be described as if it can.
 

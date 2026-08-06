@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
-"""Canopus probe: run a contract set before the code exists and read its shape.
+"""Canopus: the three thin commands the standard's steps 4 and 7 need.
 
-One command. It runs the test files that are meant to define done for a slice,
-at a moment when the implementation they describe has not been written, and
-reports which of them assert something about it.
+    python scripts/canopus.py probe tests/contract/     # step 3, is it vacuous
+    python scripts/canopus.py note <slug> --value ...   # step 7, the record
+    python scripts/canopus.py check --range A..B        # the four clauses
 
-    python scripts/canopus.py probe tests/contract/
+`note` and `check` hold no logic of their own. `note` validates and writes
+through `scripts/utils/canopus_note.write_note`, and `check` calls
+`scripts/canopus_check.main` — the same entry point the `sovereignty guards` CI
+job runs — so there is exactly one implementation of each and this file is the
+one place an operator has to remember. They exist because the skill promises
+`/canopus note` and `/canopus check`, and a document claiming a capability the
+tool does not have is the defect this whole standard was built to remove.
+
+`probe` is the command that does the work here. It runs the test files that are
+meant to define done for a slice, at a moment when the implementation they
+describe has not been written, and reports which of them assert something about
+it.
 
 Three questions are answered, and each of them is a way a contract can be born
 too weak to be worth committing:
@@ -57,7 +68,18 @@ from scripts.utils.canopus_contract import (  # noqa: E402
 # run rather than only the ones that took something. Importing the plugin module
 # registers no pytest hook: hooks come from `-p`, not from import.
 from scripts.utils.canopus_nullstub import CANDIDATES  # noqa: E402
+from scripts.canopus_check import main as check_main  # noqa: E402
+from scripts.utils.canopus_note import (  # noqa: E402
+    BODY_FIELD, NoteError, OPTIONAL_FIELDS, REQUIRED_FIELDS, read_note, write_note,
+)
 from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW  # noqa: E402
+
+# Every note field except `slug`, which is the subcommand's positional. Derived
+# from the schema rather than restated: a field added there — the retirement pair
+# `retired_sha`/`promoted_to` above all — gets its flag here without anyone
+# remembering to add one, and a flag can never name a field the schema refuses.
+_NOTE_FLAGS = tuple(name for name in REQUIRED_FIELDS + OPTIONAL_FIELDS + (BODY_FIELD,)
+                    if name != "slug")
 
 
 def _under_root(raw: str, root: Path) -> Path:
@@ -217,19 +239,94 @@ def cmd_probe(args) -> int:
     return 1 if reasons else 0
 
 
+def cmd_note(args) -> int:
+    """Write the slice's committed record, or print one back with --show.
+
+    Every field is optional to argparse and required by the SCHEMA. That is the
+    deliberate direction: `write_note` already refuses a note missing a required
+    field, naming every one of them in a single sentence, and duplicating the
+    required set into `add_argument(required=True)` would give the operator two
+    different refusals for one mistake — and would drift the moment the schema
+    gains a field. The one exception is the slug, which is the positional,
+    because `--show` needs to name a note without supplying its contents.
+    """
+    root = Path(args.root).resolve() if args.root else ENGINE_ROOT
+    try:
+        if args.show:
+            for name, value in read_note(root, args.slug).items():
+                print(f"{name}: {value}")
+            return 0
+        fields = {name: getattr(args, name) for name in _NOTE_FLAGS
+                  if getattr(args, name) is not None}
+        fields["slug"] = args.slug
+        print(write_note(root, args.slug, fields).relative_to(root))
+    except (NoteError, OSError) as exc:
+        # OSError alongside NoteError because the write can fail on the
+        # filesystem (an unwritable records/ directory, a vanished root) and a
+        # traceback over that reads as a bug in the tool rather than as a
+        # refusal the operator can act on.
+        print(f"canopus: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_check(args) -> int:
+    """Run the four clauses, from `scripts/canopus_check.py`, nothing reimplemented.
+
+    That module IS the check: the `sovereignty guards` CI job invokes it
+    directly, so a second copy of the clause logic behind this subcommand would
+    be a second answer to the same question, and the two would diverge on the
+    first fix that landed in only one of them. The flags are passed through, so
+    the local reading and the CI reading are the same reading.
+    """
+    root = Path(args.root).resolve() if args.root else ENGINE_ROOT
+    argv = ["--root", str(root)]
+    if args.commit_range:
+        argv += ["--range", args.commit_range]
+    if args.json:
+        argv.append("--json")
+    return check_main(argv)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="canopus",
-        description="Run a test contract before its implementation exists and "
-                    "report which of its tests actually assert something.",
+        description="Write a slice's record, hold every record to the four "
+                    "clauses, and read whether a contract asserts anything.",
     )
     parser.add_argument("--root", default=None,
                         help="working tree root (default: this script's own "
                              "repository root, NOT the shell's cwd)")
-    # NOT required. With one subcommand, argparse's own required-subparser error
-    # is a usage line about a choice the operator has no choice about; `main`
-    # prints the whole help instead, and still exits non-zero.
+    # NOT required. argparse's own required-subparser error is a one-line usage
+    # string; `main` prints the whole help instead, which names all three
+    # subcommands and what each is for, and still exits non-zero.
     sub = parser.add_subparsers(dest="command")
+
+    note = sub.add_parser(
+        "note",
+        help="write the slice's committed record under records/slices/",
+    )
+    note.add_argument("slug", help="the slice's slug: records/slices/<slug>.md")
+    note.add_argument("--show", action="store_true",
+                      help="print the named note's fields instead of writing one")
+    for name in _NOTE_FLAGS:
+        note.add_argument(
+            f"--{name.replace('_', '-')}",
+            help=f"the note's {name} field"
+                 f"{' (required by the schema)' if name in REQUIRED_FIELDS else ''}",
+        )
+    note.set_defaults(func=cmd_note)
+
+    check = sub.add_parser(
+        "check",
+        help="run the four clauses over every committed slice note",
+    )
+    check.add_argument("--range", dest="commit_range", metavar="A..B",
+                       help="run the two expensive clauses only for notes whose "
+                            "approval_sha or retired_sha falls inside this range")
+    check.add_argument("--json", action="store_true",
+                       help="one JSON row per clause on stdout, nothing else")
+    check.set_defaults(func=cmd_check)
 
     probe = sub.add_parser(
         "probe",

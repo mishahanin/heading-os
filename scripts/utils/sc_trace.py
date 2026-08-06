@@ -19,15 +19,21 @@ criterion is decided". An operator who reads it the second way and stops reading
 the tests is worse off than before this existed, so the limitation is stated here
 and in the report rather than left to be inferred.
 
-PURE. Nothing here touches the filesystem except `gate_refusal`, which is the one
-seam `scripts/canopus.py` calls and which is TOTAL by construction: see its
-docstring for why a raise here would be a lockout rather than a refusal.
+PURE, with one exception: `contract_sources` reads the files its caller names.
+Everything else is a function over strings.
+
+**This module REPORTS. Nothing gates on it.** Until 2026-08-07 it also carried
+`gate_refusal`, a total wrapper that the retired `approve` and `freeze` commands
+called to refuse a slice leaving a criterion unclaimed. Those commands were
+deleted, and the wrapper outlived its only call site by five commits. It is gone;
+`scripts/sc-trace.py` is the whole surface, and it prints a trace and exits
+non-zero on the same finding. An exit code a human reads is not a gate, and this
+module must not be described as if it were one.
 """
 from __future__ import annotations
 
 import ast
 import re
-import sys
 from pathlib import Path
 
 # A criterion is DEFINED by a line it opens, and merely MENTIONED anywhere else.
@@ -211,38 +217,3 @@ def contract_sources(paths) -> dict[str, str]:
                 name = path.name
             sources[name] = path.read_text(encoding="utf-8", errors="replace")
     return sources
-
-
-def gate_refusal(anchor_path, contract_paths) -> str:
-    """The one seam the lifecycle calls. TOTAL: it never raises, ever.
-
-    This runs inside `_candidate_manifest`, the single builder `approve` and
-    `freeze` share. A raise here refuses EVERY slice in the workspace, and the
-    sanctioned repair for a wedged gate -- `/canopus back` -- itself begins with
-    `approve --replace`, so the lockout would include its own escape. A check
-    about the shape of prose is not permitted to do that.
-
-    So: only a DEFINITE finding refuses. An unreadable artifact, an unparseable
-    contract file, an unexpected exception of any kind -- all report on stderr
-    and return no refusal at all. The same reasoning that made the retired
-    commit-time depth gate deliberately bypassable: process discipline is not a
-    leak wall, and the push-time scans that ARE unbypassable exist for a
-    different job.
-
-    No contract means no trace. A slice freezing only enforcer content has no
-    tests to bind to, and demanding one there would refuse every content-only
-    freeze in the workspace.
-    """
-    if not contract_paths:
-        return ""
-    try:
-        text = Path(anchor_path).read_text(encoding="utf-8", errors="replace")
-        result = trace(read_criteria(text), read_claims(contract_sources(contract_paths)))
-        return refusal(result)
-    except Exception as exc:  # noqa: BLE001 — totality IS the requirement
-        # Named, so this is a report and not a swallow. An operator seeing this
-        # is looking at a check that could not establish an answer, which is not
-        # the same claim as a criterion being unbound, and the sentence says so.
-        print(f"canopus: the criteria trace could not be established, so it "
-              f"refuses nothing: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return ""

@@ -1,17 +1,28 @@
-"""Tests for the Canopus CLI, which is now one command: `probe`.
+"""Tests for the Canopus CLI: `note`, `check`, and `probe`.
 
 The lifecycle this file used to exercise - approve, freeze, verify, status,
 release, repin, pack, where - was deleted on 2026-08-07 along with the freeze
 manifest it read. What survives is the reading `probe` produces over a contract
 whose implementation does not exist yet, and every assertion below is about that
 reading rather than about a lock.
+
+`note` and `check` came back on 2026-08-07 because the skill promised both and
+the tool offered neither. Both are thin, so the tests below assert what an
+operator can SEE at the command surface - the file that appears on disk, the
+refusal sentence, the exit code, the clause rows - and never that a particular
+function was called. Renaming anything inside `canopus_note` or `canopus_check`
+must not move a single assertion here.
 """
+import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
 import scripts.canopus as canopus
 from scripts.canopus import main
+from scripts.utils.canopus_note import digest_text, write_note
 
 
 def _make_tree(root: Path) -> Path:
@@ -31,6 +42,79 @@ def tree(tmp_path: Path, monkeypatch) -> Path:
 def _run(argv, tree):
     # --root is a top-level option, so it must precede the subcommand.
     return main(["--root", str(tree), *argv])
+
+
+# A complete, schema-valid record. Every `note` test starts from this and breaks
+# exactly one thing, so a refusal names the property under test and nothing else.
+_PLAN_DIGEST = digest_text("the plan this slice was approved on")
+_FIELDS = {
+    "value": "the skill promised two subcommands the tool did not have",
+    "approval_sha": "abc1234",
+    "contract": "tests/contract/2026-08-07-widget/",
+    "plan_digest": _PLAN_DIGEST,
+    "scrutinize_plan": "3 findings, all applied",
+    "scrutinize_built": "1 finding, applied",
+    "undo": "revert abc1234 and re-run the suite",
+}
+
+
+def _note_argv(slug="widget", **overrides):
+    """`note <slug> ...` with every schema-required flag, plus any override."""
+    fields = dict(_FIELDS, **overrides)
+    argv = ["note", slug]
+    for name, value in fields.items():
+        argv += [f"--{name.replace('_', '-')}", value]
+    return argv
+
+
+def _git(repo: Path, *argv: str) -> str:
+    """git in *repo*, with every GIT_* variable out of the child environment.
+
+    The scrub is `canopus_check.git_child_env`'s, for its reason: this suite runs
+    inside the engine's pre-push hook, and git exports GIT_DIR and GIT_INDEX_FILE
+    to a hook, so an unscrubbed `git add` here would stage against the ENGINE's
+    index instead of this fixture's.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("GIT_")}
+    proc = subprocess.run(["git", "-C", str(repo), *argv], check=False,
+                          capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, f"git {' '.join(argv)}: {proc.stderr.strip()}"
+    return proc.stdout.strip()
+
+
+@pytest.fixture
+def repo(tree):
+    """`tree` as a git repository holding one commit, and that commit's sha.
+
+    The clauses read git, so `check` has nothing to answer without one.
+    """
+    _git(tree, "init", "-q", "-b", "main")
+    _git(tree, "config", "user.email", "builder@example.invalid")
+    _git(tree, "config", "user.name", "Builder")
+    _git(tree, "config", "commit.gpgsign", "false")
+    contract = tree / "tests" / "contract" / "test_widget.py"
+    contract.parent.mkdir(parents=True, exist_ok=True)
+    contract.write_text("def test_widget():\n    assert True\n")
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-q", "-m", "approve the widget contract")
+    # Abbreviated, never the full 40 characters: this repository's own
+    # convention, because a full sha reads to detect-secrets as a hex
+    # high-entropy string and every way to silence that is forbidden here.
+    return tree, _git(tree, "rev-parse", "--short=7", "HEAD")
+
+
+def _record(root: Path, sha: str, **overrides) -> None:
+    """Commit-free: write one schema-valid note straight into the scratch tree."""
+    write_note(root, "widget", dict(
+        _FIELDS, slug="widget", approval_sha=sha,
+        contract="tests/contract/test_widget.py", **overrides))
+
+
+# The range that scopes C3 and C4 to nothing. Both spawn a worktree and a pytest
+# run, and neither is what these tests are about: what is under test here is
+# whether the subcommand reaches the clauses at all and carries its flags there.
+_NO_RANGE = "0000000..HEAD"
 
 
 def _write_contract(tree, red=True):
@@ -147,6 +231,165 @@ _REAL_POPULATION = [
     ("tests/contract/slice/test_contract.py", "test_a", "failure"),
     ("tests/contract/slice/test_contract.py", "test_b", "passed"),
 ]
+
+
+def test_a_bare_invocation_prints_help_naming_every_subcommand(capsys):
+    """Non-zero, and the whole help rather than a one-line usage string.
+
+    The help is the only place the three subcommands are enumerated to an
+    operator who typed the command with nothing after it, so a subparser that was
+    written but never registered shows up here and nowhere else.
+    """
+    assert main([]) == 2
+    err = capsys.readouterr().err
+    assert all(name in err for name in ("note", "check", "probe"))
+
+
+def test_check_carries_the_json_flag_to_the_clauses(repo, capsys):
+    """--json has to REACH the clauses, not merely be accepted by this parser.
+
+    A flag parsed here and dropped on the way through leaves the operator reading
+    the text listing while their tooling waits for JSON, and nothing errors.
+    """
+    root, sha = repo
+    _record(root, sha)
+
+    _run(["check", "--range", _NO_RANGE, "--json"], root)
+
+    rows = json.loads(capsys.readouterr().out)
+    assert {row["clause"] for row in rows} == {"C1", "C2"}
+    assert all(row["slug"] == "widget" for row in rows)
+
+
+def test_check_carries_the_range_flag_to_the_clauses(repo, capsys):
+    """Same passthrough property, on the flag that decides what the run COSTS.
+
+    A dropped --range does not fail: it silently widens the run to every note's
+    expensive clauses, which is a worktree and a full pytest session per slice.
+    The range named here scopes those to nothing and says so, so the sentence is
+    the evidence the flag arrived.
+    """
+    root, sha = repo
+    _record(root, sha)
+
+    _run(["check", "--range", _NO_RANGE], root)
+
+    assert "names no push range" in capsys.readouterr().err
+
+
+def test_check_reports_a_note_whose_approval_is_not_in_the_history(repo, capsys):
+    """The clauses are RUN, not merely reached: this one has to come back red.
+
+    `0123456` is a well-formed abbreviated sha that names no commit in the
+    scratch repository, so the record claims an approval the history does not
+    carry. A subcommand that printed a listing and always exited 0 would pass the
+    green test above and fail this one.
+    """
+    root, sha = repo
+    _record(root, sha)
+    write_note(root, "widget", dict(
+        _FIELDS, slug="widget", approval_sha="0123456",
+        contract="tests/contract/test_widget.py"))
+
+    assert _run(["check", "--range", _NO_RANGE], root) == 1
+    assert "C2" in capsys.readouterr().out
+
+
+def test_check_runs_the_clauses_over_a_committed_note(repo, capsys):
+    """A record whose approval IS the history reads clean, and exits 0."""
+    root, sha = repo
+    _record(root, sha)
+
+    assert _run(["check", "--range", _NO_RANGE], root) == 0
+    out = capsys.readouterr().out
+    assert "C1" in out and "C2" in out and "widget" in out
+
+
+def test_note_reads_a_record_back(tree, capsys):
+    """--show is the cheap half of the round trip: what was written comes back."""
+    _run(_note_argv(), tree)
+    capsys.readouterr()
+
+    assert _run(["note", "widget", "--show"], tree) == 0
+    out = capsys.readouterr().out
+    assert f"value: {_FIELDS['value']}" in out
+    assert f"approval_sha: {_FIELDS['approval_sha']}" in out
+
+
+def test_note_records_a_retirement_that_names_where_the_coverage_went(tree):
+    """The retirement pair is written, and it is written as a PAIR.
+
+    A note carrying `retired_sha` without `promoted_to` is the shape the schema
+    refuses, and the flags for both exist only because they are derived from that
+    schema rather than typed out by hand.
+    """
+    code = _run(_note_argv(retired_sha="def5678",
+                           promoted_to="tests/test_widget.py"), tree)
+
+    assert code == 0
+    text = (tree / "records" / "slices" / "widget.md").read_text(encoding="utf-8")
+    assert "retired_sha: def5678" in text
+    assert "promoted_to: tests/test_widget.py" in text
+
+
+def test_note_refuses_a_field_carrying_a_path(tree, capsys):
+    """The property that matters most at this surface: the repository is PUBLIC.
+
+    The plan lives in the operator's private overlay, so a note pins it by
+    digest. A CLI that wrote its arguments through without the schema's leak
+    check would put an overlay path into a committed public file, and the digest
+    field is not even the likeliest carrier: `undo` is free prose.
+    """
+    code = _run(_note_argv(undo="revert, then restore ~/private/plan.md"), tree)
+
+    assert code == 1
+    assert "carries a path" in capsys.readouterr().err
+    assert not (tree / "records").exists()
+
+
+def test_note_refuses_a_record_missing_a_required_field(tree, capsys):
+    """A plain sentence naming every missing field, no traceback, nothing written.
+
+    Nothing written is the half that would be missed: a CLI that wrote first and
+    validated after would leave a half-formed record on disk for the four clauses
+    to report against forever.
+    """
+    code = _run(["note", "widget", "--value", _FIELDS["value"]], tree)
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "missing required field" in err
+    assert "undo" in err and "approval_sha" in err
+    assert "Traceback" not in err
+    assert not (tree / "records").exists()
+
+
+def test_note_refuses_a_retirement_that_names_no_promotion(tree, capsys):
+    """Half a retirement is refused, because it cannot be told from a dropped
+    contract: the clauses would then hold a shipped slice to a deleted target."""
+    code = _run(_note_argv(retired_sha="def5678"), tree)
+
+    assert code == 1
+    assert "promoted_to" in capsys.readouterr().err
+    assert not (tree / "records").exists()
+
+
+def test_note_writes_the_slice_record(tree, capsys):
+    """The record appears where the standard says it does, carrying its fields.
+
+    The printed path is engine-relative rather than absolute, which is not
+    cosmetic: this repository is public, and an absolute path is the one thing an
+    operator is most likely to paste out of a terminal into a commit message.
+    """
+    code = _run(_note_argv(), tree)
+
+    assert code == 0
+    assert capsys.readouterr().out.strip() == "records/slices/widget.md"
+    text = (tree / "records" / "slices" / "widget.md").read_text(encoding="utf-8")
+    assert "slug: widget" in text
+    assert f"approval_sha: {_FIELDS['approval_sha']}" in text
+    assert f"plan_digest: {_PLAN_DIGEST}" in text
+    assert _FIELDS["undo"] in text
 
 
 def test_probe_does_not_call_an_already_green_test_vacuous(tree, capsys):

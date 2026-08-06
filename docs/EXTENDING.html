@@ -222,10 +222,17 @@ frozen bytes, <code>git diff</code> answers whether the contract moved, and <cod
 Nothing on this machine holds those bytes down.</p>
 <p>When the slice ships, it writes one committed markdown record per slice under
 <code>records/slices/</code>, engine-relative paths only:</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>note<span class="w"> </span>--slug<span class="w"> </span>&lt;slug&gt;<span class="w"> </span>--value<span class="w"> </span><span class="s2">&quot;&lt;one sentence&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>note<span class="w"> </span>&lt;slug&gt;<span class="w"> </span>--value<span class="w"> </span><span class="s2">&quot;&lt;one sentence&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--approval-sha<span class="w"> </span>&lt;sha&gt;<span class="w"> </span>--contract<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--plan-digest<span class="w"> </span>sha256:&lt;...&gt;<span class="w"> </span>--undo<span class="w"> </span><span class="s2">&quot;revert &lt;sha&gt;, restore &lt;baseline&gt;, re-run &lt;cmd&gt;&quot;</span>
+<span class="w">    </span>--plan-digest<span class="w"> </span>sha256:&lt;...&gt;<span class="w"> </span>--scrutinize-plan<span class="w"> </span><span class="s2">&quot;&lt;step 4 findings, all applied&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--scrutinize-built<span class="w"> </span><span class="s2">&quot;&lt;step 6 findings, all applied&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--undo<span class="w"> </span><span class="s2">&quot;revert &lt;sha&gt;, restore &lt;baseline&gt;, re-run &lt;cmd&gt;&quot;</span>
 </code></pre></div>
+<p>Every flag there is required by the record&rsquo;s schema, which refuses an incomplete
+note rather than writing one. A slice whose contract has been retired into the
+ordinary suite adds <code>--retired-sha</code> and <code>--promoted-to</code>, and the schema refuses
+the first without the second: a retirement pointing nowhere cannot be told apart
+from a contract that was simply dropped.</p>
 <p><code>scripts/canopus_check.py</code> reads those records back over the repository they are
 committed to, in four clauses. C1: the contract did not move between its approval
 and the end of its life. C2: HEAD descends from the approval commit. C3: the
@@ -235,9 +242,11 @@ collected is not run and an all-skipped file exits 0. No clause reads a
 timestamp: <code>GIT_COMMITTER_DATE</code> and <code>GIT_AUTHOR_DATE</code> are environment variables,
 and on 2026-08-06 two of them put an implementation commit nine hours before the
 approval it descends from.</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus_check.py<span class="w"> </span>--range<span class="w"> </span>origin/main..HEAD
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>check<span class="w"> </span>--range<span class="w"> </span>origin/main..HEAD
 python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/
 </code></pre></div>
+<p><code>check</code> is a passthrough to <code>scripts/canopus_check.py</code>, which is the module CI
+runs directly, so the local reading and the CI reading are the same reading.</p>
 <p><code>probe</code> measures whether a contract&rsquo;s redness means anything: it null-stubs the
 missing modules, so a test that ERRORS against the stub is vacuous, and it runs
 three wrong implementations that exist and prints what each took of the red set.</p>

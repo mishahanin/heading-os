@@ -1,42 +1,40 @@
 ---
 name: canopus
 description: >
-  The engineering standard for building anything non-trivial in this workspace: thirteen
-  numbered moments in four acts, with the operator's two approvals as steps 6 and 12. Bare
-  `/canopus` prints where the current slice is and the whole agenda. Subcommands drive the
-  lifecycle: `plan` runs the planning gate (success criteria, contrarian critique, harness
-  audit, the real test contract), `lock` freezes that contract so it cannot move under the
-  code, `check` reports the machine's verdict and the state of the lock, `release` closes a
-  shipped slice, `back` opens a release window mid-build and names the way back. Use for any
-  change worth a plan. Skip for typo fixes, config-only edits, and one-line corrections.
-argument-hint: "[plan | lock | check | release | back]  (bare = where am I)"
+  The engineering standard for building anything non-trivial in this workspace: seven
+  numbered steps, with the operator's two moments as steps 4 and 7. Bare `/canopus`
+  prints where the current slice is and the whole agenda. Subcommands are thin: `note`
+  writes the slice's committed record, `check` runs the four clauses a CI step runs
+  identically, `where` orients, `probe` measures whether a contract's redness means
+  anything. Use for any change worth a plan. Skip typo fixes and config-only edits.
+argument-hint: "[note | check | where | probe]  (bare = where am I)"
 allowed-tools: "Read, Write, Edit, Bash(python3:*), Bash(git:*), Skill"
 disable-model-invocation: true
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "2.0"
+  version: "3.1"
 x-heading-orchestration:
   parallel_safe: false
-  shared_state: [".canopus/"]
+  shared_state: ["records/slices/"]
   triggers: []
 x-heading-routing:
   category: Operations
-  triggers: ["NEVER auto-trigger. Explicit `/canopus [plan | lock | check | release | back]` only. Bare `/canopus` prints the current position and the full agenda."]
+  triggers: ["NEVER auto-trigger. Explicit `/canopus [note | check | where | probe]` only. Bare `/canopus` prints the current position and the full agenda."]
   exclusions: ["N/A"]
   compound: "No"
   router: manual
-  label: "/canopus [plan \\| lock \\| check \\| release \\| back]"
+  label: "/canopus [note | check | where | probe]"
 x-heading-capability:
   what: >
     The workspace's engineering standard as a command. Prints where a slice is in its
-    thirteen moments, and drives the lifecycle that freezes a test contract before the
-    code exists so the target cannot move under the builder.
+    seven steps, records what a slice froze and shipped, and runs the four clauses that
+    decide whether the contract held between the approval commit and the code.
   how: >
-    Bare `/canopus` for the orientation page. `/canopus plan` to run the planning gate,
-    `lock` to freeze the contract, `check` for the machine's verdict, `release` to close a
-    shipped slice, `back` to open a release window mid-build. State lives in `.canopus/`;
-    gate artifacts land in the plans directory of the data overlay.
+    Bare `/canopus` for the orientation page. `/canopus note` to write the slice record,
+    `check` for the four clauses, `probe` to measure whether a contract is vacuous.
+    Records live in `records/slices/`; plans and scope documents live in the operator's
+    private overlay and are referenced by digest, never by path.
   when: >
     Use for any change worth a plan. Do NOT use for typo fixes or config-only edits, and
     do NOT use it to review finished work: that is `/scrutinize`.
@@ -44,253 +42,158 @@ x-heading-capability:
 
 # Canopus
 
-The standard for building anything here. Thirteen moments, four acts, and two of
-those moments are the operator's own.
+The standard for building anything non-trivial here. Seven steps, two of them the
+operator's own, and every mechanical part built out of git, GitHub and pytest
+rather than re-implemented in Python: 93 percent of the retired version's
+hand-built prevention surface was defeated by one shell command.
 
 **The one thing this exists to prevent:** a contract too weak to decide anything,
-passing as one that decided. Everything else is scaffolding around that.
-
-Read that as a correction, not a slogan. Until 2026-08-03 this line said the
-standard exists to stop a contract MOVING under the code. Classifying all 62
-window-and-retake records said otherwise: across 20 shipped slices a contract was
-never once weakened after the fact, and was born too weak thirty times. So the
-green to distrust is the one no wrong implementation was ever made to fail.
-The freeze still holds — it keeps the contract from weakening BETWEEN the two
-approvals — it is simply no longer what the standard is about.
+passing as one that decided. Across all 62 prior records a contract was never once
+weakened after the fact, and was born too weak thirty times. The green to distrust
+is the one no wrong implementation was ever made to fail.
 
 ## Bare `/canopus` — where am I
 
-Run this first, always, and show the operator its output verbatim:
+`.venv/bin/python scripts/canopus.py where`, run first and shown verbatim. It
+prints the current step out of seven, what comes next, HOW that position was worked
+out, and the full agenda. Never summarise it into a status line. Only two of the
+seven leave a trace here, so it says plainly when it is inferring, and that
+admission is the point. `--json` for the same as data.
 
-```
-python scripts/canopus.py where
-```
-
-It prints the current step out of thirteen, which act it belongs to, what was
-just finished, what comes next, HOW that position was worked out, and the full
-agenda. Never summarise it into a status line. Only six of the thirteen leave a
-durable trace, so the command says plainly when it is inferring, and that
-admission is the point.
-
-`--json` for the same thing as data.
-
-## The thirteen moments
+## The seven steps
 
 The agenda has exactly one definition, `scripts/utils/canopus_steps.py`. This
 file may summarise it and may never renumber it.
 
-**Act 1 — Decide (1 to 6, nothing is built yet).** Say what we want; decide what
-to build; write the plan; write the test that decides; try to break the plan;
-**Approval 1 (step 6)**.
+```
+1. Define the Value
+2. superpowers:brainstorming                 -> scope document
+3. superpowers:writing-plans                 -> plan
+4. /scrutinize the plan, apply every finding -> the operator's commit
+5. superpowers:subagent-driven-development   -> implementation
+6. /scrutinize --relentless, apply every finding
+7. Production
+```
 
-**Act 2 — Build (7 to 9, no human inside).** Lock the test; write the code; the
-machine checks it.
+Steps 4 and 7 are the operator's. Act 1 is steps 1 to 4, nothing built yet; act 2 is
+step 5, where the implementer is not the planner; act 3 is step 6, where green is not
+the same as right; act 4 is step 7, where the undo is named before it is needed.
 
-**Act 3 — Check (10 to 12, green is not the same as right).** Check it is what we
-wanted; try to break it; **Approval 2 (step 12)**.
+## Step 3 — what makes a plan worth committing
 
-**Act 4 — Release (13).** Release it, with the undo named in advance.
+Four properties, and a plan missing any of them buys nothing at step 4.
 
-Acts 1 and 3 end on the operator's step. Act 2 is the only act with no human in
-it, which is exactly why the contract is locked before it starts.
+1. **Criteria derived from a partition of the input domain.** One row per value
+   class, edges included, and the contract is real test files at
+   `tests/contract/{YYYY-MM-DD}-{slug}/` importing the code under test INSIDE each
+   test body. It is the only generator of a strong contract we have, and a contract
+   born too weak is the dominant measured defect.
+2. **A byte budget on the plan**, on the precedent of `skill-metadata-check.py`,
+   which caps a `SKILL.md` at 500 lines and 18,432 bytes. The budget forces the
+   writer to discard what does not matter; without one the plan grows until nobody
+   reads the part that decides.
+3. **The plan does not decide what the implementer can decide from its own context**,
+   and it names the files to read first. Re-specifying what the code already says
+   wastes the implementer's attention on agreement.
+4. **Vacuity is measured, not assumed.** `.venv/bin/python scripts/canopus.py
+   probe tests/contract/{date}-{slug}/` null-stubs the missing modules: a test
+   that ERRORS against the stub is vacuous, because an outcome invariant to the
+   stub proves nothing. It also runs three wrong implementations that EXIST
+   (`none`, `echo`, `greedy`) and prints what each took of the red set. `greedy 2
+   of 3` says two checks are greps for a word, not assertions about a value.
+
+## Step 4 — the freeze is a commit
+
+The operator's COMMIT of the plan and the RED contract IS the approval, and its sha
+is the freeze. Nothing else is needed: `git show <sha>:<path>` reads the frozen
+bytes, `git diff` against it answers whether the contract moved, and `git merge-base
+--is-ancestor` answers whether the implementation descends from the approval. Put
+that sha in the note as `approval_sha`.
+
+## Step 5 — the separation is a dispatch
+
+`superpowers:subagent-driven-development` sends a fresh implementer per task plus a
+reviewer who did not write the code, so the entity that decides what "done" means is
+not the entity that decides it is done. Executing the plan inline in the session
+that wrote it IS the gap. The note is a RECORD and never an agent input: feeding it
+back hands a reviewer the previous author's framing and destroys what separation buys.
+
+## Step 6 — every finding carries an origin
+
+`/scrutinize --relentless`, and apply all. A contract-origin finding returns to
+step 3 and produces a NEW contract; it never becomes a patch that leaves the old
+contract green. A code-origin finding is fixed against the contract that already
+exists. Naming the origin is what keeps a weak contract from surviving its slice.
+
+## Step 7 — production, the note, and the undo
+
+Ship it, then write the record:
+
+```
+.venv/bin/python scripts/canopus.py note --slug <slug> --value "<one sentence>" \
+    --approval-sha <sha> --contract tests/contract/<date>-<slug>/ \
+    --plan-digest sha256:<...> --undo "revert <sha>, restore <baseline>, re-run <cmd>"
+```
+
+One committed markdown file per slice under `records/slices/`, engine-relative
+paths only. This repository is PUBLIC: a note carries no absolute path and no
+overlay path, which is why the plan and the scope document go in by sha256
+digest. Retiring the contract into the ordinary suite is part of the step, and a
+retirement is RECORDED: `retired_sha` is the commit that removed the contract and
+`promoted_to` the file carrying the coverage now. Without both, the clauses below
+read a shipped slice as a broken one.
+
+## `check` — the four clauses
+
+```
+.venv/bin/python scripts/canopus_check.py --range <A>..<B>
+```
+
+C1 the contract did not move between the approval sha and the end state. C2 the
+implementation descends from the approval. C3 the contract, checked out at the
+approval sha and RUN there, was red. C4 the target is green at HEAD, with per-file
+junit counts above zero, because collected is not run. A CI step in the `sovereignty
+guards` job runs the same module on every push. It REPORTS. It does not block:
+`enforce_admins` is false on the only push path in use, and a control that cannot
+enforce must never be described as if it can.
+
+## The four rules the measurements bought
+
+Each was learned expensively. A reader who does not know why will delete them.
+
+1. **Topology, never timestamps.** Any clause deciding an order uses git ancestry or
+   an off-machine run record. `GIT_COMMITTER_DATE` is an environment variable:
+   demonstrated 2026-08-06, two variables put an implementation commit nine hours
+   before the approval it descends from, and ancestry got it right while the clock did not.
+2. **The oracle is the executed suite at the target state.** Import assertions and
+   `--collect-only` are lossy projections. Measured: a deletion program produced 586
+   failing tests in 28 files while all three projections returned exit 0. Keep them as
+   fast localisers, never as verdicts.
+3. **Every check is demonstrated red on its own failure class before it is
+   adopted.** An uncalibrated check is worse than none because it manufactures
+   confidence. The four clauses were each broken on purpose first, six deliberate
+   mutations of their own module.
+4. **Prove a record is alive; do not infer it from silence.** 24 broad exception
+   handlers wrap a call into this system, 10 of them invisibly, and 6 were a flagship's
+   own pytest hooks where total failure changed the corpus by exactly zero tests.
 
 ## NEVER
 
-- **NEVER take Approval 1 (step 6) or Approval 2 (step 12).** They are the
-  operator's, and nothing in this skill may approve on his behalf. A standard
-  with two approvals that the assistant can grant itself is a standard with
+- **NEVER take step 4 or step 7 on the operator's behalf.** They are his, and a
+  standard whose two approvals the assistant can grant itself is a standard with
   zero. Present the evidence and stop.
-- NEVER present a summary in place of evidence at step 12. Name what the test
+- NEVER present a summary in place of evidence at step 7. Name what the contract
   does NOT cover.
-- NEVER edit a frozen contract to make it pass. The way out is `back`.
+- NEVER edit a frozen contract to make it pass. A contract-origin finding goes back
+  to step 3 and produces a new one, with a new approval commit.
+- NEVER write an absolute path, an overlay path, or a third-party entity name into
+  a note. The engine repository is public.
 - NEVER pass `--no-verify`, and never weaken a guard to get a commit through.
 - NEVER delete anything without the operator's explicit word.
 
-## `/canopus plan` — steps 1 to 6
-
-Read `references/planning-gate.md` in full and follow it. It is the former
-`/pre-impl` gate, moved rather than rewritten, and it carries the six phases:
-context, success criteria, the inline contrarian critique, the optional
-architecture council, the harness audit, and the test contract as REAL FILES.
-
-Four things in it decide whether the slice is worth anything:
-
-1. **The contract is real test files**, written to
-   `tests/contract/{YYYY-MM-DD}-{slug}/`, importing the code under test INSIDE
-   each test body. A prose contract and the tests that later decide whether the
-   work is done are two artifacts joined by good intentions.
-2. **Vacuity is measured, not assumed.** `python scripts/canopus.py probe
-   tests/contract/{date}-{slug}/` null-stubs the missing modules and classifies
-   every test. A test that ERRORS against the stub is vacuous: an outcome
-   invariant to the stub proves nothing. Report the table. A contract whose every
-   red test is vacuous is refused at approve and freeze time, and `vacuity was
-   NOT measured` is not a clean bill.
-
-   The same command also runs three PASS-CANDIDATES — wrong implementations that
-   EXIST (`none`, `echo`, `greedy`) — and prints what each took of the red set. A
-   contract whose every red test passes against one of them is refused, at
-   `probe`, `approve` and `freeze` alike. Read that line even when nothing is
-   refused: `greedy 2 of 3` says two of the contract's checks are greps for a
-   word rather than assertions about a value.
-
-3. **A fixture must produce the shape the real source produces.** Check every
-   fabricated input against a real sample before freezing. Measured 2026-08-02:
-   a 28-test contract missed that a report could not parse its own log's
-   timestamps, because every fixture in it stamped a format no real record has
-   ever carried. Green, and proving nothing about the real shape.
-4. **Every criterion is bound to a test, and the machine checks it.** Each
-   success criterion from Phase 1 is named in the DOCSTRING of at least one
-   contract test; `python scripts/sc-trace.py --anchor {artifact} --contract
-   {dir}` prints the binding, and `approve` and `freeze` refuse a criterion
-   claimed by nothing or a claim on a criterion that was never stated. Measured
-   2026-08-02: an artifact stating seven criteria against a 28-test contract had
-   five of the seven bound to nothing. It proves a test CLAIMS to decide a
-   criterion, never that it does.
-
-Step 6 ends with the gate artifact written to the plans directory and the
-operator asked. His COMMIT of that artifact IS the approval.
-
-## `/canopus lock` — step 7
-
-```
-python scripts/canopus.py approve --label "{slug}" --anchor {artifact path} \
-    --contract tests/contract/{date}-{slug}/ \
-    --content scripts/run-tests.py \
-    --content scripts/utils/atomic.py \
-    --content scripts/utils/canopus_freeze.py \
-    --content scripts/utils/canopus_gate.py \
-    --content scripts/utils/canopus_git.py \
-    --content scripts/utils/canopus_tree.py \
-    --content scripts/utils/colors.py \
-    --content scripts/utils/production_shape.py \
-    --content scripts/utils/venv.py \
-    --content tests/conftest.py
-# read the already-green count, COMMIT the artifact, then:
-python scripts/canopus.py freeze  ...identical flags...
-python scripts/canopus.py verify
-```
-
-`verify` must report LOCK HELD and APPROVED. Ten files, not four: the gate's own
-import TAIL is inside the guarantee, because a lock whose enforcer can be edited
-is not one. `canopus_freeze` reaches `atomic`, which WRITES the manifest;
-`run-tests` reaches `venv`, which chooses which interpreter runs the gate;
-`canopus_gate` reaches `production_shape`, which can WITHHOLD an attestation. The
-list is not decoration and it is checked —
-`tests/test_canopus_freeze.py::test_the_documented_enforcer_set_covers_its_import_closure`
-recomputes the closure and fails if this command has fallen behind it.
-
-**Pass the same ten to `freeze` that you passed to `approve`.** The root hash
-carries the enforcer NAMES, so a freeze over a shorter list is refused against
-the committed approval rather than accepted with a file quietly outside the
-guarantee. Their BYTES stay outside the hash, so editing one still costs only a
-`repin`.
-
-`freeze` refuses a contract that is not red for a reason that means something,
-and refuses a root the COMMITTED artifact contradicts. Both refusals and their
-exceptions are in `references/canopus-gate.md`. Read it before the first retake.
-
-## `/canopus check` — steps 9 to 11
-
-```
-python scripts/canopus.py verify      # did the contract move
-python scripts/canopus.py status      # the lock and the attestation, together
-python scripts/canopus.py pack        # the evidence page for step 12
-```
-
-The verdict at step 9 is mechanical and nothing else counts: the locked tests
-pass, none deselected, bound to a commit. Then steps 10 and 11 are the human
-half — measure against the sentence from step 1, and attack the built thing until
-the attack stops finding anything. Green is not the same as right, and step 10 is
-the only place "passed but wrong" is visible.
-
-**Step 11 does not run `/scrutinize` from inside a slice.** That skill carries
-`disable-model-invocation: true`, so only the operator can fire it; an instruction
-to invoke it is an instruction to do something the harness forbids. The assistant's
-adversarial pass is `scripts/utils/mutation_probe.py`: break the code on purpose,
-and a contract worth having goes red. Every mutation carries a CONTROL proving it
-is the break its label claims, because a mutation that does not do what its author
-thinks yields a confident, wrong SURVIVED and gets a working guard weakened.
-
-Run the mutations TWICE and report both: against the whole suite, and against the
-frozen contract ALONE. The second run is the honest one — it is what tells you
-which properties the contract itself does not hold. Measured on the yield-axes
-slice, 2026-08-03: twelve killed against the suite, two of those SURVIVING the
-contract alone, both of them CLI wiring the contract pinned only as a function.
-And two defects that no mutation could reach were found by reading the branch,
-because a silent no-op breaks no assertion anywhere. The operator may still run
-`/scrutinize` himself; this is what the slice does when he does not.
-
-`pack` is not optional and it is the LAST thing before Approval 2, not the
-first. It records the render, and `release --ship` refuses without one. Run it
-after the last change, because the attestation dies when the tree moves and a
-render older than the attestation describes an earlier state.
-
-## `/canopus release` — step 13
-
-```
-python scripts/canopus.py release --ship --reason "<why>"
-```
-
-It refuses on two grounds, and the attestation is checked first because clearing
-it invalidates the page anyway: a record that no longer stands for the tree sends
-you to `run-tests`, and a missing or stale render sends you to `pack`. Neither
-fires on a root that is not a git working copy, where the tree cannot be
-described at all. It does NOT refuse when the ledger has lost the freeze
-itself: a ledger that cannot answer prints an `unverifiable` warning and lets
-the ship through, because a gate that pushes an honest operator toward `--force`
-is worse than no gate. `--window` is never gated: a window is the way back into
-the build, not the way out of it.
-
-Then finish the step, because the command is not the step:
-
-- **Retire the contract.** Promote the coverage that is still worth having into
-  the ordinary suite and remove `tests/contract/{date}-{slug}/`. Left in place it
-  binds every later slice to this one's behaviour.
-- **Name the undo, in advance.** Write into the gate artifact which commit to
-  revert, which baseline to restore, and what to re-run. The moment you need an
-  undo is the worst moment to invent one.
-
-## `/canopus back` — the way back, mid-build
-
-For when the recipe itself must change while the slice is running: the frozen
-set was wrong, or the fix belongs inside a frozen file.
-
-```
-python scripts/canopus.py release --window --reason "<why>"
-```
-
-An open window makes every pytest session start print an amber line saying no
-lock is held, so a green suite proves nothing while it is open. Close it fast.
-
-**An enforcer edit does not need a window at all.** Its bytes are hashed outside
-the contract root, so `git commit` them and run `python scripts/canopus.py repin
---reason "<why>"`. The re-pin refuses while they are uncommitted, naming the
-files, and it clears the attestation, so the suite runs again. An un-repinned
-enforcer edit reddens the lock and `verify` names it with `cure: repin`.
-
-**Coming back from a window is six commands, not one.** The contract bytes moved,
-so the root moved with them, and the committed approval still records the
-previous root — precisely what `freeze` refuses. `approve --replace --reason "<why>" --cause
-<contract-strengthened | enforcer-moved | lint | recipe-bumped | frozen-set-wrong>`, a fresh
-COMMIT of the artifact, then the identical `freeze`, then `verify`. Releasing a
-freeze clears the attestation with it, so step 9 is run again.
-
-A retake of a contract the slice has legitimately turned green needs
-`--contract-satisfied "<why>"` on BOTH `approve` and `freeze`. It waives only
-the redness refusal, the reason is mandatory, and it lands in the committed
-artifact.
-
-## Depth
-
-Not every slice earns all thirteen. `python scripts/slice-depth.py <paths>`
-classifies the change and prints the depth. Calibration may only ever REMOVE
-ceremony from a shallow slice; the floor cannot be diluted, and the enforcement
-surface is fixed. A slice touching the guards, the lifecycle, or anything in
-`docs/security/` is `full` and is not negotiable.
-
 ## Voice
 
-Internal engineering prose: terse and concrete. No `--` as punctuation. 31C
-terms exactly (**ODUN.ONE**, **DPI+**, **Tribe**, **TrustONE**). No hidden
-Unicode. Success criteria and test contracts are factual claims — never
-fabricate a metric, a threshold, or a behaviour. Derive it from the plan, or ask.
+Internal engineering prose: terse and concrete. No `--` as punctuation. 31C terms
+exactly (**ODUN.ONE**, **DPI+**, **Tribe**, **TrustONE**). No hidden Unicode. Success
+criteria and contracts are factual claims: never fabricate a metric, a threshold, or
+a behaviour. Derive it from the plan, or ask.

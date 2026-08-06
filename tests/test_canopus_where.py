@@ -1,8 +1,8 @@
 """`canopus where` must never contradict itself about where you are.
 
-Found at step 11 of the canopus-skill slice, by probing the seam rather than by
-reading it. A freeze whose label is the empty string made the header print "no
-slice open" three lines above "Step 8 of 13". Both lines came from the same
+Found late in the canopus-skill slice, by probing the seam rather than by
+reading it. A slice whose label is the empty string made the header print "no
+slice open" three lines above the build step. Both lines came from the same
 payload; only the header consulted the label's truthiness instead of the step,
 which is the authoritative field.
 
@@ -58,8 +58,8 @@ def test_a_freeze_with_an_empty_label_does_not_read_as_no_slice(frozen_tree):
     root = frozen_tree("")
     out = _where(root)
     assert "no slice open" not in out, (
-        "the header called it closed while the body reported step 8:\n" + out)
-    assert "Step 8 of 13" in out
+        "the header called it closed while the body reported the build step:\n" + out)
+    assert "Step 5 of 7" in out
 
 
 def test_the_header_and_the_step_never_disagree(frozen_tree):

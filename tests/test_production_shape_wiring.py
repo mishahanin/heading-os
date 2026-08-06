@@ -164,9 +164,12 @@ def test_the_checker_is_inside_the_frozen_enforcer_set():
     import closure; this one names the single file this slice added, so a
     revert that drops it from the documented command fails here with the reason
     rather than as an opaque closure diff.
-    """
-    skill = (_ROOT / ".claude" / "skills" / "canopus" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
 
-    assert "--content scripts/utils/production_shape.py" in skill
+    Both read `references/planning-gate.md` since 2026-08-06: the skill moved to
+    the seven steps and no longer documents `freeze`, so the reference is where
+    the command an operator copies lives.
+    """
+    documented = (_ROOT / ".claude" / "skills" / "canopus" / "references"
+                  / "planning-gate.md").read_text(encoding="utf-8")
+
+    assert "--content scripts/utils/production_shape.py" in documented

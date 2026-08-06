@@ -1375,8 +1375,13 @@ def test_the_documented_enforcer_set_covers_its_import_closure():
         if (root / rel).is_file()
     }
 
-    skill = (root / ".claude" / "skills" / "canopus" / "SKILL.md").read_text(encoding="utf-8")
-    missing = sorted(rel for rel in seen if f"--content {rel}" not in skill)
+    # Read against `references/planning-gate.md`, not `SKILL.md`. The skill moved
+    # to the seven steps on 2026-08-06 and stopped documenting `freeze` at all, so
+    # the command an operator copies now lives in the reference. The property is
+    # unchanged and no assertion is loosened; only the document moved.
+    documented = (root / ".claude" / "skills" / "canopus" / "references"
+                  / "planning-gate.md").read_text(encoding="utf-8")
+    missing = sorted(rel for rel in seen if f"--content {rel}" not in documented)
     assert not missing, (
         f"the documented freeze command does not freeze {missing}; an enforcer's "
         f"import tail is outside the guarantee it enforces"
@@ -1399,14 +1404,18 @@ def test_the_canopus_skill_writes_real_contract_files_and_freezes_them():
 
     The skill was `/pre-impl` until 2026-08-02 and is now `/canopus`; the gate it
     carries moved to `references/planning-gate.md` and the property is unchanged.
+    The freeze command followed it there on 2026-08-06, so the dated contract
+    directory is asserted against the skill (which still names it) and the freeze
+    command against the reference (which still carries it).
     """
     from scripts.utils.workspace import get_workspace_root
 
     skill = get_workspace_root() / ".claude" / "skills" / "canopus" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
+    gate = (skill.parent / "references" / "planning-gate.md").read_text(encoding="utf-8")
 
     assert "tests/contract/{YYYY-MM-DD}-{slug}/" in text
-    assert "scripts/canopus.py freeze" in text
+    assert "scripts/canopus.py freeze" in gate
     # The label the prose draft carried. Its return would mean the gate is being
     # asked to approve an unapproved description again.
     assert "CEO-UNAPPROVED DRAFT" not in text

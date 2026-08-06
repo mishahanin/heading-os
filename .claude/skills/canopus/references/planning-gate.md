@@ -290,6 +290,7 @@ The moment the operator approves, run `approve`:
       --content scripts/utils/canopus_git.py \
       --content scripts/utils/atomic.py \
       --content scripts/utils/colors.py \
+      --content scripts/utils/production_shape.py \
       --content scripts/utils/venv.py \
       --content scripts/run-tests.py \
       --content tests/conftest.py
@@ -302,8 +303,12 @@ scripts/canopus.py freeze --label ... --contract ...`, same flags), which takes
 the lock. Confirm with `python scripts/canopus.py verify`: LOCK HELD and
 APPROVED.
 
-Nine files, not four, because the gate's own import tail is inside the
-guarantee. `freeze` refuses a contract that is not red for a reason that means
+Ten files, not four, because the gate's own import tail is inside the
+guarantee. `tests/test_canopus_freeze.py::test_the_documented_enforcer_set_covers_its_import_closure`
+recomputes that tail against THIS file and fails when a new import escapes the
+documented set. It read `SKILL.md` until 2026-08-06, when the skill moved to the
+seven steps and stopped documenting `freeze` at all; the property is unchanged,
+only the document carrying the command moved. `freeze` refuses a contract that is not red for a reason that means
 something, and a root the COMMITTED artifact contradicts. Both refusals, with
 their exceptions, are in `references/canopus-gate.md` — read it before the first
 retake. Three rules there bite mid-slice:

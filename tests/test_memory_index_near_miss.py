@@ -117,6 +117,7 @@ def test_near_miss_returns_hits_instead_of_gap(tmp_path, monkeypatch, capsys):
 
     assert obj["gap"] is False, obj
     assert obj.get("near_miss") is True, obj
+    assert obj.get("confident") is False, obj
     paths = [h["path"] for h in obj["hits"]]
     assert "knowledge/odin-brain/episodes/note-alpha.md" in paths, obj
     hit = next(h for h in obj["hits"] if h["path"].endswith("note-alpha.md"))
@@ -202,4 +203,5 @@ def test_normal_hits_carry_no_near_miss_flag(tmp_path, monkeypatch, capsys):
 
     assert obj["gap"] is False, obj
     assert "near_miss" not in obj, obj
+    assert "confident" not in obj, obj
     assert all("below_threshold" not in h for h in obj["hits"]), obj

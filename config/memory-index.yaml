@@ -152,14 +152,25 @@ chunk:
 # embedding) and injects a capped salience snapshot of recent/important memory
 # into the first turn. Salience = status:evergreen first, then most-recent. The
 # `memory` layer is excluded (MEMORY.md is already injected by the memory system).
-# Default OFF -- opt-in, so it can never silently bloat context. / Инъекция памяти
-# на старте сессии. По умолчанию ВЫКЛ.
+# Currently OFF: superseded 2026-08-07 by .claude/hooks/recall-inject.py
+# (relevance-ranked, per-prompt); this date-ordered snapshot stays behind the
+# flag. / Инъекция памяти на старте сессии. Сейчас ВЫКЛ.
 inject:
-  enabled: true           # opt-in; flip to true to activate the snapshot
+  enabled: false           # superseded 2026-08-07 by .claude/hooks/recall-inject.py (relevance-ranked, per-prompt); this date-ordered snapshot stays behind the flag
   max_tokens: 1300        # hard cap (~chars/4) on the injected block
   layers: [thread, odin, context]   # never 'memory' (already injected elsewhere)
   quota: {thread: 4, odin: 4, context: 4}   # per-layer slot guarantee; without it, top_k splits evenly across layers
   top_k: 12               # fallback total when no quota map is set
+
+# Per-prompt recall injection (.claude/hooks/recall-inject.py, UserPromptSubmit).
+# Replaces the date-ordered `inject` snapshot above with a relevance-ranked one.
+# timeout_seconds is a HARD give-up: measured 1.05s warm, 7.29s cold (ollama
+# reloading bge-m3), and a cold start must cost the prompt nothing.
+recall_inject:
+  enabled: true
+  timeout_seconds: 3.5
+  top_k: 5
+  min_prompt_chars: 6     # "да"/"ok" skip the backend entirely; "Омега?" does not
 
 # Air-gap. Two classes never touch the index:
 #   deny_prefixes -- path starts with any of these (the vault).

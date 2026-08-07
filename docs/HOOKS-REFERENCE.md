@@ -14,6 +14,7 @@ Two hook events can block work; the rest observe, enrich, or record.
 - **`PreToolUse`** runs before a tool call and can deny it. This is where blocking guards live (secret detection, the engine/data boundary, path redirection).
 - **`PostToolUse`** runs after a tool call. It cannot un-write a file, so its guards are advisory or corrective (hidden-character scan, injection detection).
 - **`SessionStart`**, **`Stop`**, **`PostCompact`**, and **`statusLine`** run around the session lifecycle: priming context, offering checkpoints, saving handoffs, rendering the status line.
+- **`UserPromptSubmit`** runs on every prompt, before the model starts to think. It can only add context, never deny the prompt.
 
 ## PreToolUse (can block)
 
@@ -41,6 +42,12 @@ Two hook events can block work; the rest observe, enrich, or record.
 | `memory-inject.py` | Loads the auto-memory index (`MEMORY.md` pointers) into context on startup. |
 | `memory-reconcile.py` | Reconciles the native harness memory store with the workspace auto-memory files. |
 | `checkpoint-inject.py` | On `compact`, `clear`, or `resume`, injects the latest saved handoff so work continues across a context reset. |
+
+## UserPromptSubmit
+
+| Hook | Purpose |
+|------|---------|
+| `recall-inject.py` | Surfaces pointers (title, layer, path) to memory relevant to what the CEO just typed, ranked by the [recall](CONFIGURATION.html) index rather than by date. It does NOT block the prompt, does NOT read file content, and on any error, timeout, or missing index it stays silent and exits 0 -- an internal 3.5-second timeout, under the harness's own 8-second timeout for the hook, so it gives up on a cold model load rather than stall the prompt. Toggled off entirely via `recall_inject.enabled` in `config/memory-index.yaml`. Supersedes the date-ordered `inject` snapshot (`memory-inject.py`, `SessionStart`), which stays in the codebase behind its own flag but defaults off. |
 
 ## Session lifecycle
 

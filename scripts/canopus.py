@@ -72,6 +72,7 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     run_pass_candidates,
     run_pytest_report,
     skip_markers_without_reason,
+    tests_that_never_ran,
     vacuity_refusal,
     verification_gaps,
 )
@@ -140,10 +141,16 @@ _AFTER_BUILD_MEANING = (
 # it, and the subject is never stood in for. Measured 2026-08-07 on
 # `tests/test_update_common.py`: `survived 3 of 6`, exit 0, and the module the
 # whole file is about was replaced zero times.
+#
+# The third reason in it is newer and arrives from the other end: a module the
+# claim set names and no import ever reaches is replaced by nothing, and the
+# `replaced` line used to name it anyway, because it was filled from the claim
+# set. The children now say what they actually replaced.
 _AFTER_BUILD_UNREPLACED = (
     "What was NOT replaced. The modules on the `not replaced` line above were "
-    "left standing, each because it resolves outside the tree being probed or "
-    "because this probe's own plugin lies under it; the reason for each is on "
+    "left standing: each either resolves outside the tree being probed, or has "
+    "this probe's own plugin under it, or was never imported by the run at all, "
+    "so nothing stood in for it. The reason for each is on "
     "stderr above. Nothing below is evidence about them. A test that exercises "
     "only those modules was put in front of no wrong implementation at all, so "
     "its name below records that it was never measured against one, not that "
@@ -152,9 +159,32 @@ _AFTER_BUILD_UNREPLACED = (
     "it, and if it is missing, name that module in the contract's own imports "
     "rather than its parent package."
 )
+# Printed ONLY when something was skipped, for the reason the paragraph above
+# is conditional: a caveat on every page is a caveat nobody reads.
+#
+# It exists because a skipped test is the THIRD thing a test on this page can
+# be, and the page could say only two of them. Absent from the taken map, it was
+# folded into the "went red under at least one candidate" bucket that the
+# paragraph below describes, in words, as the measurement working. Measured at
+# HEAD on 2026-08-07: a module whose two tests both carried a module-level skip
+# printed `survived 0 of 2`, the green `none` line, and exit 0, over a run in
+# which nothing ran at all. That whole-module case now refuses; this paragraph
+# is for the ordinary mixed one, where a reading exists and some of the suite
+# sat it out.
+_AFTER_BUILD_NEVER_RAN = (
+    "What the tests on the `never ran` lines below did. Nothing. They were "
+    "skipped in this run, so no wrong implementation was ever put in front of "
+    "them and this reading says nothing whatever about them, in either "
+    "direction: they neither survived a wrong implementation nor went red "
+    "under one. They are not counted in the total above, because that total is "
+    "the population this reading is about. A skipped test in the suite that "
+    "guards shipped code is worth its own look, and this page is not the "
+    "instrument that gives it one."
+)
 _AFTER_BUILD_EXPECTATION = (
-    "What the tests NOT named below did. They went red under replacement, and "
-    "that is the measurement working rather than a broken tool: the code "
+    "What the tests named on NEITHER list below did. They went red under "
+    "replacement, and that is the measurement working rather than a broken "
+    "tool: the code "
     "beneath them was wrong on purpose, so failing is the correct answer. A "
     "reader arriving here expecting a mostly-green run is reading the page "
     "backwards. This reading refuses nothing and gates nothing; nobody has "
@@ -213,7 +243,16 @@ def _after_build(paths, root, expected) -> int:
     # (`verification_gaps` collapses the triples to pairs before it counts).
     # `len(outcomes)` counted raw report rows, so a report carrying one pair
     # twice printed a denominator larger than the set the numerator came out of.
-    total = len({(rel, name) for rel, name, _outcome in outcomes})
+    #
+    # The tests that never ran come OUT of it, through the same reader
+    # `verification_gaps` drops them with, so the page and the answer it prints
+    # weigh one population. Counted in, the denominator says a suite of two was
+    # measured when one test was measured, and the missing name reads as a test
+    # that went red.
+    never_ran = tests_that_never_ran(outcomes)
+    total = len(
+        {(rel, name) for rel, name, _outcome in outcomes} - set(never_ran)
+    )
     dropped = claims.get("dropped", [])
     print(f"{BOLD}after-build gap reading{RESET}")
     for rel in expected:
@@ -231,19 +270,30 @@ def _after_build(paths, root, expected) -> int:
     if dropped:
         print(f"  not replaced  {', '.join(dropped)}")
     print(f"  survived    {len(gaps)} of {total}")
+    if never_ran:
+        print(f"  never ran   {len(never_ran)}  (skipped, so no candidate was "
+              f"put in front of them)")
     print()
     print(_AFTER_BUILD_MEANING)
     print()
     if dropped:
         print(_AFTER_BUILD_UNREPLACED)
         print()
+    if never_ran:
+        print(_AFTER_BUILD_NEVER_RAN)
+        print()
     print(_AFTER_BUILD_EXPECTATION)
     print()
     if not gaps:
-        print(f"  {GREEN}none{RESET}  every test went red under at least one "
-              f"candidate")
+        print(f"  {GREEN}none{RESET}  every test that RAN went red under at "
+              f"least one candidate")
     for rel, name in gaps:
         print(f"  {YELLOW}survived{RESET}  {rel}::{name}")
+    # LAST, under the survivors, because the two lists answer different
+    # questions and the survivors are what the reader came for. Named at all
+    # because a skipped test that is only absent reads as a test that went red.
+    for rel, name in never_ran:
+        print(f"  {YELLOW}never ran{RESET}  {rel}::{name}")
     return 0
 
 

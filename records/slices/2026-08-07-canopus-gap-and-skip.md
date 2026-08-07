@@ -8,6 +8,6 @@ scrutinize_plan: none run. The operator read the plan and the red contract at st
 scrutinize_built: sha256:5087e510d2c1ad6f18273c1a70deef2b082457f846f8f96407344a6a62d4a2ac
 undo: 'git revert --no-commit $(git log --reverse --format=%H --grep ''^canopus('' cb9dd05f6284f7bb620ecae9488ffa2d235d1999..HEAD), then re-run .venv/bin/python -m pytest tests/ -q. The subject prefix is the selector rather than a count or a contiguous range, deliberately: two other tasks committed into this same range while the slice was building, one of them merging a feature branch, so any count is stale the moment it is written and any range sweeps work that is not this slice''s. Nothing named sentinel: or feat(recall): belongs to this slice, and 9b798a7 in particular must NOT be reverted, since it scrubbed a real identifier out of the public engine. The slice also touched .claude/skills/canopus/SKILL.md and references/planning-gate.md; git show cb9dd05f6284f7bb620ecae9488ffa2d235d1999:<path> reads either at the approval if a revert leaves them wrong.'
 scope_digest: sha256:53f9600edc5a1d10ec6a13a4a584887b8bdc9a23deed38c39b6b13adf8512436
-retired_sha: 1fb545875b2dd31123f2708c251fc973b8f9d9ae
+retired_sha: d5123a4e73d1fe3dda7b78972e8c6dc5105aa805
 promoted_to: tests/
 ---

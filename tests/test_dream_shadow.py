@@ -34,7 +34,8 @@ def _write(path: Path, text: str, days_old: int) -> None:
     os.utime(path, (old, old))
 
 
-def _fact(mem_type: str, access_count: int, name: str) -> str:
+def _fact(mem_type: str, access_count: int, name: str, last_accessed: str = "") -> str:
+    last = f"  last_accessed: {last_accessed}\n" if last_accessed else ""
     return (
         "---\n"
         f"name: {name}\n"
@@ -43,42 +44,61 @@ def _fact(mem_type: str, access_count: int, name: str) -> str:
         f"  node_type: memory\n"
         f"  type: {mem_type}\n"
         f"  access_count: {access_count}\n"
+        f"{last}"
         "---\n\n"
         "Some fact body.\n"
     )
 
 
-def test_stale_low_salience_flagged_as_prune_candidate(tmp_path):
+def test_old_and_never_surfaced_is_dormant(tmp_path):
     mod = load_module()
     mem = tmp_path / "auto-memory"
-    _write(mem / "stale-low.md", _fact("reference", 0, "stale-low"), days_old=90)
+    _write(mem / "quiet.md", _fact("reference", 0, "quiet"), days_old=90)
 
     now = datetime.now(timezone.utc)
-    candidates = mod.compute_prune_candidates(mem, now)
-    names = [c["name"] for c in candidates]
-    assert "stale-low.md" in names
+    names = [c["name"] for c in mod.compute_dormant(mem, now)]
+    assert "quiet.md" in names
 
 
-def test_stale_high_salience_not_flagged(tmp_path):
+def test_old_but_recently_surfaced_is_not_dormant(tmp_path):
+    """Access, not type, is what the list is about now. A reference-type fact
+    the retriever keeps surfacing is in active use whatever its type weight."""
     mod = load_module()
     mem = tmp_path / "auto-memory"
-    _write(mem / "stale-high.md", _fact("feedback", 20, "stale-high"), days_old=90)
+    today = datetime.now(timezone.utc).date().isoformat()
+    _write(mem / "busy.md", _fact("reference", 12, "busy", last_accessed=today), days_old=90)
 
     now = datetime.now(timezone.utc)
-    candidates = mod.compute_prune_candidates(mem, now)
-    names = [c["name"] for c in candidates]
-    assert "stale-high.md" not in names
+    names = [c["name"] for c in mod.compute_dormant(mem, now)]
+    assert "busy.md" not in names
 
 
-def test_recent_low_salience_not_flagged(tmp_path):
+def test_recent_file_is_never_dormant(tmp_path):
+    """A memory written yesterday has had no chance to be surfaced."""
     mod = load_module()
     mem = tmp_path / "auto-memory"
-    _write(mem / "recent-low.md", _fact("reference", 0, "recent-low"), days_old=1)
+    _write(mem / "fresh.md", _fact("reference", 0, "fresh"), days_old=1)
 
     now = datetime.now(timezone.utc)
-    candidates = mod.compute_prune_candidates(mem, now)
-    names = [c["name"] for c in candidates]
-    assert "recent-low.md" not in names
+    names = [c["name"] for c in mod.compute_dormant(mem, now)]
+    assert "fresh.md" not in names
+
+
+def test_report_proposes_no_removal(tmp_path, monkeypatch):
+    """The directive is that nothing is ever pruned. The report must not carry
+    the vocabulary of removal, or a reader will act on it."""
+    mod = load_module()
+    mem = tmp_path / "auto-memory"
+    _write(mem / "quiet.md", _fact("reference", 0, "quiet"), days_old=90)
+
+    monkeypatch.setattr(mod, "get_auto_memory_dir", lambda: mem)
+    monkeypatch.setattr(mod, "scan_redundancy", lambda memory_dir, threshold=0.86, embedder=None, timeout=120: {
+        "ok": True, "pairs": [], "note": "fewer than 2 memory files"
+    })
+    text = mod.render_report(mod.gather(), "2026-08-08T03:10:00+00:00").lower()
+    assert "quiet.md" in text
+    for word in ("prune", "retire", "delete", "remove"):
+        assert word not in text
 
 
 def test_merge_candidates_ranked_by_salience(tmp_path, monkeypatch):

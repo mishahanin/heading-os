@@ -424,7 +424,7 @@ def run_reminders_due(workspace_root: Path) -> dict[str, Any]:
 
 def run_dream_shadow(workspace_root: Path) -> dict[str, Any]:
     """Read the latest dream-shadow report and surface one line when it lists
-    prune/merge candidates, nothing otherwise.
+    merge candidates, nothing otherwise.
 
     Read-only: never runs scripts/dream-shadow.py itself -- that is the
     nightly timer's job (scripts/install-dream-shadow-timer.sh). This check
@@ -450,21 +450,21 @@ def run_dream_shadow(workspace_root: Path) -> dict[str, Any]:
         return {"status": "error", "output": f"dream-shadow report unreadable: {exc}",
                 "omit_if_empty": True}
 
-    prune_match = re.search(r"## Prune Candidates.*?:\s*(\d+)", text)
-    prune_n = int(prune_match.group(1)) if prune_match else 0
+    # Dormancy is deliberately NOT surfaced here: it is informational, it
+    # proposes nothing, and on the first runs after reinforcement shipped it
+    # lists nearly every aged file. It lives in the report for the operator to
+    # read when they want it. Merge candidates DO need a nudge — each one is a
+    # decision waiting on them.
     merge_section = re.search(r"## Merge Candidates.*?\n\n(.*?)(?:\n---|\Z)", text, re.DOTALL)
     merge_n = 0
     if merge_section:
         merge_n = len(re.findall(r"^- .+<->.+$", merge_section.group(1), re.MULTILINE))
 
-    if prune_n == 0 and merge_n == 0:
+    if merge_n == 0:
         return {"status": "ok", "output": "", "omit_if_empty": True}
     return {
         "status": "ok",
-        "output": (
-            f"Dream-shadow: {prune_n} prune candidates, {merge_n} merge "
-            "candidates -- run `/dream` to review."
-        ),
+        "output": f"Dream-shadow: {merge_n} merge candidates — run `/dream` to review.",
         "omit_if_empty": True,
     }
 

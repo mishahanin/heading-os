@@ -183,6 +183,11 @@ read a shipped slice as a broken one.
 .venv/bin/python scripts/canopus.py probe --after-build <test paths>
 ```
 
+All three subcommands take a global `--root <path>` ahead of the subcommand
+name, which sets the working tree they read. It defaults to this script's own
+repository root rather than the shell's cwd, so an invocation from anywhere
+answers about the same tree unless you say otherwise.
+
 Step 3 asks "if this code were wrong, would any gate notice" exactly once, at a
 moment when the code does not exist. Retiring the contract into the ordinary
 suite at step 7 ends the asking: nothing re-asks, ever. This flag asks it again

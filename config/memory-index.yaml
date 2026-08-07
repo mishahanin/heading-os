@@ -166,11 +166,19 @@ inject:
 # Replaces the date-ordered `inject` snapshot above with a relevance-ranked one.
 # timeout_seconds is a HARD give-up: measured 1.05s warm, 7.29s cold (ollama
 # reloading bge-m3), and a cold start must cost the prompt nothing.
+# min_prompt_chars is a length heuristic separating conversational filler from a
+# question aimed at memory, measured on real messages: "продолжай" is 9
+# characters and "спасибо, давай дальше" is 21, against "почему мы не пошли в
+# Омегу" at 26 and "что мы решили по Омеги и почему" at 31. A cut at 25 splits
+# those measurements. It is not exact, and it cannot be: a short prompt can be a
+# real question and a long one can be filler. It is tuned to fail toward
+# silence, because missing one pointer costs less than roughly 250 tokens and a
+# backend round trip on every "продолжай".
 recall_inject:
   enabled: true
   timeout_seconds: 3.5
   top_k: 5
-  min_prompt_chars: 6     # "да"/"ok" skip the backend entirely; "Омега?" does not
+  min_prompt_chars: 25
 
 # Air-gap. Two classes never touch the index:
 #   deny_prefixes -- path starts with any of these (the vault).

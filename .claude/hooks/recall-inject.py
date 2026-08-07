@@ -17,6 +17,8 @@ Design:
     reloading bge-m3). A cold start must cost the prompt nothing, so the hook
     gives up rather than stall.
   - Fail-safe: ANY error, timeout, or gap -> emit nothing, exit 0.
+  - Fail-closed on the switch: a config that cannot be read means the hook
+    cannot confirm it was enabled, so it stays silent rather than run anyway.
 """
 
 import json
@@ -28,14 +30,31 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
-PYTHON = WORKSPACE / ".venv" / "bin" / "python"
 ENGINE = WORKSPACE / "scripts" / "memory-index.py"
 CONFIG_PATH = WORKSPACE / "config" / "memory-index.yaml"
 
-# Fallbacks, used verbatim when the config block is missing or unreadable.
+# The venv interpreter, laid out differently per platform: POSIX puts it in
+# `bin/`, Windows in `Scripts/` with an `.exe` suffix. Both are probed at run
+# time rather than assumed, because assuming `bin/python` made the hook
+# permanently silent under the shipped windows settings template.
+INTERPRETERS = (
+    WORKSPACE / ".venv" / "bin" / "python",
+    WORKSPACE / ".venv" / "Scripts" / "python.exe",
+)
+
+# Fallbacks, used verbatim when the config block omits a key.
 TIMEOUT_SECONDS = 3.5   # cold ollama measured at 7.29s; give up, never stall
 TOP_K = 5
-MIN_PROMPT_CHARS = 6    # "да", "ok", "go" cost nothing; "Омега?" does not
+NEAR_MISS_MAX = 3       # a below-threshold lead is cheaper wrong than right
+# Length heuristic separating conversational filler from a question aimed at
+# memory. Measured on real messages: "продолжай" is 9 characters and "спасибо,
+# давай дальше" is 21, against "почему мы не пошли в Омегу" at 26 and "что мы
+# решили по Омеги и почему" at 31. A cut at 25 splits those measurements. It is
+# only a length heuristic and it is not exact: a short prompt can be a genuine
+# question ("Омега?") and a long one can be filler. It is tuned to fail toward
+# silence, because the cost of missing one pointer is lower than the cost of
+# roughly 250 tokens and a backend round trip on every conversational reply.
+MIN_PROMPT_CHARS = 25
 ENABLED = True
 
 
@@ -49,18 +68,41 @@ def _log(msg: str, exc: BaseException | None = None) -> None:
     print(f"recall-inject: {msg}{tail}", file=sys.stderr)
 
 
-def _config() -> dict:
-    """Read the `recall_inject` block. Any failure falls back to the constants."""
-    cfg = {"enabled": ENABLED, "timeout_seconds": TIMEOUT_SECONDS,
-           "top_k": TOP_K, "min_prompt_chars": MIN_PROMPT_CHARS}
+def _config() -> dict | None:
+    """Read the `recall_inject` block, or None when the config cannot be read.
+
+    Fail-closed on the switch. The harness launches this hook with the system
+    `python3`, which need not have PyYAML installed, so `import yaml` fails on
+    real machines rather than in theory. The earlier version swallowed that into
+    a default of `enabled: True`, which meant `recall_inject.enabled: false` was
+    silently ignored on exactly the machines least able to notice, while the
+    docs promised the flag turned the hook off entirely. A hook that cannot
+    confirm it was switched on must not run.
+
+    Only the switch is fail-closed. The remaining knobs keep their constant
+    defaults for a config that parses but omits a key; when the config does not
+    parse at all, their values are moot because the hook emits nothing.
+    """
     try:
         import yaml
         loaded = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
-        block = loaded.get("recall_inject") or {}
-        cfg.update({k: block[k] for k in cfg if k in block})
     except Exception as exc:
-        _log("config unreadable, using defaults", exc)
+        _log(f"config unreadable ({CONFIG_PATH}), staying silent: cannot "
+             "confirm recall_inject.enabled", exc)
+        return None
+    block = loaded.get("recall_inject") or {}
+    cfg = {"enabled": ENABLED, "timeout_seconds": TIMEOUT_SECONDS,
+           "top_k": TOP_K, "min_prompt_chars": MIN_PROMPT_CHARS}
+    cfg.update({k: block[k] for k in cfg if k in block})
     return cfg
+
+
+def _interpreter() -> Path | None:
+    """First venv interpreter that exists, or None. See INTERPRETERS."""
+    for candidate in INTERPRETERS:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _emit(context: str) -> None:
@@ -87,14 +129,16 @@ def _read_prompt() -> str:
 
 def main() -> None:
     cfg = _config()
-    if not cfg["enabled"]:
+    if cfg is None or not cfg["enabled"]:
         _emit("")
 
     prompt = _read_prompt()
     if len(prompt) < int(cfg["min_prompt_chars"]):
         _emit("")
-    if not PYTHON.is_file() or not ENGINE.is_file():
-        _log(f"recall backend missing ({PYTHON}, {ENGINE})")
+    python_bin = _interpreter()
+    if python_bin is None or not ENGINE.is_file():
+        _log(f"recall backend missing (tried {', '.join(str(p) for p in INTERPRETERS)}"
+             f"; engine {ENGINE})")
         _emit("")
 
     try:
@@ -102,7 +146,7 @@ def main() -> None:
         # (memory-index.py, cmd_query), so a prompt beginning with "-" would
         # otherwise be read as an unknown option and exit 2, silently.
         proc = subprocess.run(
-            [str(PYTHON), str(ENGINE), "query",
+            [str(python_bin), str(ENGINE), "query",
              "--json", "--top-k", str(int(cfg["top_k"])), "--", prompt],
             capture_output=True, text=True,
             timeout=float(cfg["timeout_seconds"]), cwd=str(WORKSPACE),
@@ -144,7 +188,10 @@ def main() -> None:
             "message. The pointers below are the nearest material by similarity and "
             "may be entirely irrelevant. Do NOT treat them as context for this "
             "message unless you open one and confirm it is on topic.\n\n"
-            + "\n".join(lines)
+            # Capped at NEAR_MISS_MAX, shorter than the confident block. A
+            # below-threshold result is noise by default, so its budget must be
+            # smaller than the budget for a result that cleared the threshold.
+            + "\n".join(lines[:NEAR_MISS_MAX])
         )
     _emit(
         "## Memory relevant to this message\n\n"

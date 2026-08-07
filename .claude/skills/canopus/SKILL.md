@@ -207,7 +207,11 @@ whose subject sits on the `not replaced` line was measured against nothing and
 its name says only that; a module the run never imported is on that line too,
 because nothing stood in for it. And a SKIPPED test is neither a survivor nor a
 test that bit: it is named on its own `never ran` line, it is out of the total,
-and a run in which every test skipped produces no reading at all.
+and a run in which every test skipped produces no reading at all. A test the
+CANDIDATES skipped is that same third thing arriving by the other door — it
+passes for real, so the real run cannot see it, and a fixture reading a value
+the candidates stand in for is the ordinary way it happens — and it is named on
+a `sat out` line.
 
 ## `check` — the four clauses
 

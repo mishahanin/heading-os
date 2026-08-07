@@ -73,6 +73,7 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     run_pytest_report,
     skip_markers_without_reason,
     tests_that_never_ran,
+    tests_the_candidates_never_ran,
     vacuity_refusal,
     verification_gaps,
 )
@@ -172,9 +173,13 @@ _AFTER_BUILD_UNREPLACED = (
 # is for the ordinary mixed one, where a reading exists and some of the suite
 # sat it out.
 _AFTER_BUILD_NEVER_RAN = (
-    "What the tests on the `never ran` lines below did. Nothing. They were "
-    "skipped in this run, so no wrong implementation was ever put in front of "
-    "them and this reading says nothing whatever about them, in either "
+    "What the tests on the `never ran` and `sat out` lines below did. Nothing. "
+    "A `never ran` test was skipped in the real run, so no wrong implementation "
+    "was ever put in front of them at all. A `sat out` test ran for real and "
+    "was then skipped under a candidate: the wrong implementation was "
+    "installed, but the test never executed against it, so that candidate "
+    "returned no verdict and no candidate can be said to have run it. Either "
+    "way this reading says nothing whatever about them, in either "
     "direction: they neither survived a wrong implementation nor went red "
     "under one. They are not counted in the total above, because that total is "
     "the population this reading is about. A skipped test in the suite that "
@@ -220,16 +225,16 @@ def _after_build(paths, root, expected) -> int:
     never been pointed at real code before today.
     """
     xml_text = run_pytest_report(paths, root)
-    counts, outcomes = parse_junit(xml_text)
-    collected: dict[str, set[tuple[str, str]]] = {}
+    _counts, outcomes = parse_junit(xml_text)
+    candidate_outcomes: dict[str, list[tuple[str, str, str]]] = {}
     claims: dict[str, list[str]] = {}
     try:
         taken = run_pass_candidates(
             paths, root, expected_population=outcomes,
-            replace_existing=True, collected_out=collected,
+            replace_existing=True, outcomes_out=candidate_outcomes,
             claims_out=claims,
         )
-        gaps = verification_gaps(outcomes, taken, collected)
+        gaps = verification_gaps(outcomes, taken, candidate_outcomes)
     except ContractError as exc:
         # The one failure this command reports as a failure: no reading exists.
         # Printed on stderr and exited non-zero, because a page that said
@@ -250,13 +255,34 @@ def _after_build(paths, root, expected) -> int:
     # measured when one test was measured, and the missing name reads as a test
     # that went red.
     never_ran = tests_that_never_ran(outcomes)
-    total = len(
-        {(rel, name) for rel, name, _outcome in outcomes} - set(never_ran)
+    # The same third bucket, entered through the candidates rather than the real
+    # run, and read with the reader `verification_gaps` drops them with. A test
+    # that passed for real and skipped under a candidate is on neither of the
+    # two lists the page could previously print, so it fell into the sentence
+    # that says the tests named on neither went red under replacement.
+    # Subtracted from the real-run set so a test skipped on BOTH sides is named
+    # once, under the line that describes it first.
+    sat_out = [
+        pair for pair in tests_the_candidates_never_ran(candidate_outcomes)
+        if pair not in set(never_ran)
+    ]
+    population = (
+        {(rel, name) for rel, name, _outcome in outcomes}
+        - set(never_ran) - set(sat_out)
     )
+    total = len(population)
     dropped = claims.get("dropped", [])
     print(f"{BOLD}after-build gap reading{RESET}")
     for rel in expected:
-        print(f"  target      {rel}  ({counts.get(rel, 0)} collected)")
+        # The count of THIS reading's population, not the raw collection count.
+        # The two differ whenever anything was skipped, and the page printed one
+        # beside the other: `(2 collected)` above `survived 0 of 1`, reconciled
+        # only by the `never ran` row further down. Two numbers a skim can take
+        # for each other is one number too many, so the page carries the
+        # denominator's own, decomposed per target.
+        print(f"  target      {rel}  "
+              f"({sum(1 for case_rel, _n in population if case_rel == rel)} "
+              f"in this reading)")
     print(f"  candidates  {', '.join(CANDIDATES)}   "
           f"(three implementations that EXIST and are wrong)")
     # On the PAGE, not only on stderr. The reading below is evidence about these
@@ -271,15 +297,18 @@ def _after_build(paths, root, expected) -> int:
         print(f"  not replaced  {', '.join(dropped)}")
     print(f"  survived    {len(gaps)} of {total}")
     if never_ran:
-        print(f"  never ran   {len(never_ran)}  (skipped, so no candidate was "
-              f"put in front of them)")
+        print(f"  never ran   {len(never_ran)}  (skipped in the real run, so no "
+              f"candidate was put in front of them)")
+    if sat_out:
+        print(f"  sat out     {len(sat_out)}  (skipped under a candidate, so "
+              f"that candidate returned no verdict)")
     print()
     print(_AFTER_BUILD_MEANING)
     print()
     if dropped:
         print(_AFTER_BUILD_UNREPLACED)
         print()
-    if never_ran:
+    if never_ran or sat_out:
         print(_AFTER_BUILD_NEVER_RAN)
         print()
     print(_AFTER_BUILD_EXPECTATION)
@@ -294,6 +323,8 @@ def _after_build(paths, root, expected) -> int:
     # because a skipped test that is only absent reads as a test that went red.
     for rel, name in never_ran:
         print(f"  {YELLOW}never ran{RESET}  {rel}::{name}")
+    for rel, name in sat_out:
+        print(f"  {YELLOW}sat out{RESET}  {rel}::{name}")
     return 0
 
 

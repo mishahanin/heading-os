@@ -2517,12 +2517,12 @@ def test_a_test_red_under_every_candidate_is_measured_not_a_gap():
     from scripts.utils.canopus_contract import verification_gaps
 
     outcomes = [("tests/test_subject.py", "test_bites", "passed")]
-    pair = {("tests/test_subject.py", "test_bites")}
+    red = [("tests/test_subject.py", "test_bites", "failure")]
 
     assert verification_gaps(
         outcomes,
         {"none": set(), "echo": set(), "greedy": set()},
-        {"none": set(pair), "echo": set(pair), "greedy": set(pair)},
+        {"none": list(red), "echo": list(red), "greedy": list(red)},
     ) == []
 
 
@@ -2556,12 +2556,13 @@ def test_a_test_one_candidate_never_collected_is_not_cleared():
     from scripts.utils.canopus_contract import ContractError, verification_gaps
 
     pair = {("tests/test_subject.py", "test_partly_seen")}
+    seen = [("tests/test_subject.py", "test_partly_seen", "passed")]
 
     with pytest.raises(ContractError) as excinfo:
         verification_gaps(
             [("tests/test_subject.py", "test_partly_seen", "passed")],
             {"none": set(pair), "echo": set(pair), "greedy": set()},
-            {"none": set(pair), "echo": set(pair), "greedy": set()},
+            {"none": list(seen), "echo": list(seen), "greedy": []},
         )
 
     assert "test_partly_seen" in str(excinfo.value)
@@ -2835,7 +2836,7 @@ def test_a_run_in_which_nothing_ran_produces_no_reading():
         verification_gaps(
             [(*pair, "skipped")],
             {"none": {pair}, "echo": {pair}, "greedy": {pair}},
-            {"none": {pair}, "echo": {pair}, "greedy": {pair}},
+            {name: [(*pair, "skipped")] for name in ("none", "echo", "greedy")},
         )
 
     assert "test_parked" in str(excinfo.value)
@@ -2858,7 +2859,7 @@ def test_a_skipped_test_is_not_weighed_against_the_candidates_at_all():
     assert verification_gaps(
         [(*ran, "passed"), (*parked, "skipped")],
         {"none": {ran}, "echo": {ran}, "greedy": {ran}},
-        {"none": {ran}, "echo": {ran}, "greedy": {ran}},
+        {name: [(*ran, "passed")] for name in ("none", "echo", "greedy")},
     ) == [ran]
 
 
@@ -2878,3 +2879,120 @@ def test_the_never_ran_reader_names_the_parked_tests_and_nothing_else():
         ("tests/test_subject.py", "test_mixed", "skipped"),
         ("tests/test_subject.py", "test_mixed", "failure"),
     ]) == [("tests/test_subject.py", "test_parked")]
+
+
+# ----------------------------------------------------------------------------
+# The same third thing, arriving by the other door: the CANDIDATE runs skipped it
+# ----------------------------------------------------------------------------
+
+def test_a_test_the_candidates_skipped_is_not_counted_as_one_that_bit():
+    """The sibling of the run-in-which-nothing-ran defect, one door along.
+
+    Reproduced at HEAD through the CLI on a fixture that reads a value the
+    candidates stand in for and skips when it is not what it expects:
+
+        @pytest.fixture
+        def conf():
+            import subject
+            if subject.CONF.get("ready") is not True:
+                pytest.skip("the subject is not ready in this environment")
+            return subject.CONF
+
+    The test PASSES for real, so it is not in the never-ran set, which is read
+    from the real run's outcomes. Under every candidate the fixture skips it, so
+    it is absent from the taken map, and the page printed, in green,
+    `none  every test that RAN went red under at least one candidate` over a
+    suite in which that test was never measured at all.
+
+    A test the candidates skipped went red under nothing. Both available answers
+    about it are false, exactly as they are for a test skipped in the real run,
+    so it leaves the population by the same rule rather than being folded into
+    the bucket the page describes as the measurement working. Nothing is left
+    here, so there is no reading and this refuses.
+    """
+    from scripts.utils.canopus_contract import ContractError, verification_gaps
+
+    pair = ("tests/test_subject.py", "test_reads_the_ready_flag")
+
+    with pytest.raises(ContractError) as excinfo:
+        verification_gaps(
+            [(*pair, "passed")],
+            {"none": set(), "echo": set(), "greedy": set()},
+            {name: [(*pair, "skipped")] for name in ("none", "echo", "greedy")},
+        )
+
+    assert "test_reads_the_ready_flag" in str(excinfo.value)
+
+    # The same call with the candidates having RUN the test, asserted in the
+    # same test deliberately. The refusal above fires against the older
+    # signature too, for a reason that has nothing to do with skipping: that
+    # third argument used to carry pairs, so a list of triples matched nothing
+    # and every pair read as unmeasured. Alone, the assertion above would have
+    # been green against the code this test exists to change. What separates the
+    # two versions is the line below, which the older signature cannot reach.
+    assert verification_gaps(
+        [(*pair, "passed")],
+        {name: {pair} for name in ("none", "echo", "greedy")},
+        {name: [(*pair, "passed")] for name in ("none", "echo", "greedy")},
+    ) == [pair]
+
+
+def test_a_test_one_candidate_skipped_is_not_a_survivor_of_all_three():
+    """Two verdicts out of three do not add up to "green under every candidate".
+
+    The partial shape, and it is the commoner one: `conf.get("ready")` answers
+    None under the `none` candidate and a truthy string under the other two, so
+    one candidate skips the test and two run it green. Left in the population it
+    is absent from ONE taken set, which is the same shape as a test that bit,
+    and the page would say it went red under a candidate that never ran it.
+
+    The test that really did bite is measured alongside it, so this pins a
+    narrowing of the population rather than an emptying of it.
+    """
+    from scripts.utils.canopus_contract import (
+        tests_the_candidates_never_ran,
+        verification_gaps,
+    )
+
+    parked = ("tests/test_subject.py", "test_sat_out")
+    bit = ("tests/test_subject.py", "test_bites")
+    candidate_outcomes = {
+        "none": [(*parked, "skipped"), (*bit, "failure")],
+        "echo": [(*parked, "passed"), (*bit, "failure")],
+        "greedy": [(*parked, "passed"), (*bit, "failure")],
+    }
+
+    assert tests_the_candidates_never_ran(candidate_outcomes) == [parked]
+    assert verification_gaps(
+        [(*parked, "passed"), (*bit, "passed")],
+        {"none": set(), "echo": {parked}, "greedy": {parked}},
+        candidate_outcomes,
+    ) == []
+
+
+def test_a_test_red_under_one_candidate_and_skipped_under_another_still_bit():
+    """The other direction, so the new rule cannot swallow a real measurement.
+
+    A candidate that recorded the test RED returned a verdict on it, and that
+    verdict is the page's sentence: it went red under at least one candidate.
+    Dropping it because a different candidate skipped it would cost the reading
+    a measurement it actually took, which is the one direction this population
+    may not err in.
+    """
+    from scripts.utils.canopus_contract import (
+        tests_the_candidates_never_ran,
+        verification_gaps,
+    )
+
+    bit = ("tests/test_subject.py", "test_bites_then_sits_out")
+    candidate_outcomes = {
+        "none": [(*bit, "failure")],
+        "echo": [(*bit, "skipped")],
+        "greedy": [(*bit, "failure")],
+    }
+
+    assert tests_the_candidates_never_ran(candidate_outcomes) == []
+    assert verification_gaps(
+        [(*bit, "passed")], {"none": set(), "echo": set(), "greedy": set()},
+        candidate_outcomes,
+    ) == []

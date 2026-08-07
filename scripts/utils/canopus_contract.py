@@ -908,7 +908,7 @@ def run_pass_candidates(
     timeout: int = 900,
     expected_population: Optional[Sequence[tuple[str, str, str]]] = None,
     replace_existing: bool = False,
-    collected_out: Optional[dict[str, set[tuple[str, str]]]] = None,
+    outcomes_out: Optional[dict[str, list[tuple[str, str, str]]]] = None,
     claims_out: Optional[dict[str, list[str]]] = None,
 ) -> dict[str, set[tuple[str, str]]]:
     """For each candidate, the (file, test) pairs it turned green.
@@ -959,18 +959,31 @@ def run_pass_candidates(
     let a probe that measured half a contract print the same page as one that
     measured all of it, so the loss is named.
 
-    `collected_out`, when a caller supplies a dict, is FILLED with the pairs
-    each candidate actually collected, alongside the pairs it turned green in
-    the return value. An out-parameter rather than a widened return, and the
-    reason is arithmetic rather than taste: the return value is read as the
-    taken map at every call site in this repository and in a dozen tests, and
-    turning it into a tuple would rewrite all of them to serve one caller.
+    `outcomes_out`, when a caller supplies a dict, is FILLED with each
+    candidate's own report triples, alongside the pairs it turned green in the
+    return value. An out-parameter rather than a widened return, and the reason
+    is arithmetic rather than taste: the return value is read as the taken map
+    at every call site in this repository and in a dozen tests, and turning it
+    into a tuple would rewrite all of them to serve one caller.
     The one caller is `verification_gaps`, which cannot tell a test that FAILED
     under every candidate from a test no candidate ever ran when it is handed
     passing sets alone, and those two readings are opposites: the first is the
     best a test can do and the second is a test nobody measured. Left with only
     the taken map it must call both unmeasured, which on a real target is a
     false claim about most of the suite. See that function.
+
+    The TRIPLES rather than the pairs, and the difference is a false verdict
+    rather than a convenience. This parameter carried the collected pairs until
+    2026-08-07, and a pair alone cannot say whether the candidate RAN that test:
+    a fixture reading a value the candidates stand in for skips, the skip is
+    written into the report like any other row, so the pair is collected, absent
+    from the taken map, and folded into the bucket the caller's page describes
+    in words as the measurement working. Measured through the CLI on a fixture
+    doing `if subject.CONF.get("ready") is not True: pytest.skip(...)`: the test
+    passes for real, skips under all three candidates, and the page printed
+    `none  every test that RAN went red under at least one candidate` in green
+    over a suite in which it was never measured. The outcome tokens are already
+    parsed in the loop below; nothing extra is run to fill this.
 
     `claims_out`, when a caller supplies a dict, is FILLED with `claimed` and
     `dropped`. Under `replace_existing` those are MEASURED rather than predicted:
@@ -1074,8 +1087,8 @@ def run_pass_candidates(
             stood_in_for.append(reported)
         _counts, outcomes = parse_junit(xml_text)
         collected = {(rel, test) for rel, test, _o in outcomes}
-        if collected_out is not None:
-            collected_out[name] = collected
+        if outcomes_out is not None:
+            outcomes_out[name] = list(outcomes)
         taken[name] = {
             (rel, test) for rel, test, outcome in outcomes if outcome == "passed"
         }
@@ -1220,10 +1233,58 @@ def tests_that_never_ran(
     )
 
 
+def tests_the_candidates_never_ran(
+    candidate_outcomes: dict[str, Sequence[tuple[str, str, str]]],
+) -> list[tuple[str, str]]:
+    """The pairs a candidate SKIPPED and no candidate ever recorded red, sorted.
+
+    The sibling of `tests_that_never_ran` above, reading the candidate runs
+    rather than the real one, and it exists because the real run cannot see this
+    shape at all. A fixture that reads a value the candidates stand in for skips
+    the test it builds; the test PASSES for real, so the real run's outcomes
+    name it nowhere, and it arrives at the reading as a pair that is absent from
+    the taken map — which is the same shape as a test that went red. Measured
+    through the CLI on 2026-08-07, on a fixture doing
+    `if subject.CONF.get("ready") is not True: pytest.skip(...)`: the page
+    printed `survived 0 of 1` and the green `none` line over one test that no
+    candidate had run.
+
+    ONE candidate skipping is enough to name a pair here, because the claim the
+    reading makes is about all of them: a candidate that skipped a test returned
+    no verdict on it, so "green under every candidate" cannot be said. The
+    partial shape is the commoner one, not an exotic edge — `conf.get("ready")`
+    answers None under `none` and a truthy string under the other two, so one
+    candidate skips and two run it.
+
+    A pair any candidate recorded RED is NOT named, whatever else happened to
+    it. That candidate did return a verdict, and the verdict is the caller's
+    page in one sentence: it went red under at least one candidate. Dropping it
+    because a different candidate skipped it would cost the reading a
+    measurement it actually took, and losing a real measurement is the one
+    direction this population may not err in.
+
+    Read from the outcome tokens the caller already holds, and it reuses
+    `tests_that_never_ran` per candidate rather than restating the all-rows-
+    skipped rule: two definitions of one rule is how a page and the answer it
+    prints come to disagree.
+    """
+    parked: set[tuple[str, str]] = set()
+    red: set[tuple[str, str]] = set()
+    for outcomes in candidate_outcomes.values():
+        parked.update(tests_that_never_ran(outcomes))
+        red.update(
+            (rel, name) for rel, name, outcome in outcomes
+            if outcome in RED_OUTCOMES
+        )
+    return sorted(parked - red)
+
+
 def verification_gaps(
     outcomes: Sequence[tuple[str, str, str]],
     taken: dict[str, set[tuple[str, str]]],
-    collected: Optional[dict[str, set[tuple[str, str]]]] = None,
+    candidate_outcomes: Optional[
+        dict[str, Sequence[tuple[str, str, str]]]
+    ] = None,
 ) -> list[tuple[str, str]]:
     """The tests that stayed green under EVERY candidate, sorted.
 
@@ -1260,16 +1321,28 @@ def verification_gaps(
     with nothing left in it raises: a run in which no test ran is not a clean
     reading, it is no reading.
 
+    A test the CANDIDATES skipped leaves the population by the same rule and
+    through `tests_the_candidates_never_ran`, which is why that reader sits
+    beside the other one. It is the same defect arriving by the other door: the
+    real run cannot see it, because the test passes for real, and the reading
+    saw only that it was absent from the taken map. That door is only open when
+    the third argument is supplied, since nothing else carries what the
+    candidates DID.
+
     WHAT COUNTS AS MEASURED depends on which of the two calls the caller makes,
     and the difference is not cosmetic.
 
-      * With `collected`, the pairs each candidate really collected, a pair is
-        measured when EVERY candidate collected it. Every candidate has to have
-        run the test, because the claim being made is about all of them; a pair
-        that one candidate never collected has no verdict from that candidate,
-        and two verdicts out of three do not add up to "under every candidate".
-        Supplied and EMPTY says no candidate collected anything, which measures
-        nothing and refuses the whole population; it is not read as absent.
+      * With `candidate_outcomes`, each candidate's own report triples, a pair
+        is measured when EVERY candidate collected it. Every candidate has to
+        have run the test, because the claim being made is about all of them; a
+        pair that one candidate never collected has no verdict from that
+        candidate, and two verdicts out of three do not add up to "under every
+        candidate". Supplied and EMPTY says no candidate collected anything,
+        which measures nothing and refuses the whole population; it is not read
+        as absent. Collection is not the same question as running, and both are
+        read off these triples: a pair a candidate collected and SKIPPED left
+        the population two paragraphs above, and only what is left is weighed
+        here.
       * Without it, only the passing sets are in hand, and passing proves
         collection while failing is indistinguishable from never running. The
         best available reading is then the UNION of those sets: a pair seen
@@ -1279,7 +1352,7 @@ def verification_gaps(
         REFUSING direction. Pointed at a real target it refuses nearly
         everything, because most tests go red under replacement and redness is
         what this form cannot see; `scripts/canopus.py probe --after-build`
-        therefore passes `collected` and the two-argument form stays what a
+        therefore passes the triples and the two-argument form stays what a
         caller holding only a taken map may honestly ask.
 
     `taken`'s OWN keys are the candidate set, not the module-level `CANDIDATES`
@@ -1307,31 +1380,44 @@ def verification_gaps(
     # over a suite in which nothing ran at all. It is not a gap either: nothing
     # was put in front of it to survive. So it is neither, and it leaves here.
     never_ran = set(tests_that_never_ran(outcomes))
+    # The same rule, applied to what the CANDIDATES did. A test the real run
+    # passed and every candidate skipped is invisible to the reader above, so it
+    # reached the arithmetic below as a pair absent from `taken`, which is
+    # exactly the shape of a test that went red. Measured at HEAD on 2026-08-07,
+    # through the CLI, on the ordinary fixture idiom in
+    # `tests_the_candidates_never_ran`: `survived 0 of 1`, the green line, and
+    # exit 0, over one test no candidate had run.
+    if candidate_outcomes is not None:
+        never_ran |= set(tests_the_candidates_never_ran(candidate_outcomes))
     population = sorted(
         {(rel, name) for rel, name, _outcome_token in outcomes} - never_ran
     )
     if not population:
         raise ContractError(
-            "every test here was skipped, so nothing ran and there is no gap "
-            "reading to make: an answer computed over no tests that ran names "
+            "every test here was skipped, either in the real run or under the "
+            "candidates, so nothing was measured and there is no gap reading to "
+            "make: an answer computed over no tests that ran names "
             "none of them as a survivor, which is the shape of a completed "
             "measurement and the content of none. The tests that never ran: "
             + ", ".join(f"{rel}::{name}" for rel, name in sorted(never_ran))
         )
-    # `is not None`, never truthiness. A caller that supplied the collected map
-    # and filled it with nothing has REPORTED that no candidate collected
-    # anything, and that is not the same statement as declining to supply the
-    # map at all. Read as absent it fell back to the weaker union reading, which
-    # answers a question the caller did not ask; read as supplied and empty it
-    # measures nothing, so nothing is measured and the refusal below fires over
-    # the whole population. That is the fail-closed direction and it is decided
-    # here rather than arrived at by accident.
-    if collected is None:
+    # `is not None`, never truthiness. A caller that supplied the candidates'
+    # outcomes and filled the map with nothing has REPORTED that no candidate
+    # collected anything, and that is not the same statement as declining to
+    # supply the map at all. Read as absent it fell back to the weaker union
+    # reading, which answers a question the caller did not ask; read as supplied
+    # and empty it measures nothing, so nothing is measured and the refusal below
+    # fires over the whole population. That is the fail-closed direction and it
+    # is decided here rather than arrived at by accident.
+    if candidate_outcomes is None:
         measured = set().union(*(set(pairs) for pairs in taken.values()))
-    elif not collected:
+    elif not candidate_outcomes:
         measured = set()
     else:
-        measured = set.intersection(*(set(pairs) for pairs in collected.values()))
+        measured = set.intersection(*(
+            {(rel, name) for rel, name, _outcome_token in rows}
+            for rows in candidate_outcomes.values()
+        ))
     unmeasured = [pair for pair in population if pair not in measured]
     if unmeasured:
         raise ContractError(

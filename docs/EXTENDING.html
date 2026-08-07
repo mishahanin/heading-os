@@ -265,7 +265,9 @@ names every test that stayed green under all of them. The page names which
 modules were actually replaced and which were not, because a name that survived
 a module nothing stood in for is not evidence about it, and it names skipped
 tests separately: a test that never ran neither survived a wrong implementation
-nor went red under one. It REPORTS and never refuses (exit 0 whether it names
+nor went red under one. Skipped in the real run it is on a <code>never ran</code> line;
+skipped under a candidate, having passed for real, it is on a <code>sat out</code> line.
+It REPORTS and never refuses (exit 0 whether it names
 twenty survivors or none; exit 1 only when no reading could be made at all).
 Nobody has calibrated this reading, so do not wire it into a gate.</p>
 <p><strong>The honest limit.</strong> A CI step in the <code>sovereignty guards</code> job runs

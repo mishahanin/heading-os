@@ -208,7 +208,9 @@ names every test that stayed green under all of them. The page names which
 modules were actually replaced and which were not, because a name that survived
 a module nothing stood in for is not evidence about it, and it names skipped
 tests separately: a test that never ran neither survived a wrong implementation
-nor went red under one. It REPORTS and never refuses (exit 0 whether it names
+nor went red under one. Skipped in the real run it is on a `never ran` line;
+skipped under a candidate, having passed for real, it is on a `sat out` line.
+It REPORTS and never refuses (exit 0 whether it names
 twenty survivors or none; exit 1 only when no reading could be made at all).
 Nobody has calibrated this reading, so do not wire it into a gate.
 

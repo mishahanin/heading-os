@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""memory_touch.py -- the single writer of auto-memory access_count.
+
+Bumping is a RANKING signal and nothing else. A memory that is never bumped
+sinks in recall order and stays on the shelf forever; nothing in this module,
+or downstream of it, may treat a low count as grounds for removal.
+
+Two callers:
+  - scripts/memory-touch.py (CLI wrapper, one bump per invocation)
+  - scripts/memory-index.py (`query --touch`, debounced to once per day)
+
+Does a minimal, targeted text edit scoped to the frontmatter `metadata:` block:
+increments `access_count` (inserting it at 1 if absent) and sets
+`last_accessed` to the supplied date. Every other line -- comments, key order,
+unrelated fields, the whole body -- is preserved byte-for-byte. NOT a full YAML
+re-serialize. Writes atomically.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from scripts.utils.atomic import atomic_write_text
+from scripts.utils.markdown import parse_frontmatter
+
+FRONTMATTER_RE = re.compile(r"^(---\s*\n)(.*?\n)(---\s*\n)", re.DOTALL)
+
+
+class TouchError(ValueError):
+    """Raised when a file cannot be touched (no frontmatter, bad path, etc.)."""
+
+
+def _bump_frontmatter(text: str, today: str) -> tuple[str, int]:
+    """Return (new_text, new_access_count).
+
+    Locates the top-level `metadata:` block inside the frontmatter and bumps
+    `access_count`/`last_accessed` within it (inserting either if absent),
+    leaving every other line untouched. Raises TouchError if the file has no
+    frontmatter block at all.
+    """
+    m = FRONTMATTER_RE.match(text)
+    if not m:
+        raise TouchError("no frontmatter block found")
+    open_marker, fm_body, close_marker = m.group(1), m.group(2), m.group(3)
+    rest = text[m.end():]
+
+    lines = fm_body.split("\n")
+    meta_idx = None
+    for i, line in enumerate(lines):
+        if line.rstrip() == "metadata:":
+            meta_idx = i
+            break
+
+    default_indent = "  "
+    if meta_idx is None:
+        # No metadata block at all (not expected on real auto-memory files,
+        # but handled rather than crashing): append a fresh one.
+        new_access_count = 1
+        block = [
+            "metadata:",
+            f"{default_indent}access_count: {new_access_count}",
+            f"{default_indent}last_accessed: {today}",
+        ]
+        if lines and lines[-1] == "":
+            lines[-1:-1] = block
+        else:
+            lines.extend(block)
+    else:
+        block_end = meta_idx + 1
+        while (
+            block_end < len(lines)
+            and lines[block_end].strip()
+            and lines[block_end][0] in (" ", "\t")
+        ):
+            block_end += 1
+        block_lines = lines[meta_idx + 1 : block_end]
+
+        indent = default_indent
+        if block_lines:
+            im = re.match(r"^([ \t]+)", block_lines[0])
+            if im:
+                indent = im.group(1)
+
+        found_access = found_last = False
+        new_access_count = 1
+        new_block_lines = []
+        for line in block_lines:
+            stripped = line.strip()
+            if stripped.startswith("access_count:"):
+                try:
+                    current = int(stripped.split(":", 1)[1].strip() or 0)
+                except ValueError:
+                    current = 0
+                new_access_count = current + 1
+                new_block_lines.append(f"{indent}access_count: {new_access_count}")
+                found_access = True
+            elif stripped.startswith("last_accessed:"):
+                new_block_lines.append(f"{indent}last_accessed: {today}")
+                found_last = True
+            else:
+                new_block_lines.append(line)
+        if not found_access:
+            new_block_lines.append(f"{indent}access_count: {new_access_count}")
+        if not found_last:
+            new_block_lines.append(f"{indent}last_accessed: {today}")
+
+        lines[meta_idx + 1 : block_end] = new_block_lines
+
+    new_fm_body = "\n".join(lines)
+    new_text = open_marker + new_fm_body + close_marker + rest
+    return new_text, new_access_count
+
+
+def touch_file(raw_path: str, auto_memory_dir: Path, today: str) -> tuple[int, str]:
+    """Touch one file. Returns (access_count, resolved_path_str) on success.
+
+    Raises TouchError if the resolved path is outside auto_memory_dir, does
+    not exist, or has no frontmatter.
+    """
+    resolved = _resolve(raw_path, auto_memory_dir)
+    text = resolved.read_text(encoding="utf-8")
+    new_text, access_count = _bump_frontmatter(text, today)
+    atomic_write_text(resolved, new_text)
+    return access_count, str(resolved)
+
+
+def _resolve(raw_path: str, auto_memory_dir: Path) -> Path:
+    """Resolve a bare filename or a data-root-relative path to a real file.
+
+    The single resolver for both entry points, so they cannot drift apart on
+    which paths they accept. memory-index.py emits the data-root-relative
+    prefixed form ("auto-memory/x.md") and direct callers pass the bare form
+    ("x.md"); both must land on the same file, and anything outside the
+    auto-memory directory is refused.
+    """
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        direct = (auto_memory_dir / candidate).resolve()
+        resolved = direct if direct.is_file() else (auto_memory_dir.parent / candidate).resolve()
+    auto_memory_resolved = auto_memory_dir.resolve()
+    try:
+        resolved.relative_to(auto_memory_resolved)
+    except ValueError:
+        raise TouchError(
+            f"{raw_path}: outside auto-memory directory ({auto_memory_resolved})"
+        ) from None
+    if not resolved.is_file():
+        raise TouchError(f"{raw_path}: not found ({resolved})")
+    return resolved
+
+
+def touch_if_stale(raw_path: str, auto_memory_dir: Path, today: str) -> bool:
+    """Bump unless this file was already bumped today. True when written.
+
+    The debounce exists because the retrieval hook runs on EVERY prompt: ten
+    messages about one subject are one use of a memory, not ten. `last_accessed`
+    is already written by the bump, so the debounce needs no new state.
+    """
+    resolved = _resolve(raw_path, auto_memory_dir)
+    meta, _ = parse_frontmatter(resolved.read_text(encoding="utf-8"))
+    nested = meta.get("metadata")
+    nested = nested if isinstance(nested, dict) else {}
+    last = str(nested.get("last_accessed") or meta.get("last_accessed") or "").strip()
+    if last == today:
+        return False
+    touch_file(str(resolved), auto_memory_dir, today)
+    return True

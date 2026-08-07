@@ -109,6 +109,7 @@ def load_config(root: Path) -> dict:
     cfg.setdefault("model", "bge-m3")
     cfg.setdefault("host", "http://localhost:11434")
     cfg.setdefault("threshold", 0.55)
+    cfg.setdefault("near_miss_margin", 0.12)
     cfg.setdefault("top_k", 8)
     cfg.setdefault("layers", [])
     cfg.setdefault("collections", {})
@@ -786,7 +787,7 @@ def _combined(cos, recency, importance, weights):
             + weights["importance"] * importance)
 
 
-def _query_store(conn, qvec, full_text, *, threshold, layer, allowed):
+def _query_store(conn, qvec, full_text, *, threshold, layer, allowed, near_miss_margin=0.0):
     """Full hybrid retrieval (dense + BM25 + path-token) for ONE store.
 
     Returns per-store results carrying raw signals so the caller can pool
@@ -797,7 +798,7 @@ def _query_store(conn, qvec, full_text, *, threshold, layer, allowed):
     vector; sparse/path use ``full_text`` -- exactly as the pre-split path did."""
     ids, metas, matrix = _load_index(conn)
     if matrix is None:
-        return {"dense_ids": [], "sparse_ids": [], "path_ids": [],
+        return {"dense_ids": [], "sparse_ids": [], "path_ids": [], "near_ids": [],
                 "cos_by_id": {}, "metas": {}, "chunks_total": {}, "best": None}
     q = np.asarray(qvec, dtype=np.float32)
     qn = np.linalg.norm(q) or 1.0
@@ -835,6 +836,20 @@ def _query_store(conn, qvec, full_text, *, threshold, layer, allowed):
         if cos_by_id[ids[i]] >= threshold and in_layer(ids[i])
     ][:RANK_CAP]
 
+    # Near-miss channel: cosine in [threshold - near_miss_margin, threshold).
+    # NOT part of the normal result set -- the caller uses it ONLY when every
+    # other channel came back empty, in place of declaring a gap. Kept separate
+    # from `dense_ids` on purpose: a below-threshold hit must never silently
+    # join a confident result set.
+    near_ids = []
+    if near_miss_margin > 0:
+        floor = threshold - near_miss_margin
+        near_ids = [
+            ids[i]
+            for i in np.argsort(scores)[::-1]
+            if floor <= cos_by_id[ids[i]] < threshold and in_layer(ids[i])
+        ][:RANK_CAP]
+
     # Sparse channel: BM25 lexical match, gated by convergence with the dense
     # signal so a generic-term match on an unrelated note cannot leak through.
     sparse_floor = threshold - SPARSE_COS_MARGIN
@@ -852,6 +867,7 @@ def _query_store(conn, qvec, full_text, *, threshold, layer, allowed):
         "dense_ids": _collapse(dense_ids),
         "sparse_ids": _collapse(sparse_ids),
         "path_ids": _collapse(path_ids),
+        "near_ids": _collapse(near_ids),
         "cos_by_id": cos_by_id,
         "metas": metas,
         "chunks_total": chunks_total,
@@ -881,6 +897,7 @@ def cmd_query(args) -> int:
 
     cfg = load_config(get_workspace_root())  # memory-index.yaml is engine config
     threshold = args.threshold if args.threshold is not None else cfg["threshold"]
+    near_miss_margin = float(cfg.get("near_miss_margin", 0.12) or 0.0)
     top_k = args.top_k or cfg["top_k"]
     layer = args.layer
     qtext = args.text[:SNIPPET_CHARS]  # symmetry with build-time snippet window
@@ -928,12 +945,13 @@ def cmd_query(args) -> int:
     # that store's lists in order -> byte-identical to the pre-split path (the
     # /recall content-regression guard).
     cos_by_id, metas, chunks_total = {}, {}, {}
-    all_dense, all_sparse, all_path = [], [], []
+    all_dense, all_sparse, all_path, all_near = [], [], [], []
     best = None
     for s_root, s_rel in stores:
         conn = open_store(s_root, s_rel)
         res = _query_store(conn, qvec, args.text,
-                           threshold=threshold, layer=layer, allowed=allowed)
+                           threshold=threshold, layer=layer, allowed=allowed,
+                           near_miss_margin=near_miss_margin)
         conn.close()
         cos_by_id.update(res["cos_by_id"])
         metas.update(res["metas"])
@@ -941,6 +959,7 @@ def cmd_query(args) -> int:
         all_dense.extend(res["dense_ids"])
         all_sparse.extend(res["sparse_ids"])
         all_path.extend(res["path_ids"])
+        all_near.extend(res["near_ids"])
         if res["best"] is not None:
             best = res["best"] if best is None else max(best, res["best"])
 
@@ -957,22 +976,28 @@ def cmd_query(args) -> int:
     path_ids = all_path
     combined_sparse = list(dict.fromkeys(path_ids + sparse_ids))
 
+    near_miss = False
     if not dense_ids and not combined_sparse:
-        best_val = best if best is not None else 0.0
-        if want_json:
-            print(json.dumps(
-                {"hits": [], "gap": True, "best": round(best_val, 4),
-                 "threshold": round(float(threshold), 4)},
-                ensure_ascii=False,
-            ))
+        near_ids = sorted(all_near, key=lambda i: cos_by_id.get(i, 0.0), reverse=True)
+        if not near_ids:
+            best_val = best if best is not None else 0.0
+            if want_json:
+                print(json.dumps(
+                    {"hits": [], "gap": True, "best": round(best_val, 4),
+                     "threshold": round(float(threshold), 4)},
+                    ensure_ascii=False,
+                ))
+                _emit(gap=True, hits_list=[])
+                return 0
+            print(
+                f"{YELLOW}Nothing above threshold {threshold:.2f}{RESET} "
+                f"(best {best_val:.3f}, no lexical match) -- a gap in this area of memory."
+            )
             _emit(gap=True, hits_list=[])
             return 0
-        print(
-            f"{YELLOW}Nothing above threshold {threshold:.2f}{RESET} "
-            f"(best {best_val:.3f}, no lexical match) -- a gap in this area of memory."
-        )
-        _emit(gap=True, hits_list=[])
-        return 0
+        # Below the confidence threshold but inside the margin: answer, flagged.
+        near_miss = True
+        dense_ids = near_ids
 
     fused, _ = _rrf_fuse(dense_ids, combined_sparse)
     dense_set, sparse_set, path_set = set(dense_ids), set(sparse_ids), set(path_ids)
@@ -1023,13 +1048,24 @@ def cmd_query(args) -> int:
             "chunk": m.get("chunk", 0),
             "chunks_total": chunks_total.get(m["path"], 1),
         })
+        if near_miss:
+            hits[-1]["below_threshold"] = True
 
     if want_json:
-        print(json.dumps({"hits": hits, "gap": False}, ensure_ascii=False))
+        payload = {"hits": hits, "gap": False}
+        if near_miss:
+            payload["near_miss"] = True
+        print(json.dumps(payload, ensure_ascii=False))
         _emit(gap=False, hits_list=hits)
         return 0
 
-    print(f"{BOLD}Associative recall{RESET} {GRAY}(recency x importance x relevance){RESET}")
+    if near_miss:
+        print(
+            f"{YELLOW}Below the confidence threshold {threshold:.2f}{RESET} "
+            f"{GRAY}(nothing cleared it; showing the closest matches){RESET}"
+        )
+    else:
+        print(f"{BOLD}Associative recall{RESET} {GRAY}(recency x importance x relevance){RESET}")
     for h in hits:
         tag = "+".join(h["channels"])
         ntype = f" {GRAY}{h['ntype']}{RESET}" if h["ntype"] else ""

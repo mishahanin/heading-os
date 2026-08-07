@@ -17,6 +17,16 @@ host: "http://localhost:11434"
 # Порог релевантности (тест на мозге Один: попадания 0.56-0.61, пустота 0.49-0.53).
 threshold: 0.55
 
+# Near-miss window below the confidence threshold. When NOTHING clears
+# `threshold` and no lexical match exists, hits within this distance of the
+# threshold are returned FLAGGED as below-confidence instead of the query being
+# reported as a gap. Rationale (measured 2026-08-07): a question-shaped query
+# scores systematically lower than a keyword query against the same document
+# (0.459 vs 0.663 on the Omega episode), so an absolute threshold calibrated on
+# keywords reports a false gap on questions. A false "not in memory" closes the
+# subject; a flagged weak hit does not. Set to 0 to restore the old behaviour.
+near_miss_margin: 0.12
+
 # Max ranked hits returned by query. / Макс. число ранжированных попаданий.
 top_k: 8
 

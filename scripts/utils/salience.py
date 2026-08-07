@@ -11,17 +11,23 @@ Consumed by:
 """
 from __future__ import annotations
 
+import math
+
 TYPE_WEIGHT = {"feedback": 1.0, "project": 0.8, "user": 0.7, "reference": 0.5}
 _DEFAULT_TYPE_WEIGHT = 0.6
 
-REINFORCE_K = 0.03
-REINFORCE_CAP = 1.3
+# Log-scaled so the bonus keeps separating past the old linear ceiling. K and
+# CAP are calibrated to the previous curve at its only two meaningful points:
+# exactly 1.0 at zero accesses, exactly 1.30 at ten. Above ten, where the old
+# curve was flat, this one still ranks. The cap is reached near 121 accesses.
+REINFORCE_K = 0.125
+REINFORCE_CAP = 1.6
 
 
 def type_weight(mem_type: str) -> float:
     """Base weight for a memory `type` (feedback/project/user/reference).
 
-    Unrecognized or missing types get a neutral default, never zero -- an
+    Unrecognized or missing types get a neutral default, never zero — an
     unknown type should not be penalized as if it were worthless.
     """
     key = (mem_type or "").strip().lower()
@@ -29,12 +35,14 @@ def type_weight(mem_type: str) -> float:
 
 
 def reinforcement_bonus(access_count: int) -> float:
-    """Multiplicative bonus from citation frequency, capped at REINFORCE_CAP.
+    """Multiplicative bonus from retrieval frequency, capped at REINFORCE_CAP.
 
-    access_count <= 0 yields exactly 1.0 (no bonus, no penalty).
+    access_count <= 0 yields exactly 1.0 — no bonus AND no penalty. A memory
+    that has never been retrieved is not demoted, it merely gains nothing; the
+    ranking effect of low use is relative position, never removal.
     """
     count = max(int(access_count or 0), 0)
-    return min(1.0 + count * REINFORCE_K, REINFORCE_CAP)
+    return min(1.0 + REINFORCE_K * math.log1p(count), REINFORCE_CAP)
 
 
 def composite_salience(mem_type: str, access_count: int) -> float:

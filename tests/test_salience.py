@@ -40,8 +40,25 @@ def test_reinforcement_bonus_increases_with_access_count():
 
 def test_reinforcement_bonus_caps_at_high_access_count():
     assert salience.reinforcement_bonus(1000) == pytest.approx(salience.REINFORCE_CAP)
-    # Comfortably past the cap threshold, still capped, not runaway.
-    assert salience.reinforcement_bonus(100) == pytest.approx(salience.REINFORCE_CAP)
+    assert salience.reinforcement_bonus(10_000) == pytest.approx(salience.REINFORCE_CAP)
+
+
+def test_reinforcement_bonus_calibrated_to_the_previous_curve_at_ten():
+    """The change must be invisible on the range the old curve covered.
+
+    Old: 1.0 + 0.03 * count, capped 1.3 — so exactly 1.30 at count 10.
+    New: log-scaled, same two anchor points, and it keeps separating above 10
+    where the old curve was flat.
+    """
+    assert salience.reinforcement_bonus(0) == pytest.approx(1.0)
+    assert salience.reinforcement_bonus(10) == pytest.approx(1.30, abs=0.005)
+    assert salience.reinforcement_bonus(50) > salience.reinforcement_bonus(10)
+    assert salience.reinforcement_bonus(50) < salience.REINFORCE_CAP
+
+
+def test_reinforcement_bonus_never_decreases():
+    values = [salience.reinforcement_bonus(n) for n in range(400)]
+    assert values == sorted(values)
 
 
 def test_composite_salience_multiplies_weight_and_bonus():

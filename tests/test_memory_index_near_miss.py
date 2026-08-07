@@ -150,7 +150,7 @@ def test_near_miss_collapses_chunks_of_one_file(tmp_path, monkeypatch, capsys):
     # fixture appended the new layer line and a `chunking:` key AFTER
     # `deny_segments:`, which breaks the `layers:` block sequence (invalid
     # YAML) and used a key name (`chunking`) the schema does not read (the
-    # real key is `chunk:` -- see config/memory-index.yaml and
+    # real key is `chunk:`, see config/memory-index.yaml and
     # `load_config`'s `cfg.setdefault("chunk", {})`). Left as written, the
     # config either fails to parse or silently chunks nothing, so the test
     # can never exercise the multi-chunk collapse it documents. Fixed here by
@@ -186,6 +186,10 @@ def test_near_miss_collapses_chunks_of_one_file(tmp_path, monkeypatch, capsys):
     assert obj.get("near_miss") is True, obj
     thread_hits = [h for h in obj["hits"] if h["path"].endswith("note-gamma.md")]
     assert len(thread_hits) == 1, thread_hits
+    # Guards against a vacuous pass: this assertion fails if chunking is ever
+    # disabled (enabled_layers empty), since an unchunked file collapses to
+    # one row trivially and would never exercise `_collapse` at all.
+    assert thread_hits[0]["chunks_total"] > 1, thread_hits
 
 
 def test_normal_hits_carry_no_near_miss_flag(tmp_path, monkeypatch, capsys):

@@ -1055,14 +1055,16 @@ def cmd_query(args) -> int:
         payload = {"hits": hits, "gap": False}
         if near_miss:
             payload["near_miss"] = True
+            payload["confident"] = False
         print(json.dumps(payload, ensure_ascii=False))
         _emit(gap=False, hits_list=hits)
         return 0
 
     if near_miss:
         print(
-            f"{YELLOW}Below the confidence threshold {threshold:.2f}{RESET} "
-            f"{GRAY}(nothing cleared it; showing the closest matches){RESET}"
+            f"{YELLOW}No confident match above {threshold:.2f}.{RESET} "
+            f"{GRAY}Nearest material by similarity, relevance NOT established -- "
+            f"treat as a lead, not an answer.{RESET}"
         )
     else:
         print(f"{BOLD}Associative recall{RESET} {GRAY}(recency x importance x relevance){RESET}")

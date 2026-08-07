@@ -111,7 +111,18 @@ Parse the JSON. It is one object:
   from your own prior knowledge. Optionally name the nearest layer or suggest a
   rephrase or `--collection all`. Stop here.
 
-- **Hits** (`{"hits": [ {path,title,layer,ntype,classification,collection,score,channels}, ... ], "gap": false}`):
+- **Near-miss** (`"gap": false` but `"near_miss": true` and `"confident": false`,
+  each hit carrying `"below_threshold": true`): **not the same as Hits below.**
+  Nothing cleared the salience threshold; the engine surfaced the nearest
+  material anyway because it sat within the near-miss margin, not because it
+  answers the question. Say so plainly — "No confident match in memory for
+  that; nearest by similarity: <titles>, relevance not established." List the
+  `title`/`path` pairs as **possible leads only**. Do NOT read the files and do
+  NOT compose an answer from them unless the user explicitly asks to go deeper
+  ("check that anyway", "open it", "read it"). Stop here.
+
+- **Hits** (`{"hits": [ {path,title,layer,ntype,classification,collection,score,channels}, ... ], "gap": false}`,
+  no `near_miss` key — confident matches):
   1. **Read the top cited files** (`Read` each `path`, highest `score` first —
      usually the top 3–5 are enough). Read the actual files; the JSON carries
      only titles and scores, not full content.

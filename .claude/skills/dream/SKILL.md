@@ -5,7 +5,8 @@ description: >
   Reflective memory consolidation - performs a periodic pass over memory files,
   synthesizing recent learnings into durable, well-organized memories for future
   sessions. Validates technical claims against Context7, enforces security protocols,
-  prunes stale entries, and produces a structured consolidation report.
+  rewrites and merges stale entries in place, surfaces what has gone dormant, and
+  produces a structured consolidation report.
   Use when the user says "dream", "/dream", "consolidate memories", "memory cleanup",
   "reflect on recent sessions", "update memories", or at the end of a productive
   session when significant new information was learned.
@@ -31,12 +32,13 @@ x-heading-capability:
   what: >
     Reflective memory consolidation - merges recent learnings into durable
     memory files, validates technical claims against Context7, passes a security
-    gate, prunes stale entries, and produces a consolidation report.
+    gate, rewrites stale entries in place, surfaces what has gone dormant, and
+    produces a consolidation report.
   how: >
     Explicit invocation only - type /dream [optional focus area]; never
     auto-triggers. It scans the memory directory and recent workspace state,
     rewrites memory files in place, keeps MEMORY.md under its line budget, and
-    reports what was consolidated/pruned.
+    reports what was consolidated and what has gone dormant.
   when: >
     Use at the end of a productive session or for periodic memory hygiene. For a
     simple one-off memory write use the auto-memory system; for knowledge-base
@@ -234,7 +236,7 @@ Follow the exclusion rules from the auto-memory system:
 
 ---
 
-## Phase 3 - Prune, Index, and Report
+## Phase 3 - Index and Report
 
 ### Step 1: Update MEMORY.md
 
@@ -261,7 +263,7 @@ Present this report to the user:
 **Consolidated**
 - {file.md} - {what was added, updated, or merged}
 
-**Pruned**
+**Retired**
 - {file.md or index entry} - {reason: operator-approved retirement / redundancy merge / orphan pointer for an already-retired file}
 
 **Context7 Validated**

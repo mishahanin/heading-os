@@ -343,6 +343,36 @@ def test_disabled_flag_stays_silent(monkeypatch, capsys, tmp_path):
     assert capsys.readouterr().out == ""
 
 
+def test_touch_flag_reaches_the_backend_argv(monkeypatch, capsys):
+    """`--touch` is the ONLY thing wiring retrieval to reinforcement.
+
+    memory-index.py's `_should_touch` gate fires on `getattr(args, "touch",
+    False)` and nothing else — this argv is the sole place that intent is
+    expressed. Every other fake in this file (`fake_run`, `tracker`, `boom`,
+    `garbled`, `slow`) ignores argv content entirely, so a careless edit, a bad
+    merge, or a refactor of the argument list could drop this flag and every
+    test above would stay green: the hook would keep answering prompts
+    correctly while access_count silently froze on every memory in the
+    workspace, reverting the whole feature to the dead state the plan exists
+    to fix — invisibly, because nothing else here looks at what was actually
+    passed to the backend. This is that assertion.
+    """
+    mod = load_hook()
+    feed(monkeypatch, "что мы решили по Омеги и почему")
+    captured = {}
+
+    def tracker(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=_json.dumps({"hits": [], "gap": False}), stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", tracker)
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 0
+    assert "--touch" in captured["cmd"], captured["cmd"]
+
+
 def test_interpreter_probes_both_platform_layouts():
     """POSIX puts the venv interpreter in bin/, Windows in Scripts/python.exe.
 

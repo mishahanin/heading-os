@@ -712,6 +712,126 @@ def test_after_build_names_the_test_that_survived_every_candidate(tree, capsys):
     assert "the measurement working" in out
 
 
+def test_after_build_names_on_the_page_what_it_did_not_replace(tree, capsys):
+    """The page may never assert a replacement that did not happen.
+
+    Measured 2026-08-07 on a shipped target:
+    `probe --after-build tests/test_update_common.py` printed `survived 3 of 6`
+    and exited 0 while `scripts.utils.update_common`, the subject the whole file
+    is about, was swept out of the claim set and never replaced once. The claim
+    set is narrowed for two good reasons, and the narrowing is reported on
+    stderr, but the PAGE said, unconditionally, that "the tree's own code
+    beneath it was replaced". Six shipped targets carry that shape, and on every
+    one of them a reader takes away a sentence that is false of the run in front
+    of them.
+
+    Both drop rules are exercised here. `pathlib` resolves outside the tree, and
+    `scripts.utils` is the package this probe's own plugin lives under, so the
+    module a survivor actually exercises is stood in for by nothing. What the
+    page has to carry is therefore three things: which claims WERE replaced,
+    which were not, and that a name in the list below is evidence about the
+    first set only.
+    """
+    (tree / "subject_module.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    (tree / "tests" / "test_partly.py").write_text(
+        "from pathlib import Path  # noqa: F401\n"
+        "from scripts.utils import canopus_note\n"
+        "\n\n"
+        "def test_strict():\n"
+        "    from subject_module import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n"
+        "\n\n"
+        "def test_only_touches_a_module_nothing_stood_in_for():\n"
+        "    assert canopus_note.digest_text('x') == canopus_note.digest_text('x')\n",
+        encoding="utf-8",
+    )
+
+    assert _run(["probe", "--after-build", "tests/test_partly.py"], tree) == 0
+
+    out = capsys.readouterr().out
+    assert "test_only_touches_a_module_nothing_stood_in_for" in out
+    # What WAS stood in for, on the page, so a reader can see whether the
+    # subject they care about is in it.
+    assert "  replaced" in out
+    assert "subject_module" in out
+    # What was NOT, on the page rather than only on stderr, both drop rules.
+    assert "not replaced" in out
+    assert "pathlib" in out
+    assert "scripts.utils" in out
+    # And the survivor list bounded to the first set, in words.
+    assert "Nothing below is evidence about them" in out
+    # The claim the page makes is now tied to the line above it, not to the
+    # whole tree. This is the sentence the measurement above proved false.
+    assert "the tree's own code beneath it was replaced" not in out
+    assert "the modules on the `replaced` line above were replaced" in out
+
+
+def test_after_build_claims_no_drop_when_nothing_was_dropped(tree, capsys):
+    """The inverse false page, guarded so the caveat cannot become boilerplate.
+
+    A caveat printed unconditionally is a caveat that says nothing, and it would
+    also be its own false claim: on a run where every module the contract names
+    was stood in for, telling the reader that something was left standing sends
+    them looking for a hole that is not there.
+    """
+    (tree / "subject_module.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    (tree / "tests" / "test_whole.py").write_text(
+        "def test_strict():\n"
+        "    from subject_module import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n",
+        encoding="utf-8",
+    )
+
+    assert _run(["probe", "--after-build", "tests/test_whole.py"], tree) == 0
+
+    out = capsys.readouterr().out
+    assert "  replaced    subject_module" in out
+    assert "not replaced" not in out
+    assert "Nothing below is evidence about them" not in out
+
+
+def test_after_build_counts_the_population_it_drew_the_survivors_from(
+    tree, capsys, monkeypatch
+):
+    """Numerator and denominator have to come out of one population.
+
+    `verification_gaps` collapses the report's triples to `(file, test)` pairs
+    before it decides anything, and the denominator counted raw report rows. A
+    report carrying one pair twice therefore printed `survived 1 of 2` over a
+    population of one, and the reader is told that a test bit when none did.
+
+    The seams around the arithmetic are stood in for here, and that is the point
+    rather than a shortcut: a duplicated junit row is not something pytest can
+    be asked for on demand, so the only way to put one in front of this
+    arithmetic is to hand it one. `verification_gaps` itself runs for real.
+    """
+    pair = ("tests/test_dup.py", "test_a")
+    doubled = [(*pair, "passed"), (*pair, "passed")]
+    every = {"none": {pair}, "echo": {pair}, "greedy": {pair}}
+
+    def _candidates(*_a, collected_out=None, claims_out=None, **_k):
+        collected_out.update({name: set(pairs) for name, pairs in every.items()})
+        claims_out["claimed"] = ["subject_module"]
+        claims_out["dropped"] = []
+        return {name: set(pairs) for name, pairs in every.items()}
+
+    monkeypatch.setattr(canopus, "run_pytest_report", lambda *a, **k: "")
+    monkeypatch.setattr(canopus, "parse_junit", lambda _text: ({pair[0]: 2}, doubled))
+    monkeypatch.setattr(canopus, "run_pass_candidates", _candidates)
+
+    assert canopus._after_build([tree / pair[0]], tree, [pair[0]]) == 0
+
+    assert "survived    1 of 1" in capsys.readouterr().out
+
+
 def test_after_build_reports_when_no_reading_could_be_made(tree, capsys):
     """The one failure this command reports as a failure, and why it is not a gate.
 

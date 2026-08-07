@@ -2580,6 +2580,52 @@ def test_no_candidate_at_all_is_refused_rather_than_clearing_everything():
         verification_gaps([("tests/test_subject.py", "test_a", "passed")], {})
 
 
+def test_a_supplied_but_empty_collected_map_measures_nothing():
+    """Supplied-and-empty is a statement, not the absence of one.
+
+    Read by truthiness it fell through to the union-of-passing-sets reading,
+    answering a weaker question than the caller asked and doing it silently. A
+    caller that handed over the collected map and filled it with nothing has
+    said no candidate collected anything, so nothing is measured and the whole
+    population is refused. `test_bites` passed under every candidate here, so
+    the truthiness reading cleared it; only the identity reading refuses.
+    """
+    from scripts.utils.canopus_contract import ContractError, verification_gaps
+
+    pair = {("tests/test_subject.py", "test_bites")}
+
+    with pytest.raises(ContractError) as excinfo:
+        verification_gaps(
+            [("tests/test_subject.py", "test_bites", "passed")],
+            {"none": set(pair), "echo": set(pair), "greedy": set(pair)},
+            {},
+        )
+
+    assert "test_bites" in str(excinfo.value)
+
+
+def test_the_refusal_does_not_claim_a_measured_test_was_never_measured():
+    """What the two-argument refusal may say about a test that bit.
+
+    It opened "these tests were never put in front of a wrong implementation",
+    and that sentence is false for exactly the tests this form cannot see: a
+    test put in front of all three candidates that went red under every one of
+    them is absent from the taken map for the best possible reason. On the
+    2026-08-07 run of `tests/test_canopus_steps.py` that was 14 of 21. The
+    refusal is correct to fire; it is not entitled to say why.
+    """
+    from scripts.utils.canopus_contract import ContractError, verification_gaps
+
+    with pytest.raises(ContractError) as excinfo:
+        verification_gaps(
+            [("tests/test_subject.py", "test_bites", "passed")],
+            {"none": set(), "echo": set(), "greedy": set()},
+        )
+
+    assert "never put in front of" not in str(excinfo.value)
+    assert "not known to have been put in front of" in str(excinfo.value)
+
+
 # ----------------------------------------------------------------------------
 # The claim narrowing that makes replacement survivable
 # ----------------------------------------------------------------------------

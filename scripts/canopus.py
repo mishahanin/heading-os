@@ -119,15 +119,38 @@ def _under_root(raw: str, root: Path) -> Path:
 # mostly-green run reads a correct measurement as a broken tool, and the first
 # thing they do about it is stop running the tool.
 _AFTER_BUILD_MEANING = (
-    "What a name below means. That test stayed GREEN while the tree's own code "
-    "beneath it was replaced by three implementations that are wrong in three "
-    "different ways: one that returns nothing from every call, one that hands "
-    "back its own first argument, and one that answers with every string the "
-    "test file itself wrote. The claim is exactly that and no more, so read it "
-    "exactly: the test did not distinguish right from wrong under those three "
-    "wrongnesses. It is NOT a bad test. It may be a perfectly good test of "
-    "something these candidates cannot express, such as a file on disk, a "
-    "document's prose, or a value the subject never returns."
+    "What a name below means. That test stayed GREEN while the modules on the "
+    "`replaced` line above were replaced by three implementations that are "
+    "wrong in three different ways: one that returns nothing from every call, "
+    "one that hands back its own first argument, and one that answers with "
+    "every string the test file itself wrote. The claim is exactly that and no "
+    "more, so read it exactly: the test did not distinguish right from wrong "
+    "under those three wrongnesses. It is NOT a bad test. It may be a perfectly "
+    "good test of something these candidates cannot express, such as a file on "
+    "disk, a document's prose, or a value the subject never returns."
+)
+# Printed ONLY when the narrowing actually dropped something, because a caveat
+# on every page is a caveat nobody reads and would itself be false on a run
+# where every module the contract named was stood in for.
+#
+# It exists because the sentence above used to say "the tree's own code beneath
+# it was replaced" unconditionally, and that is false whenever the subject
+# reaches the claim set only through a package prefix: the ordinary idiom
+# `from scripts.utils import subject` claims the PACKAGE, the sweep rule drops
+# it, and the subject is never stood in for. Measured 2026-08-07 on
+# `tests/test_update_common.py`: `survived 3 of 6`, exit 0, and the module the
+# whole file is about was replaced zero times.
+_AFTER_BUILD_UNREPLACED = (
+    "What was NOT replaced. The modules on the `not replaced` line above were "
+    "left standing, each because it resolves outside the tree being probed or "
+    "because this probe's own plugin lies under it; the reason for each is on "
+    "stderr above. Nothing below is evidence about them. A test that exercises "
+    "only those modules was put in front of no wrong implementation at all, so "
+    "its name below records that it was never measured against one, not that "
+    "it failed to tell right from wrong. Check the subject you care about "
+    "against the `replaced` line before reading any name below as being about "
+    "it, and if it is missing, name that module in the contract's own imports "
+    "rather than its parent package."
 )
 _AFTER_BUILD_EXPECTATION = (
     "What the tests NOT named below did. They went red under replacement, and "
@@ -169,10 +192,12 @@ def _after_build(paths, root, expected) -> int:
     xml_text = run_pytest_report(paths, root)
     counts, outcomes = parse_junit(xml_text)
     collected: dict[str, set[tuple[str, str]]] = {}
+    claims: dict[str, list[str]] = {}
     try:
         taken = run_pass_candidates(
             paths, root, expected_population=outcomes,
             replace_existing=True, collected_out=collected,
+            claims_out=claims,
         )
         gaps = verification_gaps(outcomes, taken, collected)
     except ContractError as exc:
@@ -184,16 +209,30 @@ def _after_build(paths, root, expected) -> int:
         print(f"canopus: the after-build gap reading could not be made: {exc}",
               file=sys.stderr)
         return 1
-    total = len(outcomes)
+    # The DEDUPLICATED population, which is the set `gaps` was drawn from
+    # (`verification_gaps` collapses the triples to pairs before it counts).
+    # `len(outcomes)` counted raw report rows, so a report carrying one pair
+    # twice printed a denominator larger than the set the numerator came out of.
+    total = len({(rel, name) for rel, name, _outcome in outcomes})
+    dropped = claims.get("dropped", [])
     print(f"{BOLD}after-build gap reading{RESET}")
     for rel in expected:
         print(f"  target      {rel}  ({counts.get(rel, 0)} collected)")
     print(f"  candidates  {', '.join(CANDIDATES)}   "
           f"(three implementations that EXIST and are wrong)")
+    # On the PAGE, not only on stderr. The reading below is evidence about these
+    # modules and no others, and a reader who cannot see the list cannot tell
+    # whether the subject they came here about is in it.
+    print(f"  replaced    {', '.join(claims.get('claimed', [])) or 'nothing'}")
+    if dropped:
+        print(f"  not replaced  {', '.join(dropped)}")
     print(f"  survived    {len(gaps)} of {total}")
     print()
     print(_AFTER_BUILD_MEANING)
     print()
+    if dropped:
+        print(_AFTER_BUILD_UNREPLACED)
+        print()
     print(_AFTER_BUILD_EXPECTATION)
     print()
     if not gaps:

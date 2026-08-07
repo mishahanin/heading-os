@@ -834,6 +834,7 @@ def run_pass_candidates(
     expected_population: Optional[Sequence[tuple[str, str, str]]] = None,
     replace_existing: bool = False,
     collected_out: Optional[dict[str, set[tuple[str, str]]]] = None,
+    claims_out: Optional[dict[str, list[str]]] = None,
 ) -> dict[str, set[tuple[str, str]]]:
     """For each candidate, the (file, test) pairs it turned green.
 
@@ -895,8 +896,21 @@ def run_pass_candidates(
     best a test can do and the second is a test nobody measured. Left with only
     the taken map it must call both unmeasured, which on a real target is a
     false claim about most of the suite. See that function.
+
+    `claims_out`, when a caller supplies a dict, is FILLED with `claimed` (the
+    names the candidates were made to stand in for) and `dropped` (the names the
+    contract's source gave that the narrowing removed). It exists because the
+    narrowing is reported on stderr and the READING is printed on stdout, and a
+    caller that prints one without the other tells the operator that the code
+    beneath a test was replaced when the module that test exercises was left
+    standing. Measured 2026-08-07: `probe --after-build tests/test_update_common.py`
+    printed `survived 3 of 6` and exited 0 with `scripts.utils.update_common`
+    swept out of the claim set. The drop list is what lets the page say which
+    claims the reading is about, so it belongs beside the reading rather than
+    two streams away from it.
     """
     modules = _passable_claims(contract_imports(paths, root))
+    dropped: list[str] = []
     if replace_existing:
         # Narrowed ONLY here, never on the absent-name path. A claim that costs
         # nothing when it merely supplies a missing name destroys a live module
@@ -913,7 +927,11 @@ def run_pass_candidates(
                 "package this probe's own plugin lives under. The reason for "
                 "each drop is on stderr above."
             )
+        dropped = [name for name in modules if name not in set(narrowed)]
         modules = narrowed
+    if claims_out is not None:
+        claims_out["claimed"] = list(modules)
+        claims_out["dropped"] = dropped
     if not modules:
         # The identical posture `run_null_stub` takes, one step earlier and for
         # the identical reason: nothing was stood in for, so no wrong
@@ -1088,6 +1106,8 @@ def verification_gaps(
         run the test, because the claim being made is about all of them; a pair
         that one candidate never collected has no verdict from that candidate,
         and two verdicts out of three do not add up to "under every candidate".
+        Supplied and EMPTY says no candidate collected anything, which measures
+        nothing and refuses the whole population; it is not read as absent.
       * Without it, only the passing sets are in hand, and passing proves
         collection while failing is indistinguishable from never running. The
         best available reading is then the UNION of those sets: a pair seen
@@ -1116,16 +1136,34 @@ def verification_gaps(
             "none"
         )
     population = sorted({(rel, name) for rel, name, _outcome_token in outcomes})
-    if collected:
-        measured = set.intersection(*(set(pairs) for pairs in collected.values()))
-    else:
+    # `is not None`, never truthiness. A caller that supplied the collected map
+    # and filled it with nothing has REPORTED that no candidate collected
+    # anything, and that is not the same statement as declining to supply the
+    # map at all. Read as absent it fell back to the weaker union reading, which
+    # answers a question the caller did not ask; read as supplied and empty it
+    # measures nothing, so nothing is measured and the refusal below fires over
+    # the whole population. That is the fail-closed direction and it is decided
+    # here rather than arrived at by accident.
+    if collected is None:
         measured = set().union(*(set(pairs) for pairs in taken.values()))
+    elif not collected:
+        measured = set()
+    else:
+        measured = set.intersection(*(set(pairs) for pairs in collected.values()))
     unmeasured = [pair for pair in population if pair not in measured]
     if unmeasured:
         raise ContractError(
-            "these tests were never put in front of a wrong implementation, so "
-            "the gap reading cannot speak for them and calling them clear would "
-            "name the one test nobody measured as the one test that is fine: "
+            # NOT "were never put in front of a wrong implementation". Under the
+            # two-argument form a test that WAS put in front of all three and
+            # went red under every one of them is indistinguishable from a test
+            # nobody ran, and on a real target that is most of the suite: the
+            # 2026-08-07 run of `tests/test_canopus_steps.py` had 14 of 21 bite.
+            # Naming those 14 as never measured is a false claim about the best
+            # thing a test can do, so the sentence says what is actually known.
+            "these tests are not known to have been put in front of a wrong "
+            "implementation, so the gap reading cannot speak for them and "
+            "calling them clear would name the one test nobody measured as the "
+            "one test that is fine: "
             + ", ".join(f"{rel}::{name}" for rel, name in unmeasured)
             + ". Most often a candidate run never collected them, which the "
             "candidate probe reports on stderr; a module-scope statement "

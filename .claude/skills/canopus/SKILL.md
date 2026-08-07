@@ -32,7 +32,8 @@ x-heading-capability:
     clauses that decide whether the contract held between the approval commit and the code.
   how: >
     Bare `/canopus` for the seven steps. `/canopus note` to write the slice record,
-    `check` for the four clauses, `probe` to measure whether a contract is vacuous.
+    `check` for the four clauses, `probe` to measure whether a contract is vacuous, and
+    `probe --after-build` to ask that question again over code that already shipped.
     Records live in `records/slices/`; plans and scope documents live in the operator's
     private overlay and are referenced by digest, never by path.
   when: >
@@ -172,6 +173,35 @@ digest. Retiring the contract into the ordinary suite is part of the step, and a
 retirement is RECORDED: `--retired-sha` is the commit that removed the contract and
 `--promoted-to` the file carrying the coverage now. Without both, the clauses below
 read a shipped slice as a broken one.
+
+## `probe --after-build` — the same question, over code that already exists
+
+```
+.venv/bin/python scripts/canopus.py probe --after-build <test paths>
+```
+
+Step 3 asks "if this code were wrong, would any gate notice" exactly once, at a
+moment when the code does not exist. Retiring the contract into the ordinary
+suite at step 7 ends the asking: nothing re-asks, ever. This flag asks it again
+over code that ALREADY EXISTS. It puts the same three wrong implementations in
+front of whatever tests now cover the shipped slice and names every test that
+stayed green under all three. Reach for it when a later slice is about to lean
+on a retired contract's coverage, or when a suite looks greener than the work
+behind it.
+
+It REPORTS and never refuses. Exit 0 whether it names twenty survivors or none;
+exit 1 only when no reading could be made at all, which is a different statement
+from a clean one. **Nobody has calibrated this reading**, and rule 3 below
+forbids an uncalibrated reading from becoming a gate, so do not wire it into
+one.
+
+Two things about the page, both of which decide whether it is read correctly. A
+name in the list is NOT a bad test: the claim is exactly that the test did not
+tell right from wrong under those three wrongnesses, and a test of a document or
+of a file on disk lands there while being a perfectly good test of what it is
+about. And the page names which modules were replaced and which were not, so a
+test whose subject sits on the `not replaced` line was measured against nothing
+and its name says only that.
 
 ## `check` — the four clauses
 

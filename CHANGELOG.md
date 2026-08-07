@@ -6,6 +6,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- **Auto-memory is never pruned; a memory that goes unused sinks in ranking and
+  stays retrievable forever.** `access_count` was a salience field nothing had
+  ever written, so every consumer of it read a corpus-wide zero and the ranking
+  signal it was meant to carry did not exist. It is now written on the retrieval
+  path: `memory-index.py query --touch` bumps the auto-memory files a CONFIDENT
+  result surfaced, debounced to one write per file per day, and the recall hook
+  passes that flag on every prompt. The reinforcement bonus is log-scaled
+  (`scripts/utils/salience.py`), matching the old linear curve at zero and at ten
+  and continuing to separate above ten where the old one was flat.
+
+  Every path that turned a low count into a deletion proposal is gone with it.
+  `dream-shadow.py` reports DORMANCY — what the retriever has not surfaced
+  lately, informational, oldest first — where it used to emit prune candidates,
+  and `/dream` no longer proposes retiring anything: a superseded fact is
+  rewritten in place so the record survives. Removal happens only when the
+  operator explicitly asks, through `scripts/retire-memory.py`.
+
+- **Clock-driven auto-retire is retired and disabled.** `/dream` no longer
+  stamps `expires:`, which was the pass's only trigger, so nothing new accrues
+  for it to act on. `scripts/install-memory-auto-retire-timer.sh` now refuses to
+  install the timer unless the no-prune directive is deliberately overridden
+  (`--i-am-reversing-the-no-prune-directive`), because a fresh clone that runs
+  the old installer re-arms deletion. The script and its unit templates stay on
+  disk: switched off, not removed.
+
+### Added
+
+- **`memory-index.py stats --top-access [N]`** lists the N most-accessed
+  memories (default 20) with their `access_count` and `last_accessed`. It exists
+  to read the reinforcement loop from the outside: if the same names hold the
+  top of that list month over month, retrieval is reinforcing what retrieval
+  already surfaces and `REINFORCE_K` is weighted too heavily. A low count is a
+  ranking position and nothing else, so the never-surfaced entries stay visible
+  rather than being filtered out into a shortlist.
+
 ### Fixed
 
 - **The freeze's plugin baseline described whichever interpreter typed the

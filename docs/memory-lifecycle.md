@@ -2,7 +2,7 @@
 
 One map of the six memory stores and the exact script or hook that moves data between them, with the trigger and cadence on every edge.
 
-Last Updated: 2026-07-08
+Last Updated: 2026-08-08
 
 HEADING OS keeps memory in six mechanisms. Each is documented on its own; what this page adds is the lifecycle: where a fact is written, how it is indexed for recall, when it is retired, and how the per-launch store stays in sync with the durable one. The diagram is the mechanism only. It names stores and the scripts that move data, never any real memory content.
 
@@ -16,8 +16,8 @@ flowchart TD
 
     AM <-->|memory-reconcile.py<br/>SessionStart hook, newest-wins, no delete-propagation| NAT[native harness store<br/>per-launch, ephemeral]
 
-    AM -->|memory-auto-retire.py<br/>daily 07:20, expires past-due| RET(((retired<br/>all stores)))
-    AM -->|retire-memory.py<br/>manual, the delete that sticks| RET
+    AM -.->|memory-auto-retire.py<br/>RETIRED: timer disabled, installer refuses| RET(((retired<br/>all stores)))
+    AM -->|retire-memory.py<br/>manual, on explicit instruction, the delete that sticks| RET
 
     AM -->|memory-index.py build<br/>daily 03:30 incremental| IDX[(semantic recall index<br/>.memory-index)]
     ODIN -->|memory-index.py build| IDX
@@ -50,12 +50,12 @@ The conversation chronicle is a distinct historical CLASS, not one of the belief
 
 - **Write during a session (on demand).** A fact is written to auto-memory (`data-root/auto-memory/*.md`) with a one-line pointer added to `MEMORY.md`. This is the canonical, durable home.
 - **Reconcile, `.claude/hooks/memory-reconcile.py` (SessionStart).** The per-launch native harness store and the canonical DATA auto-memory are synced newest-wins. It NEVER propagates deletions, so a file removed on one store alone is resurrected from the other at the next session start. That is why a real delete needs an all-store retire.
-- **Auto-retire, `scripts/memory-auto-retire.py` (daily 07:20).** Retires only records whose explicit `expires:` date has passed, from all stores, then strips the record's pointer from `MEMORY.md`. It is the safe, deterministic slice of `/dream`: it touches only facts the author pre-authorized with an expiry date.
-- **Manual retire, `scripts/retire-memory.py`.** Removes a named record from ALL stores at once. This is the only delete that sticks, given the reconcile hook's no-deletion-propagation rule.
+- **Auto-retire, `scripts/memory-auto-retire.py` — RETIRED, and disabled.** Clock-driven retirement is switched off. Auto-memory is never pruned: a memory that has gone unused sinks in recall ranking and stays retrievable, and removal happens only when the operator asks for it. `/dream` no longer stamps `expires:`, so the pass's only trigger no longer accrues; the timer is not installed, and `scripts/install-memory-auto-retire-timer.sh` refuses to install one unless the directive is explicitly overridden. The script and its unit templates stay on disk so reversing the decision is a one-line change, not an archaeology exercise.
+- **Manual retire, `scripts/retire-memory.py`.** Removes a named record from ALL stores at once, on an explicit operator instruction. This is the only delete that sticks, given the reconcile hook's no-deletion-propagation rule, and it is now the ONLY route out of memory.
 - **Index build, `scripts/memory-index.py build` (daily 03:30, incremental).** Rebuilds the local semantic recall index over the business memory corpus (Odin brain, business threads, business CRM) and the auto-memory records, computed locally via ollama `bge-m3`. Recall is hybrid: a dense channel (bge-m3 cosine, threshold-gated) fused with a sparse channel (SQLite FTS5 BM25) by reciprocal rank fusion. Query it with `memory-index.py query "<text>"`.
 - **Promote, `scripts/promote-knowledge.py` (manual).** Copies a personal `knowledge/` note into corporate `knowledge/shared/{type}/` with provenance, for sharing down to executives.
-- **Consolidate, `/dream` (manual, human-gated).** The judgement pass: merges duplicates, rewords, resolves contradictions, clears orphans across auto-memory and the ODIN brain. Nothing here is automatic.
-- **Chronicle build, `scripts/chronicle.py build` (daily timer, incremental).** Summarizes past session transcripts (top-level sessions only, never nested subagent logs) with a local model (`gemma3:4b`) into one dated entry per non-trivial conversation, tagged business or personal. Business entries index into the `chronicle` collection, recalled BELOW the belief stores. Personal entries are NEVER indexed (the `personal` segment is a hard-coded air-gap deny); they are recallable only on explicit demand via `scripts/chronicle.py personal-recall`, which reads `chronicle/personal/*.md` on the fly (local bge-m3, lexical fallback) and persists nothing - so personal life never surfaces into a working/send context unless the CEO summons it. It never writes to the brain and never sends anything, so it is safe to run unattended - the same family as the daily index build and auto-retire.
+- **Consolidate, `/dream` (manual, human-gated).** The judgement pass: merges duplicates, rewords, resolves contradictions, clears orphans across auto-memory and the ODIN brain. Nothing here is automatic, and nothing here proposes a removal: a superseded fact is rewritten in place so the record survives.
+- **Chronicle build, `scripts/chronicle.py build` (daily timer, incremental).** Summarizes past session transcripts (top-level sessions only, never nested subagent logs) with a local model (`gemma3:4b`) into one dated entry per non-trivial conversation, tagged business or personal. Business entries index into the `chronicle` collection, recalled BELOW the belief stores. Personal entries are NEVER indexed (the `personal` segment is a hard-coded air-gap deny); they are recallable only on explicit demand via `scripts/chronicle.py personal-recall`, which reads `chronicle/personal/*.md` on the fly (local bge-m3, lexical fallback) and persists nothing - so personal life never surfaces into a working/send context unless the CEO summons it. It never writes to the brain and never sends anything, so it is safe to run unattended - the same family as the daily index build.
 - **Hygiene, `scripts/memory-hygiene.py` (weekly Monday 07:34).** A detector, never a mutator. It aggregates objective defects (orphan memory files, `MEMORY.md` over budget, Odin temporal-validity errors) into one dated report and exits non-zero when any is present. A human resolves what it finds, usually via `/dream`.
 
 ## Driving it from one place

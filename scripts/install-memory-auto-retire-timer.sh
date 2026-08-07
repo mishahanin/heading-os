@@ -1,8 +1,23 @@
 #!/usr/bin/env bash
-# Install the memory auto-retire pass as a systemd-user timer on Linux/WSL2.
+# RETIRED AND DISABLED. Clock-driven auto-retire of auto-memory is switched off.
+#
+# The standing directive is that auto-memory is NEVER pruned: a memory that has
+# gone unused sinks in recall ranking and stays retrievable, and removal happens
+# only when the operator explicitly asks for it. /dream no longer stamps
+# `expires:`, so this timer's only trigger no longer accrues -- but a timer left
+# installable is a timer a fresh clone re-arms, and this one deletes memories.
+#
+# The mechanism is switched off, not removed: the script and its units stay on
+# disk so reversing the decision is a one-line change rather than an
+# archaeology exercise. This installer therefore REFUSES by default. A warning
+# would have been the softer choice and the wrong one -- it changes nothing
+# mechanically, so a clone that ignores it ends up in exactly the state the
+# directive forbids, with deletion armed and nobody aware.
 #
 # Usage:
-#   scripts/install-memory-auto-retire-timer.sh
+#   scripts/install-memory-auto-retire-timer.sh                  # refuses, exits 9
+#   scripts/install-memory-auto-retire-timer.sh --i-am-reversing-the-no-prune-directive
+#   MEMORY_AUTO_RETIRE_OVERRIDE=1 scripts/install-memory-auto-retire-timer.sh
 #   HEADING_OS_TZ=America/New_York scripts/install-memory-auto-retire-timer.sh   # pin a TZ
 #   PYTHON=/path/to/python scripts/install-memory-auto-retire-timer.sh   # override interpreter
 #
@@ -22,6 +37,29 @@
 # For unattended boot:  loginctl enable-linger "$USER"  (done automatically below)
 
 set -euo pipefail
+
+# The retirement gate. First thing, before any path is resolved or unit rendered.
+OVERRIDE="${MEMORY_AUTO_RETIRE_OVERRIDE:-}"
+if [[ "${1:-}" == "--i-am-reversing-the-no-prune-directive" ]]; then
+    OVERRIDE=1
+    shift
+fi
+if [[ -z "$OVERRIDE" ]]; then
+    echo "[refused] memory auto-retire is RETIRED and disabled." >&2
+    echo "          Auto-memory is never pruned on a clock. A memory that has gone" >&2
+    echo "          unused sinks in recall ranking and stays retrievable; removal is" >&2
+    echo "          an explicit operator instruction, run through" >&2
+    echo "          scripts/retire-memory.py by hand." >&2
+    echo "          /dream no longer stamps expires:, so this timer's only trigger" >&2
+    echo "          no longer accrues. See docs/memory-lifecycle.md." >&2
+    echo "" >&2
+    echo "          If the directive is being reversed deliberately, re-run with" >&2
+    echo "          --i-am-reversing-the-no-prune-directive (or set" >&2
+    echo "          MEMORY_AUTO_RETIRE_OVERRIDE=1)." >&2
+    exit 9
+fi
+echo "[warn] installing a timer that DELETES memories. The no-prune directive is" >&2
+echo "       being overridden deliberately (docs/memory-lifecycle.md)." >&2
 
 # Workspace root = directory containing this script's parent (i.e. scripts/../).
 WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"

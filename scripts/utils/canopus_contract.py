@@ -442,41 +442,61 @@ _SKIP_MARKER_NAMES = ("skip", "skipif", "xfail")
 def _skip_marker_name(node: ast.expr) -> Optional[str]:
     """The marker family a decorator or an assigned value names, or None.
 
-    Matches `pytest.mark.<name>` reached through the ATTRIBUTE chain, whether
-    the marker is used bare (`@pytest.mark.skip`, an `ast.Attribute`) or called
+    Matches the marker reached through the ATTRIBUTE chain, whether it is used
+    bare (`@pytest.mark.skip`, an `ast.Attribute`) or called
     (`@pytest.mark.skip(...)`, an `ast.Call` whose `.func` is that same
     `ast.Attribute`). Matched by name over the chain rather than by resolving
     the object, the same trade every AST reader in this module makes:
     `contract_imports` above matches a dynamic-import callee by bare name for
-    the identical reason, over-reporting rather than resolving. A shadowed
-    local named `pytest` would be misread here too, and misreading toward MORE
-    matches is the safe direction for a reader that only ever widens a
-    refusal, never manufactures a silent pass.
+    the identical reason, over-reporting rather than resolving.
+
+    TWO shapes are accepted, and the second is the whole of this paragraph.
+    `<anything>.mark.<family>` covers `pytest.mark.skip` and every alias of the
+    module (`import pytest as pt` then `@pt.mark.skip`). A BARE `mark.<family>`
+    covers `from pytest import mark` then `@mark.skip`. An earlier revision
+    required the chain to root in a `ast.Name` spelled exactly `pytest`, and
+    measured against both spellings it caught NEITHER: `skip_markers_without_
+    reason` returned `[]` for a file carrying an unreasoned `@pt.mark.skip`
+    and an unreasoned `@mark.skip`, while the canonical spelling in the same
+    tree was caught. `vacuity_refusal` states that the contract author is the
+    adversary here, so a one-line import alias that walks a parked test past
+    this refusal is the whole finding, not an edge.
+
+    Widening is the direction this reader is permitted to err in, and both
+    arms err that way: a shadowed local named `pytest`, or any object named
+    `mark`, is misread toward MORE matches, and a match only ever produces a
+    refusal for a marker that states no reason. `foo.bar.skip` still matches
+    nothing, because the middle segment must be `mark`.
     """
     base = node.func if isinstance(node, ast.Call) else node
     if not isinstance(base, ast.Attribute) or base.attr not in _SKIP_MARKER_NAMES:
         return None
     mark = base.value
-    if not (isinstance(mark, ast.Attribute) and mark.attr == "mark"):
-        return None
-    root = mark.value
-    if not (isinstance(root, ast.Name) and root.id == "pytest"):
-        return None
-    return base.attr
+    if isinstance(mark, ast.Attribute):
+        return base.attr if mark.attr == "mark" else None
+    if isinstance(mark, ast.Name) and mark.id == "mark":
+        return base.attr
+    return None
 
 
 def _skip_states_reason(node: ast.expr, marker: str) -> bool:
     """Whether *node* (the decorator, or the value `pytestmark` was assigned) documents a reason.
 
     A `reason=` keyword whose value is a non-empty string constant states a
-    reason for every marker in the family, `skipif` included: real pytest's
-    signature is `skipif(condition, *, reason=None)`, so a keyword reason is
-    legitimate there even though the positional carve-out below is not.
+    reason for every marker in the family, `skipif` and `xfail` included: real
+    pytest's signature is `skipif(condition, *, reason=None)` and
+    `xfail(condition=None, *, reason=None, ...)`, so a keyword reason is
+    legitimate in both even though the positional carve-out below is not.
 
-    The first POSITIONAL string constant states a reason for `skip` and
-    `xfail` only. `skipif`'s first positional is the CONDITION, not a reason,
-    so a bare `@pytest.mark.skipif(COND)` with no `reason=` keyword states no
-    reason regardless of what COND is.
+    The first POSITIONAL string constant states a reason for `skip` ALONE,
+    because `skip`'s signature is `skip(reason="")` and it is the only member
+    of the family whose first positional is the reason. Both `skipif` and
+    `xfail` take a CONDITION there. An earlier revision grouped `xfail` with
+    `skip`, on a docstring claim that xfail's first positional is a reason;
+    measured, `@pytest.mark.xfail("1 == 1")` on a failing test reports
+    `1 xfailed`, which is the string being EVALUATED as a condition. So a bare
+    `@pytest.mark.skipif(COND)` or `@pytest.mark.xfail(COND)` with no
+    `reason=` keyword states no reason, regardless of what COND is.
 
     A reason that is not a string constant (a variable, an f-string) cannot
     be read statically, and this reader FAILS OPEN there: it is treated as
@@ -495,7 +515,7 @@ def _skip_states_reason(node: ast.expr, marker: str) -> bool:
             if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
                 return kw.value.value != ""
             return True  # not a string constant: fail open, treat as reasoned
-    if marker in ("skip", "xfail") and node.args:
+    if marker == "skip" and node.args:
         first = node.args[0]
         if isinstance(first, ast.Constant) and isinstance(first.value, str):
             return first.value != ""
@@ -1102,7 +1122,7 @@ def run_pass_candidates(
                 "stands in for; move it inside the test body.",
                 file=sys.stderr,
             )
-    if replace_existing and claims_out is not None:
+    if replace_existing:
         # What the children REPLACED, in place of what they were armed for. The
         # intersection rather than the union: the page's sentence is that a
         # named test survived three wrong implementations of these modules, and
@@ -1110,6 +1130,12 @@ def run_pass_candidates(
         # carry that claim. Both readings are the same set on every run measured
         # here, because all three children run the same target; the intersection
         # is the one that stays true if they ever differ.
+        #
+        # Computed whether or not the caller wants `claims_out`, because the
+        # refusal below is a property of the RUN and not of the caller's
+        # out-parameter. While this whole block hung on `claims_out is not
+        # None`, a caller that merely wanted the taken map got no diagnostic
+        # and no refusal for a run in which nothing was replaced at all.
         replaced = set.intersection(*stood_in_for)
         claimed = [name for name in modules if _was_replaced(name, replaced)]
         untouched = [name for name in modules if name not in set(claimed)]
@@ -1123,8 +1149,42 @@ def run_pass_candidates(
                 "test is the ordinary way this happens.",
                 file=sys.stderr,
             )
-        claims_out["claimed"] = claimed
-        claims_out["dropped"] = sorted(dropped + untouched)
+        if not claimed:
+            # The third route to "nothing was stood in for", and the only one
+            # that was not refused. The two above it are decided BEFORE the
+            # children run — an empty claim set, and a claim set the narrowing
+            # emptied — and both raise. This one is decided by what the children
+            # actually did, and until it raised, a run in which no candidate
+            # replaced a single module returned a taken map holding every test
+            # that passed against the REAL code, which `verification_gaps` then
+            # reported as tests that survived three wrong implementations.
+            #
+            # Measured through the CLI on 2026-08-07, at HEAD, on a contract
+            # whose only import of the subject sat inside a skipped test:
+            #
+            #     replaced
+            #     not replaced  pytest, scripts.utils.canopus_steps
+            #     survived    1 of 1
+            #
+            # — a blank `replaced` line above a survivor named for staying green
+            # while the modules on that blank line were replaced, and exit 0. A
+            # reading nobody took wearing the face of a completed measurement is
+            # the one shape this instrument exists to refuse, and it reached the
+            # page by the door where nothing looked like it had failed.
+            raise ContractError(
+                "no candidate child replaced anything, so no wrong "
+                "implementation was ever put in front of any test and this run "
+                "measured NOTHING: every test that stayed green stayed green "
+                "against the real code. The modules armed for replacement were "
+                + ", ".join(modules) + ", and no import in the run reached any "
+                "of them. Most often the subject is imported only inside a test "
+                "that skipped, or is reached only through a package prefix the "
+                "narrowing dropped; import it by its own name inside a test "
+                "that runs."
+            )
+        if claims_out is not None:
+            claims_out["claimed"] = claimed
+            claims_out["dropped"] = sorted(dropped + untouched)
     return taken
 
 

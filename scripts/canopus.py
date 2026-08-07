@@ -288,10 +288,15 @@ def _after_build(paths, root, expected) -> int:
     # On the PAGE, not only on stderr. The reading below is evidence about these
     # modules and no others, and a reader who cannot see the list cannot tell
     # whether the subject they came here about is in it.
-    # No empty-case fallback: `run_pass_candidates` raises before it returns
-    # when the claim set is empty, so this line cannot be reached with nothing
-    # to name, and a fallback for a state that cannot occur is a claim about
-    # the code that is not true.
+    # No empty-case fallback, and the reason is now TWO refusals rather than
+    # one. `run_pass_candidates` raises before it returns when the claim set is
+    # empty, and again when the children replaced nothing — the second was
+    # missing, and this comment named only the first while asserting the line
+    # could not be reached with nothing to name. Measured false on 2026-08-07:
+    # a contract importing its subject only inside a skipped test printed a
+    # BLANK `replaced` line above `survived 1 of 1` and exited 0. A fallback for
+    # a state that cannot occur is a claim about the code that is not true; so
+    # is a comment that says a state cannot occur while it does.
     print(f"  replaced    {', '.join(claims.get('claimed', []))}")
     if dropped:
         print(f"  not replaced  {', '.join(dropped)}")

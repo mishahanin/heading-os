@@ -2810,6 +2810,101 @@ def test_a_reasoned_class_skip_is_left_alone(tmp_path):
     assert skip_markers_without_reason([target], tmp_path) == []
 
 
+def test_an_aliased_pytest_import_does_not_walk_a_skip_past_the_reader(tmp_path):
+    """The refusal survives the two ordinary ways `pytest.mark` is respelled.
+
+    `vacuity_refusal` states plainly that the contract author is the adversary
+    this module is written against, so a one-line respelling that parks a test
+    where the gate cannot see it is the whole finding rather than an edge.
+    Measured before `_skip_marker_name` was widened: a file carrying an
+    unreasoned `@pt.mark.skip` and an unreasoned `@mark.skip` returned `[]`,
+    while the canonical `@pytest.mark.skip` in the same tree was caught. Both
+    spellings are ordinary Python that pytest honours identically.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import pytest as pt
+        from pytest import mark
+
+        @pt.mark.skip
+        def test_module_alias():
+            assert False
+
+        @mark.skip
+        def test_bare_mark():
+            assert False
+
+        @pt.mark.skip(reason="a stated reason still passes, whatever the alias")
+        def test_reasoned_under_an_alias():
+            assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == [
+        "test_bare_mark",
+        "test_module_alias",
+    ]
+
+
+def test_a_middle_segment_that_is_not_mark_matches_nothing(tmp_path):
+    """The other side of the widening, so it is a chain match and not a suffix one.
+
+    `_skip_marker_name` no longer requires the chain to root in the literal
+    name `pytest`, which is what lets an alias through. The middle segment is
+    still required to be `mark`, so an unrelated `helper.state.skip` is not a
+    marker and does not earn a refusal this reader would have manufactured.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import helper
+
+        @helper.state.skip
+        def test_not_a_marker_at_all():
+            assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == []
+
+
+def test_a_positional_condition_on_xfail_is_not_read_as_a_reason(tmp_path):
+    """`xfail`'s first positional is a CONDITION, exactly as `skipif`'s is.
+
+    Only `pytest.mark.skip` has the signature `skip(reason="")`; `xfail` is
+    `xfail(condition=None, *, reason=None, ...)`. An earlier revision grouped
+    `xfail` with `skip` in the positional carve-out on a docstring claim that
+    its first positional is a reason, so `@pytest.mark.xfail(COND)` with no
+    `reason=` keyword read as documented and walked past the refusal. Measured
+    against real pytest: `@pytest.mark.xfail("1 == 1")` on a failing test
+    reports `1 xfailed`, which is the string being evaluated as a condition
+    rather than displayed as a reason.
+
+    The `skip` arm is asserted alongside it, so this pins the carve-out's
+    boundary rather than merely deleting it.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import pytest
+
+        @pytest.mark.xfail("1 == 1")
+        def test_xfail_positional_condition():
+            assert False
+
+        @pytest.mark.xfail("1 == 1", reason="a keyword reason still documents it")
+        def test_xfail_condition_with_a_reason():
+            assert False
+
+        @pytest.mark.skip("the first positional IS the reason for skip alone")
+        def test_skip_positional_reason():
+            assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == [
+        "test_xfail_positional_condition",
+    ]
+
+
 # ----------------------------------------------------------------------------
 # The third thing a test can be: skipped, which is neither a gap nor a bite
 # ----------------------------------------------------------------------------
@@ -2996,3 +3091,71 @@ def test_a_test_red_under_one_candidate_and_skipped_under_another_still_bit():
         [(*bit, "passed")], {"none": set(), "echo": set(), "greedy": set()},
         candidate_outcomes,
     ) == []
+
+
+def test_skip_markers_refuses_a_file_it_cannot_parse(tmp_path):
+    """A syntax error must not read as "this contract carries no skip marker".
+
+    The sibling of `test_contract_imports_refuses_a_file_it_cannot_parse` above,
+    against the other AST reader, and it needs its own test rather than
+    inheriting that one: the two are separate `ast.parse` call sites with
+    separate handlers, and this one's silence has a different cost. An empty
+    list here means the skip refusal cannot fire, so an undocumented parking
+    walks a test through the gate on a file nobody could read — the fail-open
+    direction, arriving by the door that looks like a clean bill.
+    """
+    from scripts.utils.canopus_contract import ContractError, skip_markers_without_reason
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text("def test_a(:\n", encoding="utf-8")
+
+    with pytest.raises(ContractError, match="could not be parsed"):
+        skip_markers_without_reason([contract], tmp_path)
+
+
+def test_skip_markers_refuses_a_file_that_is_not_valid_utf8(tmp_path):
+    """Bytes that are not valid UTF-8 raise `ValueError`, not `OSError`.
+
+    The handler names `OSError, SyntaxError, ValueError` for this reason.
+    Uncaught, a `UnicodeDecodeError` escapes as a raw traceback rather than the
+    `ContractError` every other unreadable-contract path raises, and `main`'s
+    `except ContractError` would not catch it.
+    """
+    from scripts.utils.canopus_contract import ContractError, skip_markers_without_reason
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_bytes(b"\xff\xfe not utf-8 at all\n")
+
+    with pytest.raises(ContractError, match="could not be parsed"):
+        skip_markers_without_reason([contract], tmp_path)
+
+
+def test_a_child_that_said_nothing_is_not_read_as_a_child_that_replaced_nothing():
+    """`None` and `set()` are different claims, and the refusal rests on it.
+
+    `_replaced_by_the_child` returns `None` when the child NEVER reported, and
+    an empty set when it reported replacing nothing. `run_pass_candidates`
+    refuses on the first and accepts the second, so collapsing the two removes
+    the guard: a child that says nothing would have its ARMED claim set printed
+    as what happened, which is the clean page over a measurement nobody took
+    that this whole instrument exists to refuse.
+
+    Mutation-proven to have been uncovered: returning `set()` in place of `None`
+    left all eleven `--after-build` CLI tests green.
+    """
+    from scripts.utils.canopus_contract import _replaced_by_the_child
+    from scripts.utils.canopus_nullstub import NULLSTUB_STDERR_MARKER, REPLACED_REPORT
+
+    prefix = f"{NULLSTUB_STDERR_MARKER} {REPLACED_REPORT}"
+
+    assert _replaced_by_the_child([]) is None
+    assert _replaced_by_the_child(
+        [f"{NULLSTUB_STDERR_MARKER} not claiming os: it is compiled in"]
+    ) is None
+    assert _replaced_by_the_child([f"{prefix} "]) == set()
+    assert _replaced_by_the_child([f"{prefix} a.b,c"]) == {"a.b", "c"}
+    # A later line wins: the plugin writes diagnostics of its own and the parent
+    # forwards every one of them, so position is not a reliable reader.
+    assert _replaced_by_the_child([f"{prefix} a", f"{prefix} b"]) == {"b"}

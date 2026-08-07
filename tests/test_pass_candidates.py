@@ -820,3 +820,169 @@ def test_the_narrowing_does_not_touch_the_absent_name_path(tmp_path):
         taken[name] == {("c/test_absent.py", "test_a")}
         for name in ("none", "echo", "greedy")
     )
+
+
+def test_an_armed_run_refuses_when_no_child_replaced_anything(tmp_path):
+    """The third route to "nothing was stood in for", and the last one to refuse.
+
+    Two routes already raised, and both are decided BEFORE the children run: an
+    empty claim set, and a claim set the narrowing emptied. This one is decided
+    by what the children actually DID, and it was silent. A claim is what a
+    candidate was ARMED for; only an import reaching that name replaces
+    anything, so a subject imported exclusively inside a SKIPPED test is armed
+    and never stood in for.
+
+    Measured through the CLI at HEAD on 2026-08-07, before this refusal existed,
+    on exactly the shape below::
+
+        replaced
+        not replaced  pytest, scripts.utils.canopus_steps
+        survived    1 of 1
+
+    A blank `replaced` line, above a survivor named for having stayed green
+    while the modules on that blank line were replaced, at exit 0. Every test
+    that "survived" had run against the real code. A reading nobody took wearing
+    the face of a completed measurement is the one shape this instrument exists
+    to refuse.
+
+    The refusal names the armed modules, because the operator's next question is
+    which subject they thought was under the candidates.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_pass_candidates
+
+    (tmp_path / "shipped_subject.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    directory = tmp_path / "c"
+    directory.mkdir()
+    (directory / "test_shipped.py").write_text(
+        "import pytest\n"
+        "\n\n"
+        "@pytest.mark.skip(reason='the only import of the subject sits here')\n"
+        "def test_only_importer():\n"
+        "    from shipped_subject import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n"
+        "\n\n"
+        "def test_touches_no_subject_at_all():\n"
+        "    assert 1 + 1 == 2\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        run_pass_candidates(
+            [directory], tmp_path, replace_existing=True,
+            expected_population=[
+                ("c/test_shipped.py", "test_only_importer", "skipped"),
+                ("c/test_shipped.py", "test_touches_no_subject_at_all", "passed"),
+            ],
+        )
+
+    message = str(excinfo.value)
+    assert "measured NOTHING" in message
+    assert "shipped_subject" in message
+
+
+def test_the_refusal_does_not_fire_when_a_child_did_replace_something(tmp_path):
+    """The calibration in the other direction, so the refusal is not a blanket.
+
+    The same subject, imported inside a test that RUNS. One import reaching the
+    name is the whole difference between a run that measured something and the
+    run above, so this pins that the refusal reads what the children did rather
+    than refusing every armed run that also carries a skipped test.
+    """
+    from scripts.utils.canopus_contract import run_pass_candidates
+
+    (tmp_path / "shipped_subject.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    directory = tmp_path / "c"
+    directory.mkdir()
+    (directory / "test_shipped.py").write_text(
+        "import pytest\n"
+        "\n\n"
+        "@pytest.mark.skip(reason='parked beside a test that does import it')\n"
+        "def test_parked():\n"
+        "    assert False\n"
+        "\n\n"
+        "def test_strict():\n"
+        "    from shipped_subject import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n",
+        encoding="utf-8",
+    )
+
+    claims: dict = {}
+    taken = run_pass_candidates(
+        [directory], tmp_path, replace_existing=True, claims_out=claims,
+        expected_population=[
+            ("c/test_shipped.py", "test_parked", "skipped"),
+            ("c/test_shipped.py", "test_strict", "passed"),
+        ],
+    )
+
+    assert claims["claimed"] == ["shipped_subject"]
+    assert all(
+        ("c/test_shipped.py", "test_strict") not in passed
+        for passed in taken.values()
+    )
+
+
+def test_a_candidate_child_that_reported_nothing_refuses_the_run(monkeypatch, tmp_path):
+    """The armed run refuses a child that never said what it replaced.
+
+    A claim is what a candidate was ARMED for; only the child knows which of
+    those names an import actually reached, and it says so once at teardown. A
+    parent that accepts silence has nothing left but the claim set, and printing
+    that as what happened is exactly how a page comes to name a module nothing
+    touched.
+
+    The guard existed and was untested. Mutation-proven on 2026-08-07: making
+    `_replaced_by_the_child` return an empty set in place of `None` — which
+    makes this `raise` unreachable — left all eleven `--after-build` CLI tests
+    green. So the one guard against a clean page over an unmeasured run was
+    itself unmeasured.
+
+    Driven by replacing the child launch rather than by building a contract that
+    provokes silence, because the plugin always writes the line when it is
+    armed: the state under test is a child that did not, which on a real target
+    means a plugin that failed to load or a stream that was lost.
+    """
+    from scripts.utils import canopus_contract
+    from scripts.utils.canopus_contract import ContractError, run_pass_candidates
+
+    (tmp_path / "shipped_subject.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    directory = tmp_path / "c"
+    directory.mkdir()
+    (directory / "test_shipped.py").write_text(
+        "def test_strict():\n"
+        "    from shipped_subject import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n",
+        encoding="utf-8",
+    )
+
+    def _silent_child(*_args, notes_out=None, **_kwargs):
+        # A well-formed report, and not one word about what was replaced.
+        return (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<testsuites><testsuite name="pytest" tests="1">'
+            '<testcase classname="c.test_shipped" file="c/test_shipped.py" '
+            'name="test_strict"/>'
+            "</testsuite></testsuites>"
+        )
+
+    monkeypatch.setattr(canopus_contract, "run_pytest_report", _silent_child)
+
+    with pytest.raises(ContractError) as excinfo:
+        run_pass_candidates(
+            [directory], tmp_path, replace_existing=True,
+            expected_population=[("c/test_shipped.py", "test_strict", "passed")],
+        )
+
+    assert "did not report which modules it replaced" in str(excinfo.value)

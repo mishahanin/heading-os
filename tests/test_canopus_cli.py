@@ -980,7 +980,14 @@ def test_after_build_names_a_skipped_test_as_neither_a_gap_nor_a_bite(tree, caps
     # raw collection count, so the mixed case read `(2 collected)` beside
     # `0 of 1` and a skim could take either number for the other.
     assert "(1 in this reading)" in out
-    assert "collected" not in out
+    # Scoped to the target line, never asserted over the whole page. "collected"
+    # is an ordinary English word this instrument uses in several diagnostics
+    # ("contract file collected nothing", "never collected these tests"), so a
+    # page-wide negative pins the absence of a WORD rather than the absence of
+    # the raw count, and any future diagnostic breaks it with no change in
+    # behaviour.
+    target_line = next(line for line in out.splitlines() if "target" in line)
+    assert "collected" not in target_line
 
 
 # The fixture idiom that skips under the candidates, written once and used by

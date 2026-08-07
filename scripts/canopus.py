@@ -35,6 +35,15 @@ It writes nothing, anywhere. The exit code is 1 when the contract would be
 refused on any of those grounds and 0 otherwise, so it is usable as a gate by a
 caller that wants one, and the reasons are printed either way.
 
+`probe --after-build <paths>` asks the third of those questions at the other end
+of a slice's life. The standard asks "if this code were wrong, would any gate
+notice" exactly once, before the code exists, and then never again: a shipped
+slice's contract is retired into the ordinary suite and nothing re-asks. Armed
+with `--after-build`, the same wrong implementations are put in front of tests
+covering code that ALREADY EXISTS, and every test that stays green under all
+three is named. It reports and exits 0; it never refuses. A reading nobody has
+calibrated must not become a gate.
+
 What replaced the rest. Until 2026-08-07 this file also held a freeze
 lifecycle - approve, freeze, verify, status, release, repin, pack, where - that
 locked the contract's bytes and re-checked them from a manifest under
@@ -64,6 +73,7 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     run_pytest_report,
     skip_markers_without_reason,
     vacuity_refusal,
+    verification_gaps,
 )
 # The candidate NAMES only, so the summary line names every candidate that was
 # run rather than only the ones that took something. Importing the plugin module
@@ -94,6 +104,106 @@ def _under_root(raw: str, root: Path) -> Path:
     return candidate if candidate.is_absolute() else root / candidate
 
 
+# The whole value of `--after-build` is in these two paragraphs, so they live on
+# the PAGE the operator reads rather than in a docstring nobody opens. Both
+# halves are load-bearing and neither may be dropped for brevity.
+#
+# The first half bounds the claim. A test named by this reading is not a bad
+# test and the page must never let it be read as one: the claim is exactly that
+# the test did not distinguish right from wrong under three specific
+# wrongnesses, and a test of a file on disk or of a document's prose is a
+# perfectly good test of something these three candidates cannot express.
+#
+# The second half bounds the reader's expectation. Under replacement MOST tests
+# go red, and that is the instrument working. A reader who arrives expecting a
+# mostly-green run reads a correct measurement as a broken tool, and the first
+# thing they do about it is stop running the tool.
+_AFTER_BUILD_MEANING = (
+    "What a name below means. That test stayed GREEN while the tree's own code "
+    "beneath it was replaced by three implementations that are wrong in three "
+    "different ways: one that returns nothing from every call, one that hands "
+    "back its own first argument, and one that answers with every string the "
+    "test file itself wrote. The claim is exactly that and no more, so read it "
+    "exactly: the test did not distinguish right from wrong under those three "
+    "wrongnesses. It is NOT a bad test. It may be a perfectly good test of "
+    "something these candidates cannot express, such as a file on disk, a "
+    "document's prose, or a value the subject never returns."
+)
+_AFTER_BUILD_EXPECTATION = (
+    "What the tests NOT named below did. They went red under replacement, and "
+    "that is the measurement working rather than a broken tool: the code "
+    "beneath them was wrong on purpose, so failing is the correct answer. A "
+    "reader arriving here expecting a mostly-green run is reading the page "
+    "backwards. This reading refuses nothing and gates nothing; nobody has "
+    "calibrated it yet, so it reports and exits 0."
+)
+
+
+def _after_build(paths, root, expected) -> int:
+    """The gap reading over code that already exists. Writes nothing, gates nothing.
+
+    `probe` asks "if this code were wrong, would any gate notice" exactly once,
+    at a moment when the code does not exist, and then never again: once a slice
+    ships, its contract is retired into the ordinary suite and nothing re-asks.
+    This is the surface that asks it afterwards, against whatever tests cover the
+    shipped code.
+
+    It arms the replacement switch, which is what makes the three candidates
+    reach code that EXISTS at all. Without it they install a PEP 562
+    `__getattr__`, which Python consults only for a name a module lacks, so
+    against shipped code they touch nothing and the page reports a clean run over
+    a suite that was never measured.
+
+    It does NOT run the null-stub vacuity probe. That probe asks whether a test
+    passes while the code is ABSENT, and against shipped code nothing is absent,
+    so its two runs would agree for a reason that has nothing to do with the
+    tests and the word `vacuous` would appear beside tests it never judged. Two
+    fewer pytest sessions is the incidental benefit, not the reason.
+
+    The exit is 0 whenever a reading was produced, and 1 only when one could not
+    be. That is not a gate on what the reading SAYS: a page naming twenty
+    survivors exits 0 exactly like a page naming none. Rule 3 of this standard is
+    that a reading nobody has calibrated must not become a gate, and this one has
+    never been pointed at real code before today.
+    """
+    xml_text = run_pytest_report(paths, root)
+    counts, outcomes = parse_junit(xml_text)
+    collected: dict[str, set[tuple[str, str]]] = {}
+    try:
+        taken = run_pass_candidates(
+            paths, root, expected_population=outcomes,
+            replace_existing=True, collected_out=collected,
+        )
+        gaps = verification_gaps(outcomes, taken, collected)
+    except ContractError as exc:
+        # The one failure this command reports as a failure: no reading exists.
+        # Printed on stderr and exited non-zero, because a page that said
+        # nothing survived would be indistinguishable from a run in which
+        # nothing was ever measured, which is the reading this whole instrument
+        # was built to refuse.
+        print(f"canopus: the after-build gap reading could not be made: {exc}",
+              file=sys.stderr)
+        return 1
+    total = len(outcomes)
+    print(f"{BOLD}after-build gap reading{RESET}")
+    for rel in expected:
+        print(f"  target      {rel}  ({counts.get(rel, 0)} collected)")
+    print(f"  candidates  {', '.join(CANDIDATES)}   "
+          f"(three implementations that EXIST and are wrong)")
+    print(f"  survived    {len(gaps)} of {total}")
+    print()
+    print(_AFTER_BUILD_MEANING)
+    print()
+    print(_AFTER_BUILD_EXPECTATION)
+    print()
+    if not gaps:
+        print(f"  {GREEN}none{RESET}  every test went red under at least one "
+              f"candidate")
+    for rel, name in gaps:
+        print(f"  {YELLOW}survived{RESET}  {rel}::{name}")
+    return 0
+
+
 def cmd_probe(args) -> int:
     """Read a contract's shape before its implementation exists. Writes nothing.
 
@@ -121,6 +231,14 @@ def cmd_probe(args) -> int:
     if not expected:
         print("canopus: no test modules found under those paths", file=sys.stderr)
         return 1
+    if getattr(args, "after_build", False):
+        # Branched HERE rather than woven into the table below, because the two
+        # readings answer different questions over different subjects and a
+        # single page carrying both would invite each to be read as the other.
+        # Everything above this line is shared on purpose: the path resolution
+        # and the collected-nothing refusal are properties of `probe`, not of
+        # either reading.
+        return _after_build(paths, root, expected)
     xml_text = run_pytest_report(paths, root)
     counts, outcomes = parse_junit(xml_text)
     # BOUND before the call, on every path, because the table twenty lines down
@@ -344,6 +462,17 @@ def build_parser() -> argparse.ArgumentParser:
              "its tests assert something; writes nothing",
     )
     probe.add_argument("paths", nargs="+", help="contract files or directories")
+    # A FLAG on `probe`, never a fourth subcommand. It is the same question this
+    # command already asks ("if this code were wrong, would any gate notice"),
+    # asked at the other end of a slice's life, and a separate subcommand would
+    # present it as a separate capability an operator has to learn.
+    probe.add_argument(
+        "--after-build", action="store_true",
+        help="read the gap over code that ALREADY EXISTS: run the wrong "
+             "implementations against shipped code and name every test that "
+             "stayed green under all of them. Reports, never refuses; exits 0 "
+             "unless no reading could be made at all",
+    )
     probe.set_defaults(func=cmd_probe)
     return parser
 

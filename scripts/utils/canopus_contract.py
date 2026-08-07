@@ -18,10 +18,13 @@ from __future__ import annotations
 import ast
 import json
 import os
+import site
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from fnmatch import fnmatch
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Optional, Sequence
 from xml.etree import ElementTree
@@ -45,6 +48,13 @@ from scripts.utils.canopus_nullstub import (
     _expand_claims,
     greedy_payload,
 )
+# The plugin module OBJECT, alongside the names above, for one purpose:
+# `replaceable_claims` has to know what the instrument itself is running out of,
+# and it reads that off `__name__` rather than from a string written here. A
+# spelled-out "scripts.utils.canopus_nullstub" would survive the file being moved
+# or renamed, and what it would survive INTO is a probe that replaces its own
+# plugin's module and cannot say why it died. Measured; see that function.
+from scripts.utils import canopus_nullstub as _nullstub
 # `venv_python` ONLY, never `ensure_venv`. The first is a pure path computation;
 # the second re-execs the running process, and this module is imported by the
 # CLI, by the gate's callers and by the suite. An import that could re-exec is a
@@ -636,6 +646,186 @@ def passable_literals(literals) -> list[str]:
     return sorted(kept)
 
 
+def _library_roots() -> frozenset:
+    """Where this interpreter keeps code that is not the tree's own.
+
+    The stdlib, the platform stdlib, and both site-packages directories, read
+    off `sysconfig` and `site` rather than written down, so the answer is a
+    PROPERTY of the running interpreter instead of a list somebody maintains.
+    That matters more than it looks: under `uv` the venv's `site-packages` sits
+    INSIDE the repository (`.venv/lib/python3.11/site-packages`), so "is this
+    file under the repository root" answers True for `pytest` and for `yaml`,
+    and a narrowing built on the root alone would keep exactly the claims that
+    kill the probe child.
+
+    Every getter is guarded. `site.getsitepackages` is absent from some
+    embedded builds and `getusersitepackages` can touch the filesystem; a
+    missing entry can only make this set SMALLER, which can only keep a claim,
+    which is the direction the whole narrowing already errs in.
+    """
+    roots: set[Path] = set()
+    paths = sysconfig.get_paths()
+    for key in ("stdlib", "platstdlib", "purelib", "platlib"):
+        value = paths.get(key)
+        if value:
+            roots.add(Path(value).resolve())
+    for getter in (site.getsitepackages, site.getusersitepackages):
+        try:
+            value = getter()
+        except (AttributeError, OSError, TypeError):
+            continue
+        for entry in ([value] if isinstance(value, str) else list(value)):
+            roots.add(Path(entry).resolve())
+    return frozenset(roots)
+
+
+_LIBRARY_ROOTS = _library_roots()
+
+
+def _resolves_inside(name: str, root: Path) -> Optional[bool]:
+    """True in the tree, False elsewhere, None when the name does not resolve here.
+
+    THREE answers, not two, because the three mean different things to the
+    caller. A name that resolves to a file under *root* and outside the
+    interpreter's library directories is the tree's own code, which is what a
+    replacing candidate exists to stand in for. A name that resolves anywhere
+    else is somebody else's code. A name that does not resolve AT ALL has
+    nothing live to replace, so the caller keeps it and the absent-name path
+    behaves exactly as it did before this narrowing existed.
+
+    `built-in` and `frozen` are the False answer rather than the None one, and
+    the distinction is the whole reason this function returns a tri-state.
+    `os` is FROZEN on this interpreter, so a reader that treated "no file on
+    disk" as "does not resolve" would keep the claim, and keeping the claim on
+    `os` is precisely what was measured killing the child: with replacement
+    armed, `os.environ` read `None`, pytest's own teardown died on
+    `'NoneType' object has no attribute 'pop'`, no JUnit report was written at
+    all, and the parent could report only that the contract could not be
+    measured.
+
+    Resolution happens in the PARENT, under the parent's `sys.path`, which is
+    the same trade `run_null_stub` already makes when it borrows
+    `_expand_claims` to predict the child's claim set. A name importable only
+    from the contract root reads as unresolvable here and is therefore KEPT,
+    and keeping is the direction that preserves the behaviour every existing
+    caller measured. `find_spec` executes ancestor packages' `__init__.py`, so
+    `SystemExit` is caught alongside `Exception` for the reason `_expand_claims`
+    records at its own handler: an ordinary `sys.exit(0)` in an ancestor walks
+    straight past a handler that names only `Exception`, and there is no child
+    process boundary here to contain it.
+    """
+    try:
+        spec = find_spec(name)
+    except (Exception, SystemExit):  # noqa: BLE001 - reported by the caller
+        return None
+    if spec is None:
+        return None
+    origin = spec.origin
+    if origin in ("built-in", "frozen"):
+        return False
+    if origin is None:
+        locations = list(spec.submodule_search_locations or [])
+        if not locations:
+            return False
+        target = Path(locations[0])
+    else:
+        target = Path(origin)
+    try:
+        target = target.resolve()
+    except OSError:
+        return None
+    if not target.is_relative_to(Path(root).resolve()):
+        return False
+    return not any(target.is_relative_to(library) for library in _LIBRARY_ROOTS)
+
+
+def replaceable_claims(names: Sequence[str], root: Path) -> list[str]:
+    """The claims a REPLACING candidate may install on, sorted.
+
+    A narrowing that applies to replacement ONLY. The absent-name path supplies
+    a value for a name a module lacks, so claiming `os` there costs nothing:
+    `os` has every name it needs and the supplier is never consulted.
+    Replacement rewrites the names a module HAS, so the same claim overwrites
+    `os.environ`, and the module it overwrites is one the running pytest child
+    is itself standing on. Two claim sets for two questions, rather than one set
+    that is right for neither.
+
+    THE MEASUREMENT, at full cost, on this repository, 2026-08-07. Pointing the
+    armed candidates at `tests/test_canopus_steps.py` claims what that file and
+    the conftest beside it import, which is `argparse, html, json, os, pathlib,
+    pytest, re, scripts.canopus, scripts.utils, scripts.utils.canopus_contract,
+    scripts.utils.canopus_steps, xml.etree, yaml`. Armed, the child died before
+    writing a report:
+
+        os.environ.pop("PYTEST_VERSION", None)
+        AttributeError: 'NoneType' object has no attribute 'pop'
+
+    Narrowed to the tree's own code, one claim still killed it, by a second
+    route: `scripts.utils` is a PREFIX of this instrument's own plugin module,
+    the finder claims every name under a claimed prefix, and the plugin
+    therefore replaced ITSELF. `CANDIDATES` read `None` and pytest reported
+    `INTERNALERROR TypeError: argument of type 'NoneType' is not iterable`.
+    Narrowed by both rules, the same command ran to completion and produced a
+    reading over twenty one tests.
+
+    So there are two drop rules, and both are derived rather than listed.
+
+      * A name that RESOLVES outside the tree being probed, or inside this
+        interpreter's stdlib or site-packages, is not the code under test. See
+        `_resolves_inside`, including why a name that does not resolve at all is
+        KEPT.
+      * A name that would sweep this instrument's own plugin module in is
+        dropped whole. `_NamedFinder._claims` matches a name and everything
+        below it, so a claim C reaches the plugin exactly when the plugin's
+        dotted name equals C or begins with `C.`, and that test is computed off
+        `canopus_nullstub.__name__` rather than off a string written here.
+
+    The cost of the second rule, stated plainly rather than left to be met: a
+    slice whose subject IS the package this instrument runs out of cannot be
+    read by `--after-build`. The probe cannot stand in for the module it is
+    standing on, and a run that tried would report a crash rather than a
+    measurement. Naming the subject's own module directly, rather than its
+    parent package, is claimed normally and is the ordinary case.
+
+    Every drop is named on stderr. A claim silently removed is a verdict
+    silently narrowed, which is the reading this whole instrument exists to
+    refuse; `_passable_claims` reports its own drops for the identical reason.
+    ONE line per drop RULE rather than one per name, because the ordinary run
+    drops ten claims for one reason and ten paragraphs of identical prose is a
+    page an operator learns to scroll past, taking the eleventh line with it.
+    """
+    instrument = _nullstub.__name__
+    kept: list[str] = []
+    foreign: list[str] = []
+    swept: list[str] = []
+    for name in sorted(set(names)):
+        if instrument == name or instrument.startswith(f"{name}."):
+            swept.append(name)
+        elif _resolves_inside(name, root) is False:
+            foreign.append(name)
+        else:
+            kept.append(name)
+    if foreign:
+        print(
+            "canopus: not replacing " + ", ".join(foreign) + ": each resolves "
+            "outside the tree being probed, or inside this interpreter's own "
+            "stdlib or site-packages, so none of them is the code under test. "
+            "Replacing one rewrites a module the pytest child is standing on, "
+            "which ends the run rather than measuring it.",
+            file=sys.stderr,
+        )
+    if swept:
+        print(
+            "canopus: not replacing under the claim(s) " + ", ".join(swept)
+            + f": this probe's own plugin module ({instrument}) lies under "
+            "them, and a claim reaches every name below it, so the candidates "
+            "would replace the instrument taking the measurement. Name the "
+            "subject's own module rather than its parent package.",
+            file=sys.stderr,
+        )
+    return kept
+
+
 def run_pass_candidates(
     paths: Sequence[Path],
     root: Path,
@@ -643,6 +833,7 @@ def run_pass_candidates(
     timeout: int = 900,
     expected_population: Optional[Sequence[tuple[str, str, str]]] = None,
     replace_existing: bool = False,
+    collected_out: Optional[dict[str, set[tuple[str, str]]]] = None,
 ) -> dict[str, set[tuple[str, str]]]:
     """For each candidate, the (file, test) pairs it turned green.
 
@@ -691,8 +882,38 @@ def run_pass_candidates(
     took, which is the status quo before this probe existed. Silence would still
     let a probe that measured half a contract print the same page as one that
     measured all of it, so the loss is named.
+
+    `collected_out`, when a caller supplies a dict, is FILLED with the pairs
+    each candidate actually collected, alongside the pairs it turned green in
+    the return value. An out-parameter rather than a widened return, and the
+    reason is arithmetic rather than taste: the return value is read as the
+    taken map at every call site in this repository and in a dozen tests, and
+    turning it into a tuple would rewrite all of them to serve one caller.
+    The one caller is `verification_gaps`, which cannot tell a test that FAILED
+    under every candidate from a test no candidate ever ran when it is handed
+    passing sets alone, and those two readings are opposites: the first is the
+    best a test can do and the second is a test nobody measured. Left with only
+    the taken map it must call both unmeasured, which on a real target is a
+    false claim about most of the suite. See that function.
     """
     modules = _passable_claims(contract_imports(paths, root))
+    if replace_existing:
+        # Narrowed ONLY here, never on the absent-name path. A claim that costs
+        # nothing when it merely supplies a missing name destroys a live module
+        # when it replaces the names that module has, and some of those modules
+        # are what the running pytest child is standing on. The measurement, and
+        # both drop rules, are in `replaceable_claims`.
+        narrowed = replaceable_claims(modules, root)
+        if modules and not narrowed:
+            raise ContractError(
+                "every module this contract's source names was dropped from the "
+                "replacing claim set, so no wrong implementation was put in "
+                "front of it: " + ", ".join(modules) + ". A replacing candidate "
+                "may only stand in for the tree's own code, and not for the "
+                "package this probe's own plugin lives under. The reason for "
+                "each drop is on stderr above."
+            )
+        modules = narrowed
     if not modules:
         # The identical posture `run_null_stub` takes, one step earlier and for
         # the identical reason: nothing was stood in for, so no wrong
@@ -735,6 +956,8 @@ def run_pass_candidates(
         )
         _counts, outcomes = parse_junit(xml_text)
         collected = {(rel, test) for rel, test, _o in outcomes}
+        if collected_out is not None:
+            collected_out[name] = collected
         taken[name] = {
             (rel, test) for rel, test, outcome in outcomes if outcome == "passed"
         }
@@ -825,6 +1048,93 @@ def pass_candidate_refusal(
                 + _CANDIDATE_CURE[candidate]
             ]
     return []
+
+
+def verification_gaps(
+    outcomes: Sequence[tuple[str, str, str]],
+    taken: dict[str, set[tuple[str, str]]],
+    collected: Optional[dict[str, set[tuple[str, str]]]] = None,
+) -> list[tuple[str, str]]:
+    """The tests that stayed green under EVERY candidate, sorted.
+
+    The question `probe` asks once, before the code exists, asked again after
+    it is written: not "is this code right" but "if it were wrong, would any
+    gate notice". Each pair returned here is a test that could not tell right
+    from wrong under three specific wrongnesses, so the coverage it appears to
+    give is coverage nobody has shown to exist.
+
+    A name in this list is NOT a bad test, and no caller may print it as one.
+    The claim is exactly the sentence above and nothing wider: a test of a file
+    on disk, of a document's prose, or of a value the candidates cannot express
+    lands here while being a perfectly good test of the thing it is actually
+    about. The wording every caller prints is the caller's half of that
+    contract; this function's half is refusing to widen the claim.
+
+    THE EDGE THAT DECIDES WHETHER THIS IS EVIDENCE. A test no candidate ever
+    COLLECTED is green under all three in the same empty way that every claim
+    about the members of an empty set is true: it never ran, so it never failed.
+    Reported as absent from the list it reads as a test that DID tell right from
+    wrong, which is the opposite of what happened, and the one test nobody
+    measured is then the one test the page calls fine. So it is refused by name
+    instead. That direction is the same one `run_null_stub` takes for a test its
+    stub runs lost: not measured is not proved innocent, and an intersection
+    computed over the survivors reads exactly like a completed measurement.
+
+    WHAT COUNTS AS MEASURED depends on which of the two calls the caller makes,
+    and the difference is not cosmetic.
+
+      * With `collected`, the pairs each candidate really collected, a pair is
+        measured when EVERY candidate collected it. Every candidate has to have
+        run the test, because the claim being made is about all of them; a pair
+        that one candidate never collected has no verdict from that candidate,
+        and two verdicts out of three do not add up to "under every candidate".
+      * Without it, only the passing sets are in hand, and passing proves
+        collection while failing is indistinguishable from never running. The
+        best available reading is then the UNION of those sets: a pair seen
+        green under at least one candidate is known to have been in the
+        measurement, and a pair seen nowhere is not known to have been in it at
+        all. That is a weaker instrument on purpose, and it is weak in the
+        REFUSING direction. Pointed at a real target it refuses nearly
+        everything, because most tests go red under replacement and redness is
+        what this form cannot see; `scripts/canopus.py probe --after-build`
+        therefore passes `collected` and the two-argument form stays what a
+        caller holding only a taken map may honestly ask.
+
+    `taken`'s OWN keys are the candidate set, not the module-level `CANDIDATES`
+    tuple. A caller that ran two candidates is asking a two-candidate question
+    and should be answered it; a caller that ran none is asking nothing, and an
+    empty map raises rather than returning every test in the population, which
+    is what `all()` over no candidates would otherwise produce. That is the same
+    vacuous-truth defect as the uncollected test above, one level up.
+    """
+    if not taken:
+        raise ContractError(
+            "no candidate was run, so nothing was put in front of these tests "
+            "and no test can be called green under every candidate: an answer "
+            "computed over no candidates names every test in the population, "
+            "which is the shape of a completed measurement and the content of "
+            "none"
+        )
+    population = sorted({(rel, name) for rel, name, _outcome_token in outcomes})
+    if collected:
+        measured = set.intersection(*(set(pairs) for pairs in collected.values()))
+    else:
+        measured = set().union(*(set(pairs) for pairs in taken.values()))
+    unmeasured = [pair for pair in population if pair not in measured]
+    if unmeasured:
+        raise ContractError(
+            "these tests were never put in front of a wrong implementation, so "
+            "the gap reading cannot speak for them and calling them clear would "
+            "name the one test nobody measured as the one test that is fine: "
+            + ", ".join(f"{rel}::{name}" for rel, name in unmeasured)
+            + ". Most often a candidate run never collected them, which the "
+            "candidate probe reports on stderr; a module-scope statement "
+            "reading a value the candidates stand in for is the usual cause."
+        )
+    return [
+        pair for pair in population
+        if all(pair in taken[candidate] for candidate in taken)
+    ]
 
 
 def _outcome(case: ElementTree.Element) -> str:

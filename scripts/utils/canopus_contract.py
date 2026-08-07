@@ -420,6 +420,152 @@ def contract_literals(paths: Sequence[Path], root: Path) -> set[str]:
     return literals
 
 
+_SKIP_MARKER_NAMES = ("skip", "skipif", "xfail")
+
+
+def _skip_marker_name(node: ast.expr) -> Optional[str]:
+    """The marker family a decorator or an assigned value names, or None.
+
+    Matches `pytest.mark.<name>` reached through the ATTRIBUTE chain, whether
+    the marker is used bare (`@pytest.mark.skip`, an `ast.Attribute`) or called
+    (`@pytest.mark.skip(...)`, an `ast.Call` whose `.func` is that same
+    `ast.Attribute`). Matched by name over the chain rather than by resolving
+    the object, the same trade every AST reader in this module makes:
+    `contract_imports` above matches a dynamic-import callee by bare name for
+    the identical reason, over-reporting rather than resolving. A shadowed
+    local named `pytest` would be misread here too, and misreading toward MORE
+    matches is the safe direction for a reader that only ever widens a
+    refusal, never manufactures a silent pass.
+    """
+    base = node.func if isinstance(node, ast.Call) else node
+    if not isinstance(base, ast.Attribute) or base.attr not in _SKIP_MARKER_NAMES:
+        return None
+    mark = base.value
+    if not (isinstance(mark, ast.Attribute) and mark.attr == "mark"):
+        return None
+    root = mark.value
+    if not (isinstance(root, ast.Name) and root.id == "pytest"):
+        return None
+    return base.attr
+
+
+def _skip_states_reason(node: ast.expr, marker: str) -> bool:
+    """Whether *node* (the decorator, or the value `pytestmark` was assigned) documents a reason.
+
+    A `reason=` keyword whose value is a non-empty string constant states a
+    reason for every marker in the family, `skipif` included: real pytest's
+    signature is `skipif(condition, *, reason=None)`, so a keyword reason is
+    legitimate there even though the positional carve-out below is not.
+
+    The first POSITIONAL string constant states a reason for `skip` and
+    `xfail` only. `skipif`'s first positional is the CONDITION, not a reason,
+    so a bare `@pytest.mark.skipif(COND)` with no `reason=` keyword states no
+    reason regardless of what COND is.
+
+    A reason that is not a string constant -- a variable, an f-string -- cannot
+    be read statically, and this reader FAILS OPEN there: it is treated as
+    stating a reason, so the marker is not refused. Over-refusing teaches the
+    operator to route around the gate, which is worse than letting one
+    genuinely undocumented skip through unread.
+
+    The bare form (`@pytest.mark.skip`, not a call at all) carries no
+    arguments whatsoever, so it states no reason by construction; that is the
+    `not isinstance(node, ast.Call)` branch below.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    for kw in node.keywords:
+        if kw.arg == "reason":
+            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                return kw.value.value != ""
+            return True  # not a string constant: fail open, treat as reasoned
+    if marker in ("skip", "xfail") and node.args:
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value != ""
+        return True  # fail open, same rule as the keyword branch above
+    return False
+
+
+def skip_markers_without_reason(paths: Sequence[Path], root: Path) -> list[str]:
+    """SORTED names of tests carrying a skip-family marker that states no reason.
+
+    Read from the contract's own SOURCE via the AST, the same shape
+    `contract_imports` and `contract_literals` above already walk:
+    `contract_source_files` for which files to read, one `ast.parse` per file,
+    and an `OSError`/`SyntaxError`/`ValueError` from that parse raised as a
+    `ContractError` rather than swallowed -- an unparseable contract file is
+    not the same claim as a contract file that names no skip marker at all.
+
+    The marker family is `pytest.mark.skip`, `pytest.mark.skipif`, and
+    `pytest.mark.xfail`, matched by `_skip_marker_name` above. What counts as
+    stating a reason is `_skip_states_reason`, including its fail-open rule for
+    a reason that is not a string constant.
+
+    Two shapes are read, not one, in two separate passes over the same tree.
+    A DECORATOR on a `def` or `async def` -- walked via `ast.walk` so a marked
+    method nested inside a test class is read too, and named by its own bare
+    function name rather than qualified by class, on the authoring rule the
+    contract this reader answers to states plainly: it asserts bare names, not
+    `TestClass.test_method`. And a MODULE-LEVEL `pytestmark = pytest.mark.skip`,
+    read separately from `tree.body` -- module top-level statements ONLY,
+    never `ast.walk` -- so a `pytestmark` assigned inside a class body is never
+    mistaken for the module's own. The list form
+    `pytestmark = [pytest.mark.skip, pytest.mark.other]` is accepted too, each
+    element checked independently. A module-level marker is named by the
+    literal string `"<module>"`, because there is no function name to report,
+    and that string is exactly what SORTS first among `test_*` names (`<` is
+    ASCII 0x3C, `t` is 0x74) -- which is why the returned list needs no
+    special-casing to put it there; a single `sorted()` over the whole set
+    already does.
+
+    Why this reader exists at all: `probe` already prints a skipped test with
+    the note "did not run, so it proves nothing", and printing is ALL it does
+    -- nothing about that note ever became a refusal.
+    `.claude/skills/canopus/references/planning-gate.md` says the human eye was
+    the only thing standing between an operator and a skip that quietly walked
+    a whole test through the gate; this reader is what lets `refusal_reasons`
+    stand there instead. An `xfail` did exactly that once already, and
+    `run_null_stub`'s own comments record it: xunit1 writes an expected
+    failure as `skipped`, so the vacuity intersection never saw it either.
+    """
+    names: set[str] = set()
+    for rel in contract_source_files(paths, root):
+        path = Path(root) / rel
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError) as exc:
+            raise ContractError(
+                f"the contract file {rel} could not be parsed, so the skip "
+                f"markers it carries could not be read: {exc}"
+            ) from exc
+        for stmt in tree.body:
+            if not (
+                isinstance(stmt, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "pytestmark"
+                    for target in stmt.targets
+                )
+            ):
+                continue
+            values = (
+                stmt.value.elts if isinstance(stmt.value, ast.List) else [stmt.value]
+            )
+            for value in values:
+                marker = _skip_marker_name(value)
+                if marker and not _skip_states_reason(value, marker):
+                    names.add("<module>")
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                marker = _skip_marker_name(decorator)
+                if marker and not _skip_states_reason(decorator, marker):
+                    names.add(node.name)
+                    break
+    return sorted(names)
+
+
 def passable_literals(literals) -> list[str]:
     """The literals that can survive the trip to the child, sorted.
 
@@ -978,11 +1124,13 @@ def refusal_reasons(
     expected: Sequence[str],
     *,
     green_ok: bool = False,
+    skipped_without_reason: Sequence[str] = (),
 ) -> list[str]:
     """Why this contract cannot be frozen. Empty means it can.
 
-    Two conditions, and they do not overlap. A collection error yields zero items
-    for its file, so it is caught by the first rather than needing its own rule.
+    Three conditions now, not two, and the third does not overlap the first
+    two either. A collection error yields zero items for its file, so it is
+    caught by the first rather than needing its own rule.
 
     Redness is required of the SET, not of each test. A single honest case
     ("returns an empty list for empty input") can legitimately pass against a
@@ -1005,6 +1153,21 @@ def refusal_reasons(
     reason from a reason that never fired. Here the suppression is at the one
     site that produces it, and the per-file zero-item refusals below are
     untouched by construction rather than by careful matching.
+
+    `skipped_without_reason` is the third condition, and it is a caller-supplied
+    LIST rather than something computed in here: this function reads a JUnit
+    population, and `skip_markers_without_reason` reads the contract's own
+    SOURCE, a different input entirely that only `probe` (or another caller
+    running both) is positioned to hand over. When it is non-empty, exactly
+    ONE reason is appended naming every test in it -- never one reason per
+    test, because the caller that prints this list prints one line per reason,
+    and N elements for one underlying defect would read as N separate defects
+    rather than the single family it is. The reason it states is why an
+    undocumented skip is refused at all: a test that never ran cannot be told,
+    from the suite's own report, apart from one that ran and passed -- both
+    read `skipped`-free and green -- so a skip carrying no reason is the one
+    shape this function cannot distinguish from a test that quietly proves
+    nothing.
     """
     reasons: list[str] = []
     for rel in expected:
@@ -1020,6 +1183,14 @@ def refusal_reasons(
         reasons.append(
             "no contract test failed: a contract that is green before the code "
             "exists asserts nothing"
+        )
+    if skipped_without_reason:
+        reasons.append(
+            "skip marker states no reason, so the test it covers cannot be told "
+            "apart from one that ran and passed: the suite reports green either "
+            "way, and a test that never ran is not evidence of anything. Name a "
+            "reason, or replace the marker with the assertion it stands in for: "
+            + ", ".join(skipped_without_reason)
         )
     return reasons
 

@@ -62,6 +62,7 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     run_null_stub,
     run_pass_candidates,
     run_pytest_report,
+    skip_markers_without_reason,
     vacuity_refusal,
 )
 # The candidate NAMES only, so the summary line names every candidate that was
@@ -219,7 +220,16 @@ def cmd_probe(args) -> int:
         print(f"{BOLD}candidates{RESET}  {summary}   "
               f"(of {len(red_set)} red; each is an implementation that EXISTS "
               f"and is wrong)")
-    reasons = refusal_reasons(counts, outcomes, expected)
+    # Read from the contract's SOURCE, not from `outcomes`: a skip never fails,
+    # so nothing in the JUnit report can name it. Unwrapped, like the
+    # `contract_files`/`run_pytest_report` calls above it in this function: a
+    # `ContractError` here (an unparseable contract file) propagates to
+    # `main`'s own `except ContractError`, the same path an unparseable
+    # contract already takes on those two calls.
+    skipped = skip_markers_without_reason(paths, root)
+    reasons = refusal_reasons(
+        counts, outcomes, expected, skipped_without_reason=skipped
+    )
     if candidates_failed:
         reasons.append(candidates_failed)
     else:

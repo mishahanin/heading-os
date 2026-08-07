@@ -31,8 +31,8 @@ cannot.
 # overlay: min 336 bytes, p25 13,911, median 23,704, p75 35,200, max 164,805.
 # PLAN_BYTE_WARN mirrors the SKILL.md warn `skill-metadata-check.py` already
 # enforces, so the workspace carries one number rather than two. PLAN_BYTE_HARD
-# sits one byte above the measured median, so half that history would have
-# passed unchanged.
+# is 24 KiB, the first binary-round number above the measured median, clearing
+# it by 872 bytes; 51 of the 99 plans measured would pass it unchanged.
 PLAN_BYTE_WARN = 16384
 PLAN_BYTE_HARD = 24576
 

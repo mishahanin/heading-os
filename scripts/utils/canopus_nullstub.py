@@ -438,6 +438,17 @@ def replace_attributes(module, mode: str, payload: str):
     module half-replaced is not a wrong implementation, it is a mixture, and no
     verdict can be read off a mixture.
 
+    That choice leaves ONE asymmetry a contract author can meet, stated here
+    rather than left to be guessed at. A name the module HAD answers the
+    candidate's VALUE, so `subject.REAL` reads `None` under `none`. A name it
+    lacks, which includes every name a real PEP 562 `__getattr__` used to
+    serve, answers a `Candidate` OBJECT, so `subject.DYNAMIC` reads a stand-in
+    that answers `None` only when it is CALLED. Measured on a module carrying
+    its own `__getattr__`: `REAL` gave `None` and `DYNAMIC` gave a `Candidate`.
+    The absent-name half cannot do better, because a name nobody ever bound has
+    no recorded shape to imitate and a callable stand-in is the more useful of
+    the two guesses; see `Candidate` for why only a call answers there.
+
     DUNDERS SURVIVE UNTOUCHED, on the rule `_stub_attribute` and both stand-in
     classes already follow. `__name__`, `__file__`, `__path__`, `__spec__`,
     `__loader__`, `__package__`, `__doc__` and `__builtins__` are read by the
@@ -459,11 +470,25 @@ def replace_attributes(module, mode: str, payload: str):
     contract and is wrong twice over: `subject.ANSWER is None` is then false,
     and a constant that has to be CALLED to answer is not a constant a wrong
     implementation could have. Replacing a callable with the candidate's answer
-    is wrong the other way: every call in the contract dies on
+    is wrong the other way: EVERY call in the contract dies on
     `'NoneType' object is not callable`, every test goes red for a reason that
     is about this instrument rather than the contract, no candidate takes
     anything, and the probe reports a clean page for the second time by a new
     route.
+
+    The split MOVES that instrument-shaped failure to the edges; it does not
+    remove it, and the boundary is worth knowing before reading a candidate
+    run. A class is callable, so it becomes a candidate, so calling it answers
+    the mode's value, so the method call on the result dies: measured,
+    `Widget().render()` raised `AttributeError: 'NoneType' object has no
+    attribute 'render'`. A constant that a contract subscripts dies the
+    matching way: measured, `CONFIG['a']` raised `TypeError: 'NoneType' object
+    is not subscriptable`. Both are one call deeper than the plain
+    `subject.render("x")` the split was chosen for, and both leave the test red
+    rather than green, so a candidate takes FEWER tests and the probe claims
+    FEWER gaps than the truth. That is the direction this instrument is allowed
+    to err in, and a builder who meets one reads it as a contract the
+    candidates could not measure rather than as a contract they cleared.
 
     ONE `Candidate` is built at the door and every callable name gets a sibling
     of it. Building it first is what validates *mode* even for a module with no
@@ -477,6 +502,18 @@ def replace_attributes(module, mode: str, payload: str):
     asserting an equivalence between two of the subject's names would be
     satisfied by an accident of this function instead of by the candidate's
     behaviour.
+
+    The scope is the module's dict AT THIS INSTANT, and no later. A name bound
+    after this call returns keeps whatever was bound: the name then EXISTS, so
+    Python never consults `supply` for it, exactly as it never consults an
+    absent-name supplier for a name that is present. Measured, a module given a
+    new attribute after `pytest_configure` kept its real value. Correct and
+    safe rather than a hole, on two counts. The subject's own module-scope code
+    has already finished by the time this runs, so what binds a name afterwards
+    is the contract or a fixture, and a value the CONTRACT itself wrote is not
+    a value the candidate should be answering for. And the direction, as
+    everywhere else here, is toward a test staying red and a candidate taking
+    less.
 
     Returns `(existing, supply)`, the pair `_supply_absent_attributes` returns,
     so `pytest_unconfigure` gives a live module its surface back through one
@@ -564,15 +601,36 @@ class _WrapLoader(Loader):
         return self._real.create_module(spec)
 
     def exec_module(self, module):
-        # The returned pair is dropped here and recorded in `pytest_configure`
-        # on the other surface, deliberately. This loader only ever runs for a
-        # name that was NOT in `sys.modules` when the plugin armed, so the
-        # module it hands back was created by this probe and nothing outside
-        # the probe holds a reference to it; there is no prior surface to give
-        # back. The already-imported modules are the ones somebody else owns,
-        # and those are the ones teardown restores.
         self._real.exec_module(module)
-        _install_attributes(module)
+        installed = _install_attributes(module)
+        # Recorded on THIS installation's ledger, so a module the loader
+        # touched gets its surface back exactly as one that was already
+        # imported does.
+        #
+        # An earlier revision dropped this pair, defending it with the claim
+        # that nothing outside the probe holds the module. `sys.modules` holds
+        # it, and the claim was measured false after it was written: under an
+        # armed candidate a module wrapped here still answered `None` to every
+        # name AFTER `pytest_unconfigure`, was still in `sys.modules`, and a
+        # re-import handed the same dead subject back. Under the absent-name
+        # supplier alone that leak was additive and harmless, which is how the
+        # false comment survived being read; replacement changes its class,
+        # because the module is DESTROYED rather than extended, and every later
+        # reader in that process gets a subject whose every value is None.
+        #
+        # What restoration hands back here is the module's REAL values, not a
+        # stub's. The real loader ran on the line above, so the dict
+        # `replace_attributes` snapshotted is the genuine one.
+        #
+        # `_INSTALLED[-1]` is this probe's own installation, on the LIFO rule
+        # the ledger already follows: the finder that resolved this import is
+        # the one most recently installed and sitting at the front of
+        # `sys.meta_path`. The guard is for a caller that builds this loader
+        # directly, which the unit tests do, where there is no installation to
+        # record against and no teardown that would ever consult one.
+        if _INSTALLED:
+            existing, supply = installed
+            _INSTALLED[-1].supplied.append((module, existing, supply))
 
 
 class _NamedFinder(MetaPathFinder):

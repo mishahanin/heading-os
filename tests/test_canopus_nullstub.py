@@ -892,6 +892,61 @@ def test_unconfigure_gives_a_replaced_module_its_own_values_back(
         givenback_fixture.NOT_THERE_YET  # noqa: B018 - the access is the assertion
 
 
+def test_unconfigure_gives_back_a_module_the_wrapping_loader_replaced(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The OTHER surface, whose leak was defended by a comment that was false.
+
+    The loader's returned pair used to be dropped, on the claim that nothing
+    outside the probe held a module this loader created. `sys.modules` holds it.
+    Measured before this test existed: after `pytest_unconfigure` the module
+    still answered `None` to every name, was still in `sys.modules`, and a
+    re-import handed the same dead subject back. Under the absent-name supplier
+    that leak was additive and harmless; replacement changes its class, because
+    the module is destroyed rather than extended.
+
+    The re-import is asserted as well as the live object, deliberately. Reading
+    only the object this test already holds would stay green against a fix that
+    repaired one reference and left `sys.modules` carrying a ruin, which is the
+    reference every later importer in the process actually gets.
+    """
+    from scripts.utils.canopus_nullstub import (
+        CANDIDATE_VAR,
+        MODULES_VAR,
+        REPLACE_VAR,
+        pytest_configure,
+        pytest_unconfigure,
+    )
+
+    (tmp_path / "wrapped_fixture.py").write_text(
+        "REAL = 'own value'\n"
+        "\n\n"
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(CANDIDATE_VAR, "none")
+    monkeypatch.setenv(REPLACE_VAR, "1")
+    monkeypatch.setenv(MODULES_VAR, "wrapped_fixture")
+
+    pytest_configure(config=None)
+
+    import wrapped_fixture
+
+    assert wrapped_fixture.REAL is None
+
+    pytest_unconfigure(config=None)
+
+    assert (wrapped_fixture.REAL, wrapped_fixture.render("claim")) == (
+        "own value", "the claim was accepted",
+    )
+    del sys.modules["wrapped_fixture"]
+    import wrapped_fixture as reimported
+
+    assert reimported.REAL == "own value"
+
+
 def test_a_prefix_that_is_a_plain_module_is_claimed_and_stubbed_as_a_package(
     clean_imports, tmp_path, monkeypatch
 ):

@@ -53,7 +53,9 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     parse_junit,
     pytest_child_env,
 )
-from scripts.utils.canopus_note import NoteError, note_paths, read_note  # noqa: E402
+from scripts.utils.canopus_note import (  # noqa: E402
+    NOTE_DIR, NoteError, note_paths, read_note,
+)
 
 GIT_TIMEOUT = 60
 PYTEST_TIMEOUT = 900
@@ -379,7 +381,9 @@ def main(argv: list[str] | None = None) -> int:
                              "naming no commit (empty, or the all-zero sha) scopes "
                              "them to nothing rather than to everything")
     parser.add_argument("--json", action="store_true",
-                        help="one JSON row per clause on stdout, nothing else")
+                        help="one JSON row per clause on stdout, nothing else; "
+                             "with no note to check at all, a single row whose "
+                             "clause is 'scope' saying so")
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     rows: list[dict] = []
@@ -408,6 +412,27 @@ def main(argv: list[str] | None = None) -> int:
         for clause in clauses:
             rows.append(_row(slug, clause.__name__, *clause(root, note)))
     reported = [row for row in rows if not row["ok"]]
+    if not rows:
+        # A repository with no slice note is the ORDINARY state, not an error, so
+        # this exits 0 exactly as a clean run does. What it must never do is READ
+        # like one. `0 clause(s) over 0 note(s); 0 report(s)` under a green CI
+        # tick is indistinguishable from four clauses that ran and held, and the
+        # standard's own third rule is that an uncalibrated check is worse than
+        # none because it manufactures confidence. This is that failure wearing a
+        # tick, so the one thing owed here is to say which of the two happened.
+        #
+        # The `--json` payload carries it as a row rather than as a new top-level
+        # shape, so a caller iterating rows keeps working and a caller reading
+        # `ok` still sees nothing wrong; `clause == "scope"` is what distinguishes
+        # it from a clause verdict, and no clause is named that.
+        nothing = (f"NOTHING WAS CHECKED: no slice note under "
+                   f"{NOTE_DIR.as_posix()}/, so the four clauses ran zero "
+                   f"times. This is an empty bill, not a clean one.")
+        if args.json:
+            print(json.dumps([_row("-", "scope", True, nothing)], indent=2))
+        else:
+            print(f"canopus-check: {nothing}")
+        return 0
     if args.json:
         print(json.dumps(rows, indent=2))
     else:

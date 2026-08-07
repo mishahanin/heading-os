@@ -252,6 +252,71 @@ def test_C4_reports_when_a_retired_note_names_a_promoted_file_that_no_longer_run
     assert PROMOTED in message
 
 
+def test_a_run_with_no_note_at_all_says_it_checked_nothing(tmp_path, capsys):
+    """Measured 2026-08-07: `records/slices/` held only `.gitkeep`, so the CI
+    step printed `0 clause(s) over 0 note(s); 0 report(s)` and exited 0. Nothing
+    in that line, or in the green tick above it, separated a check that ran and
+    held from a check that had nothing to run against.
+
+    The exit code stays 0 deliberately. A repository with no open slice is the
+    ordinary state, not an error; what is owed is the DISTINCTION, not a
+    failure.
+    """
+    repo = _init(tmp_path)
+    _write(repo, "widget.py", IMPLEMENTATION)
+    _commit(repo, "a repository with code but no slice note at all")
+
+    status = cc.main(["--root", str(repo)])
+
+    assert status == 0
+    out = capsys.readouterr().out
+    assert "NOTHING WAS CHECKED" in out
+    assert "0 clause(s) over 0 note(s)" not in out, (
+        "the empty run still renders as a completed one")
+
+
+def test_the_json_payload_says_it_checked_nothing_too(tmp_path, capsys):
+    """The machine-readable half of the same distinction.
+
+    `[]` is what a caller also gets from a run that checked four clauses and
+    found nothing wrong on zero notes, so the payload has to carry the reason
+    rather than leave it to the human line. It stays a LIST OF ROWS, so a caller
+    iterating rows keeps working; `clause == "scope"` is what marks it, and no
+    clause is named that.
+    """
+    repo = _init(tmp_path)
+    _write(repo, "widget.py", IMPLEMENTATION)
+    _commit(repo, "a repository with code but no slice note at all")
+
+    status = cc.main(["--root", str(repo), "--json"])
+
+    assert status == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [row["clause"] for row in rows] == ["scope"]
+    assert rows[0]["ok"] is True, "an empty repository is not a failing one"
+    assert "NOTHING WAS CHECKED" in rows[0]["message"]
+
+
+def test_a_run_that_did_check_something_does_not_claim_it_checked_nothing(
+    tmp_path, capsys
+):
+    """The other side of the distinction, and the reason it is a pair.
+
+    A message that appeared on every run would be noise nobody reads. This
+    asserts the clean run still renders as a COUNT of what it weighed, and never
+    borrows the empty run's sentence.
+    """
+    repo, _note = _clean_slice(tmp_path)
+
+    status = cc.main(["--root", str(repo)])
+
+    assert status == 0
+    out = capsys.readouterr().out
+    assert "NOTHING WAS CHECKED" not in out
+    assert "note(s)" in out and "report(s)" in out
+    assert "0 clause(s)" not in out, "a clean run weighed at least one clause"
+
+
 def test_a_well_formed_note_over_clean_history_reports_nothing(tmp_path):
     repo, note = _clean_slice(tmp_path)
 

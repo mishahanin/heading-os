@@ -118,6 +118,33 @@ def test_backend_failure_emits_nothing(monkeypatch, capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_nonzero_returncode_emits_nothing(monkeypatch, capsys):
+    """Recall backend exits nonzero -> hook stays silent and never blocks the prompt."""
+    mod = load_hook()
+    feed(monkeypatch, "что мы решили по Омеги и почему")
+    monkeypatch.setattr(mod.subprocess, "run", fake_run(
+        {"hits": [], "gap": True}, returncode=1))
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_unparseable_json_emits_nothing(monkeypatch, capsys):
+    """Recall backend prints garbage on stdout -> hook stays silent, never blocks."""
+    mod = load_hook()
+    feed(monkeypatch, "что мы решили по Омеги и почему")
+
+    def garbled(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="not json{{{", stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", garbled)
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_timeout_emits_nothing(monkeypatch, capsys):
     """Cold ollama (measured 7.29s) must not hold the prompt hostage."""
     mod = load_hook()

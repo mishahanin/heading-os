@@ -9,12 +9,12 @@ A hook is a script the Claude Code harness runs at a named event. HEADING OS shi
 - **`.claude/settings.json`** wires the one fully portable hook (`data-path-redirect.py`) with a self-locating launcher, so it works from any clone location.
 - **`.claude/settings.local.{linux,macos,windows}.json`** wire the rest, per operating system. Copy the template for your platform to `.claude/settings.local.json` on a fresh clone.
 
-Two hook events can block work; the rest observe, enrich, or record.
+Some hook events can block work by protocol; the rest can only observe, enrich, or record. Whether a given event blocks in practice depends on the hook wired to it, not only on what the event allows.
 
 - **`PreToolUse`** runs before a tool call and can deny it. This is where blocking guards live (secret detection, the engine/data boundary, path redirection).
 - **`PostToolUse`** runs after a tool call. It cannot un-write a file, so its guards are advisory or corrective (hidden-character scan, injection detection).
 - **`SessionStart`**, **`Stop`**, **`PostCompact`**, and **`statusLine`** run around the session lifecycle: priming context, offering checkpoints, saving handoffs, rendering the status line.
-- **`UserPromptSubmit`** runs on every prompt, before the model starts to think. It can only add context, never deny the prompt.
+- **`UserPromptSubmit`** runs on every prompt, before the model starts to think, and by protocol can block the prompt (exit code 2, or `{"decision": "block"}`). The hook wired here (`recall-inject.py`) never exercises that: it only adds context, and on any error it stays silent and exits 0.
 
 ## PreToolUse (can block)
 

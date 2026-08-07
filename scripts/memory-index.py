@@ -1192,14 +1192,35 @@ def cmd_query(args) -> int:
 
 def cmd_stats(args) -> int:
     cfg = load_config(get_workspace_root())  # memory-index.yaml is engine config
+    top_access = int(getattr(args, "top_access", 0) or 0)
     for i, t in enumerate(_store_targets(cfg)):
         if i:
             print()
-        _stats_one_store(t["name"], t["root"], t["store_rel"])
+        _stats_one_store(t["name"], t["root"], t["store_rel"], top_access)
     return 0
 
 
-def _stats_one_store(name, root, store_rel) -> None:
+def top_access_rows(conn, limit: int) -> list:
+    """Memory-layer entries ranked by access_count. A DIAGNOSTIC, not a worklist.
+
+    Reads the reinforcement loop from the outside: if the same names hold the
+    top of this list month after month, retrieval is reinforcing what retrieval
+    already surfaces and REINFORCE_K is weighted too heavily. A LOW count here
+    means a lower position in recall and nothing else — auto-memory is never
+    pruned, so nothing at the bottom of this list is a candidate for anything.
+
+    Returns [(path, access_count, last_accessed)], chunked files collapsed to
+    one row (every chunk of a file carries the same count).
+    """
+    return conn.execute(
+        "SELECT path, MAX(access_count), MAX(COALESCE(last_accessed, '')) "
+        "FROM notes WHERE layer = 'memory' GROUP BY path "
+        "ORDER BY 2 DESC, path ASC LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def _stats_one_store(name, root, store_rel, top_access: int = 0) -> None:
     """Print one store's layer/classification breakdown. Existence is checked
     BEFORE opening (open_store would create an empty file otherwise); an existing
     store with zero rows is reported as unbuilt per the empty-matrix predicate."""
@@ -1223,6 +1244,7 @@ def _stats_one_store(name, root, store_rel) -> None:
         "FROM notes GROUP BY 1 ORDER BY 1"
     ).fetchall()
     model = conn.execute("SELECT val FROM meta WHERE key='model'").fetchone()
+    top_rows = top_access_rows(conn, top_access) if top_access > 0 else None
     conn.close()
 
     print(label)
@@ -1240,6 +1262,13 @@ def _stats_one_store(name, root, store_rel) -> None:
     if last_mtime:
         age_days = max(0.0, (time.time() - last_mtime) / 86400.0)
         print(f"  newest source: {last_mtime:.0f}  {GRAY}({age_days:.1f} days ago){RESET}")
+    if top_rows is not None:
+        print(f"  {BOLD}top {top_access} memories by access_count:{RESET}")
+        if not top_rows:
+            print(f"    {GRAY}no memory-layer entries in this store{RESET}")
+        for path, count, last in top_rows:
+            print(f"    {CYAN}{count:5}{RESET}  {path.rsplit('/', 1)[-1]:52}  "
+                  f"{GRAY}last surfaced {last or 'never'}{RESET}")
 
 
 # ============================================================
@@ -1273,6 +1302,11 @@ def main() -> int:
     p_query.set_defaults(func=cmd_query)
 
     p_stats = sub.add_parser("stats", help="index summary by layer")
+    p_stats.add_argument("--top-access", type=int, nargs="?", const=20, default=0,
+                         metavar="N",
+                         help="also list the N most-accessed memories (default 20) with "
+                              "access_count and last_accessed; a diagnostic on the "
+                              "reinforcement loop, never a removal worklist")
     p_stats.set_defaults(func=cmd_stats)
 
     args = parser.parse_args()

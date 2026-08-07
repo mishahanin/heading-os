@@ -62,14 +62,21 @@ SUBDIRS = ["sources", "principles", "positions", "episodes", "conflicts", "refer
 
 
 def _namespace_rels():
-    """ns -> data-root-relative subpath for each cross-tree target.
+    """ns -> data-root-relative glob patterns for each cross-tree target.
 
-    Subpaths are derived from the seam helpers (relative to the personal/data
+    Patterns are derived from the seam helpers (relative to the personal/data
     root) so no hardcoded data-path literal lives in engine code (leak-guard).
-    They stay *relative* on purpose: _external_entities joins them onto a root
-    derived from the passed brain_root, which keeps the lint hermetic under a
-    temp brain in tests. Thread refs scope to the business/ subtree -- personal
-    threads are CEO-only and are never wiki-link targets."""
+    They stay *relative* on purpose: _external_entities globs them against a
+    root derived from the passed brain_root, which keeps the lint hermetic
+    under a temp brain in tests.
+
+    Thread refs resolve against the active business subtree AND its archive.
+    Closing a thread archives it rather than deleting it, so an episode that
+    cites a closed thread stays historically correct -- resolving only the
+    active subtree turned every closed thread into a permanent warning. The
+    archive is matched one level at a time (`archive/*/business`) rather than
+    wholesale, because personal threads are CEO-only and are never wiki-link
+    targets; archived ones must stay outside the resolvable set too."""
     base = get_personal_root()
 
     def rel(p):
@@ -78,10 +85,11 @@ def _namespace_rels():
         except ValueError:  # e.g. THREADS_ROOT override points outside base
             return Path(p.name)
 
+    threads = rel(get_threads_dir())
     return {
-        "crm": rel(get_crm_contacts_dir()),
-        "thread": rel(get_threads_dir()) / "business",
-        "plan": rel(get_plans_dir()),
+        "crm": [rel(get_crm_contacts_dir())],
+        "thread": [threads / "business", threads / "archive" / "*" / "business"],
+        "plan": [rel(get_plans_dir())],
     }
 
 # Intra-brain TYPE prefixes: [[source:slug]] / [[principle:slug]] etc. are just a
@@ -225,9 +233,11 @@ def _external_entities(brain_root):
     cannot be verified and are NOT flagged."""
     data_root = Path(brain_root).parent.parent
     out = {}
-    for ns, rel in _namespace_rels().items():
-        d = data_root / rel
-        out[ns] = {p.stem for p in d.rglob("*.md")} if d.is_dir() else None
+    for ns, patterns in _namespace_rels().items():
+        # A wildcard-free pattern globs to itself when it exists, so one code
+        # path covers both the plain subtrees and the archive fan-out.
+        dirs = [d for pat in patterns for d in data_root.glob(str(pat)) if d.is_dir()]
+        out[ns] = {p.stem for d in dirs for p in d.rglob("*.md")} if dirs else None
     return out
 
 

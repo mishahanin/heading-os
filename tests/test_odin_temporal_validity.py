@@ -142,3 +142,59 @@ def test_dangling_wikilink_warns_not_errors(tmp_path):
     assert dangling[0]["target"] == "nonexistent-note"
     # markers are warnings, never errors -- they must not fail the gate
     assert [i for i in issues if i["severity"] == "error"] == []
+
+
+def _thread(data_root: Path, rel: str, slug: str) -> None:
+    """Write a thread file under <data_root>/threads/<rel>/<slug>.md."""
+    d = data_root / "threads" / rel
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{slug}.md").write_text("# Thread\n", encoding="utf-8")
+
+
+def _rooted_brain(tmp_path: Path) -> Path:
+    """A brain at its REAL depth: <data_root>/knowledge/odin-brain.
+
+    _external_entities derives the data root as brain_root.parent.parent, so a
+    brain written straight to tmp_path/odin-brain resolves the data root ABOVE
+    tmp_path -- every cross-namespace tree then reads as absent, the check
+    suppresses itself, and a test asserting "no warning" passes without
+    resolving anything. Tests that exercise the thread namespace need this."""
+    return tmp_path / "knowledge" / "odin-brain"
+
+
+def test_thread_ref_to_archived_business_thread_is_clean(tmp_path):
+    """A closed thread is archived, not deleted -- an episode citing it is still
+    historically correct. Scoping resolution to threads/business/ alone made
+    every closed thread a permanent warning."""
+    brain = _rooted_brain(tmp_path)
+    # An unrelated ACTIVE thread, so the namespace is verifiable at all: an
+    # absent threads/business/ yields None and suppresses the check.
+    _thread(tmp_path, "business", "2026-08-01-still-open")
+    _thread(tmp_path, "archive/2026/business", "2026-04-30-closed-deal")
+    _write(brain, "episodes", "ep", _base("Ep", type="episode"),
+           body="Recorded on [[thread:2026-04-30-closed-deal]] after it closed.")
+    dangling = [i for i in lint(brain) if i["check"] == "dangling_wikilink"]
+    assert dangling == []
+
+
+def test_thread_ref_to_archived_personal_thread_still_warns(tmp_path):
+    """Personal threads are CEO-only and are never wiki-link targets. Widening
+    resolution to the archive must not smuggle the personal subtree in."""
+    brain = _rooted_brain(tmp_path)
+    _thread(tmp_path, "business", "2026-08-01-still-open")
+    _thread(tmp_path, "archive/2026/personal", "2026-04-30-private-matter")
+    _write(brain, "episodes", "ep", _base("Ep", type="episode"),
+           body="Recorded on [[thread:2026-04-30-private-matter]] after it closed.")
+    dangling = [i for i in lint(brain) if i["check"] == "dangling_wikilink"]
+    assert len(dangling) == 1
+    assert dangling[0]["target"] == "thread:2026-04-30-private-matter"
+
+
+def test_thread_ref_to_active_thread_is_clean_at_real_depth(tmp_path):
+    """Guards the harness itself: at the real brain depth an ACTIVE thread must
+    resolve. If this ever fails, the two tests above are measuring absence."""
+    brain = _rooted_brain(tmp_path)
+    _thread(tmp_path, "business", "2026-08-01-still-open")
+    _write(brain, "episodes", "ep", _base("Ep", type="episode"),
+           body="Recorded on [[thread:2026-08-01-still-open]] today.")
+    assert [i for i in lint(brain) if i["check"] == "dangling_wikilink"] == []

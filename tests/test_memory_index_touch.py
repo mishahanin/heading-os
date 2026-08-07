@@ -110,3 +110,60 @@ def test_gate_closed_for_a_caller_that_has_no_touch_attribute():
     """/recall and the bare-namespace callers never set it."""
     mod = load_module()
     assert mod._should_touch(object(), near_miss=False) is False
+
+
+def test_an_undecodable_memory_file_never_breaks_the_query(memory_dir, capsys):
+    """UnicodeDecodeError is a ValueError, not an OSError or a TouchError.
+
+    With the per-file handler naming only those two, one badly encoded memory
+    file propagated out of cmd_query, exited non-zero, and left the recall hook
+    emitting nothing on EVERY prompt until someone read stderr. A bump is a
+    ranking nicety; nothing it can hit is worth failing a recall over.
+    """
+    bad = memory_dir / "undecodable.md"
+    bad.write_bytes(b"---\nname: bad\nmetadata:\n  type: feedback\n---\n\n\xff\xfe not utf-8\n")
+
+    mod = load_module()
+    assert mod._touch_memory_hits([_hit("auto-memory/undecodable.md")]) == 0
+    assert "touch: skipped" in capsys.readouterr().err
+
+
+def test_the_new_count_reaches_the_index_without_a_rebuild(memory_dir, tmp_path, monkeypatch):
+    """The bump preserves the source mtime, so the incremental build skips the
+    file and would never notice the new count. The column is written here
+    instead, in the module that owns the store."""
+    mod = load_module()
+    monkeypatch.setattr(mod, "get_data_root", lambda: tmp_path)
+    cfg = {
+        "collections": {"content": ["memory"]},
+        "layers": [{"layer": "memory", "glob": "auto-memory/*.md"}],
+    }
+    rel = "auto-memory/example-fact.md"
+    conn = mod.open_store(tmp_path, mod.STORE_REL)
+    mod.upsert_note(conn, id_=rel, path=rel, title="Example", layer="memory",
+                    ntype="feedback", mtime=1.0, body="body", vec=[0.1, 0.2],
+                    access_count=0, last_accessed="")
+    conn.commit()
+    conn.close()
+
+    assert mod._touch_memory_hits([_hit(rel)], cfg) == 1
+
+    conn = mod.open_store(tmp_path, mod.STORE_REL)
+    row = conn.execute(
+        "SELECT access_count, last_accessed FROM notes WHERE path = ?", (rel,)
+    ).fetchone()
+    conn.close()
+    assert row[0] == 1
+    assert row[1]                       # today's date, whatever the host TZ says
+    assert _access_count(memory_dir / "example-fact.md") == 1
+
+
+def test_the_index_mirror_never_breaks_a_recall(memory_dir, tmp_path, monkeypatch):
+    """No store built yet: the bump still lands, the mirror stays quiet."""
+    mod = load_module()
+    monkeypatch.setattr(mod, "get_data_root", lambda: tmp_path)
+    cfg = {"collections": {"content": ["memory"]},
+           "layers": [{"layer": "memory", "glob": "auto-memory/*.md"}]}
+
+    assert mod._touch_memory_hits([_hit("auto-memory/example-fact.md")], cfg) == 1
+    assert _access_count(memory_dir / "example-fact.md") == 1

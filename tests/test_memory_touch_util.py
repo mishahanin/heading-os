@@ -8,6 +8,7 @@ Run: .venv/bin/python -m pytest tests/test_memory_touch_util.py
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -43,8 +44,8 @@ def _access_count(path: Path) -> int:
     return int(nested.get("access_count") or meta.get("access_count") or 0)
 
 
-def test_first_call_bumps_and_reports_written(memory_dir):
-    assert touch_if_stale("example-fact.md", memory_dir, "2026-07-16") is True
+def test_first_call_bumps_and_reports_the_new_count(memory_dir):
+    assert touch_if_stale("example-fact.md", memory_dir, "2026-07-16") == 1
     assert _access_count(memory_dir / "example-fact.md") == 1
 
 
@@ -52,7 +53,7 @@ def test_second_call_same_day_is_a_no_op(memory_dir):
     touch_if_stale("example-fact.md", memory_dir, "2026-07-16")
     before = (memory_dir / "example-fact.md").read_text(encoding="utf-8")
 
-    assert touch_if_stale("example-fact.md", memory_dir, "2026-07-16") is False
+    assert touch_if_stale("example-fact.md", memory_dir, "2026-07-16") is None
 
     assert (memory_dir / "example-fact.md").read_text(encoding="utf-8") == before
     assert _access_count(memory_dir / "example-fact.md") == 1
@@ -60,13 +61,29 @@ def test_second_call_same_day_is_a_no_op(memory_dir):
 
 def test_next_day_bumps_again(memory_dir):
     touch_if_stale("example-fact.md", memory_dir, "2026-07-16")
-    assert touch_if_stale("example-fact.md", memory_dir, "2026-07-17") is True
+    assert touch_if_stale("example-fact.md", memory_dir, "2026-07-17") == 2
     assert _access_count(memory_dir / "example-fact.md") == 2
 
 
 def test_accepts_the_data_root_relative_prefixed_form(memory_dir):
-    assert touch_if_stale("auto-memory/example-fact.md", memory_dir, "2026-07-16") is True
+    assert touch_if_stale("auto-memory/example-fact.md", memory_dir, "2026-07-16") == 1
     assert _access_count(memory_dir / "example-fact.md") == 1
+
+
+def test_the_bump_preserves_mtime(memory_dir):
+    """mtime is a SHARED signal: the SessionStart reconcile hook resolves
+    canonical-vs-native conflicts newest-wins, dream-shadow gates dormancy on
+    it, memory_health counts staleness by it, and the incremental index build
+    skips a file whose mtime is unchanged. A bump is access metadata, not a
+    content edit, so it must not move that clock."""
+    fact = memory_dir / "example-fact.md"
+    os.utime(fact, (1_600_000_000, 1_600_000_000))
+    before = fact.stat().st_mtime
+
+    assert touch_if_stale("example-fact.md", memory_dir, "2026-07-16") == 1
+
+    assert fact.stat().st_mtime == before
+    assert _access_count(fact) == 1
 
 
 def test_refuses_a_path_outside_the_auto_memory_dir(memory_dir, tmp_path):

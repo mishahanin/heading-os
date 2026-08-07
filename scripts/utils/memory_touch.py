@@ -17,6 +17,7 @@ re-serialize. Writes atomically.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -116,11 +117,24 @@ def touch_file(raw_path: str, auto_memory_dir: Path, today: str) -> tuple[int, s
 
     Raises TouchError if the resolved path is outside auto_memory_dir, does
     not exist, or has no frontmatter.
+
+    The file's atime/mtime are RESTORED after the write. `access_count` and
+    `last_accessed` are access metadata, not a content edit, and mtime is a
+    shared signal four consumers read as "when did the content last change":
+    the SessionStart reconcile hook resolves canonical-vs-native conflicts
+    newest-wins (a bumped mtime would let a bump silently revert a real edit
+    made in the native store), dream-shadow gates dormancy on it,
+    memory_health counts a file stale by it, and the nightly index build skips
+    a file whose mtime is unchanged. `atomic_write_text` ends in `os.replace`,
+    which stamps a new mtime, so the timestamps are captured before the write
+    and put back after it.
     """
     resolved = _resolve(raw_path, auto_memory_dir)
     text = resolved.read_text(encoding="utf-8")
     new_text, access_count = _bump_frontmatter(text, today)
+    before = resolved.stat()
     atomic_write_text(resolved, new_text)
+    os.utime(resolved, (before.st_atime, before.st_mtime))
     return access_count, str(resolved)
 
 
@@ -151,8 +165,13 @@ def _resolve(raw_path: str, auto_memory_dir: Path) -> Path:
     return resolved
 
 
-def touch_if_stale(raw_path: str, auto_memory_dir: Path, today: str) -> bool:
-    """Bump unless this file was already bumped today. True when written.
+def touch_if_stale(raw_path: str, auto_memory_dir: Path, today: str) -> int | None:
+    """Bump unless this file was already bumped today.
+
+    Returns the new `access_count` when the file was written, or None when the
+    same-day debounce declined to write. Callers that only need "did anything
+    happen" test for None; callers that mirror the count elsewhere (the recall
+    index) use the value, so the mirror can never invent one.
 
     The debounce exists because the retrieval hook runs on EVERY prompt: ten
     messages about one subject are one use of a memory, not ten. `last_accessed`
@@ -163,6 +182,13 @@ def touch_if_stale(raw_path: str, auto_memory_dir: Path, today: str) -> bool:
     comparison against the stored `last_accessed` value, not a date parse; a
     differently formatted `today` will never match and the debounce fails
     open, bumping on every call.
+
+    Read-modify-write, deliberately unlocked. Two hook runs racing on the same
+    file can both read `n` and both write `n + 1`, losing one increment.
+    `atomic_write_text` ends in `os.replace`, so a reader never sees a torn
+    file and the only cost is an undercount on a log-scaled curve whose bonus
+    barely moves near a single count. A lock on the read path of a hook with a
+    hard timeout would cost more than the count it protects.
     """
     resolved = _resolve(raw_path, auto_memory_dir)
     meta, _ = parse_frontmatter(resolved.read_text(encoding="utf-8"))
@@ -170,6 +196,6 @@ def touch_if_stale(raw_path: str, auto_memory_dir: Path, today: str) -> bool:
     nested = nested if isinstance(nested, dict) else {}
     last = str(nested.get("last_accessed") or meta.get("last_accessed") or "").strip()
     if last == today:
-        return False
-    touch_file(str(resolved), auto_memory_dir, today)
-    return True
+        return None
+    access_count, _resolved_str = touch_file(str(resolved), auto_memory_dir, today)
+    return access_count

@@ -17,6 +17,8 @@ Writes atomically (tempfile + os.replace(), scripts.utils.atomic).
 
 Consumed by:
   - .claude/skills/recall/SKILL.md (Phase 1, one touch per cited memory-layer hit)
+
+Provided by:
   - scripts/utils/memory_touch.py holds the logic; this file is the CLI surface.
 """
 import argparse

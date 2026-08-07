@@ -48,6 +48,16 @@ def reconcile(dir_a: Path, dir_b: Path) -> tuple[int, int]:
     Returns (a_updated, b_updated). copy2 preserves mtime so newest-wins is stable
     across repeated runs (an unchanged pair never re-copies). Deletions are never
     propagated.
+
+    An EXACT mtime tie between two differing files goes to `dir_b`, which main()
+    always passes as the canonical data-root store. A tie is not a race between
+    two edits: a memory edited natively during a session carries the wall clock
+    of that edit and is strictly newer. The tie arises when a pair copy2 seeded
+    from one mtime then diverged WITHOUT the clock moving, which is what an
+    access-metadata bump does by design (see scripts/utils/memory_touch.py --
+    it restores mtime so a bump cannot masquerade as a content edit). Resolving
+    that toward the durable store keeps the bump; resolving it toward the
+    per-launch cache would discard the counter at every SessionStart.
     """
     dir_a.mkdir(parents=True, exist_ok=True)
     dir_b.mkdir(parents=True, exist_ok=True)
@@ -64,7 +74,7 @@ def reconcile(dir_a: Path, dir_b: Path) -> tuple[int, int]:
         else:
             if fa.read_bytes() == fb.read_bytes():
                 continue
-            if fa.stat().st_mtime >= fb.stat().st_mtime:
+            if fa.stat().st_mtime > fb.stat().st_mtime:
                 shutil.copy2(fa, fb)
                 b_upd += 1
             else:

@@ -875,7 +875,43 @@ def _query_store(conn, qvec, full_text, *, threshold, layer, allowed, near_miss_
     }
 
 
-def _touch_memory_hits(hits) -> int:
+def _mirror_access_counts(cfg, counts: dict, today: str) -> None:
+    """Write the freshly bumped counts into the `memory` layer's store.
+
+    The bump preserves the source file's mtime (see memory_touch.touch_file),
+    which is what keeps the reconcile hook, dream-shadow and memory_health
+    honest — but it also means the nightly incremental build skips the file and
+    would never notice the new count. So the ranking signal is mirrored here,
+    in the module that owns the store, rather than a day later or not at all.
+    No re-embedding: one column on rows that already exist.
+
+    Best-effort like the bump itself. This is on the read path; a store that
+    cannot be opened must cost the recall nothing.
+    """
+    if not counts:
+        return
+    try:
+        root, store_rel = _layer_store_map(cfg)["memory"]
+    except Exception as exc:  # noqa: BLE001 - boundary; recall must still answer
+        sys.stderr.write(f"touch: no store routes the memory layer ({exc})\n")
+        return
+    if not (root / store_rel).is_file():
+        return          # nothing built yet; the next build reads the files
+    try:
+        conn = open_store(root, store_rel)
+        try:
+            conn.executemany(
+                "UPDATE notes SET access_count = ?, last_accessed = ? WHERE path = ?",
+                [(n, today, p) for p, n in counts.items()],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        sys.stderr.write(f"touch: index update failed ({exc})\n")
+
+
+def _touch_memory_hits(hits, cfg=None) -> int:
     """Reinforce auto-memory files returned as a CONFIDENT hit. Returns the
     number of files actually bumped.
 
@@ -887,9 +923,12 @@ def _touch_memory_hits(hits) -> int:
     a hard timeout, so a bump that cannot be written must cost the recall
     nothing. Every failure is reported on stderr (the hook logs it) and then
     swallowed per file.
+
+    When `cfg` is supplied the new counts are mirrored into the index in the
+    same call, so the signal ranks the very next query.
     """
     try:
-        from scripts.utils.memory_touch import TouchError, touch_if_stale
+        from scripts.utils.memory_touch import TouchError, touch_if_stale  # noqa: F401
         from scripts.utils import workspace as _ws
     except Exception as exc:  # noqa: BLE001 - boundary; recall must still answer
         sys.stderr.write(f"touch: unavailable ({exc})\n")
@@ -901,17 +940,25 @@ def _touch_memory_hits(hits) -> int:
         sys.stderr.write(f"touch: cannot resolve auto-memory dir ({exc})\n")
         return 0
 
-    bumped = 0
+    counts: dict[str, int] = {}
     seen = dict.fromkeys(h["path"] for h in hits if h.get("layer") == "memory")
     for path in seen:
         try:
-            if touch_if_stale(path, mem_dir, today):
-                bumped += 1
-        except TouchError as exc:
+            new_count = touch_if_stale(path, mem_dir, today)
+        except Exception as exc:  # noqa: BLE001 - see below; logged, never raised
+            # Total per file, as the docstring already promised. TouchError and
+            # OSError were named explicitly, which left UnicodeDecodeError (a
+            # ValueError, from read_text on an undecodable memory file) to
+            # escape cmd_query, exit non-zero, and take recall down silently on
+            # EVERY prompt until someone read stderr. A bump is a ranking
+            # nicety; nothing it can hit is worth failing a recall over.
             sys.stderr.write(f"touch: skipped {path} ({exc})\n")
-        except OSError as exc:
-            sys.stderr.write(f"touch: write failed for {path} ({exc})\n")
-    return bumped
+            continue
+        if new_count is not None:
+            counts[path] = new_count
+    if cfg is not None:
+        _mirror_access_counts(cfg, counts, today)
+    return len(counts)
 
 
 def _should_touch(args, near_miss: bool) -> bool:
@@ -1105,7 +1152,7 @@ def cmd_query(args) -> int:
     # answer. A near-miss block is explicitly "relevance NOT established", so
     # counting it would train the ranking on noise.
     if _should_touch(args, near_miss):
-        _touch_memory_hits(hits)
+        _touch_memory_hits(hits, cfg)
 
     if want_json:
         payload = {"hits": hits, "gap": False}
@@ -1220,7 +1267,9 @@ def main() -> int:
     p_query.add_argument("--threshold", type=float, default=None, help="min score (default from config)")
     p_query.add_argument("--json", action="store_true", help="emit machine-readable JSON (hits + gap object)")
     p_query.add_argument("--touch", action="store_true",
-                         help="reinforce confident auto-memory hits (bumps access_count, once per file per day)")
+                         help="reinforce confident auto-memory hits (bumps access_count; "
+                              "this flag writes at most once per file per day, but other "
+                              "callers of scripts/memory-touch.py are not debounced)")
     p_query.set_defaults(func=cmd_query)
 
     p_stats = sub.add_parser("stats", help="index summary by layer")

@@ -4,9 +4,12 @@
     python scripts/sc-trace.py --anchor <gate artifact> --contract <dir>
 
 Prints one row per success criterion the artifact states, naming the contract
-files whose test docstrings claim it. Exits 1 on the same finding that refuses
-`approve` and `freeze`, because a report that disagrees with the gate is
-decoration.
+files whose test docstrings claim it. Exits 1 on any of the three findings
+`sc_trace.refusal` names: an artifact stating no criteria at all, a criterion
+no contract test claims, and a claim naming a criterion the artifact does not
+define. It used to say it exited on "the same finding that refuses `approve`
+and `freeze`"; those two commands went with the Canopus freeze lifecycle on
+2026-08-07, and this CLI is now the only reader of that finding.
 
 Reads two things and writes nothing. It proves a criterion has a test CLAIMING
 to decide it; it cannot prove the test decides it. That limitation is printed

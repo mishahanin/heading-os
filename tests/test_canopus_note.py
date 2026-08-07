@@ -33,9 +33,9 @@ def valid() -> dict:
     """A schema-satisfying note, synthetic throughout.
 
     The shas are ABBREVIATED refs, the convention this repository already uses
-    in config/canopus-genesis.json: a full 40-character sha reads to
-    detect-secrets as a hex high-entropy string, and every way to silence that
-    is forbidden here. The digests are COMPUTED rather than pasted, for the
+    and which `_SHA` in scripts/utils/canopus_note.py carries: a full
+    40-character sha reads to detect-secrets as a hex high-entropy string, and
+    every way to silence that is forbidden here. The digests are COMPUTED rather than pasted, for the
     same reason -- a literal 64-character hexdigest is the same tripwire.
     Built fresh per call so no test can mutate another's fixture.
     """

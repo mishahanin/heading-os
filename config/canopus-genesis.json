@@ -1,5 +1,0 @@
-{
-  "genesis_ref": "fde876a",
-  "reason": "The last commit that predates the Canopus note format entirely, so no commit at or before it carries a note and none ever will. A check armed without an epoch would walk into its own history and report a violation against every commit written before the convention existed, condemning the migration that introduced it.",
-  "why_abbreviated": "Deliberately an abbreviated ref rather than the full 40-character sha. A full sha reads to detect-secrets as a hex high-entropy string, and the only ways to silence that are a baseline entry, an allow-list entry or a pragma marker, every one of which is forbidden here without exception: they are how a real secret eventually gets through. Git resolves an abbreviated ref natively and ERRORS on ambiguity rather than guessing, so the property is preserved and nothing is suppressed. Any consumer resolves it with `git rev-parse <ref>^{commit}`."
-}

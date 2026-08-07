@@ -29,9 +29,10 @@ than an exit code.
 from scripts.utils.canopus_note import digest_text, read_note, write_note
 
 # Synthetic throughout, and the shas are ABBREVIATED refs -- this repository's
-# convention (config/canopus-genesis.json), because a full 40-character sha
-# reads to detect-secrets as a hex high-entropy string and every way to silence
-# that is forbidden here. The digest is COMPUTED for the same reason.
+# convention, carried by `_SHA` in scripts/utils/canopus_note.py, because a
+# full 40-character sha reads to detect-secrets as a hex high-entropy string
+# and every way to silence that is forbidden here. The digest is COMPUTED for
+# the same reason.
 VALID_FIELDS = {
     "slug": "canary",
     "value": "the record path is alive, and this is what proves it",

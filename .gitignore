@@ -307,5 +307,13 @@ config/skill-custom/*.user.toml
 # Rebuildable from the monorepo; never committed.
 /dist/
 
-# Canopus freeze state (per working tree, never committed)
+# Canopus freeze state, from the lifecycle retired on 2026-08-07. NOTHING WRITES
+# THIS ANY MORE, and the entry stays anyway, because a machine that ran the old
+# lifecycle still HAS the directory: this line was deleted once on 2026-08-07 as
+# a dangling reference and `git add -A` immediately staged a 115 KB
+# .canopus/history.jsonl of merkle roots into a public repository. detect-secrets
+# refused the commit, which is the gate working, but the entry costs nothing and
+# is the layer that should never have needed the gate. Remove it only after the
+# leftovers are gone from every clone.
 .canopus/
+

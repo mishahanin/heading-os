@@ -44,12 +44,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history, because this is the job that runs the Canopus
-          # clauses. A clause walks commits (`git log`, `git merge-base
-          # --is-ancestor <genesis>`) to decide what is in scope and to read
-          # each commit's note. checkout defaults to depth 1, where the
-          # ancestry is absent: the walk either errors on an unknown object or
-          # finds one commit and passes vacuously, which is worse - a green
-          # check that measured nothing.
+          # clauses, and three of the four reach commits that depth 1 does not
+          # fetch. Each note names an `approval_sha`: C1 diffs the contract
+          # between that commit and the end state, C2 asks `git merge-base
+          # --is-ancestor` whether the implementation descends from it, and C3
+          # checks the contract out THERE in a worktree and runs it. The
+          # `--range` scoping adds a `git rev-list`. checkout defaults to depth
+          # 1, where every one of those objects is absent: the clause either
+          # errors on an unknown object or finds one commit and passes
+          # vacuously, which is worse - a green check that measured nothing.
+          #
+          # No clause reads a genesis epoch. This comment said one walked to
+          # `--is-ancestor <genesis>` until 2026-08-07; that stopped being true
+          # when the check moved from walking commits to reading committed
+          # notes, and `config/canopus-genesis.json` was deleted with the last
+          # thing that read it. The setting is right, the old reason was not.
           fetch-depth: 0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -82,8 +91,17 @@ jobs:
         # cannot scope, and runs the two cheap clauses over every note while
         # scoping the two expensive ones (a worktree plus a test run each) to
         # nothing. It never errors on the shape, which would read as a failure
-        # of the slice rather than of the range. Re-point this to
-        # `scripts/canopus.py check` when that subcommand lands.
+        # of the slice rather than of the range.
+        #
+        # This deliberately keeps calling `scripts/canopus_check.py` and NOT the
+        # `scripts/canopus.py check` subcommand that landed in 42b14fa. That
+        # subcommand is a passthrough to this module's own `main`, so the two
+        # are one implementation and there is no verdict to diverge; what
+        # differs is what gets imported to reach it. `canopus.py` pulls in the
+        # contract prober and the null-stub plugin, none of which a clause run
+        # touches, so routing CI through it would widen this step's blast
+        # radius to modules it does not use. The module is the entry point; the
+        # subcommand exists so an operator has one command to remember.
         run: uv run python scripts/canopus_check.py --range "${{ github.event.before }}..${{ github.sha }}"
       - name: Rule split inventory drift guard (D4)
         # No-op until a rule split/compression writes a snapshot under

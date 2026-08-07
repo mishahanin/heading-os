@@ -25,6 +25,55 @@ def test_contract_files_lists_test_modules_only(tmp_path):
     ]
 
 
+def test_a_contract_file_outside_the_root_is_refused_not_a_traceback(tmp_path):
+    """Measured 2026-08-07: `canopus.py probe <a file outside --root>` died with
+    a raw `ValueError` out of `Path.relative_to`, because `main` catches
+    `ContractError` and `OSError` and this was neither.
+
+    The file EXISTS, so this is not a missing-path case. It is the ordinary
+    mistake of naming a real contract in another tree without moving `--root`
+    with it, and `main`'s own stated policy is that a filesystem fault produces
+    a refusal the operator can act on rather than a stack trace.
+    """
+    import pytest
+
+    from scripts.utils.canopus_contract import ContractError, contract_files
+
+    inside = tmp_path / "root"
+    outside = tmp_path / "elsewhere"
+    _write(outside, "test_stray.py", "def test_a():\n    assert False\n")
+    inside.mkdir(exist_ok=True)
+
+    with pytest.raises(ContractError) as refusal:
+        contract_files([outside / "test_stray.py"], inside)
+
+    # The root is NAMED, because "outside the tree" without saying which tree
+    # leaves the operator no way to tell a wrong --root from a wrong path.
+    assert str(inside.resolve()) in str(refusal.value)
+
+
+def test_the_cli_turns_that_refusal_into_an_exit_code_and_no_traceback(tmp_path,
+                                                                      capsys):
+    """The other half: the refusal has to reach `main`'s handler, not the user.
+
+    Asserted through the CLI rather than the primitive, because the defect was
+    never in the primitive's raising; it was that the exception class raised
+    there was one `main` did not catch.
+    """
+    import scripts.canopus as canopus
+
+    outside = tmp_path / "elsewhere"
+    _write(outside, "test_stray.py", "def test_a():\n    assert False\n")
+    inside = tmp_path / "root"
+    inside.mkdir(exist_ok=True)
+
+    status = canopus.main(["--root", str(inside), "probe",
+                           str(outside / "test_stray.py")])
+
+    assert status == 1
+    assert "outside the tree" in capsys.readouterr().err
+
+
 def test_run_contract_counts_items_and_outcomes(tmp_path):
     from scripts.utils.canopus_contract import run_contract
 

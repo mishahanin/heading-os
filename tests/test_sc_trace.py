@@ -300,12 +300,16 @@ def test_both_written_shapes_of_a_criterion_are_read():
 def test_a_contract_file_that_cannot_be_parsed_does_not_refuse():
     """SC-4. Fail OPEN on an internal fault, and say so.
 
-    This runs inside the builder shared by `approve` and `freeze`, so a raise
-    here refuses every slice in the workspace including the `/canopus back` that
-    would repair it. A definite unbound criterion refuses; a parser that could
-    not establish an answer reports and stands aside. The same reasoning as the
-    retired commit-time depth gate being deliberately bypassable: process
-    discipline is not a leak wall.
+    This runs inside `scripts/sc-trace.py`, which reports which criterion each
+    contract test claims to decide. A raise on one unparseable file would take
+    the whole report down and leave the operator nothing, including the reading
+    that would tell him which file to repair. A definite unbound criterion
+    refuses; a parser that could not establish an answer reports and stands
+    aside. The same reasoning as the retired commit-time depth gate being
+    deliberately bypassable: process discipline is not a leak wall.
+
+    (The callers named here were `approve` and `freeze` until 2026-08-07, and
+    the repair was `/canopus back`. All three went with the freeze lifecycle.)
     """
     from scripts.utils.sc_trace import read_claims
 

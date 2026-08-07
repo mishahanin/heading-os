@@ -55,7 +55,7 @@ The trajectory (`outputs/operations/implement/_trajectory_<run_id>.jsonl`) is th
 
 plan_path: $ARGUMENTS (path to the plan file, e.g., `plans/2026-01-28-add-guest-research-command.md`)
 
---no-trajectory: opt out of trajectory emission for this run only. Skips Phase 0: Trajectory Setup and all per-phase emission calls (it does NOT skip the Phase 0 (pre) pre-impl gate check, which is independent of trajectory). Use for throwaway / smoke-test runs.
+--no-trajectory: opt out of trajectory emission for this run only. Skips Phase 0: Trajectory Setup and all per-phase emission calls (it does NOT skip the Phase 0 (pre) contract gate check, which is independent of trajectory). Use for throwaway / smoke-test runs.
 
 --evaluate: run /evaluate on each created or modified artefact after Phase 3 (existing Phase 4 behaviour, unchanged).
 
@@ -63,14 +63,14 @@ plan_path: $ARGUMENTS (path to the plan file, e.g., `plans/2026-01-28-add-guest-
 
 ## Instructions
 
-### Phase 0 (pre): Pre-impl gate check (soft, non-blocking)
+### Phase 0 (pre): Contract gate check (soft, non-blocking)
 
 Runs whenever a `plan_path` is supplied — **independent of `--no-trajectory`** (this check is unrelated to trajectory). Skip only when `/implement` is driven from a description with no plan file.
 
 1. Run the advisory helper:
 
    ```bash
-   python scripts/check-preimpl-gate.py --plan {plan_path}
+   python scripts/check-contract-gate.py --plan {plan_path}
    ```
 
    It always exits 0 and prints one of `FOUND` / `MISSING` / `SKIPPED`.
@@ -78,7 +78,7 @@ Runs whenever a `plan_path` is supplied — **independent of `--no-trajectory`**
 2. Act on the result:
    - **FOUND** or **SKIPPED**: proceed silently to Phase 0.
    - **MISSING**: surface a one-line reminder, then ask once whether to proceed —
-     > "No planning-gate artifact found for this plan. The gate is recommended before implementing (see `/canopus`). Proceed anyway, or work the plan through `/canopus` first?"
+     > "No test contract found under `tests/contract/` for this plan. Step 4 of the standard is a commit carrying the plan AND a red contract (see `/canopus`). Proceed anyway, or write the contract first?"
 
      This is a **soft** reminder, not a block. If Misha says proceed (or has already implied it), continue to Phase 0. Never refuse to implement on a MISSING result — CEO sovereignty holds.
 
@@ -219,7 +219,7 @@ After implementation (and optional evaluation), update the plan file:
 
 **Final emission** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type run_end --summary "<one-line>" --plan-status Implemented` (`run_id` and `trajectory_path` auto-fill).
 
-**Self-check** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --verify --run-id {run_id}`. This is **advisory** — it NEVER hard-fails a completed run (CEO sovereignty holds, matching the soft pre-impl gate). But if it exits non-zero, the reported defects MUST be surfaced **verbatim, as a named defect list**, in the Report's Deviations section — not glossed as an optional footnote. A non-zero self-check that is not surfaced verbatim is itself a discipline violation. Run this self-check BEFORE any `git commit` / `git pull`: the run-level files reconciliation compares the current engine working tree against `run_start.git_head`, so it is only meaningful while the tree holds just this run's changes (re-running it after a merge/pull over-flags pulled files — expected, advisory, not a regression). No temp files are written anymore, so there is no `_tmp/` cleanup step.
+**Self-check** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --verify --run-id {run_id}`. This is **advisory** — it NEVER hard-fails a completed run (CEO sovereignty holds, matching the soft contract gate). But if it exits non-zero, the reported defects MUST be surfaced **verbatim, as a named defect list**, in the Report's Deviations section — not glossed as an optional footnote. A non-zero self-check that is not surfaced verbatim is itself a discipline violation. Run this self-check BEFORE any `git commit` / `git pull`: the run-level files reconciliation compares the current engine working tree against `run_start.git_head`, so it is only meaningful while the tree holds just this run's changes (re-running it after a merge/pull over-flags pulled files — expected, advisory, not a regression). No temp files are written anymore, so there is no `_tmp/` cleanup step.
 
 ---
 

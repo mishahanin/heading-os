@@ -217,6 +217,15 @@ def contract_files(
     the recorder never tallies. The engine pins `python_files = ["test_*.py"]` in
     pyproject.toml, so they agree today; *patterns* is the override if that ever
     stops being true.
+
+    A member that resolves OUTSIDE *root* is refused with a sentence naming the
+    root, never left to `relative_to`. Measured 2026-08-07: `canopus.py probe`
+    on an existing file outside the tree died with a raw
+    `ValueError: ... is not in the subpath of ...` traceback, because `main`
+    catches `ContractError` and `OSError` and this was neither. Its own stated
+    policy is that a filesystem fault produces a refusal the operator can act on
+    rather than a stack trace that reads as a bug in the tool, and a path
+    argument pointing somewhere else is the most ordinary way to reach it.
     """
     resolved_root = Path(root).resolve()
     found: set[str] = set()
@@ -228,7 +237,13 @@ def contract_files(
                 continue
             if not any(fnmatch(candidate.name, pattern) for pattern in patterns):
                 continue
-            found.add(candidate.resolve().relative_to(resolved_root).as_posix())
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(resolved_root):
+                raise ContractError(
+                    f"{resolved} is outside the tree being probed "
+                    f"({resolved_root}), so it is not part of that tree's "
+                    f"contract. Pass --root to name the tree it belongs to.")
+            found.add(resolved.relative_to(resolved_root).as_posix())
     return sorted(found)
 
 

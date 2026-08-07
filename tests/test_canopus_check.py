@@ -88,9 +88,10 @@ def _commit(repo: pathlib.Path, message: str, *, date: str | None = None) -> str
     """Commit everything and return the abbreviated sha.
 
     Abbreviated, and never the full 40 characters: that is this repository's
-    convention for a sha written into a file (config/canopus-genesis.json),
-    because a 40-character hex string reads to the commit gate as a
-    high-entropy secret and every way to silence that is forbidden here.
+    convention for a sha written into a file, carried by `_SHA` in
+    scripts/utils/canopus_note.py, because a 40-character hex string reads to
+    the commit gate as a high-entropy secret and every way to silence that is
+    forbidden here.
     """
     extra = {"GIT_COMMITTER_DATE": date, "GIT_AUTHOR_DATE": date} if date else None
     _git(repo, "add", "-A", extra_env=extra)

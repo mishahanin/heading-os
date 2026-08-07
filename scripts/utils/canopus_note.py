@@ -64,9 +64,12 @@ BODY_FIELD = "body"
 _LEAK = re.compile(
     r"(?:^|\s)/\S|~/|\b[A-Za-z]:[\\/]|\.\./|" + re.escape(DATA_OVERLAY_DIR)
 )
-# Abbreviated refs are accepted and are this repository's convention
-# (config/canopus-genesis.json): a full 40-character sha reads to detect-secrets
-# as a hex high-entropy string, and every way to silence that is forbidden here.
+# Abbreviated refs are accepted, and this pattern IS the repository's
+# convention for a sha written into a file: a full 40-character sha reads to
+# detect-secrets as a hex high-entropy string, and every way to silence that
+# is forbidden here. (It used to cite config/canopus-genesis.json as the
+# precedent; that file was deleted on 2026-08-07 with the commit-walking
+# check that was its only reader, so the rule lives here now.)
 _SHA = re.compile(r"[0-9a-f]{7,40}")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _FENCE = re.compile(r"\A---\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n(.*))?\Z", re.S)

@@ -22,7 +22,7 @@ threshold: 0.55
 # threshold are returned FLAGGED as below-confidence instead of the query being
 # reported as a gap. Rationale (measured 2026-08-07): a question-shaped query
 # scores systematically lower than a keyword query against the same document
-# (0.459 vs 0.663 on the Omega episode), so an absolute threshold calibrated on
+# (0.459 vs 0.663 on one episode record), so an absolute threshold calibrated on
 # keywords reports a false gap on questions. A false "not in memory" closes the
 # subject; a flagged weak hit does not. Set to 0 to restore the old behaviour.
 near_miss_margin: 0.12
@@ -167,9 +167,10 @@ inject:
 # timeout_seconds is a HARD give-up: measured 1.05s warm, 7.29s cold (ollama
 # reloading bge-m3), and a cold start must cost the prompt nothing.
 # min_prompt_chars is a length heuristic separating conversational filler from a
-# question aimed at memory, measured on real messages: "продолжай" is 9
+# question aimed at memory, measured on real messages with the subject replaced
+# by the neutral placeholder "Омега" at the same length: "продолжай" is 9
 # characters and "спасибо, давай дальше" is 21, against "почему мы не пошли в
-# Омегу" at 26 and "что мы решили по Омеги и почему" at 31. A cut at 25 splits
+# Омегу" at 26 and "что мы решили по Омеге и почему" at 31. A cut at 25 splits
 # those measurements. It is not exact, and it cannot be: a short prompt can be a
 # real question and a long one can be filler. It is tuned to fail toward
 # silence, because missing one pointer costs less than roughly 250 tokens and a

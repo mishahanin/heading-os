@@ -49,7 +49,7 @@ def fake_run(payload, *, returncode=0):
 
 def test_substantive_prompt_emits_relevant_block(monkeypatch, capsys):
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
     monkeypatch.setattr(mod.subprocess, "run", fake_run({
         "hits": [{
             "path": "knowledge/odin-brain/episodes/20260803-omega-left-alone-tier1-prohibited.md",
@@ -77,7 +77,7 @@ def test_near_miss_block_disclaims_relevance(monkeypatch, capsys):
     false "here is your answer".
     """
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
     monkeypatch.setattr(mod.subprocess, "run", fake_run({
         "hits": [{"path": "knowledge/odin-brain/episodes/x.md",
                   "title": "Something", "layer": "odin"}],
@@ -127,7 +127,7 @@ def test_no_hits_emits_nothing(monkeypatch, capsys):
 def test_backend_failure_emits_nothing(monkeypatch, capsys):
     """Recall backend explodes -> hook stays silent and never blocks the prompt."""
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
 
     def boom(cmd, **kwargs):
         raise OSError("backend gone")
@@ -148,7 +148,7 @@ def test_nonzero_returncode_emits_nothing(monkeypatch, capsys):
     the return code is the only reason silence is possible.
     """
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
     monkeypatch.setattr(mod.subprocess, "run", fake_run({
         "hits": [{"path": "threads/business/x.md", "title": "X", "layer": "thread"}],
         "gap": False,
@@ -162,7 +162,7 @@ def test_nonzero_returncode_emits_nothing(monkeypatch, capsys):
 def test_unparseable_json_emits_nothing(monkeypatch, capsys):
     """Recall backend prints garbage on stdout -> hook stays silent, never blocks."""
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
 
     def garbled(cmd, **kwargs):
         return subprocess.CompletedProcess(cmd, 0, stdout="not json{{{", stderr="")
@@ -177,7 +177,7 @@ def test_unparseable_json_emits_nothing(monkeypatch, capsys):
 def test_timeout_emits_nothing(monkeypatch, capsys):
     """Cold ollama (measured 7.29s) must not hold the prompt hostage."""
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
 
     def slow(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, mod.TIMEOUT_SECONDS)
@@ -243,11 +243,11 @@ def test_emits_pointers_only_never_hit_internals(monkeypatch, capsys):
     the model's context.
     """
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
     monkeypatch.setattr(mod.subprocess, "run", fake_run({
         "hits": [{
-            "path": "threads/business/2026-06-20-examplecorp-region-demo.md",
-            "title": "ExampleCorp (Region) ODUN.ONE demo",
+            "path": "threads/business/2026-06-20-examplecorp-omega-demo.md",
+            "title": "ExampleCorp Omega demo",
             "layer": "thread",
             "score": 0.4642,
             "channels": ["dense"],
@@ -267,7 +267,7 @@ def test_emits_pointers_only_never_hit_internals(monkeypatch, capsys):
 
     assert "Memory relevant to this message" in ctx
     assert "thread" in ctx
-    assert "threads/business/2026-06-20-examplecorp-region-demo.md" in ctx
+    assert "threads/business/2026-06-20-examplecorp-omega-demo.md" in ctx
 
     for leaked in ("score", "0.4642", "channels", "dense", "chunk", "chunks_total",
                    "classification", "ceo-only", "collection", "below_threshold"):
@@ -281,7 +281,7 @@ def test_near_miss_block_is_capped_shorter_than_confident(monkeypatch, capsys):
     the cost of a result that cleared the threshold: three pointers, not five.
     """
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
     monkeypatch.setattr(mod.subprocess, "run", fake_run({
         "hits": [{"path": f"threads/business/hit-{i}.md",
                   "title": f"Hit {i}", "layer": "thread"} for i in range(5)],
@@ -307,7 +307,7 @@ def test_unreadable_config_stays_silent_and_never_runs(monkeypatch, capsys, tmp_
     stay silent, log the reason, exit 0, and never reach the backend.
     """
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
     monkeypatch.setattr(mod, "CONFIG_PATH", tmp_path / "absent" / "memory-index.yaml")
     called = []
 
@@ -328,7 +328,7 @@ def test_unreadable_config_stays_silent_and_never_runs(monkeypatch, capsys, tmp_
 def test_disabled_flag_stays_silent(monkeypatch, capsys, tmp_path):
     """`recall_inject.enabled: false` is honoured, as the hooks reference says."""
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
     cfg = tmp_path / "memory-index.yaml"
     cfg.write_text("recall_inject:\n  enabled: false\n", encoding="utf-8")
     monkeypatch.setattr(mod, "CONFIG_PATH", cfg)
@@ -358,7 +358,7 @@ def test_touch_flag_reaches_the_backend_argv(monkeypatch, capsys):
     passed to the backend. This is that assertion.
     """
     mod = load_hook()
-    feed(monkeypatch, "что мы решили по Омеги и почему")
+    feed(monkeypatch, "что мы решили по Омеге и почему")
     captured = {}
 
     def tracker(cmd, **kwargs):

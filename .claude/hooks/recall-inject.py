@@ -47,13 +47,15 @@ TIMEOUT_SECONDS = 3.5   # cold ollama measured at 7.29s; give up, never stall
 TOP_K = 5
 NEAR_MISS_MAX = 3       # a below-threshold lead is cheaper wrong than right
 # Length heuristic separating conversational filler from a question aimed at
-# memory. Measured on real messages: "продолжай" is 9 characters and "спасибо,
-# давай дальше" is 21, against "почему мы не пошли в Омегу" at 26 and "что мы
-# решили по Омеги и почему" at 31. A cut at 25 splits those measurements. It is
-# only a length heuristic and it is not exact: a short prompt can be a genuine
-# question ("Омега?") and a long one can be filler. It is tuned to fail toward
-# silence, because the cost of missing one pointer is lower than the cost of
-# roughly 250 tokens and a backend round trip on every conversational reply.
+# memory. Measured on real messages, with the subject replaced by the neutral
+# placeholder "Омега" at the same length, so the counts below are the measured
+# ones: "продолжай" is 9 characters and "спасибо, давай дальше" is 21, against
+# "почему мы не пошли в Омегу" at 26 and "что мы решили по Омеге и почему" at
+# 31. A cut at 25 splits those measurements. It is only a length heuristic and
+# it is not exact: a short prompt can be a genuine question ("Омега?") and a
+# long one can be filler. It is tuned to fail toward silence, because the cost
+# of missing one pointer is lower than the cost of roughly 250 tokens and a
+# backend round trip on every conversational reply.
 MIN_PROMPT_CHARS = 25
 ENABLED = True
 

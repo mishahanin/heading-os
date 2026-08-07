@@ -1,6 +1,6 @@
 """Unit tests for scripts/utils/salience.py -- the shared type-weight +
 access-count reinforcement formula used by memory-index.py's ranking
-combiner (Gap #2) and dream-shadow.py's prune/merge worklist (Gap #1).
+combiner (Gap #2) and dream-shadow.py's merge worklist (Gap #1).
 
 Run: python3 -m pytest tests/test_salience.py
 """
@@ -47,11 +47,12 @@ def test_reinforcement_bonus_calibrated_to_the_previous_curve_at_ten():
     """The change must be invisible on the range the old curve covered.
 
     Old: 1.0 + 0.03 * count, capped 1.3 — so exactly 1.30 at count 10.
-    New: log-scaled, same two anchor points, and it keeps separating above 10
-    where the old curve was flat.
+    New: log-scaled, exact at zero and 1.2997369 at ten (the old 1.30 to four
+    decimal places, which is as close as any K lands), and it keeps separating
+    above 10 where the old curve was flat.
     """
     assert salience.reinforcement_bonus(0) == pytest.approx(1.0)
-    assert salience.reinforcement_bonus(10) == pytest.approx(1.30, abs=0.005)
+    assert salience.reinforcement_bonus(10) == pytest.approx(1.2997369, abs=1e-6)
     assert salience.reinforcement_bonus(50) > salience.reinforcement_bonus(10)
     assert salience.reinforcement_bonus(50) < salience.REINFORCE_CAP
 

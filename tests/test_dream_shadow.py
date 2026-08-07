@@ -1,10 +1,18 @@
-"""Regression tests for scripts/dream-shadow.py -- the nightly salience-ranked
+"""Regression tests for scripts/dream-shadow.py -- the nightly memory
 consolidation worklist (Gap #1). Covers the dormancy list: an old, never- or
 not-recently-surfaced fact is dormant; an old fact the retriever keeps
 surfacing is not, whatever its type weight; a fact too young to have had its
 chance is never dormant; the rendered report proposes no removal. Also covers
 a near-duplicate pair surfaced merge-ranked by salience, and that the
 detector never mutates auto-memory/.
+
+Fixtures below pair an aged mtime with a recent `last_accessed`. That state is
+reachable in production only because the access bump restores the file's mtime
+(scripts/utils/memory_touch.py, and tests/test_memory_touch_util.py pins it):
+a bump is access metadata, not a content edit. Were mtime restamped, the age
+gate would exclude every recently surfaced file before the access clause was
+consulted, and these fixtures would be describing a state the system cannot
+reach.
 
 Run: python3 -m pytest tests/test_dream_shadow.py
 """
@@ -64,7 +72,10 @@ def test_old_and_never_surfaced_is_dormant(tmp_path):
 
 def test_old_but_recently_surfaced_is_not_dormant(tmp_path):
     """Access, not type, is what the list is about now. A reference-type fact
-    the retriever keeps surfacing is in active use whatever its type weight."""
+    the retriever keeps surfacing is in active use whatever its type weight.
+
+    The fixture — 90-day-old mtime, surfaced today — is exactly what a bumped
+    memory looks like on disk, because the bump restores mtime."""
     mod = load_module()
     mem = tmp_path / "auto-memory"
     today = datetime.now(timezone.utc).date().isoformat()
@@ -114,8 +125,15 @@ def test_dormancy_is_access_based_not_salience_based(tmp_path):
 
 
 def test_report_proposes_no_removal(tmp_path, monkeypatch):
-    """The directive is that nothing is ever pruned. The report must not carry
-    the vocabulary of removal, or a reader will act on it."""
+    """The directive is that nothing is ever pruned. The report must not tell a
+    reader to remove anything, or a reader will.
+
+    Scoped to ACTIONABLE phrasing rather than bare word stems. Stems were worse
+    than useless here: the report legitimately says "is a candidate for removal"
+    (negated) and "never proposes removing a fact", neither of which contains
+    the stem "remove", so the check passed on removal vocabulary while standing
+    ready to fail an honest rewording that happened to use the word.
+    """
     mod = load_module()
     mem = tmp_path / "auto-memory"
     _write(mem / "quiet.md", _fact("reference", 0, "quiet"), days_old=90)
@@ -126,8 +144,27 @@ def test_report_proposes_no_removal(tmp_path, monkeypatch):
     })
     text = mod.render_report(mod.gather(), "2026-08-08T03:10:00+00:00").lower()
     assert "quiet.md" in text
-    for word in ("prune", "retire", "delete", "remove"):
-        assert word not in text
+
+    # Every phrasing a report would use to PROPOSE a deletion, including the
+    # retired section header and the command the retired flow told /dream to run.
+    for phrase in (
+        "prune candidate",
+        "retire-memory.py",
+        "retire it",
+        "safe to remove",
+        "safe to delete",
+        "consider removing",
+        "recommend removing",
+        "should be removed",
+        "can be removed",
+        "candidates for removal",
+    ):
+        assert phrase not in text, f"the report proposes a deletion: {phrase!r}"
+
+    # And the standing disclaimer is present in words, so a rewrite that merely
+    # dropped the vocabulary without keeping the promise still fails.
+    assert "nothing listed here is a candidate for removal" in text
+    assert "never proposes removing a fact" in text
 
 
 def test_merge_candidates_ranked_by_salience(tmp_path, monkeypatch):

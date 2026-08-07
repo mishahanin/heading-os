@@ -3,11 +3,14 @@
 
 One place for the "how load-bearing is this memory fact" signal, so
 `scripts/memory-index.py` (recall ranking, Gap #2) and `scripts/dream-shadow.py`
-(nightly prune/merge worklist, Gap #1) never compute it differently.
+(nightly dormancy + merge worklist, Gap #1) never compute it differently.
+
+Nothing here ranks anything for removal. Auto-memory is never pruned; a low
+score means a lower position in recall, and nothing else.
 
 Consumed by:
   - scripts/memory-index.py (_importance_score reinforcement multiplier)
-  - scripts/dream-shadow.py (prune/merge candidate ranking)
+  - scripts/dream-shadow.py (merge candidate ranking)
 """
 from __future__ import annotations
 
@@ -18,8 +21,10 @@ _DEFAULT_TYPE_WEIGHT = 0.6
 
 # Log-scaled so the bonus keeps separating past the old linear ceiling. K and
 # CAP are calibrated to the previous curve at its only two meaningful points:
-# exactly 1.0 at zero accesses, exactly 1.30 at ten. Above ten, where the old
-# curve was flat, this one still ranks. The cap is reached near 121 accesses.
+# exactly 1.0 at zero accesses, and 1.2997 at ten — the old curve's 1.30 to
+# four decimal places, since 1 + 0.125 * ln(11) is 1.2997369 and no K makes it
+# land dead on. Above ten, where the old curve was flat, this one still ranks.
+# The cap is reached near 121 accesses.
 REINFORCE_K = 0.125
 REINFORCE_CAP = 1.6
 
@@ -46,5 +51,5 @@ def reinforcement_bonus(access_count: int) -> float:
 
 
 def composite_salience(mem_type: str, access_count: int) -> float:
-    """Combined salience score used to rank prune/merge candidates."""
+    """Combined salience score used to rank merge candidates."""
     return type_weight(mem_type) * reinforcement_bonus(access_count)

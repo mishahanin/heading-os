@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""dream-shadow.py -- nightly salience-ranked consolidation worklist (Gap #1).
+"""dream-shadow.py -- nightly memory consolidation worklist (Gap #1).
 
 Read-only detector over auto-memory/*.md content. Computes a dormancy list
-(informational only — nothing is ever proposed for removal) and merge
-candidates (near-duplicate pairs, salience-ranked) and writes a dated report.
+(oldest first, informational only — nothing is ever proposed for removal) and
+merge candidates (near-duplicate pairs, salience-ranked) and writes a dated
+report.
 NEVER mutates, merges, or deletes a memory file -- resolution stays with
 /dream (a human reviews, then applies).
 
@@ -83,6 +84,12 @@ def compute_dormant(memory_dir: Path, now: datetime) -> list[dict]:
     A file qualifies when it is older than DORMANT_DAYS AND either was never
     surfaced (access_count == 0) or was last surfaced more than DORMANT_DAYS
     ago. Oldest first.
+
+    The two clauses are independent only because the bump preserves the file's
+    mtime (scripts/utils/memory_touch.py). If a bump restamped mtime, an aged
+    file that was surfaced yesterday would necessarily look young, the age gate
+    would exclude it first, and the access clause below would be unreachable —
+    this function would silently reduce to the old age-only rule.
 
     Expect the first runs after reinforcement ships to list nearly every aged
     file: the counter starts at zero everywhere, and "not observed in use yet"
@@ -229,7 +236,7 @@ def main() -> int:
     # it ages, in UTC. The report filename would land under the previous day.
     load_env()
 
-    parser = argparse.ArgumentParser(description="Nightly salience-ranked memory consolidation worklist")
+    parser = argparse.ArgumentParser(description="Nightly memory consolidation worklist")
     parser.add_argument("--json", action="store_true", help="Emit the structured result as JSON")
     parser.add_argument("--quiet", action="store_true", help="Print only the one-line summary")
     parser.add_argument("--no-report", action="store_true", help="Do not write the report file (stdout only)")

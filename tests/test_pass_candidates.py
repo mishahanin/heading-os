@@ -591,3 +591,99 @@ def test_one_pytest_session_per_candidate_and_not_one_more(tmp_path,
     run_pass_candidates([directory], tmp_path, expected_population=outcomes)
 
     assert len(calls) == len(CANDIDATES)
+
+
+# ----------------------------------------------------------------------------
+# The switch that reaches code which EXISTS
+# ----------------------------------------------------------------------------
+#
+# Not part of the original nineteen. Added by `2026-08-07-canopus-gap-and-skip`,
+# whose contract pins `replace_attributes` at the mechanism and pins nothing
+# about the wiring. These two are that wiring, measured end to end through real
+# candidate children against a module that is really on disk.
+
+
+def _write_shipped_subject(tmp_path):
+    """A subject that EXISTS, and a contract holding one strict and one loose test.
+
+    The pair is the whole point. A candidate that reaches the real code must
+    take the substring test and must not take the equality test; a candidate
+    that reaches nothing takes both, because the real implementation runs and
+    both pass honestly. Those two readings are what the two tests below tell
+    apart, and neither test can do it alone.
+    """
+    (tmp_path / "shipped_subject.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    directory = tmp_path / "c"
+    directory.mkdir()
+    (directory / "test_shipped.py").write_text(
+        "def test_strict():\n"
+        "    from shipped_subject import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n"
+        "\n\n"
+        "def test_loose():\n"
+        "    from shipped_subject import render\n"
+        "    assert 'accepted' in str(render('claim'))\n",
+        encoding="utf-8",
+    )
+    return directory
+
+
+def test_the_candidates_reach_a_module_that_already_exists(tmp_path):
+    """R1. Armed, the wrong implementations bite shipped code.
+
+    Before this switch the candidates installed a PEP 562 `__getattr__`, which
+    Python consults ONLY for a name a module lacks, so against code that exists
+    they reached nothing: the probe reported a page over a suite it never
+    touched. Armed, the loose test is satisfied by an implementation that
+    answers with every string the contract itself wrote, and the strict one is
+    not satisfied by any of the three. That asymmetry, on one subject, in one
+    run, is the reading the whole slice exists to produce.
+    """
+    from scripts.utils.canopus_contract import run_pass_candidates
+
+    directory = _write_shipped_subject(tmp_path)
+
+    taken = run_pass_candidates(
+        [directory], tmp_path, replace_existing=True,
+        expected_population=[("c/test_shipped.py", "test_strict", "passed"),
+                             ("c/test_shipped.py", "test_loose", "passed")],
+    )
+
+    assert taken["greedy"] == {("c/test_shipped.py", "test_loose")}
+    assert all(
+        ("c/test_shipped.py", "test_strict") not in passed
+        for passed in taken.values()
+    )
+
+
+def test_the_switch_is_off_unless_a_caller_asks_for_it(tmp_path):
+    """R1. The default measures exactly what it measured before this switch.
+
+    Every contract in this repository is probed BEFORE its implementation
+    exists, where nothing is present to replace. Making replacement the default
+    would silently change what all of those measured to add a reading none of
+    them needed, so the unasked-for call is pinned to the OLD reading: the real
+    code runs, both tests pass honestly, and all three candidates appear to have
+    taken a contract they never touched. That appearance is the defect the flag
+    above exists to let a caller escape, and it is deliberately still here.
+    """
+    from scripts.utils.canopus_contract import run_pass_candidates
+    from scripts.utils.canopus_nullstub import CANDIDATES
+
+    directory = _write_shipped_subject(tmp_path)
+
+    taken = run_pass_candidates(
+        [directory], tmp_path,
+        expected_population=[("c/test_shipped.py", "test_strict", "passed"),
+                             ("c/test_shipped.py", "test_loose", "passed")],
+    )
+
+    assert all(
+        taken[name] == {("c/test_shipped.py", "test_strict"),
+                        ("c/test_shipped.py", "test_loose")}
+        for name in CANDIDATES
+    )

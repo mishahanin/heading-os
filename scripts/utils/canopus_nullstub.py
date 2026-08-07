@@ -56,6 +56,31 @@ VALUES_VAR = "CANOPUS_STUB_VALUES"
 # ordinary null stub, so every existing caller keeps its behaviour without
 # knowing this variable exists.
 CANDIDATE_VAR = "CANOPUS_CANDIDATE"
+# Whether the candidate this child carries REPLACES the values a module already
+# has, or only answers the names it lacks. Absent or empty means the second, the
+# behaviour every caller had before this variable existed.
+#
+# OPT-IN, deliberately, and the default is the whole reason it is a variable
+# rather than a rule. `_supply_absent_attributes` installs a PEP 562
+# `__getattr__`, which Python consults ONLY for a name the module does not have,
+# so against code that EXISTS the three candidates reach nothing: the run would
+# report `candidates 0 of 0` over a suite it never touched, which is a
+# clean-looking nothing and the exact reading this standard exists to refuse.
+# Replacement closes that. But every contract in this repository, and every one
+# written before this switch, is probed BEFORE its implementation exists, where
+# there is nothing present to replace and the absent-name path is the whole
+# measurement. Turning replacement on by default would change what all of those
+# measured to add a reading none of them needed, which is a migration wearing a
+# slice's clothes.
+#
+# Any NON-EMPTY value arms it; the string is not parsed as a boolean. Two
+# spellings of off ("" and "0") would be a second rule about one switch, and the
+# only writer is `canopus_contract.run_pass_candidates`, which sets it to "1" or
+# to the empty string explicitly on every candidate child. That explicit empty
+# matters: `run_pytest_report` merges its extra environment OVER `os.environ`,
+# so a value exported in the operator's own shell would otherwise arm every
+# probe on the machine and no page would say so.
+REPLACE_VAR = "CANOPUS_REPLACE_EXISTING"
 # The greedy candidate's whole payload, already joined by the parent. ONE string
 # rather than the literal set, deliberately: an environment value carrying a NUL
 # raises `ValueError: embedded null byte` out of `subprocess`, which is not the
@@ -382,6 +407,126 @@ def _supply_absent_attributes(module):
     return existing, supply
 
 
+# The attribute a REPLACING supplier carries its module's own values on. Written
+# onto the supplier rather than into `_Installation`, so `pytest_unconfigure`
+# keeps walking the ONE list it already walks and undoes both surfaces in the
+# same pass, under the same identity guard. A second list would be a second
+# teardown that only one test ever covers, and the surface that stops being
+# undone is a module left answering `None` to every name in a process that keeps
+# running.
+_REPLACED_ATTRIBUTE = "canopus_replaced"
+
+
+def replace_attributes(module, mode: str, payload: str):
+    """Answer a module's OWN names with one candidate, and its absent ones too.
+
+    A superset of `_supply_absent_attributes`, never a rival to it: the names a
+    module lacks are still answered, and the names it HAS are answered as well.
+    That second half is the whole of this function. Python consults a module's
+    PEP 562 `__getattr__` only for a name the module does not have, so a probe
+    that installs one and nothing else reaches exactly the code that has not
+    been written yet. Pointed at shipped code it reports a clean page over a
+    suite whose subject never changed, and a clean page nobody measured is the
+    reading this instrument exists to refuse.
+
+    The module's own `__getattr__` is NOT chained to, and this is the one place
+    this function deliberately disagrees with the absent-name path. There the
+    chain protects a real dynamic attribute from being swapped for a stub;
+    here a real dynamic attribute is precisely what the candidate is standing
+    in for, and deferring to it would leave one class of value answering
+    honestly while every other value in the same module answered wrong. A
+    module half-replaced is not a wrong implementation, it is a mixture, and no
+    verdict can be read off a mixture.
+
+    DUNDERS SURVIVE UNTOUCHED, on the rule `_stub_attribute` and both stand-in
+    classes already follow. `__name__`, `__file__`, `__path__`, `__spec__`,
+    `__loader__`, `__package__`, `__doc__` and `__builtins__` are read by the
+    import machinery and by pytest itself to decide HOW to handle a module;
+    replacing them does not produce a measurement, it produces a failure inside
+    somebody else's library, and a reader who meets one diagnoses the tool
+    rather than the contract.
+
+    WHAT a name gets depends on whether it was CALLABLE, and the split is
+    load-bearing rather than tidy. `Candidate` answers on a call and returns a
+    sibling on attribute access, on its own stated rule that a contract reads
+    the subject's behaviour through calls. So a function, a class or any other
+    callable is replaced by a candidate, and `subject.render("x")` then answers
+    the candidate's value instead of its own, which is the entire point of this
+    function. A plain data name is replaced by what the candidate answers to a
+    call taking no arguments: `None` for `none` and for `echo`, which has no
+    argument to hand back, and the joined payload for `greedy`. Replacing a
+    constant with the candidate OBJECT instead was measured against the
+    contract and is wrong twice over: `subject.ANSWER is None` is then false,
+    and a constant that has to be CALLED to answer is not a constant a wrong
+    implementation could have. Replacing a callable with the candidate's answer
+    is wrong the other way: every call in the contract dies on
+    `'NoneType' object is not callable`, every test goes red for a reason that
+    is about this instrument rather than the contract, no candidate takes
+    anything, and the probe reports a clean page for the second time by a new
+    route.
+
+    ONE `Candidate` is built at the door and every callable name gets a sibling
+    of it. Building it first is what validates *mode* even for a module with no
+    non-dunder names to replace, on the rule `Candidate.__init__` already
+    states: the child reads its candidate from the environment, so a typo on
+    the parent side arrives here, and an unvalidated mode would fall through to
+    the greedy branch and print a full table under a candidate nobody ran. A
+    sibling per name rather than one shared object is not thrift in reverse:
+    `Candidate` defines no `__eq__`, so sharing would make `module.f ==
+    module.g` true for every pair of replaced callables, and a contract
+    asserting an equivalence between two of the subject's names would be
+    satisfied by an accident of this function instead of by the candidate's
+    behaviour.
+
+    Returns `(existing, supply)`, the pair `_supply_absent_attributes` returns,
+    so `pytest_unconfigure` gives a live module its surface back through one
+    path whichever of the two installed it. The values this call overwrote ride
+    along on `supply` under `_REPLACED_ATTRIBUTE`; see that constant.
+    """
+    answer = Candidate(mode, payload)
+    existing = module.__dict__.get("__getattr__")
+    replaced = {
+        name: value
+        for name, value in module.__dict__.items()
+        if not (name.startswith("__") and name.endswith("__"))
+    }
+    for name, value in replaced.items():
+        module.__dict__[name] = answer._sibling() if callable(value) else answer()
+
+    def supply(name, _answer=answer):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return _answer._sibling()
+
+    setattr(supply, _REPLACED_ATTRIBUTE, replaced)
+    module.__getattr__ = supply
+    return existing, supply
+
+
+def _install_attributes(module):
+    """Supply what a module lacks, or replace what it has as well.
+
+    The ONE door both surfaces go through, because there are two of them and
+    they must not disagree: the wrapping loader, for a module this probe
+    imported, and `pytest_configure`, for a module that was already in
+    `sys.modules` when the plugin armed. The second is the one that decides
+    whether shipped code is measured at all, since an import of a module already
+    in `sys.modules` short-circuits before `sys.meta_path` and the loader never
+    runs for it. A switch honoured on only one of the two reads as closed while
+    half the import graph keeps answering its real values.
+
+    Read from the environment per call rather than captured at import, matching
+    `_values` and `_stub_attribute`, so a test can arm the switch after this
+    module is loaded.
+    """
+    candidate = os.environ.get(CANDIDATE_VAR, "")
+    if candidate and os.environ.get(REPLACE_VAR, ""):
+        return replace_attributes(
+            module, candidate, os.environ.get(GREEDY_PAYLOAD_VAR, "")
+        )
+    return _supply_absent_attributes(module)
+
+
 class _StubLoader(Loader):
     """Builds a module whose every non-dunder attribute is a Stub."""
 
@@ -419,8 +564,15 @@ class _WrapLoader(Loader):
         return self._real.create_module(spec)
 
     def exec_module(self, module):
+        # The returned pair is dropped here and recorded in `pytest_configure`
+        # on the other surface, deliberately. This loader only ever runs for a
+        # name that was NOT in `sys.modules` when the plugin armed, so the
+        # module it hands back was created by this probe and nothing outside
+        # the probe holds a reference to it; there is no prior surface to give
+        # back. The already-imported modules are the ones somebody else owns,
+        # and those are the ones teardown restores.
         self._real.exec_module(module)
-        _supply_absent_attributes(module)
+        _install_attributes(module)
 
 
 class _NamedFinder(MetaPathFinder):
@@ -706,7 +858,7 @@ def pytest_configure(config):
     for name, module in list(sys.modules.items()):
         if not isinstance(module, ModuleType) or not finder._claims(name):
             continue
-        existing, supply = _supply_absent_attributes(module)
+        existing, supply = _install_attributes(module)
         installation.supplied.append((module, existing, supply))
         if finder._must_be_a_package(name) and not hasattr(module, "__path__"):
             search_path: list[str] = []
@@ -748,6 +900,15 @@ def pytest_unconfigure(config):
     for module, existing, supply in reversed(installation.supplied):
         if module.__dict__.get("__getattr__") is not supply:
             continue
+        # The values a REPLACING supplier overwrote, put back before its
+        # supplier is lifted. Empty for the ordinary absent-name path, so this
+        # is one statement rather than a branch, and the two installers share
+        # the one teardown they are required to share. Guarded by the same
+        # identity check as the supplier above and for the same reason: a
+        # module somebody else has since rewritten is not this installation's
+        # to restore, and the alternative is clobbering a live value with a
+        # snapshot taken before the session started.
+        module.__dict__.update(getattr(supply, _REPLACED_ATTRIBUTE, {}))
         if existing is None:
             del module.__getattr__
         else:

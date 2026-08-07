@@ -39,6 +39,7 @@ from scripts.utils.canopus_nullstub import (
     GREEDY_PAYLOAD_VAR,
     MODULES_VAR,
     NULLSTUB_STDERR_MARKER,
+    REPLACE_VAR,
     STUB_NAME_SEPARATOR,
     VALUES_VAR,
     _expand_claims,
@@ -641,6 +642,7 @@ def run_pass_candidates(
     *,
     timeout: int = 900,
     expected_population: Optional[Sequence[tuple[str, str, str]]] = None,
+    replace_existing: bool = False,
 ) -> dict[str, set[tuple[str, str]]]:
     """For each candidate, the (file, test) pairs it turned green.
 
@@ -666,6 +668,19 @@ def run_pass_candidates(
     contract `run_null_stub` carries, deliberately: two probes with two dialects
     of one parameter is a defect waiting for whichever caller passes it to only
     one of them.
+
+    `replace_existing` decides which question the candidates are put to. Left
+    FALSE, a candidate answers only the names its module lacks, which is every
+    name while the implementation is still absent and is what every caller of
+    this function has always measured. Set TRUE, it answers the module's own
+    names as well, which is the only setting that reaches code already written.
+    The default stays off because every contract in this repository is probed
+    before its implementation exists: flipping it here would silently change
+    what all of them measured, and a slice that rewrites the meaning of every
+    past measurement is a migration, not a slice. The switch reaches the child
+    on `REPLACE_VAR`, and is spelled on EVERY candidate child either way, so an
+    operator who exported that variable cannot arm a probe that never says it
+    was armed; `run_pytest_report` merges this environment over `os.environ`.
 
     A candidate run that collected FEWER of the real run's red tests is reported
     on stderr and does not refuse. The arithmetic already errs safe there — a
@@ -696,6 +711,7 @@ def run_pass_candidates(
     base_env = {
         MODULES_VAR: STUB_NAME_SEPARATOR.join(modules),
         GREEDY_PAYLOAD_VAR: payload,
+        REPLACE_VAR: "1" if replace_existing else "",
         "PYTHONPATH": os.pathsep.join(
             [engine_root, str(Path(root).resolve()),
              os.environ.get("PYTHONPATH", "")]

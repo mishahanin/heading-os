@@ -758,6 +758,140 @@ def test_unconfigure_gives_an_already_imported_module_its_surface_back(
         restored_fixture.NOT_THERE_YET  # noqa: B018 - the access is the assertion
 
 
+def test_a_candidate_leaves_a_live_module_alone_until_the_switch_is_armed(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The default, pinned, because changing it silently is the whole risk.
+
+    Every contract in this repository is probed BEFORE its implementation
+    exists, where there is nothing present to replace and the absent-name path
+    is the entire measurement. A default that replaced would rewrite what all
+    of those measured, so this test fails the moment `REPLACE_VAR` stops being
+    consulted or acquires a truthy default.
+
+    Both halves are asserted together: the module's own value survives, and the
+    name it lacks still answers the candidate. Only the second proves the
+    candidate was armed at all, and without it this test would be green against
+    a plugin that installed nothing.
+    """
+    from scripts.utils.canopus_nullstub import (
+        CANDIDATE_VAR,
+        MODULES_VAR,
+        REPLACE_VAR,
+        pytest_configure,
+    )
+
+    (tmp_path / "unarmed_fixture.py").write_text(
+        "REAL = 'own value'\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(CANDIDATE_VAR, "none")
+    monkeypatch.delenv(REPLACE_VAR, raising=False)
+
+    import unarmed_fixture
+
+    monkeypatch.setenv(MODULES_VAR, "unarmed_fixture")
+    pytest_configure(config=None)
+
+    assert unarmed_fixture.REAL == "own value"
+    assert unarmed_fixture.NOT_THERE_YET() is None
+
+
+def test_an_armed_candidate_replaces_a_live_modules_own_values(
+    clean_imports, tmp_path, monkeypatch
+):
+    """SC-3 on the surface that decides whether shipped code is measured at all.
+
+    A module already in `sys.modules` when the plugin arms never reaches
+    `sys.meta_path`, so the wrapping loader never runs for it and this is the
+    only door a replacement can come through. A switch honoured on the loader
+    alone would read as closed while half the import graph kept answering its
+    real values.
+
+    The callable and the constant are read in one tuple beside two dunders,
+    deliberately. Asserting only that the dunders held still is true of a run in
+    which nothing happened, and replacing `__name__` or `__file__` breaks
+    pytest's own machinery, so the failure a reader would meet says nothing
+    about the contract that provoked it.
+    """
+    from scripts.utils.canopus_nullstub import (
+        CANDIDATE_VAR,
+        MODULES_VAR,
+        REPLACE_VAR,
+        pytest_configure,
+    )
+
+    (tmp_path / "armed_fixture.py").write_text(
+        "REAL = 'own value'\n"
+        "\n\n"
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(CANDIDATE_VAR, "none")
+    monkeypatch.setenv(REPLACE_VAR, "1")
+
+    import armed_fixture
+
+    real_file = armed_fixture.__file__
+    monkeypatch.setenv(MODULES_VAR, "armed_fixture")
+    pytest_configure(config=None)
+
+    assert (
+        armed_fixture.render("claim"),
+        armed_fixture.REAL,
+        armed_fixture.__name__,
+        armed_fixture.__file__,
+    ) == (None, None, "armed_fixture", real_file)
+
+
+def test_unconfigure_gives_a_replaced_module_its_own_values_back(
+    clean_imports, tmp_path, monkeypatch
+):
+    """Replacement mutates a module in place, so teardown is a real obligation.
+
+    The finder can be lifted off `sys.meta_path` and the session is clean again.
+    A module whose every name now answers `None` is not undone by anything, and
+    the next reader of it in a process that keeps running meets a subject that
+    silently stopped working. The values ride back through the SAME teardown
+    loop the absent-name supplier already used, which is why this asserts the
+    supplier is gone in the same breath as the values returning.
+    """
+    from scripts.utils.canopus_nullstub import (
+        CANDIDATE_VAR,
+        MODULES_VAR,
+        REPLACE_VAR,
+        pytest_configure,
+        pytest_unconfigure,
+    )
+
+    (tmp_path / "givenback_fixture.py").write_text(
+        "REAL = 'own value'\n"
+        "\n\n"
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(CANDIDATE_VAR, "none")
+    monkeypatch.setenv(REPLACE_VAR, "1")
+
+    import givenback_fixture
+
+    monkeypatch.setenv(MODULES_VAR, "givenback_fixture")
+    pytest_configure(config=None)
+
+    assert givenback_fixture.REAL is None
+
+    pytest_unconfigure(config=None)
+
+    assert givenback_fixture.REAL == "own value"
+    assert givenback_fixture.render("claim") == "the claim was accepted"
+    with pytest.raises(AttributeError):
+        givenback_fixture.NOT_THERE_YET  # noqa: B018 - the access is the assertion
+
+
 def test_a_prefix_that_is_a_plain_module_is_claimed_and_stubbed_as_a_package(
     clean_imports, tmp_path, monkeypatch
 ):

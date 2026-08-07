@@ -134,7 +134,7 @@ Check workspace state for facts that might contradict or extend existing memorie
    - Use `tail -30` to limit output
    - Skip transcript search entirely if no specific signal warrants it
 
-5. **Shadow worklist:** read the latest `<data-root>/outputs/operations/dream/*_dream-shadow_report.md` if present - its salience-ranked prune and merge candidates are additional signal, computed nightly by `scripts/dream-shadow.py` and never applied automatically.
+5. **Shadow worklist:** read the latest `<data-root>/outputs/operations/dream/*_dream-shadow_report.md` if present - its dormancy list (informational only, never a removal candidate) and its salience-ranked merge candidates are additional signal, computed nightly by `scripts/dream-shadow.py` and never applied automatically.
 
 ### Phase 1B - Context7 Validation
 
@@ -211,17 +211,17 @@ Write or update memory files based on signals gathered in Phase 1. Every write m
 
 6. **Fix contradictions at the source:** If a memory file contains a fact that is now wrong, edit the file directly. Don't leave stale information.
 
-7. **Retire superseded files (both-store):** if a memory is fully replaced, retire it with `python scripts/retire-memory.py <name.md>` - this removes it from the canonical store AND every native harness store. A plain `rm` or Edit-delete on one store alone is resurrected at the next SessionStart, because `memory-reconcile.py` never propagates a delete. Never delete a memory file any other way.
+7. **Superseding a memory means editing it, not removing it.** When a fact is replaced, rewrite the file in place so the current fact stands and the record survives. Retiring a file outright happens ONLY on an explicit instruction from the operator ("delete this memory"), and only then via `python scripts/retire-memory.py <name.md>`, which removes it from the canonical store AND every native harness store. A plain `rm` on one store alone is resurrected at the next SessionStart, because `memory-reconcile.py` never propagates a delete.
 
-8. **Stamp `expires:` on date-boxed facts.** When a memory becomes irrelevant on a KNOWN date regardless of any action (a coordination note for a launch day, a "include X once cycle N is built" once done), add `expires: YYYY-MM-DD` under `metadata:` - the last day it is live. The daily `scripts/memory-auto-retire.py` timer then retires it both-store the day after, no `/dream` needed. This is author pre-authorization: only stamp it when the retire is unconditional. Facts whose relevance is a STATE, not a date ("remind me to reconnect once Pedro is back", "keep frozen until Misha says go"), get NO `expires:` and stay a manual call - they must survive until acted on, not die on a clock. `expires:` is the ONLY auto-retire trigger; orphans and redundancy pairs are never auto-deleted (an orphan is ambiguous between "delete" and "missing index line").
+8. **Do not stamp `expires:`.** Auto-memory is never retired on a clock. A fact whose relevance ends on a known date is rewritten to say so, not scheduled for deletion. The daily auto-retire timer is disabled; `scripts/memory-auto-retire.py` remains on disk, unused.
 
 ### Apply redundancy merge proposals (human-gated)
 
 Read the latest `<data-root>/outputs/operations/memory-hygiene/` report's "## Redundancy (advisory - not gated)" section. For each candidate pair, show Misha both files and ask for approval. On approval, merge the two facts into ONE survivor file (keeping genuinely distinct facts as SEPARATE files - respect one-fact-per-file), update the survivor's `MEMORY.md` pointer, then retire the other file with `python scripts/retire-memory.py <other.md>`. Never auto-merge; each pair needs explicit approval.
 
-### Apply shadow-worklist prune proposals (human-gated)
+### Read the shadow worklist's dormancy list (informational)
 
-Read the latest `<data-root>/outputs/operations/dream/*_dream-shadow_report.md` report's "## Prune Candidates (stale + low-salience)" section (same report read as additional signal in Phase 1A). For each candidate, show Misha the file (name, age, type, access_count, salience) and ask for approval. On approval, retire it with `python scripts/retire-memory.py <name.md>`. Never auto-prune; each candidate needs explicit approval, same as the redundancy-merge flow above.
+The latest `<data-root>/outputs/operations/dream/*_dream-shadow_report.md` carries a "## Dormant" section listing memories the retriever has not surfaced lately. It is context, not a worklist: nothing there is a candidate for removal. Use it to notice what has gone quiet - a dormant fact may be worth rewriting, cross-linking, or simply leaving alone.
 
 ### What NOT to Write
 
@@ -238,7 +238,7 @@ Follow the exclusion rules from the auto-memory system:
 
 ### Step 1: Update MEMORY.md
 
-1. **Remove stale pointers:** Delete entries for memories that were deleted or superseded
+1. **Remove stale pointers:** Delete an index entry only when its memory file was actually retired via `scripts/retire-memory.py` on an explicit operator instruction. A superseded memory keeps its pointer - it was rewritten in place, not removed; update the hook text if the one-line summary changed.
 2. **Add new pointers:** Add entries for newly created memory files
 3. **Format:** Each entry must be one line, under 150 characters:
    ```
@@ -262,7 +262,7 @@ Present this report to the user:
 - {file.md} - {what was added, updated, or merged}
 
 **Pruned**
-- {file.md or index entry} - {reason: stale / contradicted / superseded / orphan removed}
+- {file.md or index entry} - {reason: operator-approved retirement / redundancy merge / orphan pointer for an already-retired file}
 
 **Context7 Validated**
 - {library@version} - confirmed against live docs
@@ -322,3 +322,4 @@ PY
 - NEVER delete memory files without explaining the reason in the consolidation report
 - NEVER proceed to Phase 2 if the security gate returned BLOCKED
 - NEVER store code patterns, git history, or ephemeral task details in memory
+- NEVER retire, prune, or propose removing a memory file on your own initiative. Deletion happens only when the operator explicitly asks for it.

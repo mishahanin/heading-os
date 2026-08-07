@@ -211,8 +211,12 @@ can see.</p>
 <li><strong>A capture channel</strong> (the maintainer&rsquo;s is named <code>M's VIRAID</code>). You drop quick notes,
   tasks, and reminders here from your phone during the day; Viraid reads them later and
   files them.</li>
-<li><strong>An alerts channel</strong> (the maintainer&rsquo;s is named <code>Urgent Stuff for M</code>). This is where
-  the Sentinel monitor and the nudge scripts send you urgent items and reminders.</li>
+<li><strong>An alerts channel</strong> (the maintainer&rsquo;s is named <code>Urgent Stuff for M</code>), if you want
+  urgent items collected in one board rather than in a direct chat. This is optional:
+  every alert and nudge in HEADING OS is delivered by the notifications bot of section 7,
+  and that bot can just as well message you directly. Point the <code>*_TELEGRAM_TARGET</code>
+  settings at your own user id for a direct chat, or at the channel&rsquo;s numeric id (with
+  the bot added as an admin) for a board.</li>
 </ul>
 <p>To create one on <strong>phone</strong>: tap the pencil / new-message icon, choose <strong>New Channel</strong>,
 give it a name, set it <strong>Private</strong>, and skip adding members. On <strong>desktop</strong>: hamburger
@@ -289,13 +293,17 @@ file by default):</p>
 
 <span class="c1"># where ops-radar nudges go; if unset, falls back to ODIN_CADENCE_TELEGRAM_TARGET</span>
 <span class="nv">OPS_RADAR_TELEGRAM_TARGET</span><span class="o">=</span>@my_alerts
+
+<span class="c1"># where Sentinel&#39;s urgency alerts and digests go; same fallback</span>
+<span class="nv">SENTINEL_TELEGRAM_TARGET</span><span class="o">=</span>-1001234567890
 </code></pre></div>
 <p>The value can be a numeric ID (from section 6) or an <code>@username</code> - NOT <code>me</code>, since the
-notifications bot cannot resolve it. To send every kind of nudge to one alerts channel,
+notifications bot cannot resolve it. To send every kind of nudge and alert to one place,
 just set <code>ODIN_CADENCE_TELEGRAM_TARGET</code> and leave the rest unset.</p>
 <blockquote>
-<p>The Sentinel monitor has its <strong>own</strong> alert-channel setting, in a config file rather than
-<code>.env</code>. That is section 10.</p>
+<p>Sentinel used to post its alerts itself, as your own user account, into a channel named
+in its config file. Since 2026-08-07 it goes through the notifications bot like
+everything else, so there is one delivery surface and one place to point it.</p>
 </blockquote>
 <hr />
 <h2 id="9-how-viraid-works-and-how-to-use-your-own-channel">9. How Viraid works, and how to use your own channel</h2>
@@ -372,10 +380,13 @@ ones people actually change.</p>
 <span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;@some_group&quot;</span>
 <span class="w">      </span><span class="nt">priority</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;medium&quot;</span>
 </code></pre></div>
-<p><strong>Where alerts land:</strong> this is Sentinel&rsquo;s own alert-channel setting (separate from the
-<code>.env</code> ones in section 8). Point it at your alerts channel:</p>
+<p><strong>Where alerts land:</strong> not in this file. Sentinel delivers over the notifications
+bot, to the chat id in <code>SENTINEL_TELEGRAM_TARGET</code> (falling back to
+<code>ODIN_CADENCE_TELEGRAM_TARGET</code>) in <code>.env</code>, exactly like every other HEADING OS
+notification. A bot cannot resolve a human-readable channel name, so a name
+would silently fail; the id is the only thing that works. What this file still
+controls is repetition:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">notification</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">target_chat</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Urgent</span><span class="nv"> </span><span class="s">Stuff</span><span class="nv"> </span><span class="s">for</span><span class="nv"> </span><span class="s">M&quot;</span><span class="w">    </span><span class="c1"># name, @username, or numeric ID</span>
 <span class="w">  </span><span class="nt">dedup_cooldown_minutes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span><span class="w">           </span><span class="c1"># do not repeat the same alert within an hour</span>
 </code></pre></div>
 <p><strong>Daily digests:</strong></p>
@@ -453,7 +464,7 @@ the bot and check the daemon&rsquo;s log, which prints the chat ID it sees).</p>
 </tr>
 <tr>
 <td>Sentinel sends nothing</td>
-<td>Either nothing scored above <code>urgency_threshold</code>, or the daemon is not running (<code>--status</code>), or <code>target_chat</code> does not resolve. Try <code>--test</code> and read <code>.sentinel/sentinel.log</code>.</td>
+<td>Either nothing scored above <code>urgency_threshold</code>, or the daemon is not running (<code>--status</code>), or no bot target is set. The daemon logs <code>Notifications route to bot target &lt;id&gt;</code> at boot, or an error naming the missing env var. Try <code>--test</code> and read <code>.sentinel/sentinel.log</code>.</td>
 </tr>
 <tr>
 <td>Alert nudges send nothing</td>
@@ -497,7 +508,11 @@ the bot and check the daemon&rsquo;s log, which prints the chat ID it sees).</p>
 </tr>
 <tr>
 <td><code>.env</code> <code>ODIN_CADENCE_TELEGRAM_TARGET</code></td>
-<td>Channel for the weekly Odin nudge (fallback: unconfigured, no send)</td>
+<td>Channel for the weekly Odin nudge, and the fallback every other target falls back to (unset: no send)</td>
+</tr>
+<tr>
+<td><code>.env</code> <code>SENTINEL_TELEGRAM_TARGET</code></td>
+<td>Where Sentinel&rsquo;s urgency alerts and digests land (fallback: <code>ODIN_CADENCE_TELEGRAM_TARGET</code>)</td>
 </tr>
 <tr>
 <td><code>.env</code> <code>OPS_RADAR_TELEGRAM_TARGET</code></td>

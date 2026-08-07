@@ -56,7 +56,10 @@ digest:
   evening_time: "22:00"       # full daily summary (local time)
 
 notification:
-  target_chat: "Urgent"
+  # Where alerts land is NOT set here. Alerts go out over the notifications
+  # bot, to the chat id in SENTINEL_TELEGRAM_TARGET (falling back to
+  # ODIN_CADENCE_TELEGRAM_TARGET) in .env. A bot cannot resolve a
+  # human-readable channel name, so no name belongs in this file.
   dedup_cooldown_minutes: 60
   max_notifications_per_cycle: 10
 

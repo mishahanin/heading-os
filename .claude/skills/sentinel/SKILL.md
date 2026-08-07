@@ -107,7 +107,7 @@ Key settings:
 - `email.vip_senders` -- emails that always get elevated priority
 - `email.ignore_patterns` -- senders/patterns to skip entirely
 - `telegram.monitored_chats` -- specific groups/channels to watch
-- `notification.target_chat` -- where urgent alerts go (default: "Urgent Stuff for M")
+- `notification.dedup_cooldown_minutes` -- do not repeat the same alert within N minutes (default: 60). Where alerts LAND is not a config key: they go out over the notifications bot to `SENTINEL_TELEGRAM_TARGET` (falling back to `ODIN_CADENCE_TELEGRAM_TARGET`) in `.env`.
 - `digest.morning_time` / `digest.evening_time` -- daily summary times (local TZ)
 - `calendar.enabled` -- enable meeting invite monitoring (default: true)
 - `calendar.auto_accept` -- auto-accept policy-compliant invites

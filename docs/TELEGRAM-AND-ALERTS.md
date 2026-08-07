@@ -126,8 +126,12 @@ You will typically create two:
 - **A capture channel** (the maintainer's is named `M's VIRAID`). You drop quick notes,
   tasks, and reminders here from your phone during the day; Viraid reads them later and
   files them.
-- **An alerts channel** (the maintainer's is named `Urgent Stuff for M`). This is where
-  the Sentinel monitor and the nudge scripts send you urgent items and reminders.
+- **An alerts channel** (the maintainer's is named `Urgent Stuff for M`), if you want
+  urgent items collected in one board rather than in a direct chat. This is optional:
+  every alert and nudge in HEADING OS is delivered by the notifications bot of section 7,
+  and that bot can just as well message you directly. Point the `*_TELEGRAM_TARGET`
+  settings at your own user id for a direct chat, or at the channel's numeric id (with
+  the bot added as an admin) for a board.
 
 To create one on **phone**: tap the pencil / new-message icon, choose **New Channel**,
 give it a name, set it **Private**, and skip adding members. On **desktop**: hamburger
@@ -226,14 +230,18 @@ ODIN_CADENCE_TELEGRAM_TARGET=-1001234567890
 
 # where ops-radar nudges go; if unset, falls back to ODIN_CADENCE_TELEGRAM_TARGET
 OPS_RADAR_TELEGRAM_TARGET=@my_alerts
+
+# where Sentinel's urgency alerts and digests go; same fallback
+SENTINEL_TELEGRAM_TARGET=-1001234567890
 ```
 
 The value can be a numeric ID (from section 6) or an `@username` - NOT `me`, since the
-notifications bot cannot resolve it. To send every kind of nudge to one alerts channel,
+notifications bot cannot resolve it. To send every kind of nudge and alert to one place,
 just set `ODIN_CADENCE_TELEGRAM_TARGET` and leave the rest unset.
 
-> The Sentinel monitor has its **own** alert-channel setting, in a config file rather than
-> `.env`. That is section 10.
+> Sentinel used to post its alerts itself, as your own user account, into a channel named
+> in its config file. Since 2026-08-07 it goes through the notifications bot like
+> everything else, so there is one delivery surface and one place to point it.
 
 ---
 
@@ -336,12 +344,15 @@ telegram:
       priority: "medium"
 ```
 
-**Where alerts land:** this is Sentinel's own alert-channel setting (separate from the
-`.env` ones in section 8). Point it at your alerts channel:
+**Where alerts land:** not in this file. Sentinel delivers over the notifications
+bot, to the chat id in `SENTINEL_TELEGRAM_TARGET` (falling back to
+`ODIN_CADENCE_TELEGRAM_TARGET`) in `.env`, exactly like every other HEADING OS
+notification. A bot cannot resolve a human-readable channel name, so a name
+would silently fail; the id is the only thing that works. What this file still
+controls is repetition:
 
 ```yaml
 notification:
-  target_chat: "Urgent Stuff for M"    # name, @username, or numeric ID
   dedup_cooldown_minutes: 60           # do not repeat the same alert within an hour
 ```
 
@@ -413,7 +424,7 @@ the bot and check the daemon's log, which prints the chat ID it sees).
 | The login code never arrives | It comes **inside the Telegram app**, from the "Telegram" account, not by SMS. Check your other logged-in Telegram sessions. |
 | It keeps asking me to log in | The `.sessions/telegram/` file was deleted or cannot be written. Re-run `setup` then `verify`. |
 | Viraid reads the wrong (or no) channel | The channel name in the two skill files does not match your channel. See section 9. |
-| Sentinel sends nothing | Either nothing scored above `urgency_threshold`, or the daemon is not running (`--status`), or `target_chat` does not resolve. Try `--test` and read `.sentinel/sentinel.log`. |
+| Sentinel sends nothing | Either nothing scored above `urgency_threshold`, or the daemon is not running (`--status`), or no bot target is set. The daemon logs `Notifications route to bot target <id>` at boot, or an error naming the missing env var. Try `--test` and read `.sentinel/sentinel.log`. |
 | Alert nudges send nothing | Either `TELEGRAM_NOTIFY_BOT_TOKEN` is unset (section 7), or the target is unset/resolves to `me`/`self`/`saved` (not valid for the bot - section 8), or the bot was never added as admin to the alerts channel. Nothing falls back to Saved Messages; a miss is logged, not silently redirected. |
 | "Datacenter IP" block when reading | Some networks rate-limit. See the VPN note in [Prerequisites](prerequisites.html). |
 
@@ -428,7 +439,8 @@ the bot and check the daemon's log, which prints the chat ID it sees).
 | `.claude/skills/telegram/scripts/telegram_client.py` | The Telegram client (`setup`, `verify`, `chats`, `info`, `read`, `send`) |
 | `.env` `TELEGRAM_NOTIFY_BOT_TOKEN` | Dedicated notifications bot token (section 7) |
 | `scripts/utils/telegram_notify.py` | `notify(target, message) -> bool` - what every system nudge/alert sends through |
-| `.env` `ODIN_CADENCE_TELEGRAM_TARGET` | Channel for the weekly Odin nudge (fallback: unconfigured, no send) |
+| `.env` `ODIN_CADENCE_TELEGRAM_TARGET` | Channel for the weekly Odin nudge, and the fallback every other target falls back to (unset: no send) |
+| `.env` `SENTINEL_TELEGRAM_TARGET` | Where Sentinel's urgency alerts and digests land (fallback: `ODIN_CADENCE_TELEGRAM_TARGET`) |
 | `.env` `OPS_RADAR_TELEGRAM_TARGET` | Channel for ops-radar nudges (fallback: the Odin target, then unconfigured) |
 | `.env` `VIRAID_CHANNEL_NAME` | The channel `/viraid` reads (default `M's VIRAID`) |
 | `scripts/sentinel_config.example.yaml` | Sentinel config template (copy it, do not edit it) |

@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import yaml
 
 from scripts.utils import daemon_heartbeat  # noqa: E402
+from scripts.utils import telegram_notify  # noqa: E402
 from scripts.utils import trace  # noqa: E402
 from scripts.utils.healthchecks import ping as hc_ping  # noqa: E402
 from scripts.utils.html import strip_html  # noqa: E402
@@ -1598,58 +1599,61 @@ BODY:
 # Telegram Notifier
 # ============================================================
 
+def resolve_notify_target() -> str:
+    """Bot-resolvable notification target, read from .env only.
+
+    SENTINEL_TELEGRAM_TARGET -> ODIN_CADENCE_TELEGRAM_TARGET -> "" (no send),
+    mirroring scripts/reminders-notify.py so every HEADING OS notification
+    lands in one place.
+
+    The sentinel_config.yaml `notification.target_chat` name is deliberately
+    NOT consulted: it names a channel for the userbot, and the bot transport
+    cannot resolve a human-readable channel name.
+    """
+    load_env(WORKSPACE_ROOT)
+    return (
+        os.environ.get("SENTINEL_TELEGRAM_TARGET")
+        or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")
+        or ""
+    ).strip()
+
+
 class TelegramNotifier:
-    """Send urgent notifications to the target Telegram channel."""
+    """Send urgent notifications through the HEADING OS notifications bot.
 
-    def __init__(self, client, target_chat: str, logger: logging.Logger):
-        self.client = client
-        self.target_chat = target_chat
+    Delivery is the shared bot transport (scripts/utils/telegram_notify), not
+    the userbot client: a Bot API sendMessage always push-notifies, whereas a
+    message the userbot posts into a channel it already owns does not
+    reliably. Because the bot needs no Telethon session, this notifier is
+    independent of whether Telegram *reading* is connected.
+    """
+
+    def __init__(self, target: str, logger: logging.Logger, dry_run: bool = False):
+        self.target = target
         self.logger = logger
-        self.target_entity = None
+        self.dry_run = dry_run
 
-    async def _ensure_connected(self):
-        """Reconnect Telegram client if disconnected, with DB lock retry."""
-        if not self.client.is_connected():
-            self.logger.warning("Telegram disconnected before send -- reconnecting")
-            for attempt in range(1, 4):
-                try:
-                    await self.client.connect()
-                    return
-                except (sqlite3.OperationalError, OSError) as e:
-                    if 'locked' in str(e).lower() and attempt < 3:
-                        delay = 2 * attempt
-                        self.logger.warning(f"Session DB locked on reconnect (attempt {attempt}/3), retrying in {delay}s...")
-                        await asyncio.sleep(delay)
-                        continue
-                    raise
-
-    async def _resolve_target(self):
-        if self.target_entity is None:
-            from telethon import errors
-            try:
-                self.target_entity = await self.client.get_entity(self.target_chat)
-            except (ValueError, errors.RPCError):
-                # Fuzzy match
-                async for dialog in self.client.iter_dialogs(limit=200):
-                    if dialog.name and dialog.name.lower() == self.target_chat.lower():
-                        self.target_entity = dialog.entity
-                        break
-            if self.target_entity is None:
-                raise ValueError(f"Cannot find notification target: '{self.target_chat}'")
-        return self.target_entity
+    async def _send(self, message: str) -> bool:
+        """Hand one message to the bot transport. Never raises."""
+        if self.dry_run:
+            self.logger.info(f"Dry-run: notification NOT sent:\n{message}")
+            return True
+        # notify() is blocking urllib; keep the daemon's event loop free.
+        ok = await asyncio.to_thread(telegram_notify.notify, self.target, message)
+        if not ok:
+            self.logger.error(
+                "Notification send failed (see telegram_notify log). Check "
+                "TELEGRAM_NOTIFY_BOT_TOKEN and SENTINEL_TELEGRAM_TARGET in .env."
+            )
+        return ok
 
     async def send_notification(self, item: dict, analysis: dict):
-        await self._ensure_connected()
-        entity = await self._resolve_target()
-        message = self._format_message(item, analysis)
-        await self.client.send_message(entity, message)
-        self.logger.info(f"Notification sent: [{analysis['urgency_score']}/10] {item.get('subject', '')}")
+        if await self._send(self._format_message(item, analysis)):
+            self.logger.info(f"Notification sent: [{analysis['urgency_score']}/10] {item.get('subject', '')}")
 
     async def send_digest(self, message: str):
-        await self._ensure_connected()
-        entity = await self._resolve_target()
-        await self.client.send_message(entity, message)
-        self.logger.info("Digest sent")
+        if await self._send(message):
+            self.logger.info("Digest sent")
 
     def _format_message(self, item: dict, analysis: dict) -> str:
         score = analysis.get("urgency_score", 0)
@@ -1798,20 +1802,24 @@ class Sentinel:
         # alive within the first second of boot.
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-        # Connect Telegram (needed for both reading and sending)
+        # Notifications go out over the bot transport, which needs no Telethon
+        # session -- so the notifier is built before (and independently of) the
+        # Telegram *reading* connect below.
+        target = resolve_notify_target()
+        self.notifier = TelegramNotifier(target, self.logger, dry_run=self.dry_run)
+        if self.dry_run:
+            self.logger.info("Dry-run: notifications will be logged, not sent")
+        elif target:
+            self.logger.info(f"Notifications route to bot target {target}")
+        else:
+            self.logger.error(
+                "No notification target set (SENTINEL_TELEGRAM_TARGET / "
+                "ODIN_CADENCE_TELEGRAM_TARGET in .env) -- alerts will NOT be delivered"
+            )
+
+        # Connect Telegram (needed for reading Telegram sources)
         if self.config.telegram.get("enabled", True) or not self.dry_run:
             await self.telegram_source.connect()
-            target = self.config.notification.get("target_chat", "Urgent Stuff for M")
-            if self.dry_run:
-                # In dry-run, send to Saved Messages
-                self.notifier = TelegramNotifier(
-                    self.telegram_source.client, "me", self.logger
-                )
-                self.logger.info("Dry-run: notifications will go to Saved Messages")
-            else:
-                self.notifier = TelegramNotifier(
-                    self.telegram_source.client, target, self.logger
-                )
 
         # Connect Exchange
         if self.config.email.get("enabled", True):

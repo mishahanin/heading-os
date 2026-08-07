@@ -69,7 +69,7 @@ python scripts/sentinel.py
 python scripts/sentinel.py --daemon
 ```
 
-### Test mode (single cycle, dry-run, notifications to Saved Messages)
+### Test mode (single cycle, dry-run -- notifications are logged, never sent)
 ```bash
 python scripts/sentinel.py --test
 ```
@@ -119,7 +119,9 @@ Key settings:
 ## Prerequisites
 
 - `ANTHROPIC_API_KEY` must be set in `.env` (get from console.anthropic.com)
-- Telegram session must be authenticated (run `/telegram setup` if needed)
+- Telegram session must be authenticated (run `/telegram setup` if needed) -- this covers Sentinel's Telegram *reading* only
+- `TELEGRAM_NOTIFY_BOT_TOKEN` in `.env` -- alerts and digests go out over the notifications bot, and without this token nothing is delivered (setup: `docs/TELEGRAM-AND-ALERTS.md` section 7)
+- `SENTINEL_TELEGRAM_TARGET` in `.env` (falling back to `ODIN_CADENCE_TELEGRAM_TARGET`) -- the chat id alerts land in; unset means no alert is delivered
 - Exchange credentials in `.env` (EXCHANGE_EMAIL, EXCHANGE_PASSWORD, EXCHANGE_SERVER)
 
 ## Runtime Files

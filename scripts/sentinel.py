@@ -1609,13 +1609,22 @@ def resolve_notify_target() -> str:
     The sentinel_config.yaml `notification.target_chat` name is deliberately
     NOT consulted: it names a channel for the userbot, and the bot transport
     cannot resolve a human-readable channel name.
+
+    Each candidate is stripped BEFORE the chain, never once at the end. Stripped
+    afterwards, a whitespace-only `SENTINEL_TELEGRAM_TARGET` is truthy, so it
+    wins the `or` chain over a perfectly good `ODIN_CADENCE_TELEGRAM_TARGET` and
+    only then collapses to "". Measured 2026-08-07: with the two set to `"   "`
+    and `"100200300"`, this returned `""`, `Sentinel.start` logged "alerts will
+    NOT be delivered", and the daemon ran on watching everything and telling
+    nobody. A trailing space on an edited `.env` line is the ordinary way a
+    value becomes whitespace-only, and the fallback exists precisely so that a
+    missing specific target is survivable.
     """
     load_env(WORKSPACE_ROOT)
     return (
-        os.environ.get("SENTINEL_TELEGRAM_TARGET")
-        or os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET")
-        or ""
-    ).strip()
+        (os.environ.get("SENTINEL_TELEGRAM_TARGET") or "").strip()
+        or (os.environ.get("ODIN_CADENCE_TELEGRAM_TARGET") or "").strip()
+    )
 
 
 class TelegramNotifier:
@@ -2433,7 +2442,7 @@ def launch_daemon(config_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Sentinel -- Unified Comms Monitor")
-    parser.add_argument("--test", action="store_true", help="Run one cycle (dry-run, notifications to Saved Messages)")
+    parser.add_argument("--test", action="store_true", help="Run one cycle (dry-run; notifications are logged, never sent)")
     parser.add_argument("--status", action="store_true", help="Check if Sentinel is running")
     parser.add_argument("--stop", action="store_true", help="Stop running Sentinel daemon")
     parser.add_argument("--daemon", action="store_true", help="Launch as detached background process (cross-platform; on Linux, prefer systemd user unit)")

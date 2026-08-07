@@ -1,4 +1,4 @@
-<!-- version: 1.2.0 | last-updated: 2026-07-17 -->
+<!-- version: 1.3.0 | last-updated: 2026-08-07 -->
 # Telegram and alerts
 
 Connect HEADING OS to Telegram, create your own capture and alert channels, and tune
@@ -20,7 +20,7 @@ both, for different jobs. Getting this straight up front saves confusion later.
 | What it is | Your own Telegram, the one you log into on your phone | A separate robot account you create with @BotFather |
 | How it signs in | `api_id` + `api_hash` from my.telegram.org, plus your phone | A bot **token** from @BotFather |
 | What it can do | Read and send as **you**, in any of your chats and channels | Only see chats it was explicitly added to; posts as the bot |
-| Used in HEADING OS by | `/telegram`, `/viraid`, the Sentinel monitor | The optional Fireside team daemon, and the system alert nudges (Odin cadence, ops-radar, council model-freshness, reminders, critical daemon alerts) |
+| Used in HEADING OS by | `/telegram`, `/viraid`, the Sentinel monitor's *reading* | The optional Fireside team daemon, the system alert nudges (Odin cadence, ops-radar, council model-freshness, reminders, critical daemon alerts), and the Sentinel monitor's *alerts* |
 
 **Reading and capturing always uses your user account.** Viraid capture, Sentinel's chat
 monitoring, and anything you drive with `/telegram` runs through *your* Telegram, so it
@@ -215,14 +215,15 @@ any Fireside bot token (section 11) - never reuse a token across them.
 ## 8. Where alerts and nudges are sent
 
 Several background scripts send you reminders: the Odin cadence nudge, the ops-radar
-nudge, the council model-freshness nudge, due reminders, and critical daemon alerts. Each
+nudge, the council model-freshness nudge, due reminders, critical daemon alerts, and the
+Sentinel monitor's urgency alerts and digests. Each
 reads an optional setting in `.env` that says which channel to send to, and all of them
 deliver through the notifications bot from section 7 - never to your account's own Saved
 Messages. If a target is unset (or would resolve to `me`/`self`/`saved`), no notification
 is sent; the miss is logged, and `/prime` backstops the same signal.
 
-Add either or both of these lines to `.env` (they are optional and not in the example
-file by default):
+Add any of these lines to `.env` (all are optional; they ship commented out in
+`.env.example`):
 
 ```bash
 # where the weekly Odin nudge goes (also the fallback for ops-radar, council, reminders)
@@ -378,7 +379,7 @@ uv run python scripts/sentinel.py --daemon
 # is it running? when did it last check? today's counts?
 uv run python scripts/sentinel.py --status
 
-# a single safe dry-run; alerts go to your own Saved Messages, not the real channel
+# a single safe dry-run; nothing is sent anywhere, alerts are written to the log only
 uv run python scripts/sentinel.py --test
 
 # stop it
@@ -424,7 +425,7 @@ the bot and check the daemon's log, which prints the chat ID it sees).
 | The login code never arrives | It comes **inside the Telegram app**, from the "Telegram" account, not by SMS. Check your other logged-in Telegram sessions. |
 | It keeps asking me to log in | The `.sessions/telegram/` file was deleted or cannot be written. Re-run `setup` then `verify`. |
 | Viraid reads the wrong (or no) channel | The channel name in the two skill files does not match your channel. See section 9. |
-| Sentinel sends nothing | Either nothing scored above `urgency_threshold`, or the daemon is not running (`--status`), or no bot target is set. The daemon logs `Notifications route to bot target <id>` at boot, or an error naming the missing env var. Try `--test` and read `.sentinel/sentinel.log`. |
+| Sentinel sends nothing | Either nothing scored above `urgency_threshold`, or the daemon is not running (`--status`), or no bot target is set. The daemon logs `Notifications route to bot target <id>` at boot, or an error naming the missing env var. Start it normally (`--daemon`) and read `.sentinel/sentinel.log` for that line; `--test` does not print it, because a dry run resolves no delivery. |
 | Alert nudges send nothing | Either `TELEGRAM_NOTIFY_BOT_TOKEN` is unset (section 7), or the target is unset/resolves to `me`/`self`/`saved` (not valid for the bot - section 8), or the bot was never added as admin to the alerts channel. Nothing falls back to Saved Messages; a miss is logged, not silently redirected. |
 | "Datacenter IP" block when reading | Some networks rate-limit. See the VPN note in [Prerequisites](prerequisites.html). |
 

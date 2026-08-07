@@ -89,10 +89,14 @@ each earned by a measured failure, and how to read `probe`'s table — is
    `tests/contract/{YYYY-MM-DD}-{slug}/` importing the code under test INSIDE each
    test body. It is the only generator of a strong contract we have, and a contract
    born too weak is the dominant measured defect.
-2. **A byte budget on the plan**, on the precedent of `skill-metadata-check.py`,
-   which caps a `SKILL.md` at 500 lines and 18,432 bytes. The budget forces the
-   writer to discard what does not matter; without one the plan grows until nobody
-   reads the part that decides.
+2. **A byte budget on the plan itself: warn at 16,384 bytes, hard at 24,576**,
+   `PLAN_BYTE_WARN` / `PLAN_BYTE_HARD` in `canopus_steps.py`, measured across 99
+   real plans (median 23,704). The warn mirrors the SKILL.md warn
+   `skill-metadata-check.py` already enforces, so the workspace carries one
+   number rather than two. This is a PROPOSAL WITH OPERATOR OVERRIDE, not a
+   gate: unlike SKILL.md's own budget, nothing here refuses a commit. It forces
+   the writer to discard what does not matter; without one the plan grows until
+   nobody reads the part that decides.
 3. **The plan does not decide what the implementer can decide from its own context**,
    and it names the files to read first. Re-specifying what the code already says
    wastes the implementer's attention on agreement.
@@ -124,10 +128,27 @@ back hands a reviewer the previous author's framing and destroys what separation
 
 ## Step 6 — every finding carries an origin
 
-`/scrutinize --relentless`, and apply all. A contract-origin finding returns to
-step 3 and produces a NEW contract; it never becomes a patch that leaves the old
-contract green. A code-origin finding is fixed against the contract that already
-exists. Naming the origin is what keeps a weak contract from surviving its slice.
+`/scrutinize --relentless`, and apply all, for THREE fix rounds; then stop and
+hand the operator what is still open. Say why: an unbounded loop already ran to
+five rounds here without a line of code being written.
+
+Three origins. A contract-origin finding returns to step 3 and produces a NEW
+contract; it never becomes a patch that leaves the old contract green. A
+code-origin finding is fixed against the contract that already exists. A
+value-origin finding, the built thing revealing that step 1's value statement
+was wrong, returns to step 1, and it is the OPERATOR's call, not the
+assistant's: step 1 is where he said what would be worth having. Filed as
+contract-origin instead, step 3 faithfully writes a strong contract against a
+value that is still wrong.
+
+Add one blinded pass: a reviewer seeing only the diff and the tree, blind to the
+plan and the value statement. ONE, not a panel: the more of the original
+session's context a reviewer is given, the more it reproduces that session's
+reasoning with the same weights and reaches the same conclusions. It cannot see
+a gap between intent and result, so it sits beside the ordinary pass, never in
+place of it.
+
+Naming the origin is what keeps a weak contract from surviving its slice.
 
 ## Step 7 — production, the note, and the undo
 

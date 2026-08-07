@@ -25,6 +25,17 @@ agenda can tell the two steps this repository can evidence from the five it
 cannot.
 """
 
+# The plan's own byte budget, checked at step 3 property 2. A PROPOSAL WITH
+# OPERATOR OVERRIDE, never a gate the way SKILL.md's own budget is: nothing here
+# refuses a commit. Measured across 99 real plans in the operator's private
+# overlay: min 336 bytes, p25 13,911, median 23,704, p75 35,200, max 164,805.
+# PLAN_BYTE_WARN mirrors the SKILL.md warn `skill-metadata-check.py` already
+# enforces, so the workspace carries one number rather than two. PLAN_BYTE_HARD
+# sits one byte above the measured median, so half that history would have
+# passed unchanged.
+PLAN_BYTE_WARN = 16384
+PLAN_BYTE_HARD = 24576
+
 ACT_DECIDE = "Decide"
 ACT_BUILD = "Build"
 ACT_CHECK = "Check"

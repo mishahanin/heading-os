@@ -29,11 +29,13 @@ bindable to ONE test; a compound criterion holding two triggers cannot be.
 Exceeding the 3-5 band is the cheaper error when the alternative is folding two
 claims into one line.
 
-**Derive the criteria from a partition of the input domain**, one row per value
-class, edges included. A criteria set assembled from the cases that came to mind
-tests the author's imagination; a partition tests the domain. Name the classes
-first, then write one criterion per class, then check that no class is missing a
-row.
+**Derive the criteria from a partition of the input domain, and write it down as
+a table**, one row per value class, edges included, each row naming the test
+that decides it (`| Value class | Test |`). A criteria set assembled from the
+cases that came to mind tests the author's imagination; a partition tests the
+domain, but only if it is an artifact the plan carries rather than reasoning
+that happened once in a chat window and left no trace. Name the classes first,
+then one row per class, then check that no class is missing a row.
 
 ## The contract is real files
 

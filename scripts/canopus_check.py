@@ -53,9 +53,7 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     parse_junit,
     pytest_child_env,
 )
-from scripts.utils.canopus_note import (  # noqa: E402
-    NOTE_DIR, NoteError, note_paths, read_note,
-)
+from scripts.utils.canopus_note import NOTE_DIR, NoteError, note_paths, read_note  # noqa: E402
 
 GIT_TIMEOUT = 60
 PYTEST_TIMEOUT = 900
@@ -381,9 +379,8 @@ def main(argv: list[str] | None = None) -> int:
                              "naming no commit (empty, or the all-zero sha) scopes "
                              "them to nothing rather than to everything")
     parser.add_argument("--json", action="store_true",
-                        help="one JSON row per clause on stdout, nothing else; "
-                             "with no note to check at all, a single row whose "
-                             "clause is 'scope' saying so")
+                        help="one JSON row per clause on stdout, nothing else; with no note to "
+                             "check at all, a single row whose clause is 'scope' saying so")
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     rows: list[dict] = []
@@ -425,13 +422,10 @@ def main(argv: list[str] | None = None) -> int:
         # shape, so a caller iterating rows keeps working and a caller reading
         # `ok` still sees nothing wrong; `clause == "scope"` is what distinguishes
         # it from a clause verdict, and no clause is named that.
-        nothing = (f"NOTHING WAS CHECKED: no slice note under "
-                   f"{NOTE_DIR.as_posix()}/, so the four clauses ran zero "
-                   f"times. This is an empty bill, not a clean one.")
-        if args.json:
-            print(json.dumps([_row("-", "scope", True, nothing)], indent=2))
-        else:
-            print(f"canopus-check: {nothing}")
+        nothing = (f"NOTHING WAS CHECKED: no slice note under {NOTE_DIR.as_posix()}/, so the four "
+                   f"clauses ran zero times. This is an empty bill, not a clean one.")
+        print(json.dumps([_row("-", "scope", True, nothing)], indent=2) if args.json
+              else f"canopus-check: {nothing}")
         return 0
     if args.json:
         print(json.dumps(rows, indent=2))

@@ -63,18 +63,6 @@ def derive_slug(plan_path: str) -> str:
     return stem or "untitled"
 
 
-def contract_root() -> Path:
-    """Where step 4's contract directories live: `tests/contract/` in the engine.
-
-    The engine tree, deliberately, and no longer `get_plans_dir()`. A contract is
-    committed CODE and lives in this repository; the plan it belongs to lives in
-    the operator's private overlay, which a public clone does not have. Reading
-    the overlay to answer a question about a tracked directory was a data
-    dependency this check never needed.
-    """
-    return get_workspace_root() / "tests" / "contract"
-
-
 def _artifact_date(path: Path) -> date | None:
     """Parse the leading YYYY-MM-DD from a contract directory name."""
     stem = path.stem
@@ -86,8 +74,7 @@ def _artifact_date(path: Path) -> date | None:
     return None
 
 
-def check_gate(plan_path, contract_dir=None, today=None,
-               stale_days=STALE_DAYS_DEFAULT):
+def check_gate(plan_path, contract_dir=None, today=None, stale_days=STALE_DAYS_DEFAULT):
     """Return (status, detail) for the contract gate check. Never raises on
     normal inputs.
 
@@ -100,8 +87,12 @@ def check_gate(plan_path, contract_dir=None, today=None,
     if not slug or slug == "untitled":
         return "SKIPPED", "plan path has no decodable slug"
 
-    contract_dir = (Path(contract_dir) if contract_dir is not None
-                    else contract_root())
+    # The ENGINE tree, deliberately, and no longer `get_plans_dir()`. A contract is
+    # committed CODE and lives in this repository; the plan it belongs to lives in the
+    # operator's private overlay, which a public clone does not have. Reading the
+    # overlay to answer a question about a tracked directory was a data dependency
+    # this check never needed.
+    contract_dir = Path(contract_dir) if contract_dir is not None else get_workspace_root() / "tests" / "contract"
     if not contract_dir.is_dir():
         return "MISSING", f"no contract for slug '{slug}' (contract dir absent)"
 
@@ -129,15 +120,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Advisory contract-gate check for /implement.")
     parser.add_argument("--plan", default="", help="path to the plan being implemented")
-    parser.add_argument("--contract-dir", default=None,
-                        help="override the contract directory (testing)")
+    parser.add_argument("--contract-dir", default=None, help="override the contract directory (testing)")
     parser.add_argument("--stale-days", type=int, default=STALE_DAYS_DEFAULT,
                         help=f"age threshold for the stale note (default {STALE_DAYS_DEFAULT})")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     args = parser.parse_args()
 
-    status, detail = check_gate(args.plan, contract_dir=args.contract_dir,
-                                stale_days=args.stale_days)
+    status, detail = check_gate(args.plan, contract_dir=args.contract_dir, stale_days=args.stale_days)
 
     if args.json:
         print(json.dumps({"status": status, "detail": detail, "plan": args.plan}))

@@ -239,10 +239,8 @@ def contract_files(
                 continue
             resolved = candidate.resolve()
             if not resolved.is_relative_to(resolved_root):
-                raise ContractError(
-                    f"{resolved} is outside the tree being probed "
-                    f"({resolved_root}), so it is not part of that tree's "
-                    f"contract. Pass --root to name the tree it belongs to.")
+                raise ContractError(f"{resolved} is outside the tree being probed ({resolved_root}), so it is "
+                                    f"not part of that tree's contract. Pass --root to name the tree it is in.")
             found.add(resolved.relative_to(resolved_root).as_posix())
     return sorted(found)
 

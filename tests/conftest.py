@@ -58,6 +58,38 @@ _ENGINE_ROOT = _TESTS_ROOT.parent
 _TEST_LOG_DIR = str(_ENGINE_ROOT / ".logs" / "_pytest")
 os.environ["WORKSPACE_LOG_DIR"] = _TEST_LOG_DIR
 
+# The same isolation, one guard along. `check_rate_limit` in the PreToolUse
+# dispatcher counts Write and Edit calls per day and BLOCKS past 1000, and six
+# test modules drive that hook in a subprocess exactly as production does.
+# Measured 2026-08-07, before this line: the operator's counter stood at 1033
+# and was blocking three tests, and the writes it had stored were fixtures —
+# `threads/personal/foo.md`, a Windows path that cannot exist on this machine,
+# a scratch probe file. One run of three of those modules added 12 more.
+#
+# UNLINKED at import, not merely redirected. The counter is keyed by date and
+# resets itself tomorrow, but a run this hour would otherwise inherit every
+# earlier run's fixtures today, and enough runs in one day would reproduce the
+# same block in the new location. Starting from zero is what makes the
+# redirection a fix rather than a move.
+#
+# Only the session that OWNS the variable resets it, and that distinction was
+# measured rather than reasoned. This suite spawns pytest CHILDREN — the Canopus
+# probe alone runs several per contract — and each child imports this file. With
+# an unconditional unlink they wiped their parent's counter mid-run, so after a
+# full run the file was simply gone and the reset the comment promised was not
+# the reset the code performed. An inherited variable means a parent already did
+# this; the child leaves it alone.
+_TEST_RATE_STATE = _ENGINE_ROOT / ".logs" / "_pytest" / "dispatch-rate.json"
+_OWNS_RATE_STATE = "WS_RATE_LIMIT_STATE" not in os.environ
+os.environ["WS_RATE_LIMIT_STATE"] = str(_TEST_RATE_STATE)
+if _OWNS_RATE_STATE:
+    try:
+        _TEST_RATE_STATE.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:  # pragma: no cover - reported, never fatal to the run
+        print(f"[conftest] could not reset the test rate-limit state: {exc}")
+
 
 @pytest.fixture(autouse=True)
 def _isolate_runtime_logs():
@@ -72,6 +104,7 @@ def _isolate_runtime_logs():
     applies inside the test body, after this.
     """
     os.environ["WORKSPACE_LOG_DIR"] = _TEST_LOG_DIR
+    os.environ["WS_RATE_LIMIT_STATE"] = str(_TEST_RATE_STATE)
     yield
 
 

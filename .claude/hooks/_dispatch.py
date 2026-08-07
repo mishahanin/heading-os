@@ -587,7 +587,25 @@ def check_cwd_anchor(payload: dict) -> Optional[dict]:
 import time
 from datetime import datetime
 
-RATE_LIMIT_STATE_FILE = WORKSPACE / ".claude" / "state" / "dispatch-rate.json"
+# `WS_RATE_LIMIT_STATE` redirects the counter, and the test suite is the only
+# caller that sets it. Six test modules drive this hook in a subprocess exactly
+# as production does, so before this seam existed every fixture write they made
+# was counted against the operator's real daily allowance. Measured 2026-08-07:
+# the production counter stood at 1033 and was BLOCKING, and the writes it had
+# stored were fixtures — a thread file that does not exist, a Windows path that
+# cannot exist on this machine, a scratch probe. The suite went red on volume
+# nobody produced, and the runaway-loop guard's own numerator was filling with
+# work nobody did, which is the worse half: a real runaway would arrive
+# indistinguishable from a week of testing.
+#
+# The same shape as `WORKSPACE_LOG_DIR` one guard along, and for the same reason
+# the denial log needed it on 2026-08-01. It weakens nothing that was not already
+# open: the block message this check prints already tells the operator to delete
+# the state file, so a redirected path is not a new way to reset the count.
+RATE_LIMIT_STATE_FILE = Path(
+    os.environ.get("WS_RATE_LIMIT_STATE")
+    or WORKSPACE / ".claude" / "state" / "dispatch-rate.json"
+)
 RATE_LIMIT_SOFT = int(os.environ.get("WS_RATE_LIMIT_SOFT", "200"))   # advisory at N writes/day
 RATE_LIMIT_HARD = int(os.environ.get("WS_RATE_LIMIT_HARD", "1000"))  # block at N writes/day
 RATE_LIMIT_LOOP_WINDOW = 20      # how many recent calls to inspect

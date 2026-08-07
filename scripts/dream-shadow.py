@@ -2,7 +2,7 @@
 """dream-shadow.py -- nightly salience-ranked consolidation worklist (Gap #1).
 
 Read-only detector over auto-memory/*.md content. Computes a dormancy list
-(informational only -- nothing is ever proposed for removal) and merge
+(informational only — nothing is ever proposed for removal) and merge
 candidates (near-duplicate pairs, salience-ranked) and writes a dated report.
 NEVER mutates, merges, or deletes a memory file -- resolution stays with
 /dream (a human reviews, then applies).
@@ -42,7 +42,7 @@ DORMANT_DAYS = STALE_DAYS  # 45; a file younger than this has not had its chance
 def _memory_meta(path: Path) -> tuple[str, int, str]:
     """(mem_type, access_count, last_accessed) from a memory file's frontmatter.
 
-    Real auto-memory files nest these under `metadata:` -- checked as a
+    Real auto-memory files nest these under `metadata:` — checked as a
     fallback when no top-level key exists, mirroring memory-index.py's
     parse_note() precedent.
     """

@@ -1,8 +1,10 @@
 """Regression tests for scripts/dream-shadow.py -- the nightly salience-ranked
-consolidation worklist (Gap #1). Encodes the plan's Success Signal: a stale +
-low-salience fact is flagged as a prune candidate; a stale + high-salience
-(feedback-type, high access_count) fact is NOT flagged; a near-duplicate pair
-is surfaced merge-ranked by salience; the detector never mutates auto-memory/.
+consolidation worklist (Gap #1). Covers the dormancy list: an old, never- or
+not-recently-surfaced fact is dormant; an old fact the retriever keeps
+surfacing is not, whatever its type weight; a fact too young to have had its
+chance is never dormant; the rendered report proposes no removal. Also covers
+a near-duplicate pair surfaced merge-ranked by salience, and that the
+detector never mutates auto-memory/.
 
 Run: python3 -m pytest tests/test_dream_shadow.py
 """
@@ -82,6 +84,33 @@ def test_recent_file_is_never_dormant(tmp_path):
     now = datetime.now(timezone.utc)
     names = [c["name"] for c in mod.compute_dormant(mem, now)]
     assert "fresh.md" not in names
+
+
+def test_dormancy_is_access_based_not_salience_based(tmp_path):
+    """Guards against a silent revert to the retired salience-threshold rule.
+
+    composite_salience("reference", 12) == 0.6603, which clears the old
+    PRUNE_SALIENCE_THRESHOLD of 0.6 — under the retired rule this file would
+    NOT have been flagged (0.6603 >= 0.6). But its last_accessed is over 200
+    days stale (2026-01-01), well past the dormancy window, so under the new
+    access-and-recency rule it IS dormant: a decent lifetime count and a
+    high-weight type do not exempt a fact the retriever has stopped
+    surfacing recently. Every dormancy test above this one would still pass
+    if compute_dormant were silently reimplemented as
+    `age > 45 AND composite_salience < 0.6` — this is the one case that
+    tells the two rules apart.
+    """
+    mod = load_module()
+    mem = tmp_path / "auto-memory"
+    _write(
+        mem / "cooling.md",
+        _fact("reference", 12, "cooling", last_accessed="2026-01-01"),
+        days_old=90,
+    )
+
+    now = datetime.now(timezone.utc)
+    names = [c["name"] for c in mod.compute_dormant(mem, now)]
+    assert "cooling.md" in names
 
 
 def test_report_proposes_no_removal(tmp_path, monkeypatch):

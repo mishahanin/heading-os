@@ -462,7 +462,7 @@ def _skip_states_reason(node: ast.expr, marker: str) -> bool:
     so a bare `@pytest.mark.skipif(COND)` with no `reason=` keyword states no
     reason regardless of what COND is.
 
-    A reason that is not a string constant -- a variable, an f-string -- cannot
+    A reason that is not a string constant (a variable, an f-string) cannot
     be read statically, and this reader FAILS OPEN there: it is treated as
     stating a reason, so the marker is not refused. Over-refusing teaches the
     operator to route around the gate, which is worse than letting one
@@ -494,7 +494,7 @@ def skip_markers_without_reason(paths: Sequence[Path], root: Path) -> list[str]:
     `contract_imports` and `contract_literals` above already walk:
     `contract_source_files` for which files to read, one `ast.parse` per file,
     and an `OSError`/`SyntaxError`/`ValueError` from that parse raised as a
-    `ContractError` rather than swallowed -- an unparseable contract file is
+    `ContractError` rather than swallowed. An unparseable contract file is
     not the same claim as a contract file that names no skip marker at all.
 
     The marker family is `pytest.mark.skip`, `pytest.mark.skipif`, and
@@ -503,25 +503,25 @@ def skip_markers_without_reason(paths: Sequence[Path], root: Path) -> list[str]:
     a reason that is not a string constant.
 
     Two shapes are read, not one, in two separate passes over the same tree.
-    A DECORATOR on a `def` or `async def` -- walked via `ast.walk` so a marked
+    A DECORATOR on a `def` or `async def`, walked via `ast.walk` so a marked
     method nested inside a test class is read too, and named by its own bare
     function name rather than qualified by class, on the authoring rule the
     contract this reader answers to states plainly: it asserts bare names, not
     `TestClass.test_method`. And a MODULE-LEVEL `pytestmark = pytest.mark.skip`,
-    read separately from `tree.body` -- module top-level statements ONLY,
-    never `ast.walk` -- so a `pytestmark` assigned inside a class body is never
+    read separately from `tree.body` (module top-level statements ONLY,
+    never `ast.walk`), so a `pytestmark` assigned inside a class body is never
     mistaken for the module's own. The list form
     `pytestmark = [pytest.mark.skip, pytest.mark.other]` is accepted too, each
     element checked independently. A module-level marker is named by the
     literal string `"<module>"`, because there is no function name to report,
     and that string is exactly what SORTS first among `test_*` names (`<` is
-    ASCII 0x3C, `t` is 0x74) -- which is why the returned list needs no
+    ASCII 0x3C, `t` is 0x74), which is why the returned list needs no
     special-casing to put it there; a single `sorted()` over the whole set
     already does.
 
     Why this reader exists at all: `probe` already prints a skipped test with
-    the note "did not run, so it proves nothing", and printing is ALL it does
-    -- nothing about that note ever became a refusal.
+    the note "did not run, so it proves nothing", and printing is ALL it does.
+    Nothing about that note ever became a refusal.
     `.claude/skills/canopus/references/planning-gate.md` says the human eye was
     the only thing standing between an operator and a skip that quietly walked
     a whole test through the gate; this reader is what lets `refusal_reasons`
@@ -1159,13 +1159,13 @@ def refusal_reasons(
     population, and `skip_markers_without_reason` reads the contract's own
     SOURCE, a different input entirely that only `probe` (or another caller
     running both) is positioned to hand over. When it is non-empty, exactly
-    ONE reason is appended naming every test in it -- never one reason per
+    ONE reason is appended naming every test in it, never one reason per
     test, because the caller that prints this list prints one line per reason,
     and N elements for one underlying defect would read as N separate defects
     rather than the single family it is. The reason it states is why an
     undocumented skip is refused at all: a test that never ran cannot be told,
-    from the suite's own report, apart from one that ran and passed -- both
-    read `skipped`-free and green -- so a skip carrying no reason is the one
+    from the suite's own report, apart from one that ran and passed. Both
+    read `skipped`-free and green, so a skip carrying no reason is the one
     shape this function cannot distinguish from a test that quietly proves
     nothing.
     """

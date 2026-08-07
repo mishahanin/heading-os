@@ -223,7 +223,11 @@ def _after_build(paths, root, expected) -> int:
     # On the PAGE, not only on stderr. The reading below is evidence about these
     # modules and no others, and a reader who cannot see the list cannot tell
     # whether the subject they came here about is in it.
-    print(f"  replaced    {', '.join(claims.get('claimed', [])) or 'nothing'}")
+    # No empty-case fallback: `run_pass_candidates` raises before it returns
+    # when the claim set is empty, so this line cannot be reached with nothing
+    # to name, and a fallback for a state that cannot occur is a claim about
+    # the code that is not true.
+    print(f"  replaced    {', '.join(claims.get('claimed', []))}")
     if dropped:
         print(f"  not replaced  {', '.join(dropped)}")
     print(f"  survived    {len(gaps)} of {total}")

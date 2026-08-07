@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""memory_touch.py -- the single writer of auto-memory access_count.
+"""memory_touch.py — the single writer of auto-memory access_count.
 
 Bumping is a RANKING signal and nothing else. A memory that is never bumped
 sinks in recall order and stays on the shelf forever; nothing in this module,
@@ -11,8 +11,8 @@ Two callers:
 
 Does a minimal, targeted text edit scoped to the frontmatter `metadata:` block:
 increments `access_count` (inserting it at 1 if absent) and sets
-`last_accessed` to the supplied date. Every other line -- comments, key order,
-unrelated fields, the whole body -- is preserved byte-for-byte. NOT a full YAML
+`last_accessed` to the supplied date. Every other line — comments, key order,
+unrelated fields, the whole body — is preserved byte-for-byte. NOT a full YAML
 re-serialize. Writes atomically.
 """
 from __future__ import annotations
@@ -157,6 +157,12 @@ def touch_if_stale(raw_path: str, auto_memory_dir: Path, today: str) -> bool:
     The debounce exists because the retrieval hook runs on EVERY prompt: ten
     messages about one subject are one use of a memory, not ten. `last_accessed`
     is already written by the bump, so the debounce needs no new state.
+
+    `today` must be an ISO date string in `YYYY-MM-DD` form, as produced by
+    `datetime.date.isoformat()`. The staleness check is a plain string
+    comparison against the stored `last_accessed` value, not a date parse; a
+    differently formatted `today` will never match and the debounce fails
+    open, bumping on every call.
     """
     resolved = _resolve(raw_path, auto_memory_dir)
     meta, _ = parse_frontmatter(resolved.read_text(encoding="utf-8"))

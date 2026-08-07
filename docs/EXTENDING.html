@@ -244,6 +244,7 @@ and on 2026-08-06 two of them put an implementation commit nine hours before the
 approval it descends from.</p>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>check<span class="w"> </span>--range<span class="w"> </span>origin/main..HEAD
 python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/
+python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>--after-build<span class="w"> </span>tests/test_&lt;subject&gt;.py
 </code></pre></div>
 <p><code>check</code> is a passthrough to <code>scripts/canopus_check.py</code>, which is the module CI
 runs directly, so the local reading and the CI reading are the same reading.</p>
@@ -252,7 +253,21 @@ missing modules and runs the contract twice, each stub carrying different values
 so a test that never FAILS under either run is vacuous. Passing, skipping and
 erroring all leave a test unproved; only a failure shows it read the value. It
 also runs three wrong implementations that exist and prints what each took of the
-red set.</p>
+red set. A skip-family marker (<code>skip</code>, <code>skipif</code>, <code>xfail</code>) that states no reason
+refuses the contract, whether it sits on a test, on a class, or on <code>pytestmark</code>;
+a <code>pytest.skip()</code> inside a test body and a module-scope <code>pytest.importorskip</code>
+are not read, so they remain the reviewer&rsquo;s to catch.</p>
+<p><code>probe --after-build &lt;test paths&gt;</code> asks the same question at the other end of a
+slice&rsquo;s life. Once a contract is retired into the ordinary suite, nothing
+re-asks whether the tests guarding that code would notice if it were wrong; this
+flag puts the same three wrong implementations in front of shipped code and
+names every test that stayed green under all of them. The page names which
+modules were actually replaced and which were not, because a name that survived
+a module nothing stood in for is not evidence about it, and it names skipped
+tests separately: a test that never ran neither survived a wrong implementation
+nor went red under one. It REPORTS and never refuses (exit 0 whether it names
+twenty survivors or none; exit 1 only when no reading could be made at all).
+Nobody has calibrated this reading, so do not wire it into a gate.</p>
 <p><strong>The honest limit.</strong> A CI step in the <code>sovereignty guards</code> job runs
 <code>canopus_check.py</code> on every push. It REPORTS a broken clause; it does not block
 one, because <code>enforce_admins</code> is false on the only push path in use. Nothing on

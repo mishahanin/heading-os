@@ -127,8 +127,12 @@ Three groups need naming, and each asserts nothing yet:
   is often the probe's own stand-in reaching a caller that type-checks its
   argument, and `probe` names those tests on stderr so they can be told apart
   from a test that genuinely asserts nothing.
-- **`skipped`** — never ran at all. Nothing else catches these, so they are
-  yours to catch here.
+- **`skipped`** — never ran at all. `probe` refuses a skip-family MARKER
+  (`skip`, `skipif`, `xfail`, on a test, on a class, or as `pytestmark`) that
+  states no reason, so an undocumented parking now fails the gate rather than
+  waiting for your eye. It does NOT read a `pytest.skip()` called inside a test
+  body or a module-scope `pytest.importorskip`; both skip for real and both are
+  still yours to catch here.
 
 Strengthen or justify all three. A contract whose every red test is vacuous
 decides nothing, and a skipped or `xfail` test does not buy it a pass.

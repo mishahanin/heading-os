@@ -91,13 +91,16 @@ each earned by a measured failure, and how to read `probe`'s table — is
    test body. It is the only generator of a strong contract we have, and a contract
    born too weak is the dominant measured defect.
 2. **A byte budget on the plan itself: warn at 16,384 bytes, hard at 24,576**,
-   `PLAN_BYTE_WARN` / `PLAN_BYTE_HARD` in `canopus_steps.py`, measured across 99
-   real plans (median 23,704). The warn mirrors the SKILL.md warn
-   `skill-metadata-check.py` already enforces, so the workspace carries one
-   number rather than two. This is a PROPOSAL WITH OPERATOR OVERRIDE, not a
-   gate: unlike SKILL.md's own budget, nothing here refuses a commit. It forces
-   the writer to discard what does not matter; without one the plan grows until
-   nobody reads the part that decides.
+   measured across 99 real plans (median 23,704). The warn mirrors the SKILL.md
+   warn `skill-metadata-check.py` already enforces, so the workspace carries one
+   number rather than two. **You measure the plan yourself and you decide.** No
+   code anywhere reads these numbers: `PLAN_BYTE_WARN` / `PLAN_BYTE_HARD` in
+   `canopus_steps.py` are two constants that exist so this paragraph and the
+   agenda module cannot drift apart, and a test holds them in lockstep. Nothing
+   counts a plan's bytes, nothing warns, and nothing refuses a commit. It is a
+   proposal with operator override, and it earns its keep by forcing the writer
+   to discard what does not matter; without one the plan grows until nobody
+   reads the part that decides.
 3. **The plan does not decide what the implementer can decide from its own context**,
    and it names the files to read first. Re-specifying what the code already says
    wastes the implementer's attention on agreement.
@@ -195,13 +198,16 @@ from a clean one. **Nobody has calibrated this reading**, and rule 3 below
 forbids an uncalibrated reading from becoming a gate, so do not wire it into
 one.
 
-Two things about the page, both of which decide whether it is read correctly. A
+Three things about the page, all of which decide whether it is read correctly. A
 name in the list is NOT a bad test: the claim is exactly that the test did not
 tell right from wrong under those three wrongnesses, and a test of a document or
 of a file on disk lands there while being a perfectly good test of what it is
-about. And the page names which modules were replaced and which were not, so a
-test whose subject sits on the `not replaced` line was measured against nothing
-and its name says only that.
+about. The page names which modules were replaced and which were not, so a test
+whose subject sits on the `not replaced` line was measured against nothing and
+its name says only that; a module the run never imported is on that line too,
+because nothing stood in for it. And a SKIPPED test is neither a survivor nor a
+test that bit: it is named on its own `never ran` line, it is out of the total,
+and a run in which every test skipped produces no reading at all.
 
 ## `check` — the four clauses
 

@@ -42,6 +42,7 @@ from scripts.utils.canopus_nullstub import (
     GREEDY_PAYLOAD_VAR,
     MODULES_VAR,
     NULLSTUB_STDERR_MARKER,
+    REPLACED_REPORT,
     REPLACE_VAR,
     STUB_NAME_SEPARATOR,
     VALUES_VAR,
@@ -73,6 +74,10 @@ RED_OUTCOMES = ("failure", "error")
 # holds them to THIS tuple. Two definitions of the rule is how the prose inverted
 # itself against the code once already.
 UNPROVED_OUTCOMES = ("passed", "skipped", "error")
+# The one token `_outcome` emits for a test that was collected and NEVER RAN.
+# Named because two readings depend on telling it apart from every other token
+# and neither may spell it for itself: see `tests_that_never_ran`.
+SKIPPED_OUTCOME = "skipped"
 
 
 def pytest_child_env(**overrides: str) -> dict:
@@ -437,41 +442,61 @@ _SKIP_MARKER_NAMES = ("skip", "skipif", "xfail")
 def _skip_marker_name(node: ast.expr) -> Optional[str]:
     """The marker family a decorator or an assigned value names, or None.
 
-    Matches `pytest.mark.<name>` reached through the ATTRIBUTE chain, whether
-    the marker is used bare (`@pytest.mark.skip`, an `ast.Attribute`) or called
+    Matches the marker reached through the ATTRIBUTE chain, whether it is used
+    bare (`@pytest.mark.skip`, an `ast.Attribute`) or called
     (`@pytest.mark.skip(...)`, an `ast.Call` whose `.func` is that same
     `ast.Attribute`). Matched by name over the chain rather than by resolving
     the object, the same trade every AST reader in this module makes:
     `contract_imports` above matches a dynamic-import callee by bare name for
-    the identical reason, over-reporting rather than resolving. A shadowed
-    local named `pytest` would be misread here too, and misreading toward MORE
-    matches is the safe direction for a reader that only ever widens a
-    refusal, never manufactures a silent pass.
+    the identical reason, over-reporting rather than resolving.
+
+    TWO shapes are accepted, and the second is the whole of this paragraph.
+    `<anything>.mark.<family>` covers `pytest.mark.skip` and every alias of the
+    module (`import pytest as pt` then `@pt.mark.skip`). A BARE `mark.<family>`
+    covers `from pytest import mark` then `@mark.skip`. An earlier revision
+    required the chain to root in a `ast.Name` spelled exactly `pytest`, and
+    measured against both spellings it caught NEITHER: `skip_markers_without_
+    reason` returned `[]` for a file carrying an unreasoned `@pt.mark.skip`
+    and an unreasoned `@mark.skip`, while the canonical spelling in the same
+    tree was caught. `vacuity_refusal` states that the contract author is the
+    adversary here, so a one-line import alias that walks a parked test past
+    this refusal is the whole finding, not an edge.
+
+    Widening is the direction this reader is permitted to err in, and both
+    arms err that way: a shadowed local named `pytest`, or any object named
+    `mark`, is misread toward MORE matches, and a match only ever produces a
+    refusal for a marker that states no reason. `foo.bar.skip` still matches
+    nothing, because the middle segment must be `mark`.
     """
     base = node.func if isinstance(node, ast.Call) else node
     if not isinstance(base, ast.Attribute) or base.attr not in _SKIP_MARKER_NAMES:
         return None
     mark = base.value
-    if not (isinstance(mark, ast.Attribute) and mark.attr == "mark"):
-        return None
-    root = mark.value
-    if not (isinstance(root, ast.Name) and root.id == "pytest"):
-        return None
-    return base.attr
+    if isinstance(mark, ast.Attribute):
+        return base.attr if mark.attr == "mark" else None
+    if isinstance(mark, ast.Name) and mark.id == "mark":
+        return base.attr
+    return None
 
 
 def _skip_states_reason(node: ast.expr, marker: str) -> bool:
     """Whether *node* (the decorator, or the value `pytestmark` was assigned) documents a reason.
 
     A `reason=` keyword whose value is a non-empty string constant states a
-    reason for every marker in the family, `skipif` included: real pytest's
-    signature is `skipif(condition, *, reason=None)`, so a keyword reason is
-    legitimate there even though the positional carve-out below is not.
+    reason for every marker in the family, `skipif` and `xfail` included: real
+    pytest's signature is `skipif(condition, *, reason=None)` and
+    `xfail(condition=None, *, reason=None, ...)`, so a keyword reason is
+    legitimate in both even though the positional carve-out below is not.
 
-    The first POSITIONAL string constant states a reason for `skip` and
-    `xfail` only. `skipif`'s first positional is the CONDITION, not a reason,
-    so a bare `@pytest.mark.skipif(COND)` with no `reason=` keyword states no
-    reason regardless of what COND is.
+    The first POSITIONAL string constant states a reason for `skip` ALONE,
+    because `skip`'s signature is `skip(reason="")` and it is the only member
+    of the family whose first positional is the reason. Both `skipif` and
+    `xfail` take a CONDITION there. An earlier revision grouped `xfail` with
+    `skip`, on a docstring claim that xfail's first positional is a reason;
+    measured, `@pytest.mark.xfail("1 == 1")` on a failing test reports
+    `1 xfailed`, which is the string being EVALUATED as a condition. So a bare
+    `@pytest.mark.skipif(COND)` or `@pytest.mark.xfail(COND)` with no
+    `reason=` keyword states no reason, regardless of what COND is.
 
     A reason that is not a string constant (a variable, an f-string) cannot
     be read statically, and this reader FAILS OPEN there: it is treated as
@@ -490,11 +515,42 @@ def _skip_states_reason(node: ast.expr, marker: str) -> bool:
             if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
                 return kw.value.value != ""
             return True  # not a string constant: fail open, treat as reasoned
-    if marker in ("skip", "xfail") and node.args:
+    if marker == "skip" and node.args:
         first = node.args[0]
         if isinstance(first, ast.Constant) and isinstance(first.value, str):
             return first.value != ""
         return True  # fail open, same rule as the keyword branch above
+    return False
+
+
+def _unreasoned_pytestmark(statements: Sequence[ast.stmt]) -> bool:
+    """Whether a `pytestmark` among *statements* carries an undocumented skip marker.
+
+    Reads the statements it is HANDED and never walks below them, which is what
+    lets one implementation serve both scopes that honour this name without
+    confusing them: a module's `pytestmark` skips the file, a class's skips that
+    class, and a walk that found either from the other would name the wrong
+    thing. Callers pass `tree.body` for the module and `node.body` for a class.
+
+    The list form `pytestmark = [pytest.mark.skip, pytest.mark.other]` is
+    accepted too, each element checked independently, because pytest accepts it.
+    """
+    for stmt in statements:
+        if not (
+            isinstance(stmt, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "pytestmark"
+                for target in stmt.targets
+            )
+        ):
+            continue
+        values = (
+            stmt.value.elts if isinstance(stmt.value, ast.List) else [stmt.value]
+        )
+        for value in values:
+            marker = _skip_marker_name(value)
+            if marker and not _skip_states_reason(value, marker):
+                return True
     return False
 
 
@@ -513,22 +569,34 @@ def skip_markers_without_reason(paths: Sequence[Path], root: Path) -> list[str]:
     stating a reason is `_skip_states_reason`, including its fail-open rule for
     a reason that is not a string constant.
 
-    Two shapes are read, not one, in two separate passes over the same tree.
+    FOUR shapes are read, and they are the four ways a MARKER parks a test.
     A DECORATOR on a `def` or `async def`, walked via `ast.walk` so a marked
     method nested inside a test class is read too, and named by its own bare
     function name rather than qualified by class, on the authoring rule the
     contract this reader answers to states plainly: it asserts bare names, not
-    `TestClass.test_method`. And a MODULE-LEVEL `pytestmark = pytest.mark.skip`,
-    read separately from `tree.body` (module top-level statements ONLY,
-    never `ast.walk`), so a `pytestmark` assigned inside a class body is never
-    mistaken for the module's own. The list form
-    `pytestmark = [pytest.mark.skip, pytest.mark.other]` is accepted too, each
-    element checked independently. A module-level marker is named by the
-    literal string `"<module>"`, because there is no function name to report,
-    and that string is exactly what SORTS first among `test_*` names (`<` is
-    ASCII 0x3C, `t` is 0x74), which is why the returned list needs no
-    special-casing to put it there; a single `sorted()` over the whole set
-    already does.
+    `TestClass.test_method`. A DECORATOR on a `class`, named by the class's own
+    name: pytest applies it to every test in the body, so an unread one walks a
+    whole class through this refusal at once. Measured before the class arm
+    existed, on a file whose class held two tests: pytest reported `2 skipped`
+    and this reader named nothing, and a class body is the ORDINARY shape for a
+    contract here (the frozen contract of this slice is four classes). And
+    `pytestmark`, in either scope that honours it: at module level, read from
+    `tree.body` alone and named by the literal string `"<module>"`; in a class
+    body, read from that class's own statements and named by the class. Both go
+    through `_unreasoned_pytestmark`, so the two scopes cannot drift apart, and
+    neither is ever found by walking from the other. `"<module>"` SORTS first
+    among the names a contract can carry (`<` is ASCII 0x3C, below both `T` and
+    `t`), which is why the returned list needs no special-casing to put it
+    there; a single `sorted()` over the whole set already does.
+
+    What this reader does NOT read, stated so its silence is not mistaken for a
+    clean bill: a runtime `pytest.skip()` called inside a test body, and a
+    module-scope `pytest.importorskip(...)`. Both skip for real, both are one
+    line to write, and both leave a contract test that never ran passing for one
+    that did. They are a live gap, deliberately left to the operator as a
+    scope decision rather than closed here; `contract_imports` already reads
+    `importorskip` for the claim set, so the name is visible to this module even
+    though nothing refuses over it.
 
     Why this reader exists at all: `probe` already prints a skipped test with
     the note "did not run, so it proves nothing", and printing is ALL it does.
@@ -550,24 +618,14 @@ def skip_markers_without_reason(paths: Sequence[Path], root: Path) -> list[str]:
                 f"the contract file {rel} could not be parsed, so the skip "
                 f"markers it carries could not be read: {exc}"
             ) from exc
-        for stmt in tree.body:
-            if not (
-                isinstance(stmt, ast.Assign)
-                and any(
-                    isinstance(target, ast.Name) and target.id == "pytestmark"
-                    for target in stmt.targets
-                )
-            ):
-                continue
-            values = (
-                stmt.value.elts if isinstance(stmt.value, ast.List) else [stmt.value]
-            )
-            for value in values:
-                marker = _skip_marker_name(value)
-                if marker and not _skip_states_reason(value, marker):
-                    names.add("<module>")
+        if _unreasoned_pytestmark(tree.body):
+            names.add("<module>")
         for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, ast.ClassDef) and _unreasoned_pytestmark(node.body):
+                names.add(node.name)
+            if not isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
                 continue
             for decorator in node.decorator_list:
                 marker = _skip_marker_name(decorator)
@@ -826,6 +884,43 @@ def replaceable_claims(names: Sequence[str], root: Path) -> list[str]:
     return kept
 
 
+def _replaced_by_the_child(notes: Sequence[str]) -> Optional[set[str]]:
+    """The module names one candidate child says it replaced, or None if it said nothing.
+
+    The child writes exactly one of these lines per armed session, at teardown,
+    when the set is complete. None is NOT an empty set here: a child that
+    replaced nothing reports an empty line and a child that never reported at
+    all cannot be spoken for, and the caller refuses on the second.
+
+    The lines are read out of the whole forwarded stream rather than by
+    position, and a later line wins, because the plugin also writes diagnostics
+    of its own and the parent forwards every one of them.
+    """
+    prefix = f"{NULLSTUB_STDERR_MARKER} {REPLACED_REPORT}"
+    reported = None
+    for line in notes:
+        if line.startswith(prefix):
+            reported = {
+                name for name in line[len(prefix):].strip().split(",") if name
+            }
+    return reported
+
+
+def _was_replaced(claim: str, replaced: Sequence[str]) -> bool:
+    """Whether anything the child replaced lies AT or under *claim*.
+
+    The claim `pkg` is armed for `pkg.sub` as well, on the rule
+    `_NamedFinder._claims` applies in the child, so a run that imported only the
+    submodule replaced something under that claim and the claim is honestly on
+    the page. Mirrored rather than imported because the finder holds it as a
+    method over its own name set; the two must agree, and this one is read only
+    to decide which line of the page a name is printed on.
+    """
+    return any(
+        name == claim or name.startswith(f"{claim}.") for name in replaced
+    )
+
+
 def run_pass_candidates(
     paths: Sequence[Path],
     root: Path,
@@ -833,7 +928,7 @@ def run_pass_candidates(
     timeout: int = 900,
     expected_population: Optional[Sequence[tuple[str, str, str]]] = None,
     replace_existing: bool = False,
-    collected_out: Optional[dict[str, set[tuple[str, str]]]] = None,
+    outcomes_out: Optional[dict[str, list[tuple[str, str, str]]]] = None,
     claims_out: Optional[dict[str, list[str]]] = None,
 ) -> dict[str, set[tuple[str, str]]]:
     """For each candidate, the (file, test) pairs it turned green.
@@ -884,12 +979,12 @@ def run_pass_candidates(
     let a probe that measured half a contract print the same page as one that
     measured all of it, so the loss is named.
 
-    `collected_out`, when a caller supplies a dict, is FILLED with the pairs
-    each candidate actually collected, alongside the pairs it turned green in
-    the return value. An out-parameter rather than a widened return, and the
-    reason is arithmetic rather than taste: the return value is read as the
-    taken map at every call site in this repository and in a dozen tests, and
-    turning it into a tuple would rewrite all of them to serve one caller.
+    `outcomes_out`, when a caller supplies a dict, is FILLED with each
+    candidate's own report triples, alongside the pairs it turned green in the
+    return value. An out-parameter rather than a widened return, and the reason
+    is arithmetic rather than taste: the return value is read as the taken map
+    at every call site in this repository and in a dozen tests, and turning it
+    into a tuple would rewrite all of them to serve one caller.
     The one caller is `verification_gaps`, which cannot tell a test that FAILED
     under every candidate from a test no candidate ever ran when it is handed
     passing sets alone, and those two readings are opposites: the first is the
@@ -897,9 +992,33 @@ def run_pass_candidates(
     the taken map it must call both unmeasured, which on a real target is a
     false claim about most of the suite. See that function.
 
-    `claims_out`, when a caller supplies a dict, is FILLED with `claimed` (the
-    names the candidates were made to stand in for) and `dropped` (the names the
-    contract's source gave that the narrowing removed). It exists because the
+    The TRIPLES rather than the pairs, and the difference is a false verdict
+    rather than a convenience. This parameter carried the collected pairs until
+    2026-08-07, and a pair alone cannot say whether the candidate RAN that test:
+    a fixture reading a value the candidates stand in for skips, the skip is
+    written into the report like any other row, so the pair is collected, absent
+    from the taken map, and folded into the bucket the caller's page describes
+    in words as the measurement working. Measured through the CLI on a fixture
+    doing `if subject.CONF.get("ready") is not True: pytest.skip(...)`: the test
+    passes for real, skips under all three candidates, and the page printed
+    `none  every test that RAN went red under at least one candidate` in green
+    over a suite in which it was never measured. The outcome tokens are already
+    parsed in the loop below; nothing extra is run to fill this.
+
+    `claims_out`, when a caller supplies a dict, is FILLED with `claimed` and
+    `dropped`. Under `replace_existing` those are MEASURED rather than predicted:
+    `claimed` holds the names a candidate child reported actually replacing, and
+    `dropped` holds every other name the contract's source gave, whether the
+    narrowing removed it before the run or no import ever reached it during one.
+    A claim is what a candidate was ARMED for; only the child knows which of
+    those names an import reached, and it says so at teardown (see
+    `_replaced_by_the_child`). Filling `claimed` from the claim set instead put
+    a module on the page's `replaced` line that nothing had replaced: measured
+    2026-08-07, a module imported only inside a SKIPPED test body reaches
+    neither the wrapping loader nor `sys.modules`, and printed as replaced all
+    the same. On the unarmed path nothing is replaced at all, so the two keys
+    keep their older meaning there: what was claimed, and what the narrowing
+    dropped. It exists because the
     narrowing is reported on stderr and the READING is printed on stdout, and a
     caller that prints one without the other tells the operator that the code
     beneath a test was replaced when the module that test exercises was left
@@ -965,17 +1084,31 @@ def run_pass_candidates(
         if outcome in RED_OUTCOMES
     }
     taken: dict[str, set[tuple[str, str]]] = {}
+    stood_in_for: list[set[str]] = []
     for name in CANDIDATES:
+        notes: list[str] = []
         xml_text = run_pytest_report(
             paths, root, timeout=timeout,
             extra_env={**base_env, CANDIDATE_VAR: name},
             extra_args=("-p", "scripts.utils.canopus_nullstub"),
             allowed_returncodes=PROBE_RETURNCODES,
+            notes_out=notes,
         )
+        if replace_existing:
+            reported = _replaced_by_the_child(notes)
+            if reported is None:
+                raise ContractError(
+                    f"the {name} pass-candidate did not report which modules it "
+                    f"replaced, so this run cannot say what any wrong "
+                    f"implementation stood in for. Its claim set is what it was "
+                    f"ARMED for, and printing that as what happened is how a "
+                    f"page comes to name a module nothing touched."
+                )
+            stood_in_for.append(reported)
         _counts, outcomes = parse_junit(xml_text)
         collected = {(rel, test) for rel, test, _o in outcomes}
-        if collected_out is not None:
-            collected_out[name] = collected
+        if outcomes_out is not None:
+            outcomes_out[name] = list(outcomes)
         taken[name] = {
             (rel, test) for rel, test, outcome in outcomes if outcome == "passed"
         }
@@ -989,6 +1122,69 @@ def run_pass_candidates(
                 "stands in for; move it inside the test body.",
                 file=sys.stderr,
             )
+    if replace_existing:
+        # What the children REPLACED, in place of what they were armed for. The
+        # intersection rather than the union: the page's sentence is that a
+        # named test survived three wrong implementations of these modules, and
+        # a module one candidate replaced and another never reached does not
+        # carry that claim. Both readings are the same set on every run measured
+        # here, because all three children run the same target; the intersection
+        # is the one that stays true if they ever differ.
+        #
+        # Computed whether or not the caller wants `claims_out`, because the
+        # refusal below is a property of the RUN and not of the caller's
+        # out-parameter. While this whole block hung on `claims_out is not
+        # None`, a caller that merely wanted the taken map got no diagnostic
+        # and no refusal for a run in which nothing was replaced at all.
+        replaced = set.intersection(*stood_in_for)
+        claimed = [name for name in modules if _was_replaced(name, replaced)]
+        untouched = [name for name in modules if name not in set(claimed)]
+        if untouched:
+            print(
+                "canopus: not replacing " + ", ".join(untouched)
+                + ": no candidate child ever imported them, so nothing stood in "
+                "for them and no test below was measured against a wrong "
+                "implementation of them. A claim reaches only the names an "
+                "import reaches; a module read exclusively inside a skipped "
+                "test is the ordinary way this happens.",
+                file=sys.stderr,
+            )
+        if not claimed:
+            # The third route to "nothing was stood in for", and the only one
+            # that was not refused. The two above it are decided BEFORE the
+            # children run — an empty claim set, and a claim set the narrowing
+            # emptied — and both raise. This one is decided by what the children
+            # actually did, and until it raised, a run in which no candidate
+            # replaced a single module returned a taken map holding every test
+            # that passed against the REAL code, which `verification_gaps` then
+            # reported as tests that survived three wrong implementations.
+            #
+            # Measured through the CLI on 2026-08-07, at HEAD, on a contract
+            # whose only import of the subject sat inside a skipped test:
+            #
+            #     replaced
+            #     not replaced  pytest, scripts.utils.canopus_steps
+            #     survived    1 of 1
+            #
+            # — a blank `replaced` line above a survivor named for staying green
+            # while the modules on that blank line were replaced, and exit 0. A
+            # reading nobody took wearing the face of a completed measurement is
+            # the one shape this instrument exists to refuse, and it reached the
+            # page by the door where nothing looked like it had failed.
+            raise ContractError(
+                "no candidate child replaced anything, so no wrong "
+                "implementation was ever put in front of any test and this run "
+                "measured NOTHING: every test that stayed green stayed green "
+                "against the real code. The modules armed for replacement were "
+                + ", ".join(modules) + ", and no import in the run reached any "
+                "of them. Most often the subject is imported only inside a test "
+                "that skipped, or is reached only through a package prefix the "
+                "narrowing dropped; import it by its own name inside a test "
+                "that runs."
+            )
+        if claims_out is not None:
+            claims_out["claimed"] = claimed
+            claims_out["dropped"] = sorted(dropped + untouched)
     return taken
 
 
@@ -1068,10 +1264,87 @@ def pass_candidate_refusal(
     return []
 
 
+def tests_that_never_ran(
+    outcomes: Sequence[tuple[str, str, str]],
+) -> list[tuple[str, str]]:
+    """The (file, test) pairs whose EVERY row in the report is `skipped`, sorted.
+
+    A skipped test is the third thing a test in a gap reading can be, beside the
+    test that survived every wrong implementation and the test that went red
+    under one. It ran against nothing, so no candidate was ever put in front of
+    it and no reading can speak for it in either direction. Both halves of
+    `probe --after-build` need that set: `verification_gaps` to drop it from the
+    population it answers over, and the page to name it, which is why the rule
+    lives here once rather than in each of them. Read from the outcome tokens
+    the caller already holds; nothing new is measured to get it.
+
+    A pair carrying a skipped row AND a row that is not skipped counts as having
+    RUN. That shape is not something a marker produces; it is one name standing
+    for two report rows, and a test that ran under either of them is not a test
+    that never ran. Naming it here would drop a real measurement from the
+    population, which is the one direction this whole reading may not err in.
+    """
+    ran = {
+        (rel, name) for rel, name, outcome in outcomes
+        if outcome != SKIPPED_OUTCOME
+    }
+    return sorted(
+        {(rel, name) for rel, name, _outcome in outcomes} - ran
+    )
+
+
+def tests_the_candidates_never_ran(
+    candidate_outcomes: dict[str, Sequence[tuple[str, str, str]]],
+) -> list[tuple[str, str]]:
+    """The pairs a candidate SKIPPED and no candidate ever recorded red, sorted.
+
+    The sibling of `tests_that_never_ran` above, reading the candidate runs
+    rather than the real one, and it exists because the real run cannot see this
+    shape at all. A fixture that reads a value the candidates stand in for skips
+    the test it builds; the test PASSES for real, so the real run's outcomes
+    name it nowhere, and it arrives at the reading as a pair that is absent from
+    the taken map — which is the same shape as a test that went red. Measured
+    through the CLI on 2026-08-07, on a fixture doing
+    `if subject.CONF.get("ready") is not True: pytest.skip(...)`: the page
+    printed `survived 0 of 1` and the green `none` line over one test that no
+    candidate had run.
+
+    ONE candidate skipping is enough to name a pair here, because the claim the
+    reading makes is about all of them: a candidate that skipped a test returned
+    no verdict on it, so "green under every candidate" cannot be said. The
+    partial shape is the commoner one, not an exotic edge — `conf.get("ready")`
+    answers None under `none` and a truthy string under the other two, so one
+    candidate skips and two run it.
+
+    A pair any candidate recorded RED is NOT named, whatever else happened to
+    it. That candidate did return a verdict, and the verdict is the caller's
+    page in one sentence: it went red under at least one candidate. Dropping it
+    because a different candidate skipped it would cost the reading a
+    measurement it actually took, and losing a real measurement is the one
+    direction this population may not err in.
+
+    Read from the outcome tokens the caller already holds, and it reuses
+    `tests_that_never_ran` per candidate rather than restating the all-rows-
+    skipped rule: two definitions of one rule is how a page and the answer it
+    prints come to disagree.
+    """
+    parked: set[tuple[str, str]] = set()
+    red: set[tuple[str, str]] = set()
+    for outcomes in candidate_outcomes.values():
+        parked.update(tests_that_never_ran(outcomes))
+        red.update(
+            (rel, name) for rel, name, outcome in outcomes
+            if outcome in RED_OUTCOMES
+        )
+    return sorted(parked - red)
+
+
 def verification_gaps(
     outcomes: Sequence[tuple[str, str, str]],
     taken: dict[str, set[tuple[str, str]]],
-    collected: Optional[dict[str, set[tuple[str, str]]]] = None,
+    candidate_outcomes: Optional[
+        dict[str, Sequence[tuple[str, str, str]]]
+    ] = None,
 ) -> list[tuple[str, str]]:
     """The tests that stayed green under EVERY candidate, sorted.
 
@@ -1098,16 +1371,38 @@ def verification_gaps(
     stub runs lost: not measured is not proved innocent, and an intersection
     computed over the survivors reads exactly like a completed measurement.
 
+    A SKIPPED TEST IS NEITHER, and it leaves the population before any of the
+    above is asked. It never ran, so it survived nothing and it told nothing
+    apart, and both available answers about it are false: named, it reads as a
+    test that could not tell right from wrong; unnamed, it reads as a test that
+    went red under a wrong implementation, which the caller's page says in
+    words. `tests_that_never_ran` above holds that rule for this function and
+    for the page, which names the same set under its own heading. A population
+    with nothing left in it raises: a run in which no test ran is not a clean
+    reading, it is no reading.
+
+    A test the CANDIDATES skipped leaves the population by the same rule and
+    through `tests_the_candidates_never_ran`, which is why that reader sits
+    beside the other one. It is the same defect arriving by the other door: the
+    real run cannot see it, because the test passes for real, and the reading
+    saw only that it was absent from the taken map. That door is only open when
+    the third argument is supplied, since nothing else carries what the
+    candidates DID.
+
     WHAT COUNTS AS MEASURED depends on which of the two calls the caller makes,
     and the difference is not cosmetic.
 
-      * With `collected`, the pairs each candidate really collected, a pair is
-        measured when EVERY candidate collected it. Every candidate has to have
-        run the test, because the claim being made is about all of them; a pair
-        that one candidate never collected has no verdict from that candidate,
-        and two verdicts out of three do not add up to "under every candidate".
-        Supplied and EMPTY says no candidate collected anything, which measures
-        nothing and refuses the whole population; it is not read as absent.
+      * With `candidate_outcomes`, each candidate's own report triples, a pair
+        is measured when EVERY candidate collected it. Every candidate has to
+        have run the test, because the claim being made is about all of them; a
+        pair that one candidate never collected has no verdict from that
+        candidate, and two verdicts out of three do not add up to "under every
+        candidate". Supplied and EMPTY says no candidate collected anything,
+        which measures nothing and refuses the whole population; it is not read
+        as absent. Collection is not the same question as running, and both are
+        read off these triples: a pair a candidate collected and SKIPPED left
+        the population two paragraphs above, and only what is left is weighed
+        here.
       * Without it, only the passing sets are in hand, and passing proves
         collection while failing is indistinguishable from never running. The
         best available reading is then the UNION of those sets: a pair seen
@@ -1117,7 +1412,7 @@ def verification_gaps(
         REFUSING direction. Pointed at a real target it refuses nearly
         everything, because most tests go red under replacement and redness is
         what this form cannot see; `scripts/canopus.py probe --after-build`
-        therefore passes `collected` and the two-argument form stays what a
+        therefore passes the triples and the two-argument form stays what a
         caller holding only a taken map may honestly ask.
 
     `taken`'s OWN keys are the candidate set, not the module-level `CANDIDATES`
@@ -1135,21 +1430,54 @@ def verification_gaps(
             "which is the shape of a completed measurement and the content of "
             "none"
         )
-    population = sorted({(rel, name) for rel, name, _outcome_token in outcomes})
-    # `is not None`, never truthiness. A caller that supplied the collected map
-    # and filled it with nothing has REPORTED that no candidate collected
-    # anything, and that is not the same statement as declining to supply the
-    # map at all. Read as absent it fell back to the weaker union reading, which
-    # answers a question the caller did not ask; read as supplied and empty it
-    # measures nothing, so nothing is measured and the refusal below fires over
-    # the whole population. That is the fail-closed direction and it is decided
-    # here rather than arrived at by accident.
-    if collected is None:
+    # The tests that RAN, and no others. A skipped test is green under every
+    # candidate in the same empty way an uncollected one is: it never ran, so it
+    # never failed. Left in the population it is absent from `taken` and
+    # therefore folded into the bucket the caller's page describes as "went red
+    # under replacement, and that is the measurement working". Measured at HEAD
+    # on 2026-08-07, through the CLI: a module whose two tests both carried a
+    # module-level skip printed `survived 0 of 2`, the green line, and exit 0,
+    # over a suite in which nothing ran at all. It is not a gap either: nothing
+    # was put in front of it to survive. So it is neither, and it leaves here.
+    never_ran = set(tests_that_never_ran(outcomes))
+    # The same rule, applied to what the CANDIDATES did. A test the real run
+    # passed and every candidate skipped is invisible to the reader above, so it
+    # reached the arithmetic below as a pair absent from `taken`, which is
+    # exactly the shape of a test that went red. Measured at HEAD on 2026-08-07,
+    # through the CLI, on the ordinary fixture idiom in
+    # `tests_the_candidates_never_ran`: `survived 0 of 1`, the green line, and
+    # exit 0, over one test no candidate had run.
+    if candidate_outcomes is not None:
+        never_ran |= set(tests_the_candidates_never_ran(candidate_outcomes))
+    population = sorted(
+        {(rel, name) for rel, name, _outcome_token in outcomes} - never_ran
+    )
+    if not population:
+        raise ContractError(
+            "every test here was skipped, either in the real run or under the "
+            "candidates, so nothing was measured and there is no gap reading to "
+            "make: an answer computed over no tests that ran names "
+            "none of them as a survivor, which is the shape of a completed "
+            "measurement and the content of none. The tests that never ran: "
+            + ", ".join(f"{rel}::{name}" for rel, name in sorted(never_ran))
+        )
+    # `is not None`, never truthiness. A caller that supplied the candidates'
+    # outcomes and filled the map with nothing has REPORTED that no candidate
+    # collected anything, and that is not the same statement as declining to
+    # supply the map at all. Read as absent it fell back to the weaker union
+    # reading, which answers a question the caller did not ask; read as supplied
+    # and empty it measures nothing, so nothing is measured and the refusal below
+    # fires over the whole population. That is the fail-closed direction and it
+    # is decided here rather than arrived at by accident.
+    if candidate_outcomes is None:
         measured = set().union(*(set(pairs) for pairs in taken.values()))
-    elif not collected:
+    elif not candidate_outcomes:
         measured = set()
     else:
-        measured = set.intersection(*(set(pairs) for pairs in collected.values()))
+        measured = set.intersection(*(
+            {(rel, name) for rel, name, _outcome_token in rows}
+            for rows in candidate_outcomes.values()
+        ))
     unmeasured = [pair for pair in population if pair not in measured]
     if unmeasured:
         raise ContractError(
@@ -1308,6 +1636,7 @@ def run_pytest_report(
     extra_env: Optional[dict] = None,
     extra_args: Sequence[str] = (),
     allowed_returncodes: Optional[Sequence[int]] = None,
+    notes_out: Optional[list[str]] = None,
 ) -> str:
     """Run pytest over *paths* once and return the raw JUnit XML.
 
@@ -1322,6 +1651,14 @@ def run_pytest_report(
     that carries NULLSTUB_STDERR_MARKER. See the comment at that loop: it is the
     stub plugin's report of an exception it swallowed, and this is the only place
     it can still be read.
+
+    `notes_out`, when a caller supplies a list, is FILLED with those same lines.
+    Forwarding them to the operator and reading one of them are different needs:
+    the plugin reports what it actually REPLACED, and only the child can know
+    that, so a caller reconciling its claim set against what happened has to be
+    handed the line rather than watch it go past. An out-parameter rather than a
+    widened return, on the arithmetic this module already applied twice: every
+    caller here reads the return as the report text.
 
     `-o addopts=` neutralises the repository's configured addopts (coverage,
     parallel workers) so the report is deterministic and cheap. CANOPUS_NO_ATTEST
@@ -1437,6 +1774,8 @@ def run_pytest_report(
         for line in (proc.stderr or "").splitlines():
             if line.startswith(NULLSTUB_STDERR_MARKER):
                 print(line, file=sys.stderr)
+                if notes_out is not None:
+                    notes_out.append(line)
         if not report.is_file():
             # The child's own words, or this is a diagnosis tool that refuses to
             # diagnose. Measured: `probe` is documented as runnable while a freeze

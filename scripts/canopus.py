@@ -72,6 +72,8 @@ from scripts.utils.canopus_contract import (  # noqa: E402
     run_pass_candidates,
     run_pytest_report,
     skip_markers_without_reason,
+    tests_that_never_ran,
+    tests_the_candidates_never_ran,
     vacuity_refusal,
     verification_gaps,
 )
@@ -140,10 +142,16 @@ _AFTER_BUILD_MEANING = (
 # it, and the subject is never stood in for. Measured 2026-08-07 on
 # `tests/test_update_common.py`: `survived 3 of 6`, exit 0, and the module the
 # whole file is about was replaced zero times.
+#
+# The third reason in it is newer and arrives from the other end: a module the
+# claim set names and no import ever reaches is replaced by nothing, and the
+# `replaced` line used to name it anyway, because it was filled from the claim
+# set. The children now say what they actually replaced.
 _AFTER_BUILD_UNREPLACED = (
     "What was NOT replaced. The modules on the `not replaced` line above were "
-    "left standing, each because it resolves outside the tree being probed or "
-    "because this probe's own plugin lies under it; the reason for each is on "
+    "left standing: each either resolves outside the tree being probed, or has "
+    "this probe's own plugin under it, or was never imported by the run at all, "
+    "so nothing stood in for it. The reason for each is on "
     "stderr above. Nothing below is evidence about them. A test that exercises "
     "only those modules was put in front of no wrong implementation at all, so "
     "its name below records that it was never measured against one, not that "
@@ -152,9 +160,36 @@ _AFTER_BUILD_UNREPLACED = (
     "it, and if it is missing, name that module in the contract's own imports "
     "rather than its parent package."
 )
+# Printed ONLY when something was skipped, for the reason the paragraph above
+# is conditional: a caveat on every page is a caveat nobody reads.
+#
+# It exists because a skipped test is the THIRD thing a test on this page can
+# be, and the page could say only two of them. Absent from the taken map, it was
+# folded into the "went red under at least one candidate" bucket that the
+# paragraph below describes, in words, as the measurement working. Measured at
+# HEAD on 2026-08-07: a module whose two tests both carried a module-level skip
+# printed `survived 0 of 2`, the green `none` line, and exit 0, over a run in
+# which nothing ran at all. That whole-module case now refuses; this paragraph
+# is for the ordinary mixed one, where a reading exists and some of the suite
+# sat it out.
+_AFTER_BUILD_NEVER_RAN = (
+    "What the tests on the `never ran` and `sat out` lines below did. Nothing. "
+    "A `never ran` test was skipped in the real run, so no wrong implementation "
+    "was ever put in front of them at all. A `sat out` test ran for real and "
+    "was then skipped under a candidate: the wrong implementation was "
+    "installed, but the test never executed against it, so that candidate "
+    "returned no verdict and no candidate can be said to have run it. Either "
+    "way this reading says nothing whatever about them, in either "
+    "direction: they neither survived a wrong implementation nor went red "
+    "under one. They are not counted in the total above, because that total is "
+    "the population this reading is about. A skipped test in the suite that "
+    "guards shipped code is worth its own look, and this page is not the "
+    "instrument that gives it one."
+)
 _AFTER_BUILD_EXPECTATION = (
-    "What the tests NOT named below did. They went red under replacement, and "
-    "that is the measurement working rather than a broken tool: the code "
+    "What the tests named on NEITHER list below did. They went red under "
+    "replacement, and that is the measurement working rather than a broken "
+    "tool: the code "
     "beneath them was wrong on purpose, so failing is the correct answer. A "
     "reader arriving here expecting a mostly-green run is reading the page "
     "backwards. This reading refuses nothing and gates nothing; nobody has "
@@ -190,16 +225,16 @@ def _after_build(paths, root, expected) -> int:
     never been pointed at real code before today.
     """
     xml_text = run_pytest_report(paths, root)
-    counts, outcomes = parse_junit(xml_text)
-    collected: dict[str, set[tuple[str, str]]] = {}
+    _counts, outcomes = parse_junit(xml_text)
+    candidate_outcomes: dict[str, list[tuple[str, str, str]]] = {}
     claims: dict[str, list[str]] = {}
     try:
         taken = run_pass_candidates(
             paths, root, expected_population=outcomes,
-            replace_existing=True, collected_out=collected,
+            replace_existing=True, outcomes_out=candidate_outcomes,
             claims_out=claims,
         )
-        gaps = verification_gaps(outcomes, taken, collected)
+        gaps = verification_gaps(outcomes, taken, candidate_outcomes)
     except ContractError as exc:
         # The one failure this command reports as a failure: no reading exists.
         # Printed on stderr and exited non-zero, because a page that said
@@ -213,37 +248,88 @@ def _after_build(paths, root, expected) -> int:
     # (`verification_gaps` collapses the triples to pairs before it counts).
     # `len(outcomes)` counted raw report rows, so a report carrying one pair
     # twice printed a denominator larger than the set the numerator came out of.
-    total = len({(rel, name) for rel, name, _outcome in outcomes})
+    #
+    # The tests that never ran come OUT of it, through the same reader
+    # `verification_gaps` drops them with, so the page and the answer it prints
+    # weigh one population. Counted in, the denominator says a suite of two was
+    # measured when one test was measured, and the missing name reads as a test
+    # that went red.
+    never_ran = tests_that_never_ran(outcomes)
+    # The same third bucket, entered through the candidates rather than the real
+    # run, and read with the reader `verification_gaps` drops them with. A test
+    # that passed for real and skipped under a candidate is on neither of the
+    # two lists the page could previously print, so it fell into the sentence
+    # that says the tests named on neither went red under replacement.
+    # Subtracted from the real-run set so a test skipped on BOTH sides is named
+    # once, under the line that describes it first.
+    sat_out = [
+        pair for pair in tests_the_candidates_never_ran(candidate_outcomes)
+        if pair not in set(never_ran)
+    ]
+    population = (
+        {(rel, name) for rel, name, _outcome in outcomes}
+        - set(never_ran) - set(sat_out)
+    )
+    total = len(population)
     dropped = claims.get("dropped", [])
     print(f"{BOLD}after-build gap reading{RESET}")
     for rel in expected:
-        print(f"  target      {rel}  ({counts.get(rel, 0)} collected)")
+        # The count of THIS reading's population, not the raw collection count.
+        # The two differ whenever anything was skipped, and the page printed one
+        # beside the other: `(2 collected)` above `survived 0 of 1`, reconciled
+        # only by the `never ran` row further down. Two numbers a skim can take
+        # for each other is one number too many, so the page carries the
+        # denominator's own, decomposed per target.
+        print(f"  target      {rel}  "
+              f"({sum(1 for case_rel, _n in population if case_rel == rel)} "
+              f"in this reading)")
     print(f"  candidates  {', '.join(CANDIDATES)}   "
           f"(three implementations that EXIST and are wrong)")
     # On the PAGE, not only on stderr. The reading below is evidence about these
     # modules and no others, and a reader who cannot see the list cannot tell
     # whether the subject they came here about is in it.
-    # No empty-case fallback: `run_pass_candidates` raises before it returns
-    # when the claim set is empty, so this line cannot be reached with nothing
-    # to name, and a fallback for a state that cannot occur is a claim about
-    # the code that is not true.
+    # No empty-case fallback, and the reason is now TWO refusals rather than
+    # one. `run_pass_candidates` raises before it returns when the claim set is
+    # empty, and again when the children replaced nothing — the second was
+    # missing, and this comment named only the first while asserting the line
+    # could not be reached with nothing to name. Measured false on 2026-08-07:
+    # a contract importing its subject only inside a skipped test printed a
+    # BLANK `replaced` line above `survived 1 of 1` and exited 0. A fallback for
+    # a state that cannot occur is a claim about the code that is not true; so
+    # is a comment that says a state cannot occur while it does.
     print(f"  replaced    {', '.join(claims.get('claimed', []))}")
     if dropped:
         print(f"  not replaced  {', '.join(dropped)}")
     print(f"  survived    {len(gaps)} of {total}")
+    if never_ran:
+        print(f"  never ran   {len(never_ran)}  (skipped in the real run, so no "
+              f"candidate was put in front of them)")
+    if sat_out:
+        print(f"  sat out     {len(sat_out)}  (skipped under a candidate, so "
+              f"that candidate returned no verdict)")
     print()
     print(_AFTER_BUILD_MEANING)
     print()
     if dropped:
         print(_AFTER_BUILD_UNREPLACED)
         print()
+    if never_ran or sat_out:
+        print(_AFTER_BUILD_NEVER_RAN)
+        print()
     print(_AFTER_BUILD_EXPECTATION)
     print()
     if not gaps:
-        print(f"  {GREEN}none{RESET}  every test went red under at least one "
-              f"candidate")
+        print(f"  {GREEN}none{RESET}  every test that RAN went red under at "
+              f"least one candidate")
     for rel, name in gaps:
         print(f"  {YELLOW}survived{RESET}  {rel}::{name}")
+    # LAST, under the survivors, because the two lists answer different
+    # questions and the survivors are what the reader came for. Named at all
+    # because a skipped test that is only absent reads as a test that went red.
+    for rel, name in never_ran:
+        print(f"  {YELLOW}never ran{RESET}  {rel}::{name}")
+    for rel, name in sat_out:
+        print(f"  {YELLOW}sat out{RESET}  {rel}::{name}")
     return 0
 
 

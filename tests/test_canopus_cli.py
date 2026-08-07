@@ -817,8 +817,11 @@ def test_after_build_counts_the_population_it_drew_the_survivors_from(
     doubled = [(*pair, "passed"), (*pair, "passed")]
     every = {"none": {pair}, "echo": {pair}, "greedy": {pair}}
 
-    def _candidates(*_a, collected_out=None, claims_out=None, **_k):
-        collected_out.update({name: set(pairs) for name, pairs in every.items()})
+    def _candidates(*_a, outcomes_out=None, claims_out=None, **_k):
+        outcomes_out.update(
+            {name: [(*pair, "failure") for pair in pairs]
+             for name, pairs in every.items()}
+        )
         claims_out["claimed"] = ["subject_module"]
         claims_out["dropped"] = []
         return {name: set(pairs) for name, pairs in every.items()}
@@ -830,6 +833,255 @@ def test_after_build_counts_the_population_it_drew_the_survivors_from(
     assert canopus._after_build([tree / pair[0]], tree, [pair[0]]) == 0
 
     assert "survived    1 of 1" in capsys.readouterr().out
+
+
+def test_after_build_does_not_call_a_module_replaced_when_nothing_imported_it(
+    tree, capsys
+):
+    """The `replaced` line may only name what a candidate actually stood in for.
+
+    It was filled from the CLAIM SET, which is what the candidates were ARMED
+    for, and a claim is only ever installed on a module the run imports. A
+    module reached only inside a skipped test body never reaches the wrapping
+    loader and is not in `sys.modules` when the plugin arms, so nothing replaces
+    it, and it printed on the `replaced` line all the same. That is the same
+    family as the page that claimed a replacement that did not happen, one door
+    further in: the reader is invited to take the survivors below as evidence
+    about a module no wrong implementation was ever put in front of.
+
+    `subject_module` is imported by a test that runs, so it is genuinely
+    replaced and pins the other direction: this is a narrowing of the line, not
+    an emptying of it.
+    """
+    (tree / "subject_module.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    (tree / "unused_subject.py").write_text(
+        "def never_called():\n"
+        "    return 'never'\n",
+        encoding="utf-8",
+    )
+    (tree / "tests" / "test_unused.py").write_text(
+        "import pytest\n"
+        "\n\n"
+        "def test_strict():\n"
+        "    from subject_module import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n"
+        "\n\n"
+        "@pytest.mark.skip(reason='parked until the next slice')\n"
+        "def test_parked():\n"
+        "    import unused_subject\n"
+        "    assert unused_subject.never_called() == 'never'\n",
+        encoding="utf-8",
+    )
+
+    assert _run(["probe", "--after-build", "tests/test_unused.py"], tree) == 0
+
+    out = capsys.readouterr().out
+    replaced = next(
+        line for line in out.splitlines() if line.strip().startswith("replaced")
+    )
+    unreplaced = next(
+        line for line in out.splitlines()
+        if line.strip().startswith("not replaced")
+    )
+    assert "subject_module" in replaced
+    assert "unused_subject" not in replaced
+    assert "unused_subject" in unreplaced
+
+
+def test_after_build_refuses_a_run_in_which_nothing_ran(tree, capsys):
+    """The clean-looking page over a suite nothing touched, printed by this tool.
+
+    Reproduced at HEAD before this test existed, and it is the failure the whole
+    slice exists to remove arriving inside the fix for it. A module carrying
+    `pytestmark = pytest.mark.skip` over two tests printed `survived 0 of 2`,
+    then the green `none  every test went red under at least one candidate`,
+    then exited 0. Zero tests ran. A skipped test is absent from the taken map
+    for the one reason that is not evidence, so it was folded into the bucket
+    the page describes in words as the measurement working.
+
+    Exit 1 with no page, on the same rule the dropped-every-claim run already
+    follows: no reading exists, and the one thing this command may never do is
+    print a page that reads like a reading when none was taken.
+    """
+    (tree / "subject_module.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    (tree / "tests" / "test_allskipped.py").write_text(
+        "import pytest\n"
+        "\n"
+        "pytestmark = pytest.mark.skip\n"
+        "\n\n"
+        "def test_a():\n"
+        "    from subject_module import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n"
+        "\n\n"
+        "def test_b():\n"
+        "    from subject_module import render\n"
+        "    assert render('other') == 'the other was accepted'\n",
+        encoding="utf-8",
+    )
+
+    assert _run(["probe", "--after-build", "tests/test_allskipped.py"], tree) == 1
+
+    captured = capsys.readouterr()
+    assert "could not be made" in captured.err
+    assert "went red" not in captured.out
+
+
+def test_after_build_names_a_skipped_test_as_neither_a_gap_nor_a_bite(tree, capsys):
+    """The third thing a test can be, said on the page in its own words.
+
+    One test runs and bites; one is parked. The parked one is not a survivor and
+    it is not a test that went red, and the page has to be able to say so: named
+    among the survivors it would read as a test that could not tell right from
+    wrong, and silently absent it falls into the sentence that says the tests not
+    named went red under replacement.
+
+    The denominator is the other half. It counts the tests the reading is about,
+    so `0 of 1` here rather than `0 of 2`: a run that measured one test may not
+    print a total that includes one it never measured.
+    """
+    (tree / "subject_module.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    (tree / "tests" / "test_partly_parked.py").write_text(
+        "import pytest\n"
+        "\n\n"
+        "def test_strict():\n"
+        "    from subject_module import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n"
+        "\n\n"
+        "@pytest.mark.skip(reason='the upstream fixture lands in the next slice')\n"
+        "def test_parked():\n"
+        "    from subject_module import render\n"
+        "    assert render('other') == 'the other was accepted'\n",
+        encoding="utf-8",
+    )
+
+    assert _run(
+        ["probe", "--after-build", "tests/test_partly_parked.py"], tree
+    ) == 0
+
+    out = capsys.readouterr().out
+    parked = next(line for line in out.splitlines() if "test_parked" in line)
+    assert "never ran" in parked
+    assert "survived" not in parked
+    assert "survived    0 of 1" in out
+    assert "no wrong implementation was ever put in front of them" in out
+    # The target line and the denominator weigh ONE population. It printed the
+    # raw collection count, so the mixed case read `(2 collected)` beside
+    # `0 of 1` and a skim could take either number for the other.
+    assert "(1 in this reading)" in out
+    # Scoped to the target line, never asserted over the whole page. "collected"
+    # is an ordinary English word this instrument uses in several diagnostics
+    # ("contract file collected nothing", "never collected these tests"), so a
+    # page-wide negative pins the absence of a WORD rather than the absence of
+    # the raw count, and any future diagnostic breaks it with no change in
+    # behaviour.
+    target_line = next(line for line in out.splitlines() if "target" in line)
+    assert "collected" not in target_line
+
+
+# The fixture idiom that skips under the candidates, written once and used by
+# both tests below. It calls into the module the candidates stand in for and
+# skips on what comes back, so it passes for real and skips under every one of
+# them: `none` answers None, `echo` has no argument to hand back and answers
+# None too, and `greedy` answers its payload. None of the three is True.
+_SAT_OUT_MODULE = (
+    "import pytest\n"
+    "\n\n"
+    "@pytest.fixture\n"
+    "def conf():\n"
+    "    import subject_module\n"
+    "    if subject_module.ready() is not True:\n"
+    "        pytest.skip('the subject is not ready in this environment')\n"
+    "    return subject_module\n"
+    "\n\n"
+    "def test_reads_the_ready_flag(conf):\n"
+    "    assert conf.render('claim') == 'the claim was accepted'\n"
+)
+_SAT_OUT_SUBJECT = (
+    "def ready():\n"
+    "    return True\n"
+    "\n\n"
+    "def render(word):\n"
+    "    return f'the {word} was accepted'\n"
+)
+
+
+def test_after_build_refuses_when_the_candidates_skipped_every_test(tree, capsys):
+    """The green page over a suite nothing measured, arriving by the other door.
+
+    Reproduced at HEAD: the test above PASSES for real, so the never-ran reader,
+    which reads the real run's outcomes, does not name it. Under every candidate
+    the fixture skips it, so it is absent from the taken map and was folded into
+    the bucket the page describes in words as the measurement working. The page
+    printed `survived 0 of 1`, then the green `none  every test that RAN went
+    red under at least one candidate`, then exited 0, over one test that no
+    candidate ever ran.
+
+    Refused for the reason the all-skipped real run is refused: nothing ran, so
+    there is no reading, and printing one is the single defect this whole
+    instrument exists to remove.
+    """
+    (tree / "subject_module.py").write_text(_SAT_OUT_SUBJECT, encoding="utf-8")
+    (tree / "tests" / "test_sat_out.py").write_text(
+        _SAT_OUT_MODULE, encoding="utf-8"
+    )
+
+    assert _run(["probe", "--after-build", "tests/test_sat_out.py"], tree) == 1
+
+    captured = capsys.readouterr()
+    assert "could not be made" in captured.err
+    assert "went red" not in captured.out
+
+
+def test_after_build_names_a_test_the_candidates_skipped_as_sitting_out(
+    tree, capsys
+):
+    """The mixed case: one test bites, one sits out, and the page says which.
+
+    The sitting-out test ran for real and was skipped under the candidates, so
+    no candidate returned a verdict on it. Unnamed it falls into the sentence
+    that says the tests not named went red under replacement, which is a claim
+    about a test nothing measured; named among the survivors it would read as a
+    test that could not tell right from wrong. It is neither, and the page has
+    its own line for it.
+
+    The denominator is the other half, exactly as it is for a test skipped in
+    the real run: `0 of 1` rather than `0 of 2`.
+    """
+    (tree / "subject_module.py").write_text(_SAT_OUT_SUBJECT, encoding="utf-8")
+    (tree / "tests" / "test_mixed_sat_out.py").write_text(
+        _SAT_OUT_MODULE
+        + "\n\n"
+        "def test_strict():\n"
+        "    from subject_module import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n",
+        encoding="utf-8",
+    )
+
+    assert _run(
+        ["probe", "--after-build", "tests/test_mixed_sat_out.py"], tree
+    ) == 0
+
+    out = capsys.readouterr().out
+    line = next(
+        row for row in out.splitlines() if "test_reads_the_ready_flag" in row
+    )
+    assert "sat out" in line
+    assert "survived" not in line
+    assert "survived    0 of 1" in out
+    assert "(1 in this reading)" in out
+    assert "the test never executed against it" in out
 
 
 def test_after_build_reports_when_no_reading_could_be_made(tree, capsys):

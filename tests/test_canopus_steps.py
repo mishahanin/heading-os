@@ -312,6 +312,39 @@ def test_the_step_numbers_agree_between_the_module_and_the_skill():
                 f"the skill does not mention the operator's step {entry['number']}")
 
 
+def test_the_plan_byte_budget_agrees_between_the_module_and_the_skill():
+    """The plan's own byte budget, held in lockstep between code and prose.
+
+    Promoted here from `tests/contract/2026-08-07-canopus-gap-and-skip/`, ahead
+    of that contract retiring, because step 7 removes the contract directory and
+    this was the only thing asserting the numbers the skill advertises. A test
+    that disappears with the scaffolding it was written on leaves a claim in the
+    prose with nothing behind it, which is the same shape as never having
+    checked.
+
+    Derived in the slice's plan from 99 real plans. `PLAN_BYTE_WARN` mirrors the
+    SKILL.md warn `skill-metadata-check.py` already enforces, so the workspace
+    carries one number rather than two. `PLAN_BYTE_HARD` is 24 KiB, the first
+    binary-round number above the measured median of 23,704, clearing it by 872
+    bytes. The contract's own docstring said "one byte above" the median until
+    2026-08-07; that is the same false arithmetic `c0547cb` removed from the code
+    comment, and it is corrected here rather than carried forward.
+
+    The needles are FORMATTED FROM THE CONSTANTS rather than written out, so a
+    change to either number fails this test instead of quietly leaving the prose
+    behind. The slice's own after-build reading measured why that matters: seven
+    of this file's tests survived all three wrong implementations, and every one
+    of them greps for a phrase hardcoded in the test file, so nothing about the
+    code can move them.
+    """
+    from scripts.utils.canopus_steps import PLAN_BYTE_HARD, PLAN_BYTE_WARN
+
+    body = _SKILL.read_text(encoding="utf-8")
+
+    assert (PLAN_BYTE_WARN, PLAN_BYTE_HARD) == (16384, 24576)
+    assert [f"{PLAN_BYTE_WARN:,}" in body, f"{PLAN_BYTE_HARD:,}" in body] == [True, True]
+
+
 def test_no_operator_facing_surface_advertises_a_subcommand_the_tool_lacks():
     """The hole the frontmatter test above could not see.
 

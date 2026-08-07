@@ -184,6 +184,7 @@ approval it descends from.
 ```bash
 python scripts/canopus.py check --range origin/main..HEAD
 python scripts/canopus.py probe tests/contract/<date>-<slug>/
+python scripts/canopus.py probe --after-build tests/test_<subject>.py
 ```
 
 `check` is a passthrough to `scripts/canopus_check.py`, which is the module CI
@@ -194,7 +195,24 @@ missing modules and runs the contract twice, each stub carrying different values
 so a test that never FAILS under either run is vacuous. Passing, skipping and
 erroring all leave a test unproved; only a failure shows it read the value. It
 also runs three wrong implementations that exist and prints what each took of the
-red set.
+red set. A skip-family marker (`skip`, `skipif`, `xfail`) that states no reason
+refuses the contract, whether it sits on a test, on a class, or on `pytestmark`;
+a `pytest.skip()` inside a test body and a module-scope `pytest.importorskip`
+are not read, so they remain the reviewer's to catch.
+
+`probe --after-build <test paths>` asks the same question at the other end of a
+slice's life. Once a contract is retired into the ordinary suite, nothing
+re-asks whether the tests guarding that code would notice if it were wrong; this
+flag puts the same three wrong implementations in front of shipped code and
+names every test that stayed green under all of them. The page names which
+modules were actually replaced and which were not, because a name that survived
+a module nothing stood in for is not evidence about it, and it names skipped
+tests separately: a test that never ran neither survived a wrong implementation
+nor went red under one. Skipped in the real run it is on a `never ran` line;
+skipped under a candidate, having passed for real, it is on a `sat out` line.
+It REPORTS and never refuses (exit 0 whether it names
+twenty survivors or none; exit 1 only when no reading could be made at all).
+Nobody has calibrated this reading, so do not wire it into a gate.
 
 **The honest limit.** A CI step in the `sovereignty guards` job runs
 `canopus_check.py` on every push. It REPORTS a broken clause; it does not block

@@ -75,7 +75,7 @@
 <main class="content">
   <h1>Telegram and alerts</h1>
   <p class="page-meta">Connect HEADING OS to Telegram, create your own capture and alert channels, and tune</p>
-  <!-- version: 1.2.0 | last-updated: 2026-07-17 -->
+  <!-- version: 1.3.0 | last-updated: 2026-08-07 -->
 
 <p>Connect HEADING OS to Telegram, create your own capture and alert channels, and tune
 what the Sentinel monitor sends you. Written for someone who has never touched an API.</p>
@@ -114,8 +114,8 @@ both, for different jobs. Getting this straight up front saves confusion later.<
 </tr>
 <tr>
 <td>Used in HEADING OS by</td>
-<td><code>/telegram</code>, <code>/viraid</code>, the Sentinel monitor</td>
-<td>The optional Fireside team daemon, and the system alert nudges (Odin cadence, ops-radar, council model-freshness, reminders, critical daemon alerts)</td>
+<td><code>/telegram</code>, <code>/viraid</code>, the Sentinel monitor&rsquo;s <em>reading</em></td>
+<td>The optional Fireside team daemon, the system alert nudges (Odin cadence, ops-radar, council model-freshness, reminders, critical daemon alerts), and the Sentinel monitor&rsquo;s <em>alerts</em></td>
 </tr>
 </tbody>
 </table>
@@ -281,13 +281,14 @@ any Fireside bot token (section 11) - never reuse a token across them.</p>
 <hr />
 <h2 id="8-where-alerts-and-nudges-are-sent">8. Where alerts and nudges are sent</h2>
 <p>Several background scripts send you reminders: the Odin cadence nudge, the ops-radar
-nudge, the council model-freshness nudge, due reminders, and critical daemon alerts. Each
+nudge, the council model-freshness nudge, due reminders, critical daemon alerts, and the
+Sentinel monitor&rsquo;s urgency alerts and digests. Each
 reads an optional setting in <code>.env</code> that says which channel to send to, and all of them
 deliver through the notifications bot from section 7 - never to your account&rsquo;s own Saved
 Messages. If a target is unset (or would resolve to <code>me</code>/<code>self</code>/<code>saved</code>), no notification
 is sent; the miss is logged, and <code>/prime</code> backstops the same signal.</p>
-<p>Add either or both of these lines to <code>.env</code> (they are optional and not in the example
-file by default):</p>
+<p>Add any of these lines to <code>.env</code> (all are optional; they ship commented out in
+<code>.env.example</code>):</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># where the weekly Odin nudge goes (also the fallback for ops-radar, council, reminders)</span>
 <span class="nv">ODIN_CADENCE_TELEGRAM_TARGET</span><span class="o">=</span>-1001234567890
 
@@ -405,7 +406,7 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
 <span class="c1"># is it running? when did it last check? today&#39;s counts?</span>
 uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/sentinel.py<span class="w"> </span>--status
 
-<span class="c1"># a single safe dry-run; alerts go to your own Saved Messages, not the real channel</span>
+<span class="c1"># a single safe dry-run; nothing is sent anywhere, alerts are written to the log only</span>
 uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/sentinel.py<span class="w"> </span>--test
 
 <span class="c1"># stop it</span>
@@ -464,7 +465,7 @@ the bot and check the daemon&rsquo;s log, which prints the chat ID it sees).</p>
 </tr>
 <tr>
 <td>Sentinel sends nothing</td>
-<td>Either nothing scored above <code>urgency_threshold</code>, or the daemon is not running (<code>--status</code>), or no bot target is set. The daemon logs <code>Notifications route to bot target &lt;id&gt;</code> at boot, or an error naming the missing env var. Try <code>--test</code> and read <code>.sentinel/sentinel.log</code>.</td>
+<td>Either nothing scored above <code>urgency_threshold</code>, or the daemon is not running (<code>--status</code>), or no bot target is set. The daemon logs <code>Notifications route to bot target &lt;id&gt;</code> at boot, or an error naming the missing env var. Start it normally (<code>--daemon</code>) and read <code>.sentinel/sentinel.log</code> for that line; <code>--test</code> does not print it, because a dry run resolves no delivery.</td>
 </tr>
 <tr>
 <td>Alert nudges send nothing</td>

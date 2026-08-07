@@ -1,6 +1,7 @@
 """Canopus wire 2: the contract runner and its two refusal conditions."""
 import json
 import os
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -2516,12 +2517,12 @@ def test_a_test_red_under_every_candidate_is_measured_not_a_gap():
     from scripts.utils.canopus_contract import verification_gaps
 
     outcomes = [("tests/test_subject.py", "test_bites", "passed")]
-    pair = {("tests/test_subject.py", "test_bites")}
+    red = [("tests/test_subject.py", "test_bites", "failure")]
 
     assert verification_gaps(
         outcomes,
         {"none": set(), "echo": set(), "greedy": set()},
-        {"none": set(pair), "echo": set(pair), "greedy": set(pair)},
+        {"none": list(red), "echo": list(red), "greedy": list(red)},
     ) == []
 
 
@@ -2555,12 +2556,13 @@ def test_a_test_one_candidate_never_collected_is_not_cleared():
     from scripts.utils.canopus_contract import ContractError, verification_gaps
 
     pair = {("tests/test_subject.py", "test_partly_seen")}
+    seen = [("tests/test_subject.py", "test_partly_seen", "passed")]
 
     with pytest.raises(ContractError) as excinfo:
         verification_gaps(
             [("tests/test_subject.py", "test_partly_seen", "passed")],
             {"none": set(pair), "echo": set(pair), "greedy": set()},
-            {"none": set(pair), "echo": set(pair), "greedy": set()},
+            {"none": list(seen), "echo": list(seen), "greedy": []},
         )
 
     assert "test_partly_seen" in str(excinfo.value)
@@ -2707,3 +2709,453 @@ def test_a_name_that_does_not_resolve_here_is_kept(tmp_path):
     assert replaceable_claims(
         ["absent_subject"], tmp_path
     ) == ["absent_subject"]
+
+
+# ----------------------------------------------------------------------------
+# The skip-marker reader: which shapes it reads, and which it does not
+# ----------------------------------------------------------------------------
+
+def _skip_marker_tree(root: Path, body: str) -> Path:
+    """A scratch contract directory holding one test module. Returns the dir."""
+    target = root / "contract"
+    target.mkdir()
+    (target / "test_sample.py").write_text(
+        textwrap.dedent(body), encoding="utf-8"
+    )
+    return target
+
+
+def test_an_unreasoned_skip_on_a_class_is_named(tmp_path):
+    """A whole class walked through the refusal the reader was added to be.
+
+    The walk read `FunctionDef` and `AsyncFunctionDef` decorators only, so a
+    bare `@pytest.mark.skip` on a CLASS was invisible while pytest skipped every
+    method under it. Measured before this test existed: a file whose class held
+    two tests reported `2 skipped` and the reader named nothing at all. Class
+    bodies are the ordinary shape for contracts in this repository, so this is
+    the commoner half of the door, not the exotic one.
+
+    The class is named by its own name, on the same rule the function arm
+    follows: the refusal names what a reader can grep the contract for.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import pytest
+
+        @pytest.mark.skip
+        class TestParked:
+            def test_one(self):
+                assert False
+
+            def test_two(self):
+                assert False
+
+        def test_loose():
+            assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == ["TestParked"]
+
+
+def test_an_unreasoned_pytestmark_inside_a_class_body_is_named(tmp_path):
+    """The other spelling of the same skip, which pytest honours identically.
+
+    `pytestmark = pytest.mark.skip` in a class body skips every test in that
+    class, exactly as the decorator above does. The module-level arm of this
+    reader deliberately walks `tree.body` alone so a class's `pytestmark` is
+    never mistaken for the module's own; that correctness left the class's own
+    marker read by nothing.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import pytest
+
+        class TestParked:
+            pytestmark = pytest.mark.xfail
+
+            def test_one(self):
+                assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == ["TestParked"]
+
+
+def test_a_reasoned_class_skip_is_left_alone(tmp_path):
+    """The calibration in the other direction, so the class arm is not a blanket.
+
+    A class carrying a stated reason is a documented parking, which is exactly
+    what this refusal asks for. Refusing it too would teach the operator to
+    route around the gate, which the reader's own fail-open rule already
+    refuses to do.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import pytest
+
+        @pytest.mark.skip(reason="the upstream fixture lands in the next slice")
+        class TestParked:
+            def test_one(self):
+                assert False
+
+        class TestAlsoParked:
+            pytestmark = pytest.mark.skip(reason="same fixture, same slice")
+
+            def test_two(self):
+                assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == []
+
+
+def test_an_aliased_pytest_import_does_not_walk_a_skip_past_the_reader(tmp_path):
+    """The refusal survives the two ordinary ways `pytest.mark` is respelled.
+
+    `vacuity_refusal` states plainly that the contract author is the adversary
+    this module is written against, so a one-line respelling that parks a test
+    where the gate cannot see it is the whole finding rather than an edge.
+    Measured before `_skip_marker_name` was widened: a file carrying an
+    unreasoned `@pt.mark.skip` and an unreasoned `@mark.skip` returned `[]`,
+    while the canonical `@pytest.mark.skip` in the same tree was caught. Both
+    spellings are ordinary Python that pytest honours identically.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import pytest as pt
+        from pytest import mark
+
+        @pt.mark.skip
+        def test_module_alias():
+            assert False
+
+        @mark.skip
+        def test_bare_mark():
+            assert False
+
+        @pt.mark.skip(reason="a stated reason still passes, whatever the alias")
+        def test_reasoned_under_an_alias():
+            assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == [
+        "test_bare_mark",
+        "test_module_alias",
+    ]
+
+
+def test_a_middle_segment_that_is_not_mark_matches_nothing(tmp_path):
+    """The other side of the widening, so it is a chain match and not a suffix one.
+
+    `_skip_marker_name` no longer requires the chain to root in the literal
+    name `pytest`, which is what lets an alias through. The middle segment is
+    still required to be `mark`, so an unrelated `helper.state.skip` is not a
+    marker and does not earn a refusal this reader would have manufactured.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import helper
+
+        @helper.state.skip
+        def test_not_a_marker_at_all():
+            assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == []
+
+
+def test_a_positional_condition_on_xfail_is_not_read_as_a_reason(tmp_path):
+    """`xfail`'s first positional is a CONDITION, exactly as `skipif`'s is.
+
+    Only `pytest.mark.skip` has the signature `skip(reason="")`; `xfail` is
+    `xfail(condition=None, *, reason=None, ...)`. An earlier revision grouped
+    `xfail` with `skip` in the positional carve-out on a docstring claim that
+    its first positional is a reason, so `@pytest.mark.xfail(COND)` with no
+    `reason=` keyword read as documented and walked past the refusal. Measured
+    against real pytest: `@pytest.mark.xfail("1 == 1")` on a failing test
+    reports `1 xfailed`, which is the string being evaluated as a condition
+    rather than displayed as a reason.
+
+    The `skip` arm is asserted alongside it, so this pins the carve-out's
+    boundary rather than merely deleting it.
+    """
+    from scripts.utils.canopus_contract import skip_markers_without_reason
+
+    target = _skip_marker_tree(tmp_path, """
+        import pytest
+
+        @pytest.mark.xfail("1 == 1")
+        def test_xfail_positional_condition():
+            assert False
+
+        @pytest.mark.xfail("1 == 1", reason="a keyword reason still documents it")
+        def test_xfail_condition_with_a_reason():
+            assert False
+
+        @pytest.mark.skip("the first positional IS the reason for skip alone")
+        def test_skip_positional_reason():
+            assert False
+    """)
+
+    assert skip_markers_without_reason([target], tmp_path) == [
+        "test_xfail_positional_condition",
+    ]
+
+
+# ----------------------------------------------------------------------------
+# The third thing a test can be: skipped, which is neither a gap nor a bite
+# ----------------------------------------------------------------------------
+
+def test_a_run_in_which_nothing_ran_produces_no_reading():
+    """The reading this slice's own instrument printed over a suite nobody ran.
+
+    Measured at HEAD before this test existed, through the CLI: a module
+    carrying `pytestmark = pytest.mark.skip` over two tests printed
+    `survived 0 of 2`, the green line `none  every test went red under at least
+    one candidate`, and exited 0, with zero tests run. A skipped test is absent
+    from the taken map for the one reason that is not evidence, so it was folded
+    into the bucket the page describes in words as the measurement working.
+
+    Refused rather than answered, on the rule the empty candidate map already
+    follows: an answer computed over no tests that ran names none of them, which
+    is the shape of a completed measurement and the content of none.
+    """
+    from scripts.utils.canopus_contract import ContractError, verification_gaps
+
+    pair = ("tests/test_subject.py", "test_parked")
+
+    with pytest.raises(ContractError) as excinfo:
+        verification_gaps(
+            [(*pair, "skipped")],
+            {"none": {pair}, "echo": {pair}, "greedy": {pair}},
+            {name: [(*pair, "skipped")] for name in ("none", "echo", "greedy")},
+        )
+
+    assert "test_parked" in str(excinfo.value)
+
+
+def test_a_skipped_test_is_not_weighed_against_the_candidates_at_all():
+    """It is not a gap, it is not unmeasured, and it is not a test that bit.
+
+    The skipped test here was collected by no candidate, which is the shape that
+    used to raise the unmeasured refusal over it. Nothing was owed: no candidate
+    could have measured a test that never ran, and refusing the whole reading
+    because of one parked test would cost the reading the tests that DID run.
+    The bite alongside it is the one the reading is about, and it still bites.
+    """
+    from scripts.utils.canopus_contract import verification_gaps
+
+    ran = ("tests/test_subject.py", "test_survives")
+    parked = ("tests/test_subject.py", "test_parked")
+
+    assert verification_gaps(
+        [(*ran, "passed"), (*parked, "skipped")],
+        {"none": {ran}, "echo": {ran}, "greedy": {ran}},
+        {name: [(*ran, "passed")] for name in ("none", "echo", "greedy")},
+    ) == [ran]
+
+
+def test_the_never_ran_reader_names_the_parked_tests_and_nothing_else():
+    """One definition of "this test never ran", read by the page and the reading.
+
+    The reading has to drop these from the population and the page has to name
+    them, and two implementations of one rule is how a page and the answer it
+    prints come to disagree. The mixed row is the edge: a pair that appears once
+    skipped and once not DID run, so it is not named here.
+    """
+    from scripts.utils.canopus_contract import tests_that_never_ran
+
+    assert tests_that_never_ran([
+        ("tests/test_subject.py", "test_ran", "passed"),
+        ("tests/test_subject.py", "test_parked", "skipped"),
+        ("tests/test_subject.py", "test_mixed", "skipped"),
+        ("tests/test_subject.py", "test_mixed", "failure"),
+    ]) == [("tests/test_subject.py", "test_parked")]
+
+
+# ----------------------------------------------------------------------------
+# The same third thing, arriving by the other door: the CANDIDATE runs skipped it
+# ----------------------------------------------------------------------------
+
+def test_a_test_the_candidates_skipped_is_not_counted_as_one_that_bit():
+    """The sibling of the run-in-which-nothing-ran defect, one door along.
+
+    Reproduced at HEAD through the CLI on a fixture that reads a value the
+    candidates stand in for and skips when it is not what it expects:
+
+        @pytest.fixture
+        def conf():
+            import subject
+            if subject.CONF.get("ready") is not True:
+                pytest.skip("the subject is not ready in this environment")
+            return subject.CONF
+
+    The test PASSES for real, so it is not in the never-ran set, which is read
+    from the real run's outcomes. Under every candidate the fixture skips it, so
+    it is absent from the taken map, and the page printed, in green,
+    `none  every test that RAN went red under at least one candidate` over a
+    suite in which that test was never measured at all.
+
+    A test the candidates skipped went red under nothing. Both available answers
+    about it are false, exactly as they are for a test skipped in the real run,
+    so it leaves the population by the same rule rather than being folded into
+    the bucket the page describes as the measurement working. Nothing is left
+    here, so there is no reading and this refuses.
+    """
+    from scripts.utils.canopus_contract import ContractError, verification_gaps
+
+    pair = ("tests/test_subject.py", "test_reads_the_ready_flag")
+
+    with pytest.raises(ContractError) as excinfo:
+        verification_gaps(
+            [(*pair, "passed")],
+            {"none": set(), "echo": set(), "greedy": set()},
+            {name: [(*pair, "skipped")] for name in ("none", "echo", "greedy")},
+        )
+
+    assert "test_reads_the_ready_flag" in str(excinfo.value)
+
+    # The same call with the candidates having RUN the test, asserted in the
+    # same test deliberately. The refusal above fires against the older
+    # signature too, for a reason that has nothing to do with skipping: that
+    # third argument used to carry pairs, so a list of triples matched nothing
+    # and every pair read as unmeasured. Alone, the assertion above would have
+    # been green against the code this test exists to change. What separates the
+    # two versions is the line below, which the older signature cannot reach.
+    assert verification_gaps(
+        [(*pair, "passed")],
+        {name: {pair} for name in ("none", "echo", "greedy")},
+        {name: [(*pair, "passed")] for name in ("none", "echo", "greedy")},
+    ) == [pair]
+
+
+def test_a_test_one_candidate_skipped_is_not_a_survivor_of_all_three():
+    """Two verdicts out of three do not add up to "green under every candidate".
+
+    The partial shape, and it is the commoner one: `conf.get("ready")` answers
+    None under the `none` candidate and a truthy string under the other two, so
+    one candidate skips the test and two run it green. Left in the population it
+    is absent from ONE taken set, which is the same shape as a test that bit,
+    and the page would say it went red under a candidate that never ran it.
+
+    The test that really did bite is measured alongside it, so this pins a
+    narrowing of the population rather than an emptying of it.
+    """
+    from scripts.utils.canopus_contract import (
+        tests_the_candidates_never_ran,
+        verification_gaps,
+    )
+
+    parked = ("tests/test_subject.py", "test_sat_out")
+    bit = ("tests/test_subject.py", "test_bites")
+    candidate_outcomes = {
+        "none": [(*parked, "skipped"), (*bit, "failure")],
+        "echo": [(*parked, "passed"), (*bit, "failure")],
+        "greedy": [(*parked, "passed"), (*bit, "failure")],
+    }
+
+    assert tests_the_candidates_never_ran(candidate_outcomes) == [parked]
+    assert verification_gaps(
+        [(*parked, "passed"), (*bit, "passed")],
+        {"none": set(), "echo": {parked}, "greedy": {parked}},
+        candidate_outcomes,
+    ) == []
+
+
+def test_a_test_red_under_one_candidate_and_skipped_under_another_still_bit():
+    """The other direction, so the new rule cannot swallow a real measurement.
+
+    A candidate that recorded the test RED returned a verdict on it, and that
+    verdict is the page's sentence: it went red under at least one candidate.
+    Dropping it because a different candidate skipped it would cost the reading
+    a measurement it actually took, which is the one direction this population
+    may not err in.
+    """
+    from scripts.utils.canopus_contract import (
+        tests_the_candidates_never_ran,
+        verification_gaps,
+    )
+
+    bit = ("tests/test_subject.py", "test_bites_then_sits_out")
+    candidate_outcomes = {
+        "none": [(*bit, "failure")],
+        "echo": [(*bit, "skipped")],
+        "greedy": [(*bit, "failure")],
+    }
+
+    assert tests_the_candidates_never_ran(candidate_outcomes) == []
+    assert verification_gaps(
+        [(*bit, "passed")], {"none": set(), "echo": set(), "greedy": set()},
+        candidate_outcomes,
+    ) == []
+
+
+def test_skip_markers_refuses_a_file_it_cannot_parse(tmp_path):
+    """A syntax error must not read as "this contract carries no skip marker".
+
+    The sibling of `test_contract_imports_refuses_a_file_it_cannot_parse` above,
+    against the other AST reader, and it needs its own test rather than
+    inheriting that one: the two are separate `ast.parse` call sites with
+    separate handlers, and this one's silence has a different cost. An empty
+    list here means the skip refusal cannot fire, so an undocumented parking
+    walks a test through the gate on a file nobody could read — the fail-open
+    direction, arriving by the door that looks like a clean bill.
+    """
+    from scripts.utils.canopus_contract import ContractError, skip_markers_without_reason
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text("def test_a(:\n", encoding="utf-8")
+
+    with pytest.raises(ContractError, match="could not be parsed"):
+        skip_markers_without_reason([contract], tmp_path)
+
+
+def test_skip_markers_refuses_a_file_that_is_not_valid_utf8(tmp_path):
+    """Bytes that are not valid UTF-8 raise `ValueError`, not `OSError`.
+
+    The handler names `OSError, SyntaxError, ValueError` for this reason.
+    Uncaught, a `UnicodeDecodeError` escapes as a raw traceback rather than the
+    `ContractError` every other unreadable-contract path raises, and `main`'s
+    `except ContractError` would not catch it.
+    """
+    from scripts.utils.canopus_contract import ContractError, skip_markers_without_reason
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_bytes(b"\xff\xfe not utf-8 at all\n")
+
+    with pytest.raises(ContractError, match="could not be parsed"):
+        skip_markers_without_reason([contract], tmp_path)
+
+
+def test_a_child_that_said_nothing_is_not_read_as_a_child_that_replaced_nothing():
+    """`None` and `set()` are different claims, and the refusal rests on it.
+
+    `_replaced_by_the_child` returns `None` when the child NEVER reported, and
+    an empty set when it reported replacing nothing. `run_pass_candidates`
+    refuses on the first and accepts the second, so collapsing the two removes
+    the guard: a child that says nothing would have its ARMED claim set printed
+    as what happened, which is the clean page over a measurement nobody took
+    that this whole instrument exists to refuse.
+
+    Mutation-proven to have been uncovered: returning `set()` in place of `None`
+    left all eleven `--after-build` CLI tests green.
+    """
+    from scripts.utils.canopus_contract import _replaced_by_the_child
+    from scripts.utils.canopus_nullstub import NULLSTUB_STDERR_MARKER, REPLACED_REPORT
+
+    prefix = f"{NULLSTUB_STDERR_MARKER} {REPLACED_REPORT}"
+
+    assert _replaced_by_the_child([]) is None
+    assert _replaced_by_the_child(
+        [f"{NULLSTUB_STDERR_MARKER} not claiming os: it is compiled in"]
+    ) is None
+    assert _replaced_by_the_child([f"{prefix} "]) == set()
+    assert _replaced_by_the_child([f"{prefix} a.b,c"]) == {"a.b", "c"}
+    # A later line wins: the plugin writes diagnostics of its own and the parent
+    # forwards every one of them, so position is not a reliable reader.
+    assert _replaced_by_the_child([f"{prefix} a", f"{prefix} b"]) == {"b"}

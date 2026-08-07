@@ -576,6 +576,46 @@ class _StubLoader(Loader):
         return None
 
 
+def _record_installation(finder, module, installed) -> None:
+    """File one wrapped module against the installation whose finder claimed it.
+
+    BY IDENTITY on the finder, never by position in `_INSTALLED`, and the
+    difference is not bookkeeping. An earlier revision took `_INSTALLED[-1]` on
+    the stated rule that "the finder that resolved this import is the one most
+    recently installed"; a counter-case refuted it. With installation A claiming
+    `mod_a` and a nested installation B claiming `mod_b`, importing `mod_a`
+    runs A's wrapping loader, because B does not claim the name, and the record
+    landed on B:
+
+        installation[0] claims ('mod_a',) supplied=[]
+        installation[1] claims ('mod_b',) supplied=['mod_a']
+
+    B's teardown then restored `mod_a` in the middle of A's still-armed
+    session. Measured, armed: `mod_a.VALUE` read `'a real'` again while A's page
+    still said a candidate was armed, so A's remaining tests ran against real
+    code and passed. That is the fail-open clean-page reading this whole
+    instrument exists to refuse, arriving by the one door nobody watches.
+    Unreachable in production, where a probe is one installation per
+    subprocess; reachable in the unit tests, and `_INSTALLED` is a LIST
+    precisely because nesting is contemplated.
+
+    An unmatched finder records NOTHING, deliberately, and the asymmetry is the
+    whole argument. Recording nothing leaks a mutated module into a process
+    that is about to exit, which is the cost the old code paid unconditionally
+    and which no verdict depends on. Recording against the wrong installation
+    DISARMS a live probe mid-session and turns its remaining tests green. One
+    of those two directions is survivable and the other is the failure this
+    tool is built to make impossible, so the tie is broken toward silence. The
+    unmatched case is what a caller constructing `_WrapLoader` directly hits,
+    which the unit tests do.
+    """
+    for installation in _INSTALLED:
+        if installation.finder is finder:
+            existing, supply = installed
+            installation.supplied.append((module, existing, supply))
+            return
+
+
 class _WrapLoader(Loader):
     """Runs the real loader, then supplies the names the module lacks.
 
@@ -586,10 +626,16 @@ class _WrapLoader(Loader):
     wrapper answering only two of them narrows the real loader for the length of
     the probe, and the failure surfaces as an unrelated AttributeError inside
     somebody else's library.
+
+    `finder` is the `_NamedFinder` that built this loader, carried so
+    `exec_module` can file the module it wrapped against the ONE installation
+    that owns it. It defaults to None for a caller that builds this loader
+    directly, which records nothing; see `_record_installation`.
     """
 
-    def __init__(self, real):
+    def __init__(self, real, finder=None):
         self._real = real
+        self._finder = finder
 
     def __getattr__(self, name):
         # Only reached for names this class does not define, so create_module and
@@ -622,15 +668,12 @@ class _WrapLoader(Loader):
         # stub's. The real loader ran on the line above, so the dict
         # `replace_attributes` snapshotted is the genuine one.
         #
-        # `_INSTALLED[-1]` is this probe's own installation, on the LIFO rule
-        # the ledger already follows: the finder that resolved this import is
-        # the one most recently installed and sitting at the front of
-        # `sys.meta_path`. The guard is for a caller that builds this loader
-        # directly, which the unit tests do, where there is no installation to
-        # record against and no teardown that would ever consult one.
-        if _INSTALLED:
-            existing, supply = installed
-            _INSTALLED[-1].supplied.append((module, existing, supply))
+        # Filed against the installation whose finder built this loader, by
+        # identity. An earlier revision took `_INSTALLED[-1]` and asserted the
+        # LIFO rule as fact; a nested counter-case refuted it and disarmed a
+        # live probe mid-session. See `_record_installation` for the
+        # measurement and for why an unmatched finder records nothing.
+        _record_installation(self._finder, module, installed)
 
 
 class _NamedFinder(MetaPathFinder):
@@ -757,7 +800,7 @@ class _NamedFinder(MetaPathFinder):
         # so assigning the wrapper onto it edits the live module's own spec and
         # leaves it wrapped for the rest of the process, long after this probe.
         wrapped = copy.copy(real)
-        wrapped.loader = _WrapLoader(real.loader)
+        wrapped.loader = _WrapLoader(real.loader, self)
         return wrapped
 
 

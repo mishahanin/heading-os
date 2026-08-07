@@ -905,10 +905,14 @@ def test_unconfigure_gives_back_a_module_the_wrapping_loader_replaced(
     that leak was additive and harmless; replacement changes its class, because
     the module is destroyed rather than extended.
 
-    The re-import is asserted as well as the live object, deliberately. Reading
-    only the object this test already holds would stay green against a fix that
-    repaired one reference and left `sys.modules` carrying a ruin, which is the
-    reference every later importer in the process actually gets.
+    The module is read back out of `sys.modules`, which is the reference every
+    later importer in the process is handed, rather than only through the name
+    this test happens to hold. What is deliberately NOT done here is deleting
+    that entry and importing again: the finder is off `sys.meta_path` by the
+    time teardown has run, so a re-import runs the real loader and reads real
+    values whatever the plugin did. Measured against the unfixed plugin, a
+    re-import assertion PASSED, so it carried none of the kill-power an earlier
+    version of this docstring claimed for it.
     """
     from scripts.utils.canopus_nullstub import (
         CANDIDATE_VAR,
@@ -938,13 +942,66 @@ def test_unconfigure_gives_back_a_module_the_wrapping_loader_replaced(
 
     pytest_unconfigure(config=None)
 
-    assert (wrapped_fixture.REAL, wrapped_fixture.render("claim")) == (
+    live = sys.modules["wrapped_fixture"]
+
+    assert (live.REAL, live.render("claim")) == (
         "own value", "the claim was accepted",
     )
-    del sys.modules["wrapped_fixture"]
-    import wrapped_fixture as reimported
 
-    assert reimported.REAL == "own value"
+
+def test_a_wrapped_module_is_filed_against_the_finder_that_claimed_it(
+    clean_imports, tmp_path, monkeypatch
+):
+    """A nested installation must never restore the outer one's module.
+
+    An earlier fix filed every wrapped module on `_INSTALLED[-1]`, asserting
+    that the finder resolving an import is always the most recently installed
+    one. It is not. With A claiming one name and a nested B claiming another,
+    importing A's name runs A's loader, because B never claims it, and the
+    record landed on B. Measured: B's teardown then restored the module in the
+    middle of A's still-armed session, A's remaining tests ran against real
+    code, and the page still said a candidate was armed. That is the fail-open
+    clean page this whole instrument exists to refuse.
+
+    So the assertion that matters is the middle one: after B unconfigures, A's
+    subject is STILL replaced. The last one is its other half, because a fix
+    that recorded nothing at all would satisfy the middle assertion and leak
+    the module forever.
+    """
+    from scripts.utils.canopus_nullstub import (
+        CANDIDATE_VAR,
+        MODULES_VAR,
+        REPLACE_VAR,
+        pytest_configure,
+        pytest_unconfigure,
+    )
+
+    (tmp_path / "nested_outer_fixture.py").write_text(
+        "VALUE = 'outer real'\n", encoding="utf-8"
+    )
+    (tmp_path / "nested_inner_fixture.py").write_text(
+        "VALUE = 'inner real'\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(CANDIDATE_VAR, "none")
+    monkeypatch.setenv(REPLACE_VAR, "1")
+
+    monkeypatch.setenv(MODULES_VAR, "nested_outer_fixture")
+    pytest_configure(config=None)
+    monkeypatch.setenv(MODULES_VAR, "nested_inner_fixture")
+    pytest_configure(config=None)
+
+    import nested_outer_fixture
+
+    assert nested_outer_fixture.VALUE is None
+
+    pytest_unconfigure(config=None)
+
+    assert nested_outer_fixture.VALUE is None
+
+    pytest_unconfigure(config=None)
+
+    assert nested_outer_fixture.VALUE == "outer real"
 
 
 def test_a_prefix_that_is_a_plain_module_is_claimed_and_stubbed_as_a_package(

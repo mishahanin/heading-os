@@ -147,7 +147,7 @@ def main() -> None:
         # otherwise be read as an unknown option and exit 2, silently.
         proc = subprocess.run(
             [str(python_bin), str(ENGINE), "query",
-             "--json", "--top-k", str(int(cfg["top_k"])), "--", prompt],
+             "--json", "--touch", "--top-k", str(int(cfg["top_k"])), "--", prompt],
             capture_output=True, text=True,
             timeout=float(cfg["timeout_seconds"]), cwd=str(WORKSPACE),
         )

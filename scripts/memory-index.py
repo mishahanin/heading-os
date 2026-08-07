@@ -58,7 +58,7 @@ from scripts.utils import salience
 from scripts.utils.air_gap import is_denied
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.embeddings import EmbeddingError, embed
-from scripts.utils.workspace import get_classification, get_data_root, get_workspace_root
+from scripts.utils.workspace import get_classification, get_data_root, get_workspace_root, load_env
 
 # ============================================================
 # Configuration
@@ -875,6 +875,56 @@ def _query_store(conn, qvec, full_text, *, threshold, layer, allowed, near_miss_
     }
 
 
+def _touch_memory_hits(hits) -> int:
+    """Reinforce auto-memory files returned as a CONFIDENT hit. Returns the
+    number of files actually bumped.
+
+    Ranking signal only. Nothing downstream of this counter may read a low
+    value as grounds for removal — see the standing directive that auto-memory
+    is never pruned, only deprioritized.
+
+    Best-effort by construction: this runs on the read path, inside a hook with
+    a hard timeout, so a bump that cannot be written must cost the recall
+    nothing. Every failure is reported on stderr (the hook logs it) and then
+    swallowed per file.
+    """
+    try:
+        from scripts.utils.memory_touch import TouchError, touch_if_stale
+        from scripts.utils import workspace as _ws
+    except Exception as exc:  # noqa: BLE001 - boundary; recall must still answer
+        sys.stderr.write(f"touch: unavailable ({exc})\n")
+        return 0
+    try:
+        mem_dir = _ws.get_auto_memory_dir()
+        today = datetime.now(_ws.get_default_tz()).date().isoformat()
+    except Exception as exc:  # noqa: BLE001 - boundary; recall must still answer
+        sys.stderr.write(f"touch: cannot resolve auto-memory dir ({exc})\n")
+        return 0
+
+    bumped = 0
+    seen = dict.fromkeys(h["path"] for h in hits if h.get("layer") == "memory")
+    for path in seen:
+        try:
+            if touch_if_stale(path, mem_dir, today):
+                bumped += 1
+        except TouchError as exc:
+            sys.stderr.write(f"touch: skipped {path} ({exc})\n")
+        except OSError as exc:
+            sys.stderr.write(f"touch: write failed for {path} ({exc})\n")
+    return bumped
+
+
+def _should_touch(args, near_miss: bool) -> bool:
+    """Whether this result set may be counted as a use of memory.
+
+    Two rules, both load-bearing. Opt-in: without --touch the read path writes
+    nothing, so /recall, the CLI and the tests are unaffected. Confident only:
+    a near-miss block is presented as "relevance NOT established", and counting
+    it would train the ranking on noise.
+    """
+    return bool(getattr(args, "touch", False)) and not near_miss
+
+
 def cmd_query(args) -> int:
     _t0 = time.perf_counter()
 
@@ -1051,6 +1101,12 @@ def cmd_query(args) -> int:
         if near_miss:
             hits[-1]["below_threshold"] = True
 
+    # Reinforcement is written only for a result the caller will present as an
+    # answer. A near-miss block is explicitly "relevance NOT established", so
+    # counting it would train the ranking on noise.
+    if _should_touch(args, near_miss):
+        _touch_memory_hits(hits)
+
     if want_json:
         payload = {"hits": hits, "gap": False}
         if near_miss:
@@ -1144,6 +1200,10 @@ def _stats_one_store(name, root, store_rel) -> None:
 # ============================================================
 
 def main() -> int:
+    # Before anything reads the clock: `query --touch` resolves the debounce
+    # date via get_default_tz(), which answers UTC unless HEADING_OS_TZ has
+    # been loaded from .env first.
+    load_env()
     parser = argparse.ArgumentParser(description="Local associative-memory index.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -1159,6 +1219,8 @@ def main() -> int:
     p_query.add_argument("--top-k", type=int, default=0, help="max hits (default from config)")
     p_query.add_argument("--threshold", type=float, default=None, help="min score (default from config)")
     p_query.add_argument("--json", action="store_true", help="emit machine-readable JSON (hits + gap object)")
+    p_query.add_argument("--touch", action="store_true",
+                         help="reinforce confident auto-memory hits (bumps access_count, once per file per day)")
     p_query.set_defaults(func=cmd_query)
 
     p_stats = sub.add_parser("stats", help="index summary by layer")

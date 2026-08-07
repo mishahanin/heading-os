@@ -687,3 +687,136 @@ def test_the_switch_is_off_unless_a_caller_asks_for_it(tmp_path):
                         ("c/test_shipped.py", "test_loose")}
         for name in CANDIDATES
     )
+
+
+# ----------------------------------------------------------------------------
+# Replacement must not rewrite the modules the pytest child stands on
+# ----------------------------------------------------------------------------
+
+def test_an_armed_run_survives_a_contract_that_imports_the_stdlib(tmp_path):
+    """The live risk of arming replacement, as a measurement rather than a note.
+
+    Replacement rewrites the names a module HAS, and the claim set is whatever
+    the test file and the conftest beside it import, which on any real target
+    includes `os` and `pytest`. Measured 2026-08-07 before the narrowing existed:
+    the candidate child died on
+
+        os.environ.pop("PYTEST_VERSION", None)
+        AttributeError: 'NoneType' object has no attribute 'pop'
+
+    and wrote no JUnit report at all, so `run_pass_candidates` could say only
+    that the contract could not be measured. That is the safe direction, since
+    it fails closed rather than printing a clean page, but it makes the armed
+    mode useless against every target whose tests import the standard library,
+    which is all of them.
+
+    The subject is still reached: the loose test is taken by `greedy` and the
+    strict one by nobody, which is the same asymmetry the shipped-subject tests
+    above pin. So this asserts that the narrowing dropped the right claims and
+    kept the right one, not merely that the run completed.
+    """
+    from scripts.utils.canopus_contract import run_pass_candidates
+
+    (tmp_path / "shipped_subject.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    directory = tmp_path / "c"
+    directory.mkdir()
+    (directory / "test_shipped.py").write_text(
+        "import os\n"
+        "import pathlib\n"
+        "\n\n"
+        "def test_strict():\n"
+        "    from shipped_subject import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n"
+        "\n\n"
+        "def test_loose():\n"
+        "    from shipped_subject import render\n"
+        "    assert 'accepted' in str(render('claim'))\n"
+        "    assert os.sep in str(pathlib.Path('a') / 'b')\n",
+        encoding="utf-8",
+    )
+
+    taken = run_pass_candidates(
+        [directory], tmp_path, replace_existing=True,
+        expected_population=[("c/test_shipped.py", "test_strict", "passed"),
+                             ("c/test_shipped.py", "test_loose", "passed")],
+    )
+
+    assert taken["greedy"] == {("c/test_shipped.py", "test_loose")}
+    assert all(
+        ("c/test_shipped.py", "test_strict") not in passed
+        for passed in taken.values()
+    )
+
+
+def test_an_armed_run_refuses_when_the_narrowing_leaves_no_claim(tmp_path):
+    """Nothing was replaced, so no wrong implementation was ever put in front.
+
+    The posture `run_pass_candidates` already takes for an empty claim set,
+    reached by a second route: a contract naming only code this probe may not
+    replace measures exactly as much as one naming no code at all, and the empty
+    verdict a caller would receive is the same value a completed measurement
+    returns. The refusal names the dropped modules, because the operator's next
+    question is which of them it was.
+    """
+    from scripts.utils.canopus_contract import ContractError, run_pass_candidates
+
+    directory = tmp_path / "c"
+    directory.mkdir()
+    (directory / "test_stdlib_only.py").write_text(
+        "import json\n"
+        "\n\n"
+        "def test_a():\n"
+        "    assert json.dumps({'a': 1}) == '{\"a\": 1}'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        run_pass_candidates(
+            [directory], tmp_path, replace_existing=True,
+            expected_population=[("c/test_stdlib_only.py", "test_a", "passed")],
+        )
+
+    assert "json" in str(excinfo.value)
+
+
+def test_the_narrowing_does_not_touch_the_absent_name_path(tmp_path):
+    """Unarmed, the claim set is what it always was, stdlib included.
+
+    Two claim sets for two questions. Claiming `os` costs nothing on the
+    absent-name path, because `os` has every name it needs and the supplier is
+    never consulted; the same claim destroys it under replacement. A narrowing
+    applied to both would silently change what every contract in this repository
+    measured, which is the migration the default-off switch exists to avoid.
+
+    The assertion reaches for a name `os` does NOT have, deliberately, because
+    that is the one observable difference between a claimed module and an
+    unclaimed one on this path. Claimed, the absent-name supplier answers it and
+    the test is green under all three candidates. Narrow `os` out of the unarmed
+    claim set and the same line raises `AttributeError` under every candidate,
+    so this test goes red rather than merely changing shape.
+    """
+    from scripts.utils.canopus_contract import run_pass_candidates
+
+    directory = tmp_path / "c"
+    directory.mkdir()
+    (directory / "test_absent.py").write_text(
+        "import os\n"
+        "\n\n"
+        "def test_a():\n"
+        "    assert os.canopus_no_such_name is not None\n",
+        encoding="utf-8",
+    )
+
+    taken = run_pass_candidates(
+        [directory], tmp_path,
+        expected_population=[("c/test_absent.py", "test_a", "failure")],
+    )
+
+    assert all(
+        taken[name] == {("c/test_absent.py", "test_a")}
+        for name in ("none", "echo", "greedy")
+    )

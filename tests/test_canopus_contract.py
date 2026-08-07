@@ -2496,3 +2496,168 @@ def test_two_interpreters_sharing_a_directory_are_still_told_apart(tmp_path):
     (shared / "python3.12").write_text("#!/bin/sh\n", encoding="utf-8")
 
     assert interpreter_notice(shared / "python3.11", shared / "python3.12")
+
+
+# ----------------------------------------------------------------------------
+# The gap reading: which tests survived every wrong implementation
+# ----------------------------------------------------------------------------
+
+def test_a_test_red_under_every_candidate_is_measured_not_a_gap():
+    """The reading `--after-build` actually produces on a real target.
+
+    A test that FAILED under all three candidates and a test no candidate ever
+    ran are indistinguishable in the taken map: neither appears in it. They are
+    opposites. The first is the best a test can do, the second is a test nobody
+    measured, and a reading that cannot separate them is not evidence. The
+    collected map is what separates them, and this is the case that would be
+    refused without it: on a real target most tests go red under replacement,
+    so the two-argument form would refuse nearly the whole suite.
+    """
+    from scripts.utils.canopus_contract import verification_gaps
+
+    outcomes = [("tests/test_subject.py", "test_bites", "passed")]
+    pair = {("tests/test_subject.py", "test_bites")}
+
+    assert verification_gaps(
+        outcomes,
+        {"none": set(), "echo": set(), "greedy": set()},
+        {"none": set(pair), "echo": set(pair), "greedy": set(pair)},
+    ) == []
+
+
+def test_the_two_argument_form_cannot_see_a_test_that_bit():
+    """The cost of the weaker call, pinned rather than left to be discovered.
+
+    Handed passing sets alone, the same run as the test above has no way to know
+    the candidates ever collected that test, so it refuses instead of clearing
+    it. That is the honest answer for the evidence supplied and it is the reason
+    `probe --after-build` supplies the collected map; a later reader who removes
+    the third argument as redundant will find this test rather than a page that
+    quietly refuses a whole suite.
+    """
+    from scripts.utils.canopus_contract import ContractError, verification_gaps
+
+    with pytest.raises(ContractError):
+        verification_gaps(
+            [("tests/test_subject.py", "test_bites", "passed")],
+            {"none": set(), "echo": set(), "greedy": set()},
+        )
+
+
+def test_a_test_one_candidate_never_collected_is_not_cleared():
+    """Two verdicts out of three do not add up to "under every candidate".
+
+    The candidate that never collected the test returned no verdict on it, so
+    the claim the reading makes cannot be made. Refused by name, on the rule the
+    wholly-uncollected test already follows: not measured is not proved
+    innocent.
+    """
+    from scripts.utils.canopus_contract import ContractError, verification_gaps
+
+    pair = {("tests/test_subject.py", "test_partly_seen")}
+
+    with pytest.raises(ContractError) as excinfo:
+        verification_gaps(
+            [("tests/test_subject.py", "test_partly_seen", "passed")],
+            {"none": set(pair), "echo": set(pair), "greedy": set()},
+            {"none": set(pair), "echo": set(pair), "greedy": set()},
+        )
+
+    assert "test_partly_seen" in str(excinfo.value)
+
+
+def test_no_candidate_at_all_is_refused_rather_than_clearing_everything():
+    """`all()` over no candidates is True for every test in the population.
+
+    An empty map would therefore name the WHOLE suite as green under every
+    candidate, which is the shape of a completed measurement and the content of
+    none. It is the uncollected-test defect one level up, and it is refused for
+    the same reason.
+    """
+    from scripts.utils.canopus_contract import ContractError, verification_gaps
+
+    with pytest.raises(ContractError):
+        verification_gaps([("tests/test_subject.py", "test_a", "passed")], {})
+
+
+# ----------------------------------------------------------------------------
+# The claim narrowing that makes replacement survivable
+# ----------------------------------------------------------------------------
+
+def test_a_stdlib_module_is_never_replaced(tmp_path, capsys):
+    """Measured 2026-08-07, and it is why this function exists at all.
+
+    `probe --after-build tests/test_canopus_steps.py` claims what that file and
+    the conftest beside it import, which includes `os`. Armed, the candidates
+    replaced it, `os.environ` read `None`, pytest's own teardown died on
+    `'NoneType' object has no attribute 'pop'`, and no JUnit report was written,
+    so the parent could report only that the contract could not be measured.
+
+    `os` is FROZEN on this interpreter rather than a file on disk, so it is here
+    beside `json` deliberately: a reader that treated "no file" as "does not
+    resolve" would keep exactly this claim.
+    """
+    from scripts.utils.canopus_contract import replaceable_claims
+
+    assert replaceable_claims(["json", "os", "pathlib"], tmp_path) == []
+    assert "not replacing" in capsys.readouterr().err
+
+
+def test_the_trees_own_code_is_what_a_candidate_may_replace(tmp_path):
+    """The other half: the narrowing must not narrow to nothing.
+
+    A module of this repository, named directly rather than through its parent
+    package, is the ordinary subject of an after-build reading and is kept.
+    Asserted against a module that really is on disk here, because the whole
+    classification is a question about where a name resolves.
+    """
+    from pathlib import Path
+
+    from scripts.utils.canopus_contract import replaceable_claims
+
+    engine_root = Path(__file__).resolve().parents[1]
+
+    assert replaceable_claims(
+        ["scripts.utils.canopus_contract"], engine_root
+    ) == ["scripts.utils.canopus_contract"]
+
+
+def test_a_claim_that_would_sweep_the_instrument_in_is_dropped(tmp_path, capsys):
+    """The second measured death, by a different route from the first.
+
+    Narrowed to the tree's own code, the same command died again:
+    `scripts.utils` is a PREFIX of this probe's own plugin module, a claim
+    reaches every name below it, so the plugin replaced ITSELF. `CANDIDATES`
+    read `None` and pytest reported
+    `INTERNALERROR TypeError: argument of type 'NoneType' is not iterable`.
+
+    The message must name the plugin, because the operator's next action is to
+    name the subject's own module instead of its parent package, and they cannot
+    do that without knowing which package is forbidden and why.
+    """
+    from pathlib import Path
+
+    from scripts.utils.canopus_contract import replaceable_claims
+    from scripts.utils import canopus_nullstub
+
+    engine_root = Path(__file__).resolve().parents[1]
+
+    assert replaceable_claims(["scripts.utils"], engine_root) == []
+    assert canopus_nullstub.__name__ in capsys.readouterr().err
+
+
+def test_a_name_that_does_not_resolve_here_is_kept(tmp_path):
+    """Unresolvable is not the same answer as elsewhere, and is load-bearing.
+
+    A name that resolves nowhere has nothing live to destroy, so keeping it
+    leaves the absent-name path exactly as it behaved before this narrowing
+    existed. It is also how a subject importable only from the contract root
+    survives: resolution runs in the PARENT, under the parent's `sys.path`, the
+    same trade `run_null_stub` makes when it borrows `_expand_claims` to predict
+    the child's claim set.
+    """
+    from scripts.utils.canopus_contract import replaceable_claims
+
+    assert replaceable_claims(
+        ["absent_subject"], tmp_path
+    ) == ["absent_subject"]

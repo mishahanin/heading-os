@@ -645,3 +645,107 @@ def test_probe_shows_a_skipped_test_as_skipped_rather_than_vacuous(tree, capsys)
     # No invented failure mode either: a skipped test carries no failure child,
     # so the heuristic would have defaulted it to `other`.
     assert "other" not in parked
+
+
+def _write_shipped_tree(tree: Path) -> None:
+    """A subject that EXISTS, and two tests: one that reads it, one that does not.
+
+    The pair is what makes the reading legible, and the shape is the one the
+    first real run of this instrument found. Pointed at
+    `tests/test_canopus_steps.py` on 2026-08-07, seven of twenty one tests
+    survived all three candidates, and every one of them read
+    `.claude/skills/canopus/SKILL.md` off disk rather than calling the module the
+    candidates stand in for. Those are excellent tests of a document and they can
+    say nothing at all about the code, which is exactly the claim the page makes
+    and exactly the claim it refuses to widen.
+
+    So `test_reads_a_document` here is the survivor by construction, and
+    `test_strict` is the one that bites: it asserts a whole value, which no
+    candidate can produce.
+    """
+    (tree / "subject_module.py").write_text(
+        "def render(word):\n"
+        "    return f'the {word} was accepted'\n",
+        encoding="utf-8",
+    )
+    (tree / "NOTES.md").write_text("the claim was accepted\n", encoding="utf-8")
+    (tree / "tests" / "test_subject.py").write_text(
+        "from pathlib import Path\n"
+        "\n\n"
+        "def test_strict():\n"
+        "    from subject_module import render\n"
+        "    assert render('claim') == 'the claim was accepted'\n"
+        "\n\n"
+        "def test_reads_a_document():\n"
+        "    notes = Path(__file__).resolve().parent.parent / 'NOTES.md'\n"
+        "    assert 'accepted' in notes.read_text(encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+
+def test_after_build_names_the_test_that_survived_every_candidate(tree, capsys):
+    """The reading this flag exists to produce, and the words that bound it.
+
+    Both tests here pass against the real implementation, so the survivor is not
+    a test that was failing: it is a test that could not tell the real code from
+    three wrong ones, because it never asks the code anything. The strict test
+    does, so it is absent.
+
+    The exit is 0 with a survivor named, which is the rule and not an accident:
+    a reading nobody has calibrated must not become a gate. Assert it here so a
+    later change that turns a survivor into a refusal has to argue with this
+    test first.
+
+    Both halves of the page's wording are pinned. The first bounds the claim, so
+    a named test cannot be read as a bad test. The second bounds the reader's
+    expectation, because under replacement most tests SHOULD go red and a reader
+    who does not know that diagnoses the tool instead of the code.
+    """
+    _write_shipped_tree(tree)
+
+    assert _run(["probe", "--after-build", "tests/test_subject.py"], tree) == 0
+
+    out = capsys.readouterr().out
+    assert "tests/test_subject.py::test_reads_a_document" in out
+    assert "test_strict" not in out
+    assert "is NOT a bad test" in out
+    assert "the measurement working" in out
+
+
+def test_after_build_reports_when_no_reading_could_be_made(tree, capsys):
+    """The one failure this command reports as a failure, and why it is not a gate.
+
+    Nothing here is the tree's own code, so every claim is dropped, nothing is
+    replaced, and no wrong implementation is ever put in front of these tests.
+    The empty page that would otherwise be printed is the same page a run that
+    found no survivors prints, and those two readings are opposites. Exiting
+    non-zero here separates "no reading exists" from "the reading is clean"; it
+    does not gate on what a reading SAYS.
+    """
+    (tree / "tests" / "test_stdlib.py").write_text(
+        "import json\n"
+        "\n\n"
+        "def test_a():\n"
+        "    assert json.dumps([]) == '[]'\n",
+        encoding="utf-8",
+    )
+
+    assert _run(["probe", "--after-build", "tests/test_stdlib.py"], tree) == 1
+
+    assert "could not be made" in capsys.readouterr().err
+
+
+def test_probe_without_the_flag_prints_no_gap_reading(tree, capsys):
+    """The flag adds a reading; it does not change the one that was there.
+
+    `probe` is run before the code exists and its table is what an operator
+    reads at the planning gate. A gap heading appearing there would describe a
+    measurement that was never taken, over code that does not exist.
+    """
+    _write_contract(tree)
+
+    _run(["probe", "tests/contract/slice"], tree)
+
+    out = capsys.readouterr().out
+    assert "after-build gap reading" not in out
+    assert "candidates" in out

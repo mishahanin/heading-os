@@ -1004,6 +1004,60 @@ def test_a_wrapped_module_is_filed_against_the_finder_that_claimed_it(
     assert nested_outer_fixture.VALUE == "outer real"
 
 
+def test_a_configure_that_armed_nothing_does_not_disarm_the_probe_around_it(
+    clean_imports, tmp_path, monkeypatch
+):
+    """The nested counter-case again, through the door an empty claim set opens.
+
+    `pytest_configure` returned early when it was given no names, recording
+    nothing, while `pytest_unconfigure` popped one record per call. So an inner
+    session that armed NOTHING tore down the installation of the outer session
+    that had armed something. Measured before this test existed: the outer
+    probe's victim read `'a real value'` again, the outer finder was off
+    `sys.meta_path`, and `_INSTALLED` was empty, all while the outer probe was
+    still running. Its remaining tests then ran against real code and passed,
+    which is the fail-open clean page `_record_installation` already refuses by
+    the other door.
+
+    The middle assertion is the one that matters. The last is its other half: a
+    fix that simply stopped popping would leave the outer installation standing
+    forever and the victim replaced for the rest of the process.
+    """
+    from scripts.utils.canopus_nullstub import (
+        CANDIDATE_VAR,
+        MODULES_VAR,
+        REPLACE_VAR,
+        _NamedFinder,
+        pytest_configure,
+        pytest_unconfigure,
+    )
+
+    (tmp_path / "empty_claim_victim_fixture.py").write_text(
+        "VALUE = 'a real value'\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv(CANDIDATE_VAR, "none")
+    monkeypatch.setenv(REPLACE_VAR, "1")
+
+    monkeypatch.setenv(MODULES_VAR, "empty_claim_victim_fixture")
+    pytest_configure(config=None)  # the OUTER probe, armed
+    monkeypatch.setenv(MODULES_VAR, "")
+    pytest_configure(config=None)  # the INNER probe, claiming nothing
+
+    import empty_claim_victim_fixture
+
+    assert empty_claim_victim_fixture.VALUE is None
+
+    pytest_unconfigure(config=None)  # the INNER probe's own teardown
+
+    assert empty_claim_victim_fixture.VALUE is None
+    assert any(isinstance(finder, _NamedFinder) for finder in sys.meta_path)
+
+    pytest_unconfigure(config=None)  # the OUTER probe's
+
+    assert empty_claim_victim_fixture.VALUE == "a real value"
+
+
 def test_a_prefix_that_is_a_plain_module_is_claimed_and_stubbed_as_a_package(
     clean_imports, tmp_path, monkeypatch
 ):

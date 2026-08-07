@@ -104,6 +104,21 @@ STUB_NAME_SEPARATOR = ","
 # What this plugin prefixes its own diagnostics with, on the child's stderr. The
 # parent forwards exactly the lines that start with it; see `_report` below.
 NULLSTUB_STDERR_MARKER = "canopus-nullstub:"
+# What this child says it actually REPLACED, and the one line of this stream the
+# parent reads as data rather than forwarding as prose. Defined here, on the
+# side that writes it, and imported by the reader for the reason
+# `STUB_NAME_SEPARATOR` above already carries: two spellings of one wire format
+# is a rename away from a parent that silently learns nothing.
+#
+# It exists because the claim set is what the candidates were ARMED for, and
+# only the child knows which of those names an import ever reached. A module
+# named by a claim and imported by nothing is replaced by nothing, and a parent
+# that prints the claim set as the replaced set tells its reader that a wrong
+# implementation stood where none did. Written only when the REPLACING switch is
+# armed: the absent-name path replaces nothing, so a line about what it replaced
+# would be a line about nothing, and it would move the stderr of every ordinary
+# probe run for a reading only `--after-build` prints.
+REPLACED_REPORT = "replaced:"
 
 # Modules compiled into the interpreter, which this plugin never claims. Read
 # from the running interpreter rather than written down, so it is a PROPERTY of
@@ -909,6 +924,14 @@ class _Installation:
 # outer one's. A single slot could not tell the two apart.
 _INSTALLED: list[_Installation] = []
 
+# The `finder` an installation records when its configure armed NOTHING. It is a
+# private object rather than None because `_WrapLoader` defaults its finder to
+# None for a caller that builds it directly, and `_record_installation` matches
+# by identity: None here would make the one record that claims nothing the home
+# for exactly the modules that are documented to record nowhere. Nothing puts
+# this object on `sys.meta_path`, so teardown removes nothing for it either.
+_NOTHING_ARMED = object()
+
 
 def pytest_configure(config):
     """Install the finder, supply the modules already imported, or do nothing.
@@ -952,6 +975,17 @@ def pytest_configure(config):
         if name
     ]
     if not names:
+        # RECORDED, never returned on silently. `pytest_unconfigure` pops one
+        # record per call, so a configure that armed nothing and recorded
+        # nothing left the pair unbalanced and the pop landed on somebody
+        # else's installation. Measured, in process: an inner configure with an
+        # empty claim set followed by its own unconfigure restored the OUTER
+        # probe's replaced module and took the outer finder off `sys.meta_path`
+        # while that probe was still running, so its remaining tests ran
+        # against real code and passed. Same failure as the LIFO
+        # misattribution `_record_installation` refuses, reached through the
+        # one door that looked like it did nothing at all.
+        _INSTALLED.append(_Installation(_NOTHING_ARMED))
         return
     finder = _NamedFinder(_expand_claims(names))
     sys.meta_path.insert(0, finder)
@@ -992,6 +1026,17 @@ def pytest_unconfigure(config):
     if not _INSTALLED:
         return
     installation = _INSTALLED.pop()
+    if os.environ.get(CANDIDATE_VAR, "") and os.environ.get(REPLACE_VAR, ""):
+        # Said HERE rather than at install time, because the set is complete
+        # only now: `pytest_configure` replaces the modules already imported and
+        # the wrapping loader adds one per import for the rest of the session.
+        # This is the whole record of what a wrong implementation actually stood
+        # in for, and the parent has no other way to know it: a claim reaches
+        # only the names an import reached, so a module named by the contract's
+        # source and imported by nothing is replaced by nothing.
+        _report(f"{REPLACED_REPORT} " + ",".join(
+            sorted(module.__name__ for module, _e, _s in installation.supplied)
+        ))
     sys.meta_path[:] = [
         finder for finder in sys.meta_path if finder is not installation.finder
     ]

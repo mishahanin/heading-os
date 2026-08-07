@@ -97,9 +97,12 @@ each earned by a measured failure, and how to read `probe`'s table — is
    and it names the files to read first. Re-specifying what the code already says
    wastes the implementer's attention on agreement.
 4. **Vacuity is measured, not assumed.** `.venv/bin/python scripts/canopus.py
-   probe tests/contract/{date}-{slug}/` null-stubs the missing modules: a test
-   that ERRORS against the stub is vacuous, because an outcome invariant to the
-   stub proves nothing. It also runs three wrong implementations that EXIST
+   probe tests/contract/{date}-{slug}/` null-stubs the missing modules and runs
+   the contract twice, each stub carrying different values: a test that never
+   FAILS under either run is vacuous, because an outcome invariant to the stub
+   proves nothing. Passing, skipping and erroring all leave a test unproved;
+   only a failure shows it read the value. It also runs three wrong
+   implementations that EXIST
    (`none`, `echo`, `greedy`) and prints what each took of the red set. `greedy 2
    of 3` says two checks are greps for a word, not assertions about a value.
 

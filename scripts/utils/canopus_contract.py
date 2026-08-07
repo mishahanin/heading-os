@@ -52,6 +52,16 @@ from scripts.utils.venv import interpreter_identity, venv_python
 
 DEFAULT_PATTERNS = ("test_*.py",)
 RED_OUTCOMES = ("failure", "error")
+# The outcomes under a stub run that do NOT prove a test read the stubbed value.
+# `_outcome` emits exactly four tokens, so the complement of this set is the
+# single token "failure": a test is proved to assert something only by FAILING
+# under the stub, and passing, skipping or erroring all leave it unproved. Named
+# here rather than spelled inline in `run_null_stub` because the operator-facing
+# documents state this direction in prose, and
+# `tests/test_canopus_steps.py::test_the_documents_state_the_vacuity_direction_the_code_implements`
+# holds them to THIS tuple. Two definitions of the rule is how the prose inverted
+# itself against the code once already.
+UNPROVED_OUTCOMES = ("passed", "skipped", "error")
 
 
 def pytest_child_env(**overrides: str) -> dict:
@@ -1281,7 +1291,7 @@ def run_null_stub(
         # below is what keeps it visible rather than silent.
         unproved_each.append(
             {(rel, name) for rel, name, outcome in outcomes
-             if outcome in ("passed", "skipped", "error")}
+             if outcome in UNPROVED_OUTCOMES}
         )
     # An intersection is only evidence over one population. Two runs that
     # collected different tests were never compared, and two that collected

@@ -98,18 +98,17 @@ If a commit hook blocks your commit:
 ### The security-critical files, and what guards a change to them
 
 The layers above are themselves code, and the files that implement them are the
-ones where a wrong edit costs more than a bug: the hooks under `.claude/hooks/`,
-the shared pattern vocabulary `scripts/utils/secret_patterns.py` and the scanner
-built on it (`scripts/secret-scanner.py`), the push wall `scripts/push-all.py`
-with `scripts/utils/engine_guard.py` and `scripts/utils/content_denylist.py`
-behind it, the commit-time guards `scripts/leak-guard.py` and
-`scripts/content-guard.py`, the send gate `scripts/utils/tool_risk.py` and its
-ledger `config/tool-risk.json`, the two egress controls
-`scripts/utils/sensitive.py` and `scripts/utils/egress_proof.py`, the routing
-input `config/routing-map.yaml`, the test gate `scripts/run-tests.py` with
-`tests/conftest.py`, and this rule alongside `lethal-trifecta.md` and
-`tiered-risk.md`. The enumeration lives once, in `AGENTS.md`, so the two
-documents cannot drift apart.
+ones where a wrong edit costs more than a bug: the hooks, the pattern vocabulary
+and the scanner, the push wall and its detectors, the commit-time guards, the
+send gate and its ledger, the two egress controls, the routing input, the test
+gate, and the rules those controls implement in prose, this one among them.
+
+**The enumeration lives once, in `AGENTS.md`**, under "Which files are
+security-critical here", and this rule deliberately does not restate it. A
+second copy is a second thing to maintain, and the copy that stops being
+updated is the one someone reads: until 2026-08-07 this paragraph WAS that
+second copy, naming all eighteen files directly above a sentence claiming they
+were named once. Read `AGENTS.md` for the list; add a file there, not here.
 
 What stands behind a change to any of them is the ordinary machinery and nothing
 extra: the pre-commit gates (the `31C secret scanner` hook above all), the

@@ -118,8 +118,13 @@ Three groups need naming, and each asserts nothing yet:
 - **`passed`** — already green with no implementation. It decides nothing about
   the work being approved.
 - **`vacuous`** — red only because the code is absent. The probe null-stubs the
-  missing modules; a test that ERRORS against the stub is vacuous, because an
-  outcome invariant to the stub proves nothing.
+  missing modules and runs the contract twice, each stub carrying different
+  values; a test that never FAILS under either run is vacuous, because an
+  outcome invariant to the stub proves nothing. Passing, skipping and erroring
+  all leave a test unproved; only a failure shows it read the value. An error
+  is often the probe's own stand-in reaching a caller that type-checks its
+  argument, and `probe` names those tests on stderr so they can be told apart
+  from a test that genuinely asserts nothing.
 - **`skipped`** — never ran at all. Nothing else catches these, so they are
   yours to catch here.
 

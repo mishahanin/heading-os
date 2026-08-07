@@ -248,8 +248,11 @@ python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<sp
 <p><code>check</code> is a passthrough to <code>scripts/canopus_check.py</code>, which is the module CI
 runs directly, so the local reading and the CI reading are the same reading.</p>
 <p><code>probe</code> measures whether a contract&rsquo;s redness means anything: it null-stubs the
-missing modules, so a test that ERRORS against the stub is vacuous, and it runs
-three wrong implementations that exist and prints what each took of the red set.</p>
+missing modules and runs the contract twice, each stub carrying different values,
+so a test that never FAILS under either run is vacuous. Passing, skipping and
+erroring all leave a test unproved; only a failure shows it read the value. It
+also runs three wrong implementations that exist and prints what each took of the
+red set.</p>
 <p><strong>The honest limit.</strong> A CI step in the <code>sovereignty guards</code> job runs
 <code>canopus_check.py</code> on every push. It REPORTS a broken clause; it does not block
 one, because <code>enforce_admins</code> is false on the only push path in use. Nothing on

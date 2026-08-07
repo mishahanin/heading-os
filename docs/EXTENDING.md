@@ -190,8 +190,11 @@ python scripts/canopus.py probe tests/contract/<date>-<slug>/
 runs directly, so the local reading and the CI reading are the same reading.
 
 `probe` measures whether a contract's redness means anything: it null-stubs the
-missing modules, so a test that ERRORS against the stub is vacuous, and it runs
-three wrong implementations that exist and prints what each took of the red set.
+missing modules and runs the contract twice, each stub carrying different values,
+so a test that never FAILS under either run is vacuous. Passing, skipping and
+erroring all leave a test unproved; only a failure shows it read the value. It
+also runs three wrong implementations that exist and prints what each took of the
+red set.
 
 **The honest limit.** A CI step in the `sovereignty guards` job runs
 `canopus_check.py` on every push. It REPORTS a broken clause; it does not block

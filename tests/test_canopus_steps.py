@@ -40,10 +40,94 @@ Two properties carry the weight:
 Authoring rule: every import of the code under test happens INSIDE a test body.
 """
 
+import html
+import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SKILL = _ROOT / ".claude" / "skills" / "canopus" / "SKILL.md"
+
+# Every operator-facing surface that names a `/canopus` subcommand. The skill and
+# the two GENERATED router layers were already covered by the frontmatter test
+# below; the catalogue page is the one that shipped a retired lifecycle to the
+# published docs site, because it is hand-authored HTML with no `.md` source, so
+# neither the frontmatter test nor the docs drift guard could see it.
+_SUBCOMMAND_SURFACES = (
+    _SKILL,
+    _ROOT / ".claude" / "rules" / "skill-router.md",
+    _ROOT / "reference" / "skill-router" / "operations.md",
+    _ROOT / "docs" / "skills-operations-quality.html",
+)
+
+# The documents that state the vacuity criterion in prose to an operator.
+_VACUITY_DOCUMENTS = (
+    _SKILL,
+    _ROOT / ".claude" / "skills" / "canopus" / "references" / "planning-gate.md",
+    _ROOT / "docs" / "EXTENDING.md",
+)
+
+
+def _real_subcommands() -> set:
+    """The subcommand names `scripts/canopus.py` actually carries, from its parser.
+
+    READ, never retyped. A test naming the set in its own source asserts that two
+    lists agree at the moment somebody typed the second one; this one fails the
+    next time a subcommand is added or removed while a document still names the
+    old set, which is the whole defect it exists to catch.
+    """
+    import argparse
+
+    from scripts.canopus import build_parser
+
+    for action in build_parser()._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices)
+    raise AssertionError("canopus.py's parser carries no subparsers at all")
+
+
+def _code_spans(text: str, path: Path) -> list:
+    """Every literal command line on a surface, markup and entities removed.
+
+    Only code spans are read, deliberately. Prose says "bare `/canopus` prints
+    the seven steps", and a reader that took the next word after every `/canopus`
+    would call `prints` an advertised subcommand. What an operator can COPY is
+    what this test judges, and that is exactly the span the old catalogue card
+    put `python scripts/canopus.py pack` inside.
+
+    Split to ONE LINE PER COMMAND, because a fenced block is a span holding
+    several. Reading the block whole takes the first `canopus` and the first word
+    after it, which on a three-line block is a word from another line entirely.
+    """
+    if path.suffix == ".html":
+        spans = [html.unescape(re.sub(r"<[^>]+>", "", span))
+                 for span in re.findall(r"<code>(.*?)</code>", text, re.S)]
+    else:
+        # Markdown, including the two router tables, where a table cell escapes
+        # the alternation's pipes as `\|`.
+        spans = [span.replace(r"\|", "|")
+                 for span in re.findall(r"`([^`]+)`", text)]
+    return [line for span in spans for line in span.splitlines() if line.strip()]
+
+
+def _advertised_subcommands(span: str) -> set:
+    """The subcommand names one command span claims `/canopus` accepts.
+
+    Two shapes, and both appear on these surfaces: an alternation
+    (`/canopus [note | check | probe]`), and a concrete invocation
+    (`python scripts/canopus.py probe tests/contract/...`). A span naming neither
+    contributes nothing.
+    """
+    span = span.strip()
+    if not re.search(r"(^|[/\s])canopus(\.py)?\b", span):
+        return set()
+    rest = re.split(r"canopus(?:\.py)?\b", span, maxsplit=1)[1].strip()
+    alternation = re.match(r"\[([^\]]*)\]", rest)
+    if alternation:
+        return {word.strip() for word in alternation.group(1).split("|")
+                if word.strip()}
+    word = rest.split()[0] if rest.split() else ""
+    # A flag, a path or an argument placeholder is not a subcommand claim.
+    return {word} if re.fullmatch(r"[a-z][a-z-]*", word) else set()
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +310,151 @@ def test_the_step_numbers_agree_between_the_module_and_the_skill():
         if entry["approval"]:
             assert str(entry["number"]) in body, (
                 f"the skill does not mention the operator's step {entry['number']}")
+
+
+def test_no_operator_facing_surface_advertises_a_subcommand_the_tool_lacks():
+    """The hole the frontmatter test above could not see.
+
+    `test_the_skill_no_longer_advertises_the_retired_subcommands` reads the
+    skill's frontmatter, and the skill is one of four surfaces. Measured
+    2026-08-07: `docs/skills-operations-quality.html`, which is LIVE on the
+    published docs site, still advertised `/canopus [plan | lock | check |
+    release | back]` and told the operator to run `python scripts/canopus.py
+    pack` — five commands that do not exist — for a full day after the machinery
+    behind them was deleted, because the page is hand-authored HTML with no
+    `.md` source and neither that test nor the docs drift guard reads it.
+
+    The real set is READ FROM THE PARSER, so the next subcommand change fails
+    here instead of shipping.
+    """
+    real = _real_subcommands()
+    assert real, "no subcommands were read from the parser, so nothing was checked"
+    for path in _SUBCOMMAND_SURFACES:
+        assert path.is_file(), f"a named surface is missing: {path}"
+        text = path.read_text(encoding="utf-8")
+        for span in _code_spans(text, path):
+            for name in _advertised_subcommands(span):
+                assert name in real, (
+                    f"{path.relative_to(_ROOT)} advertises `canopus {name}`, "
+                    f"which the tool does not carry: {sorted(real)}. "
+                    f"The span was: {span.strip()!r}"
+                )
+
+
+def test_a_test_is_vacuous_when_it_never_fails_under_the_stub(tmp_path):
+    """The behaviour the three documents describe, measured rather than asserted.
+
+    Three tests, one per outcome the probe can read on a red contract:
+      * `test_vacuous` PASSES under both stub runs and asserts nothing.
+      * `test_reads_the_value` FAILS under both, because the stub resolved its
+        import and the assertion then compared against a stub value. Failing is
+        the ONLY outcome that proves a test read what the stub carried.
+      * `test_errors_in_a_fixture` ERRORS under both, because the probe's own
+        stand-in reached `json.loads`, which type-checks its argument. Not
+        measured is not proved innocent, so it is named vacuous too.
+
+    The third is the case the documents got backwards: they named erroring as
+    the criterion and left the passing case, which is the dominant one,
+    undescribed.
+    """
+    import json
+
+    from scripts.utils.canopus_contract import run_null_stub
+
+    contract = tmp_path / "c"
+    contract.mkdir()
+    (contract / "test_one.py").write_text(
+        "import json\n"
+        "\n"
+        "import pytest\n"
+        "\n"
+        "\n"
+        "@pytest.fixture\n"
+        "def subject():\n"
+        "    from absent_thing import raw\n"
+        "    return json.loads(raw())\n"
+        "\n"
+        "\n"
+        "def test_vacuous():\n"
+        "    from absent_thing import answer\n"
+        "    answer()\n"
+        "    assert True\n"
+        "\n"
+        "\n"
+        "def test_reads_the_value():\n"
+        "    from absent_thing import answer\n"
+        "    assert answer() == 42\n"
+        "\n"
+        "\n"
+        "def test_errors_in_a_fixture(subject):\n"
+        "    assert subject['k'] == 1\n",
+        encoding="utf-8",
+    )
+
+    vacuous = run_null_stub([contract], tmp_path)
+
+    assert ("c/test_one.py", "test_vacuous") in vacuous
+    assert ("c/test_one.py", "test_errors_in_a_fixture") in vacuous
+    assert ("c/test_one.py", "test_reads_the_value") not in vacuous
+    assert json  # the import above is what makes the fixture error under the stub
+
+
+def test_the_documents_state_the_vacuity_direction_the_code_implements():
+    """Bind the prose to the code by the PROPERTY, not by an exact sentence.
+
+    Three operator-facing documents said "a test that ERRORS against the stub is
+    vacuous". Read literally that sends a builder to strengthen the tests that
+    already assert something and leave the vacuous ones alone, which inverts the
+    gate's whole purpose.
+
+    The binding is deliberately not a string comparison against a blessed
+    sentence, which would fail on every rewording and pass on a reworded
+    inversion. It derives the discriminating outcome from `UNPROVED_OUTCOMES`,
+    the tuple `run_null_stub` actually classifies with, and asks of each
+    document's vacuity prose only that it name that outcome. A future change to
+    the code's rule therefore fails this test until the prose follows it.
+    """
+    from xml.etree import ElementTree
+
+    from scripts.utils.canopus_contract import UNPROVED_OUTCOMES, _outcome
+
+    # Every token the reader can emit, EXERCISED rather than retyped and
+    # deliberately not derived from `UNPROVED_OUTCOMES` itself. Taking the
+    # universe from the constant under test makes the complement below `failure`
+    # for any value of it, so the tripwire could never fire: measured, a
+    # `UNPROVED_OUTCOMES` cut to `("error",)` left this assertion green.
+    every_outcome = set()
+    for tag in ("failure", "error", "skipped", None):
+        case = ElementTree.Element("testcase")
+        if tag:
+            case.append(ElementTree.SubElement(case, tag))
+        every_outcome.add(_outcome(case))
+    assert len(every_outcome) == 4, every_outcome
+    proving = every_outcome - set(UNPROVED_OUTCOMES)
+    assert proving == {"failure"}, (
+        f"the code's vacuity rule changed: {sorted(proving)} now proves a test "
+        f"asserts something, so the three operator-facing documents need "
+        f"rewording before this test is updated")
+
+    for path in _VACUITY_DOCUMENTS:
+        text = path.read_text(encoding="utf-8")
+        sentences = [s for s in re.split(r"(?<=[.:])\s+", text)
+                     if "vacuous" in s.lower()]
+        assert sentences, f"{path.relative_to(_ROOT)} no longer states the criterion"
+        criterion = " ".join(sentences).lower()
+        assert "fail" in criterion, (
+            f"{path.relative_to(_ROOT)} states the vacuity criterion without "
+            f"naming the one outcome that clears a test ({sorted(proving)[0]}): "
+            f"{criterion!r}")
+        for unproved in UNPROVED_OUTCOMES:
+            # An unproved outcome may be MENTIONED, and all three are, but never
+            # as the criterion on its own: that is the exact inverted sentence
+            # this test was written for.
+            assert not re.search(
+                rf"\b{unproved[:-2] if unproved.endswith('ed') else unproved}"
+                rf"\w*\b[^.]{{0,60}}\bis vacuous\b", criterion), (
+                f"{path.relative_to(_ROOT)} names {unproved!r} as the vacuity "
+                f"criterion; only failing under the stub clears a test")
 
 
 def test_the_skill_carries_the_four_rules_the_measurements_bought():

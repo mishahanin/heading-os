@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design check</title>
+<meta name="description" content="Two engines decide whether an artifact this engine produces reads as designed or">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="PLUGINS.html">Install as a plugin</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="memory-lifecycle.html">Memory lifecycle</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="CANOPUS.html">Canopus: the build standard</a>
+      <a href="DESIGN-CHECK.html" class="active">Design check</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="RELEASE-NOTES.html">Release notes</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Design check</h1>
+  <p class="page-meta">Two engines decide whether an artifact this engine produces reads as designed or</p>
+  <!-- version: 1.0.0 | last-updated: 2026-08-09 -->
+
+<p>Two engines decide whether an artifact this engine produces reads as designed or
+as generated. This page explains what each can see, what the calibration
+deliberately silences, and why the gate freezes what already exists instead of
+demanding it be rebuilt.</p>
+<p>The prose rule these engines serve is <code>.claude/rules/visual-design-discipline.md</code>.
+Its sibling for text is <a href="RULES-REFERENCE.html">the humanisation rule</a>; the shape
+is the same, the medium is different.</p>
+<hr />
+<h2 id="the-two-engines">The two engines</h2>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/visual-discipline-check.py<span class="w"> </span>&lt;file-or-dir&gt;<span class="w">          </span><span class="c1"># regex only</span>
+python<span class="w"> </span>scripts/visual-discipline-check.py<span class="w"> </span>--deep<span class="w"> </span>&lt;file-or-dir&gt;<span class="w">   </span><span class="c1"># both engines</span>
+</code></pre></div>
+<!-- audit-skip-start -->
+<p><strong>The regex engine</strong> runs always. It matches patterns against file contents:
+forbidden fonts, the purple-to-pink hero gradient, oversized Tailwind radii,
+Lucide and Heroicons defaults, the banned hero colours, plus advisory layout and
+copy heuristics. It reads HTML, SVG and PPTX. <strong>It sees what is written down.</strong></p>
+<!-- audit-skip-end -->
+
+<p><strong>The deep engine</strong> runs on <code>--deep</code>. It is the
+<a href="https://github.com/pbakaus/impeccable">impeccable</a> CLI (Apache 2.0), pinned in
+<code>scripts/.impeccable-version</code>. It parses the HTML, resolves the CSS cascade, and
+computes real values: text contrast against the surface actually behind it,
+heading hierarchy, accent stripes on rounded corners, type floors, kickers,
+buzzwords and cadence tells in copy. It reads HTML and SVG. <strong>It sees what
+renders.</strong></p>
+<!-- audit-skip-start -->
+<p>The difference is not academic. The regex engine can be told <code>font-family: Inter</code>
+and see it.</p>
+<!-- audit-skip-end -->
+<p>It cannot be told that <code>#79839a</code> on <code>#ffffff</code> is a 3.8:1 contrast
+ratio against a 4.5:1 accessibility floor, because that fact does not exist in
+any single line of the file. Every deep finding carries an <code>impeccable:</code> type
+prefix, so in a merged report you can always tell which engine made a claim.</p>
+<hr />
+<h2 id="calibration">Calibration</h2>
+<p>Three filters sit between the deep engine and a finding anyone acts on. All three
+are declared in <code>config/visual-check-profiles.json</code>, each entry carrying the
+reason it exists, because a silent suppression is indistinguishable from a
+missing rule.</p>
+<h3 id="profiles">Profiles</h3>
+<p>A profile is assigned by path, longest matching glob winning.</p>
+<table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>Applies to</th>
+<th>Silences</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>screen</code></td>
+<td>the documentation site, dashboards, briefing HTML</td>
+<td>nothing</td>
+</tr>
+<tr>
+<td><code>print</code></td>
+<td>A4 documents read as PDF</td>
+<td>the type floors, line measure, container-inset checks</td>
+</tr>
+<tr>
+<td><code>doctype</code></td>
+<td>the five locked corporate templates and their renders</td>
+<td>the print set, plus the approved kicker, section numbering, tracked uppercase</td>
+</tr>
+</tbody>
+</table>
+<p>The type floors are the largest single group. Impeccable enforces an 11px
+minimum, which is a screen floor: a CSS pixel on an A4 page is not a screen
+pixel, and 9px sets a normal print caption. On one measured document family, the
+print profile removed 1,184 findings that said nothing true about the artifact.</p>
+<p>The doctype profile encodes a rule of precedence rather than a technical fact:
+<strong>where a detector rule and a locked corporate template disagree, the template
+wins.</strong> The kicker above a heading is an approved element of the xPager layout,
+and changing an approved template is a decision for its owner, not for a
+detector.</p>
+<h3 id="plausibility-bounds">Plausibility bounds</h3>
+<p>The parser emits physically impossible readings on some CSS: an <code>h1</code> measured at
+2856px, a <code>line-height</code> of 0.11x. These are filtered on <strong>value</strong>, not by
+disabling the rule that produced them, so a genuine 96px oversized headline still
+lands.</p>
+<h3 id="scope">Scope</h3>
+<p>Minified and vendored bundles are excluded. A regex inside a minified Mermaid
+build produced a <code>broken-image</code> finding on the first run; nobody designed that
+file.</p>
+<hr />
+<h2 id="the-baseline-is-a-ratchet">The baseline is a ratchet</h2>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/visual-discipline-check.py<span class="w"> </span>baseline<span class="w"> </span>record<span class="w"> </span>--deep<span class="w"> </span>docs/
+python<span class="w"> </span>scripts/visual-discipline-check.py<span class="w"> </span>baseline<span class="w"> </span>check<span class="w"> </span>--deep<span class="w"> </span>docs/
+</code></pre></div>
+<p><code>.visual-baseline.json</code> records a count per file and per rule, the same shape as
+<code>.lint-baseline.json</code> does for lint debt. <code>record</code> freezes what exists. <code>check</code>
+fails only on findings <strong>above</strong> those counts, and never rewrites the file.</p>
+<p>This is deliberate and it is the whole reason the integration was possible
+without a rewrite. Measured on first run, the documentation site carried 390
+findings and the branded document family carried thousands. Demanding zero would
+have meant either rebuilding every existing artifact before the tool could be
+used at all, or turning the gate off. Freezing means existing work is left alone
+while new work is held to the standard, and each frozen finding surfaces the
+moment its file is next edited.</p>
+<p>A file <strong>absent</strong> from the baseline is a new file: nothing is suppressed for it.
+That asymmetry is the point.</p>
+<p>The baseline covers both engines. Freezing only the deep findings left
+pre-existing regex debt failing forever, and a gate that is always red is a gate
+nobody reads.</p>
+<hr />
+<h2 id="where-it-runs">Where it runs</h2>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CI (<code>guards</code> job)</td>
+<td><code>baseline check --deep docs/</code> fails the build on a regression</td>
+</tr>
+<tr>
+<td><code>regenerate-docs-html.py --all</code></td>
+<td>prints the verdict; never blocks a regeneration</td>
+</tr>
+<tr>
+<td><code>render-doctype.py</code></td>
+<td>checks the rendered HTML under the <code>doctype</code> profile; reports</td>
+</tr>
+<tr>
+<td><code>marp_render.py</code></td>
+<td>checks the rendered deck under the <code>screen</code> profile; reports</td>
+</tr>
+</tbody>
+</table>
+<p>Only CI gates. A renderer that refused to write a file because a heading level
+was skipped would block the very edit that fixes it.</p>
+<hr />
+<h2 id="honest-limits">Honest limits</h2>
+<p>Four, stated plainly so a clean result is not over-read.</p>
+<p><strong>PPTX, DOCX and PDF are not covered by the deep engine.</strong> It reads HTML, SVG and
+source text. Decks stay on the regex path. This is the largest remaining gap.</p>
+<p><strong>An unused CSS rule is not a finding.</strong> The cascade is resolved against real
+elements, so a declaration no element uses is correctly invisible. A clean result
+is not proof that a stylesheet is clean.</p>
+<p><strong><code>npx --yes</code> fetches and executes third-party code at call time.</strong> The exact
+version pin is the only mitigation claimed here. It is the same exposure this
+engine already accepts for <code>marp-cli</code>, and it is weaker than a hash-verified
+install. Saying otherwise would be dressing a convention up as a control.</p>
+<p><strong>The CI step passes when the CLI cannot be fetched.</strong> A design gate that goes red
+because a package registry was slow teaches people to ignore it. It reports the
+degradation in one line and lets the build proceed on the regex verdict. What it
+will never do is pass a real regression quietly.</p>
+<p>And one thing no detector decides: the first three fundamentals of the design
+rule are specificity density, committed stance, and hierarchy by intent. Those
+stay human.</p>
+<hr />
+<h2 id="an-upstream-defect-worth-knowing-about">An upstream defect worth knowing about</h2>
+<p>The impeccable CLI exits without waiting for its asynchronous stdout to drain.
+Written to a pipe, Node buffers 64 KiB and the process dies with the rest
+unflushed: a directory scan returned exactly 65,536 bytes of a 168,409-byte
+document, so the JSON failed to parse and every finding was lost. Redirected to
+a file it returns everything, because Node writes to a regular file
+synchronously.</p>
+<p><code>scripts/utils/impeccable_engine.py</code> writes to a temporary file rather than
+reading a pipe. The failure is worth naming because of its shape: the parse error
+was caught and reported as &ldquo;deep design checks skipped&rdquo;, the same message a
+missing Node produces, so every directory-sized scan would have silently degraded
+to nothing while looking like an environment problem.</p>
+<hr />
+<p><em>HEADING OS · Design check · see also <a href="EXTENDING.html">Extending the engine</a> and
+<a href="ARCHITECTURE.html">Architecture</a>.</em></p>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

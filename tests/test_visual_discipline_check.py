@@ -173,3 +173,60 @@ def test_audit_file_html_passed_flag(tmp_path):
     res = vdc.audit_file(bad)
     assert res["passed"] is False
     assert len(_errors(res["findings"])) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Deep engine (impeccable) - the facade must not change under the default path
+# ---------------------------------------------------------------------------
+
+def test_default_audit_does_not_call_the_deep_engine(tmp_path):
+    """Fifteen skills already call this CLI. Adding a second engine must not
+    change what any of them sees unless they ask for it with --deep.
+    """
+    from scripts.utils import impeccable_engine
+
+    calls = []
+    original = impeccable_engine.run_detector
+    impeccable_engine.run_detector = lambda *a, **k: (calls.append(1), ([], None))[1]
+    try:
+        page = tmp_path / "page.html"
+        page.write_text("<html><body><h1>Fine</h1></body></html>", encoding="utf-8")
+        result = vdc.audit_file(page)
+    finally:
+        impeccable_engine.run_detector = original
+
+    assert calls == []
+    assert result["findings"] == []
+
+
+def test_deep_findings_merge_without_disturbing_the_regex_findings(tmp_path):
+    """Both engines' findings live in one list, one severity partition, one
+    exit code - no special-casing downstream.
+    """
+    page = tmp_path / "page.html"
+    page.write_text("body { font-family: Inter; }", encoding="utf-8")
+
+    deep = [{
+        "type": "impeccable:side-tab",
+        "severity": "error",
+        "tell": "Side-tab accent border",
+        "line": 3,
+        "context": "border-left: 4px + border-radius: 8px",
+        "file": str(page),
+    }]
+    result = vdc.audit_file(page, deep_findings=deep)
+
+    types = _types(result["findings"])
+    assert "forbidden_font" in types, "the regex finding must survive the merge"
+    assert "impeccable:side-tab" in types
+    assert result["summary"]["errors"] == 2
+    assert result["passed"] is False
+
+
+def test_minified_assets_are_skipped_by_the_file_walk(tmp_path):
+    (tmp_path / "app.min.js").write_text("var a=1", encoding="utf-8")
+    (tmp_path / "page.html").write_text("<html></html>", encoding="utf-8")
+
+    walked = [p.name for p in vdc._iter_files(tmp_path, include_internal=False)]
+    assert "page.html" in walked
+    assert "app.min.js" not in walked

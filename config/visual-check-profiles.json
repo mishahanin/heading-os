@@ -1,0 +1,61 @@
+{
+  "_comment": "Calibration for the impeccable deep engine behind scripts/visual-discipline-check.py. Read by scripts/utils/impeccable_engine.py. A rule listed under a profile's `suppress` is NOT reported for artifacts resolving to that profile; every entry carries the reason it is suppressed, because a silent suppression is indistinguishable from a missing rule. Consumed by: scripts/utils/impeccable_engine.py. Last Updated: 2026-08-09.",
+
+  "default": "screen",
+
+  "profiles": {
+    "screen": {
+      "description": "Surfaces read on a screen: the documentation site, dashboards, briefing HTML. The detector's own defaults were written for this case, so nothing is suppressed.",
+      "suppress": {}
+    },
+
+    "print": {
+      "description": "Documents laid out for A4 print and read as PDF. The detector's type floors are screen floors; a CSS pixel on an A4 page is not a screen pixel, so the floor rules say nothing true here.",
+      "suppress": {
+        "tiny-text": "11px is a screen floor. At A4 render scale 9px sets a normal print size, and 821 of the 2167 findings measured on our doctypes were this rule alone.",
+        "undersized-ui-text": "Same floor, same reason. 363 further findings, all on print labels that read correctly on paper.",
+        "line-length": "The 65-75ch measure is a screen reading rule. Print columns are set to the page grid, not to a viewport.",
+        "cramped-padding": "Detects children flush against a container edge. On a paged document the page box IS the inset, so the rule reads the margin as absent when it is the page margin."
+      }
+    },
+
+    "doctype": {
+      "extends": "print",
+      "description": "The five locked corporate doctypes (letter, proposal, partnership, official, xpager) and anything rendered from them. Their layout is approved brand, and .claude/rules/corporate-docs.md puts changes to a locked template behind CEO approval, so where the detector and the template disagree the template wins.",
+      "suppress": {
+        "kicker-above-heading": "The section kicker ('The Landscape', 'Use Case Spotlight') is an approved element of the xPager template. The detector calls it a ban no brief earns back; a locked template is exactly the brief that does. 52 findings on the xPager family. Changing this needs CEO approval, not a detector rule.",
+        "numbered-section-labels": "Numbered pillars (Pillar 01..05) carry the sequence the reader is meant to follow in the approved layout.",
+        "all-caps-body": "Uppercase set at the label scale is part of the approved typographic system for doctype eyebrows and table headers.",
+        "wide-tracking": "The tracked-uppercase label is the same approved element; the tracking is what makes it legible at that size."
+      }
+    }
+  },
+
+  "path_profiles": [
+    { "glob": "datastore/brand/templates/doctypes/**", "profile": "doctype" },
+    { "glob": "outputs/documents/**", "profile": "doctype" },
+    { "glob": "outputs/content/**xpager**/**", "profile": "doctype" },
+    { "glob": "outputs/deliverables/**", "profile": "print" },
+    { "glob": "docs/**", "profile": "screen" }
+  ],
+
+  "plausibility": {
+    "_comment": "Impeccable's parser emits physically impossible readings on some of our CSS. These are engine artifacts, not defects. They are filtered on VALUE, not by disabling the rule, so a genuine hit on the same rule still lands.",
+    "oversized-h1": {
+      "unit": "px",
+      "max": 500,
+      "reason": "Measured 2856px on outputs/deliverables/.../brief.html. No h1 renders at that size; the parser is resolving something other than the computed font-size."
+    },
+    "tight-leading": {
+      "unit": "ratio",
+      "min": 0.5,
+      "reason": "Measured 0.11x and 0.03x on our doctype HTML. A line-height below 0.5 is not a tight leading, it is a misparse."
+    }
+  },
+
+  "out_of_scope": {
+    "_comment": "Impeccable is handed a directory and walks it itself, reaching files our own checker never visits. These are not our design surface.",
+    "suffixes": [".min.js", ".min.css", ".min.mjs"],
+    "path_fragments": ["/vendor/", "/node_modules/", "/.git/", "/_archive/"]
+  }
+}

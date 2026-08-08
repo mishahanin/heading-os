@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>print type-floor fixture</title>
+<style>
+  body { font-family: "GT Standard", Georgia, serif; background: #ffffff; color: #1a1a2e; }
+  .page { width: 210mm; padding: 18mm; }
+  .caption { font-size: 9px; line-height: 1.4; }
+  .stat-label { font-size: 8px; text-transform: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Type set for paper, not for a viewport</h1>
+  <p class="caption">Nine CSS pixels renders at a normal caption size once the page is
+  laid out at A4. On a screen the same declaration would be too small to read, which is
+  why the detector's floor exists and why the print profile does not apply it.</p>
+  <p class="stat-label">Offline throughput</p>
+</div>
+</body>
+</html>

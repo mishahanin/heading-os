@@ -358,3 +358,47 @@ Pass 5 synthesis with full source enumeration: `outputs/research/2026-05-25_desi
 Council transcript: `outputs/operations/council/2026-05-25_council_161558_ai-vs-human-design-tells.md`.
 
 Odin brain principles cited in Pass 3: `specificity-density-beats-structural-patterns`, `personal-anecdote-is-structural-defeat-of-ai-detection`, `escape-competition-through-authenticity`, `ai-rhythm-is-the-tell`, `linkedin-register-detector-blind-spot`, `simplicity-signals-mastery`, `headline-first-communication`, `winstons-star-makes-ideas-stick`, `peak-end-rule-overrides-experience`, `one-language-processor-constraint`, `compress-before-consuming`, `noise-is-toxic-distilled-knowledge-endures`, `match-output-format-to-content-shape`, `self-contained-single-file-artifacts`, `agentic-output-is-content-shape`, `20260318140400-navigation-principle-states-not-goals`, `harbors-not-horizons`, `ceo-communication-force-multiplier`, `presentation-anatomy-winston-protocol`, `specificity-and-stance-defeat-ai-detection`, `narrative-craft-emotional-throughline`, `multi-voice-content-architecture`.
+
+---
+
+## The impeccable rule inventory (deep engine, 59 rules)
+
+Added 2026-08-09. These are the rules the deep engine (`--deep`) checks against a
+resolved render, as opposed to the regex engine's source-text patterns. Source:
+[`pbakaus/impeccable`](https://github.com/pbakaus/impeccable), Apache 2.0, pinned
+at `impeccable@3.5.0`. Listed so a reader can see the coverage without reading
+the upstream source. Which of these apply to a given artifact depends on its
+calibration profile - see `config/visual-check-profiles.json`.
+
+**AI-slop tells (the generated-interface signatures).** `side-tab`,
+`border-accent-on-rounded`, `overused-font`, `flat-type-hierarchy`,
+`gradient-text`, `ai-color-palette`, `cream-palette`, `nested-cards`,
+`monotonous-spacing`, `bounce-easing`, `pulsing-dot`, `blinking-cursor`,
+`shape-assembled-illustration`, `dark-glow`, `radial-halo`,
+`radial-spotlight-glow`, `marquee`, `icon-tile-stack`, `italic-serif-display`,
+`hero-eyebrow-chip`, `kicker-above-heading`, `numbered-section-labels`,
+`oversized-h1`, `extreme-negative-tracking`, `gpt-thin-border-wide-shadow`,
+`repeating-stripes-gradient`, `codex-grid-background`, `image-hover-transform`.
+
+**Copy register.** `em-dash-overuse` (advisory, fires only on saturation),
+`marketing-buzzword`, `aphoristic-cadence`, `theater-slop-phrase`.
+
+**Correctness and accessibility.** `low-contrast`, `gray-on-color`,
+`broken-image`, `script-error`, `content-hidden-at-rest`, `text-occlusion`,
+`text-overflow`, `clipped-overflow-container`, `first-viewport-column-overflow`,
+`edge-flush-cards`, `layout-transition`, `skipped-heading`, `heading-rhythm`.
+
+**Typography and space.** `line-length`, `cramped-padding`,
+`body-text-viewport-edge`, `tight-leading`, `justified-text`, `tiny-text`,
+`undersized-ui-text`, `all-caps-body`, `wide-tracking`, `repeated-container-text`.
+
+**Design-system conformance** (checked against a project `DESIGN.md`, which this
+workspace does not currently maintain, so these are inert here):
+`design-system-font`, `design-system-color`, `design-system-radius`,
+`design-system-font-size`.
+
+Two of these are calibrated OFF for the locked corporate doctypes, with the
+reason recorded next to each in `config/visual-check-profiles.json`:
+`kicker-above-heading` and `numbered-section-labels` describe approved elements
+of the xPager template. Where the detector and an approved template disagree,
+the template wins.

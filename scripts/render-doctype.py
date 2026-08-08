@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 from scripts.utils.workspace import get_workspace_root
+from scripts.utils import impeccable_engine
 from scripts.utils.doctype_renderer import (
     TEMPLATE_REGISTRY,
     render_html,
@@ -185,6 +186,12 @@ def main() -> int:
             print(f"{YELLOW}[WARN]{RESET} Hidden-character scan: {scan.stdout.strip() or scan.stderr.strip()}")
         else:
             print(f"{GREEN}[CLEAN]{RESET} Hidden-character scan passed.")
+
+    # Deep design check on the freshly produced HTML, under the doctype profile:
+    # this artifact is new, so nothing is frozen for it and every finding is live.
+    # It REPORTS. A locked-template render must not fail because a detector rule
+    # and an approved template disagree.
+    impeccable_engine.report_for_artifact(html_path, profile="doctype")
 
     print(f"\n{BOLD}{CYAN}Rendered '{args.type}' document.{RESET}")
     for path in outputs:

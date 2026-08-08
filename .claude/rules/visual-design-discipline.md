@@ -12,8 +12,8 @@ paths:
 
 > Always-active rule. Applies to every visual artifact 31C ships where 31C identity is implied. Decks (investor, product, keynote, sales), dashboards (bridge daemon, Pulse, briefings, status pages), ODUN.ONE customer-facing surfaces, briefing HTML/PDF, investor materials, the public web. Does NOT apply to internal admin/utility surfaces nobody outside the Tribe sees, code, structured machine output, or third-party content displayed verbatim.
 >
-> Last Updated: 2026-05-25
-> Last Verified: 2026-05-25
+> Last Updated: 2026-08-09 (second engine: impeccable deep detection, profiles, baseline ratchet, three craft-floor reflexes)
+> Last Verified: 2026-08-09
 > Background and citations: `outputs/research/2026-05-25_design_visual-design-discipline-research.md` (Pass 5 synthesis, 5 research passes, 30 captured screenshots, 20 Odin principles cross-referenced).
 > Empirical anchors: `outputs/research/_drafts/exemplars/manifest.json` (Pass 4 visual capture), the embedded screenshot evidence in `reference/visual-design-discipline.md`, Anthropic's own Frontend Design cookbook at platform.claude.com.
 > Companion catalog: `reference/visual-design-discipline.md` (exemplar shelf, anti-pattern catalog, audit checklists, vocabulary expansion).
@@ -141,6 +141,14 @@ Catalog of patterns the rule names for redirection. Full per-tell expansion live
 
 The single structural pattern that is always banned: **Title Case For All Headings**. Use sentence case. Title Case is print-magazine convention that RLHF picked up from training data.
 
+### Three reflexes no detector catches
+
+Added 2026-08-09 from the upstream craft floor (`pbakaus/impeccable`, Apache 2.0). Each is a thing the generated version of a page reliably omits, and none of them is mechanically checkable.
+
+- **Theme the browser surfaces you did not draw.** Text selection, the caret, the focus ring, custom scrollbars, underline offset, and the numerals in tabular data all ship with browser defaults belonging to no design system. Theming them from the palette is the cheapest signal that a page was built rather than assembled, and the one models skip most reliably.
+- **Declare elevation once: a border or a shadow, never both.** A hairline border under a wide soft shadow is the ghost card, a recurring generated signature. Pick the defined edge or the soft lift and commit to it.
+- **Icons are drawn, never typed.** Unicode glyphs and emoji standing in for an icon system are a tell. Use a real icon library or authored SVG, at one consistent stroke and weight.
+
 ## The asset rule
 
 Stock people-photography is banned. This includes generic offices, hands at keyboards, lightbulbs, gears, three-people-pointing-at-a-laptop, diverse teams in branded T-shirts, founders-in-suits portraiture, customer-headshots-on-coloured-circles.
@@ -196,7 +204,28 @@ Every visual deliverable presented to Misha must include the standard confirmati
 
 > Visual register: [register name]. AI tells found: clean / N findings (and a one-line summary of redirects applied if any). Specificity density: X named specifics per artifact.
 
-The mechanical tells are audited by `scripts/visual-discipline-check.py` (shipped 2026-06-26): it scans HTML/SVG/PPTX for forbidden fonts, the purple->pink gradient, oversized Tailwind radii (`rounded-2xl`/`3xl`), Lucide/Heroicons defaults, and the banned hero colors (ChatGPT emerald, captured pastels) as errors, plus advisory layout/copy heuristics (neutral-stack pairing, indigo-violet primary, three-up cards, centered hero, Title Case headings). Run `python scripts/visual-discipline-check.py <file-or-dir>` (`--strict` to fail on warnings, `--json` for programmatic use; out-of-scope internal dirs are skipped unless `--include-internal`). The first three fundamentals - specificity density, committed stance, hierarchy by intent - are not mechanically checkable and remain human-judged against the exemplar shelf. The CEO can request the audit at any time during a session.
+The mechanical tells are audited by `scripts/visual-discipline-check.py`, which runs **two engines**, and the difference between them decides what a clean result is worth.
+
+**The regex engine** (default, always runs, shipped 2026-06-26) scans HTML/SVG/PPTX for forbidden fonts, the purple->pink gradient, oversized Tailwind radii (`rounded-2xl`/`3xl`), Lucide/Heroicons defaults, and the banned hero colors (ChatGPT emerald, captured pastels) as errors, plus advisory layout/copy heuristics (neutral-stack pairing, indigo-violet primary, three-up cards, centered hero, Title Case headings). It sees what is WRITTEN DOWN.
+
+**The deep engine** (`--deep`, added 2026-08-09) is the impeccable CLI (`pbakaus/impeccable`, Apache 2.0, pinned in `scripts/.impeccable-version`). It parses the HTML, resolves the CSS cascade, and computes real values: text contrast against the surface actually behind it, heading hierarchy, accent stripes on rounded corners, type floors, kickers, buzzword and cadence tells in copy. It sees what RENDERS. Deep findings carry an `impeccable:` type prefix so a reader can tell, per finding, which engine made the claim. It reads HTML and SVG only - **PPTX, DOCX and PDF stay regex-only, which is the largest remaining coverage gap.**
+
+```bash
+python scripts/visual-discipline-check.py <file-or-dir>              # regex only
+python scripts/visual-discipline-check.py --deep <file-or-dir>       # both engines
+python scripts/visual-discipline-check.py --deep --profile doctype <file>
+python scripts/visual-discipline-check.py baseline check --deep docs/
+```
+
+Three things sit between the deep engine and a finding anyone acts on, all declared in `config/visual-check-profiles.json`:
+
+- **Profiles.** An A4 document is judged by print rules and a screen surface by screen rules; the 11px type floor is a screen floor and says nothing true about a printed page. Where a locked corporate template and a detector rule disagree, **the template wins** - the xPager kicker is approved brand, and `.claude/rules/corporate-docs.md` puts changes to it behind CEO approval.
+- **Plausibility bounds.** The parser emits impossible readings on some of our CSS (an h1 at 2856px, a line-height of 0.11x). Those are filtered on VALUE, never by disabling the rule, so genuine hits on the same rule still land.
+- **The baseline.** `.visual-baseline.json` freezes what existed on 2026-08-09 (390 findings across 37 files in `docs/`). The gate fires on findings ABOVE that line. Existing artifacts are recorded, not remediated; the real defects that were found and left unfixed are listed in the calibration report under `outputs/operations/design-check/`.
+
+Two honest limits on a clean deep result. An **unused CSS rule is not a finding** - the cascade is resolved against real elements, so dead styles are invisible. And `npx --yes` **fetches and executes third-party code** at call time; the exact version pin is the only mitigation claimed, matching what the workspace already accepts for marp-cli, and it is weaker than a hash-verified install.
+
+The first three fundamentals - specificity density, committed stance, hierarchy by intent - are not mechanically checkable by either engine and remain human-judged against the exemplar shelf. The CEO can request the audit at any time during a session.
 
 For artifacts produced by skills (`/design`, `/pptx-generator`, `/keynote-deck`, `/dashboard`, `/marp`, `/xpager`, `/intel-briefing-newsletter`, `/market-brief`, `/proposal`, `/corporate-letter`, `/partnership-doc`, `/official-doc`, `/investor-pitch`, `/data-room`, `/docparse`), the producing skill is responsible for running the audit before declaring the artifact done. Skills must invoke this rule's checklist as part of their phased execution.
 

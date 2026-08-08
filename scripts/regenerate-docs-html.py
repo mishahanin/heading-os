@@ -263,6 +263,7 @@ SITE_NAV_GROUPS = [
         ("engine-data-segregation-contract.html", "Engine/data contract"),
         ("EXTENDING.html", "Extending the engine"),
         ("CANOPUS.html", "Canopus: the build standard"),
+        ("DESIGN-CHECK.html", "Design check"),
         ("DOCS-PIPELINE.html", "Docs pipeline"),
         ("GLOSSARY.html", "Glossary"),
         ("RELEASE-NOTES.html", "Release notes"),
@@ -695,6 +696,33 @@ def check_stale(pairs: list[Path]) -> list[tuple[Path, Path, float]]:
     return stale
 
 
+def _report_design(target):
+    """Print the deep design verdict for the regenerated site, above the baseline.
+
+    Reports only. The docs drift guard is what gates this tree in CI; a generator
+    that refused to write HTML over a contrast finding would block the very edit
+    that fixes it. Import is local so a checkout without the engine module still
+    regenerates.
+    """
+    try:
+        from scripts.utils import impeccable_engine
+    except ImportError:
+        return
+    findings, note = impeccable_engine.deep_findings(target)
+    if note:
+        print(f"[design] {note}")
+        return
+    above = impeccable_engine.apply_baseline(findings)
+    if not above:
+        print(f"[design] clean - {len(findings)} finding(s), all within the recorded baseline.")
+        return
+    print(f"[design] {len(above)} finding(s) ABOVE the baseline:")
+    for finding in above[:10]:
+        print(f"  {finding['file']}: {finding['type']} - {finding['context'][:70]}")
+    if len(above) > 10:
+        print(f"  ...and {len(above) - 10} more")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Regenerate HTML docs from MD sources")
     parser.add_argument("md_file", nargs="?", help="Path to MD file to regenerate")
@@ -735,6 +763,8 @@ def main():
             print("Syncing nav + search box on hand-authored site pages...")
         ok = sync_all_navs(quiet=args.quiet) and ok
         build_search_index(quiet=args.quiet)
+        if not args.quiet:
+            _report_design(ROOT / "docs")
         sys.exit(0 if ok else 1)
 
     if not args.md_file:

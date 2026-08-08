@@ -1,4 +1,4 @@
-"""Test contract for the impeccable deep-engine integration.
+"""Tests for the impeccable deep-engine integration (graduated test contract).
 
 Plan: <data-root>/plans/2026-08-09-impeccable-detector-integration.md
 
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 CHECKER = ROOT / "scripts" / "visual-discipline-check.py"
@@ -294,11 +294,16 @@ def test_a_broken_config_degrades_toward_reporting_more_never_toward_silence(tmp
     broken = tmp_path / "visual-check-profiles.json"
     broken.write_text("{ this is not json", encoding="utf-8")
 
+    from scripts.utils.impeccable_engine import is_suppressed
+
     profiles, warning = load_profiles(broken)
 
     assert warning, "a malformed config must announce itself"
     assert profiles["default"] == "screen"
-    assert profiles["profiles"]["screen"]["suppress"] == []
+    # Asserted as BEHAVIOUR, not as the shape of the suppress container: what
+    # matters is that no rule is silenced, whatever structure holds them.
+    for rule in ("tiny-text", "kicker-above-heading", "side-tab", "low-contrast"):
+        assert is_suppressed(rule, "screen", profiles) is False
 
 
 def test_minified_and_vendored_assets_are_out_of_scope():

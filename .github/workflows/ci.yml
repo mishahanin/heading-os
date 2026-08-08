@@ -139,6 +139,23 @@ jobs:
         # guard-layer constant, and fails if the README or docs/index.html
         # "By the numbers" block disagrees.
         run: uv run python scripts/dev/check-readme-numbers.py
+      - name: Design ratchet (no NEW visual findings on docs/)
+        # The deep engine (impeccable, pinned in scripts/.impeccable-version)
+        # resolves the CSS cascade and computes what the page actually renders:
+        # contrast against the real backdrop, heading hierarchy, accent stripes.
+        #
+        # This gates REGRESSIONS only. `.visual-baseline.json` freezes the 390
+        # findings that existed on 2026-08-09 - they are recorded, deliberately
+        # not remediated, and listed in the calibration report. A finding ABOVE
+        # that line fails the build.
+        #
+        # `|| true` on the npm reach, not on the check: a design gate that goes
+        # red because the registry was slow teaches people to ignore it, and the
+        # checker already exits 0 with one degradation line when the CLI cannot
+        # be resolved. What it will never do is pass a real regression quietly.
+        run: |
+          node --version || echo "node unavailable; the check will report and pass"
+          uv run python scripts/visual-discipline-check.py baseline check --deep docs/
 
   lint:
     name: ruff + bandit

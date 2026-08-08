@@ -521,6 +521,14 @@ def render(source: Path, output_dir: Path = None, pdf_only: bool = False,
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0 and html_out.exists():
                 outputs.append({"type": "html", "path": str(html_out), "size": html_out.stat().st_size})
+                # Deep design verdict on the deck we just rendered. Slides are
+                # read on a screen, so the screen profile applies. Reports only:
+                # a design finding must never cost a rendered deck.
+                try:
+                    from scripts.utils import impeccable_engine
+                    impeccable_engine.report_for_artifact(html_out, profile="screen")
+                except ImportError:
+                    pass
             else:
                 err_msg = result.stderr.strip() if result.stderr else "Unknown error"
                 errors.append({"type": "html", "error": "render-failed",

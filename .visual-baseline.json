@@ -1,0 +1,229 @@
+{
+  "_comment": "Frozen design findings for artifacts that existed when the deep engine was integrated. The gate fires on findings ABOVE these counts, never on the counts themselves - existing artifacts are not remediated. Regenerate with `visual-discipline-check.py baseline record --deep <path>` only after an intentional fix, so the numbers only ever fall.",
+  "files": {
+    "docs/ARCHITECTURE.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/CANOPUS.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:side-tab": 2
+    },
+    "docs/CONFIGURATION.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/DEPLOYMENT.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "title_case_heading": 1
+    },
+    "docs/DESIGN-CHECK.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/DOCS-PIPELINE.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/EMERGENCY-PROCEDURES.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "title_case_heading": 1
+    },
+    "docs/EXTENDING.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/GLOSSARY.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/HOOKS-REFERENCE.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/INTEGRATIONS-SETUP.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/MAKE-IT-YOURS.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "title_case_heading": 1
+    },
+    "docs/MODELS-SETUP.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/PLUGINS.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/QUICKSTART.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "title_case_heading": 1
+    },
+    "docs/RELEASE-NOTES.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:side-tab": 10
+    },
+    "docs/RULES-REFERENCE.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/SECURITY-MODEL.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/TELEGRAM-AND-ALERTS.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/THREAT-MODEL.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/TROUBLESHOOTING.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/assets/docs.css": {
+      "impeccable:side-tab": 2
+    },
+    "docs/daemons.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:side-tab": 8,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/data-structure.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/engine-data-segregation-contract.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "title_case_heading": 1
+    },
+    "docs/index.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 6,
+      "impeccable:overused-font": 1,
+      "impeccable:side-tab": 2
+    },
+    "docs/memory-lifecycle.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1
+    },
+    "docs/memory-odin.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:side-tab": 2,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/prerequisites.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:side-tab": 7,
+      "impeccable:skipped-heading": 4
+    },
+    "docs/skills-communication.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/skills-content-design.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/skills-crm.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/skills-intel.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/skills-mcp-plugins.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 8,
+      "impeccable:overused-font": 1,
+      "impeccable:side-tab": 1
+    },
+    "docs/skills-operations-daily.html": {
+      "forbidden_font": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/skills-operations-infra.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/skills-operations-quality.html": {
+      "forbidden_font": 1,
+      "impeccable:aphoristic-cadence": 1,
+      "impeccable:em-dash-overuse": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:skipped-heading": 1
+    },
+    "docs/skills-strategy.html": {
+      "forbidden_font": 1,
+      "impeccable:low-contrast": 7,
+      "impeccable:overused-font": 1,
+      "impeccable:skipped-heading": 1
+    }
+  }
+}

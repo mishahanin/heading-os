@@ -85,10 +85,10 @@ def test_approve_and_skip(tmp_path):
 
 def test_edit_records_note_and_approves(tmp_path):
     sweep.cmd_propose(tmp_path, _args(file=str(_write_payload(tmp_path, SAMPLE)), date="2026-06-09"))
-    assert sweep.cmd_edit(tmp_path, _args(id=2, note="replace Quinn with Robin", date="2026-06-09")) == 0
+    assert sweep.cmd_edit(tmp_path, _args(id=2, note="replace the draft note text", date="2026-06-09")) == 0
     a = next(a for a in sweep._load(tmp_path, "2026-06-09")["actions"] if a["id"] == 2)
     assert a["status"] == "approved"
-    assert a["note"] == "replace Quinn with Robin"
+    assert a["note"] == "replace the draft note text"
 
 
 def test_set_execution_outcome_and_illegal_transition(tmp_path):

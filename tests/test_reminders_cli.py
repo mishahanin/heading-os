@@ -16,10 +16,10 @@ def _run(args, env_home):
 
 def test_add_then_list(tmp_path):
     (tmp_path / "outputs" / "operations" / "reminders").mkdir(parents=True)
-    r = _run(["add", "--once", "2026-07-26", "--message", "Prep Beacon"], tmp_path)
+    r = _run(["add", "--once", "2026-07-26", "--message", "Prep the demo"], tmp_path)
     assert r.returncode == 0, r.stderr
     out = _run(["list"], tmp_path)
-    assert "Prep Beacon" in out.stdout
+    assert "Prep the demo" in out.stdout
 
 
 def test_unknown_recurring_rule(tmp_path):

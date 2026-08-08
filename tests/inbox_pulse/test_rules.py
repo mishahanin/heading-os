@@ -911,16 +911,16 @@ def test_classify_external_sender_bypasses_rule_falls_through(make_workspace, tm
     yaml_path = _make_rules_yaml_with_domains(tmp_path, ["31c.io"])
     engine = RulesEngine(yaml_path=yaml_path)
 
-    # Give quinn a CRM score so the result is not trivially LOW
+    # Give the external sender a CRM score so the result is not trivially LOW
     _write_crm_contact(
         make_workspace / "crm" / "contacts",
-        slug="charlie-example",
-        email="charlie@example.com",
+        slug="nolan-northgate",
+        email="nolan@northgate.com",
         relationship_type="investor-active",
     )
     clf = CheapClassifier(rules=engine, workspace_root=make_workspace, account=None, my_email="ceo@31c.io")
     result = clf.classify(
-        sender_email="charlie@example.com",
+        sender_email="nolan@northgate.com",
         subject="Series B follow-up",
         now=_fixed_now(),
         recipients_to=["ceo@31c.io"],

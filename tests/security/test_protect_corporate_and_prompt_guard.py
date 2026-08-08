@@ -92,5 +92,5 @@ def test_prompt_guard_flags_injection(prompt_guard, text, category):
 
 
 def test_prompt_guard_quiet_on_benign(prompt_guard):
-    benign = "Met Rafi at the Dana office on 2026-06-09. Follow up re: ODUN.ONE demo."
+    benign = "Met Dana at the downtown office on 2026-06-09. Follow up re: ODUN.ONE demo."
     assert prompt_guard.scan_content(benign) == []

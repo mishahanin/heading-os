@@ -53,7 +53,7 @@ The subdirectory name uses the standard form; files inside use short descriptive
 
 ## What this rule prevents
 
-Without consistent naming, `outputs/` accumulates files like `report.md`, `final.pdf`, `dashboard-new.html`, `meeting prep rafi (2).docx`. Search becomes impossible. Sorting by date does not work. Two artifacts about the same subject from different dates collide.
+Without consistent naming, `outputs/` accumulates files like `report.md`, `final.pdf`, `dashboard-new.html`, `meeting prep dana (2).docx`. Search becomes impossible. Sorting by date does not work. Two artifacts about the same subject from different dates collide.
 
 The standard form is mechanical, not aesthetic. The audit pipeline, dashboard generator, and search tooling all expect `YYYY-MM-DD_*` prefixes and benefit from consistent naming.
 

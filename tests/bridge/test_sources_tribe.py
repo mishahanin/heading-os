@@ -235,9 +235,9 @@ def _write_roster_xlsx(workspace_root, data_rows):
 
 
 def test_merge_tribe_matches_by_email():
-    crm = [_crm("ada", "Ada Lovelace", email="bravo@example.com",
+    crm = [_crm("ada", "Ada Lovelace", email="ada@example.com",
                 role="tribe-leadership", last_touch="2026-05-01")]
-    roster = [_ros("Ada Lovelace", email="bravo@example.com",
+    roster = [_ros("Ada Lovelace", email="ada@example.com",
                    title="Chief Engineer", department="Eng")]
     merged = _merge_tribe(crm, roster)
     assert len(merged) == 1
@@ -285,14 +285,14 @@ def test_load_tribe_roster_missing_file(tmp_path):
 
 def test_load_tribe_roster_reads_xlsx(tmp_path):
     _write_roster_xlsx(tmp_path, [
-        ["Ada Lovelace", "bravo@example.com", "Chief Engineer", "Engineering",
+        ["Ada Lovelace", "ada@example.com", "Chief Engineer", "Engineering",
          "Misha Hanin", "ada_tg"],
     ])
     roster = _load_tribe_roster(tmp_path)
     assert len(roster) == 1
     r = roster[0]
     assert r["name"] == "Ada Lovelace"
-    assert r["email"] == "bravo@example.com"  # lowercased
+    assert r["email"] == "ada@example.com"  # lowercased
     assert r["title"] == "Chief Engineer"
     assert r["department"] == "Engineering"
     assert r["reports_to"] == "Misha Hanin"
@@ -303,9 +303,9 @@ def test_list_tribe_enriches_from_roster(tmp_path):
     """A CRM tribe contact gains roster org fields; a roster-only person
     appears too with slug None."""
     _make_contact(tmp_path, "ada-lovelace", relationship_type="tribe-leadership",
-                  email="bravo@example.com", last_touch="2026-05-01", _name="Ada Lovelace")
+                  email="ada@example.com", last_touch="2026-05-01", _name="Ada Lovelace")
     _write_roster_xlsx(tmp_path, [
-        ["Ada Lovelace", "bravo@example.com", "Chief Engineer", "Engineering", "Misha", "ada_tg"],
+        ["Ada Lovelace", "ada@example.com", "Chief Engineer", "Engineering", "Misha", "ada_tg"],
         ["Bob Roster", "bob@31c.io", "QA Lead", "QA", "Ada", "bob_tg"],
     ])
     result = list_tribe(tmp_path)

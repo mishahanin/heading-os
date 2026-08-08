@@ -708,10 +708,10 @@ def build_document():
     add_styled_table(doc,
         ['Method', 'Description', 'Use Case'],
         [
-            ['Layer 1 (Inline)', 'Traffic through DPI via ExampleVendor Intelligent Bypass Switch. Hardware bypass failsafe.', 'Full enforcement: shaping, blocking, redirect, header enrichment'],
+            ['Layer 1 (Inline)', 'Traffic through DPI via an intelligent bypass switch. Hardware bypass failsafe.', 'Full enforcement: shaping, blocking, redirect, header enrichment'],
             ['Layer 2 (VLAN/MPLS)', 'L2 integration via VLAN tagging or MPLS labels', 'Complex network topologies'],
             ['Layer 3 (DPI on Stick)', 'Routing-based traffic steering to DPI platform', 'Minimal physical changes'],
-            ['Passive (TAP/Mirror)', 'Traffic copy via ExampleVendor Fiber TAP or port mirror', 'Monitoring-only, initial phase, forensic analysis'],
+            ['Passive (TAP/Mirror)', 'Traffic copy via a passive fiber TAP or port mirror', 'Monitoring-only, initial phase, forensic analysis'],
             ['Hybrid', 'Passive monitoring + selective inline enforcement', 'Phased deployment approach'],
         ],
         col_widths=[1.5, 2.5, 2.5]
@@ -858,8 +858,8 @@ def build_document():
             ['Memory', '768 GB DDR5 ECC RAM'],
             ['Network interfaces', '12x 100GbE ports'],
             ['AI acceleration', 'NVIDIA L40 GPU (optional, for enhanced AI/ML workloads)'],
-            ['Bypass switch', 'ExampleVendor 40G/10G Intelligent Bypass Switch (inline)'],
-            ['Fiber TAP', 'ExampleVendor Fiber TAP (passive deployments)'],
+            ['Bypass switch', '40G/10G intelligent bypass switch (inline)'],
+            ['Fiber TAP', 'Passive fiber TAP (passive deployments)'],
             ['Operating system', 'Linux-based (Kubernetes-ready)'],
         ],
         col_widths=[2.0, 4.5]
@@ -869,9 +869,9 @@ def build_document():
 
     add_heading_styled(doc, '7.2 Deployment Topologies', level=2)
 
-    add_body_text(doc, 'INL01: Inline Deployment -- Traffic flows through DPI via ExampleVendor Intelligent Bypass Switch. Hardware bypass ensures traffic continuity if DPI server is unavailable. Full enforcement capability.', bold=True)
+    add_body_text(doc, 'INL01: Inline Deployment -- Traffic flows through DPI via an intelligent bypass switch. Hardware bypass ensures traffic continuity if DPI server is unavailable. Full enforcement capability.', bold=True)
 
-    add_body_text(doc, 'OFL01: Passive Deployment -- Traffic copied via ExampleVendor Fiber TAP. Zero risk to production traffic. Ideal for initial deployment phase or monitoring-only requirements.', bold=True)
+    add_body_text(doc, 'OFL01: Passive Deployment -- Traffic copied via a passive fiber TAP. Zero risk to production traffic. Ideal for initial deployment phase or monitoring-only requirements.', bold=True)
 
     add_heading_styled(doc, '7.3 Scalability', level=2)
 
@@ -906,7 +906,7 @@ def build_document():
             ['Active-Active clustering', 'Multiple instances share traffic load. No single point of failure.'],
             ['Automatic failover', 'Traffic redistributed to remaining nodes within seconds. No manual intervention.'],
             ['Session state sync', 'Active sessions synchronized across nodes. Failover transparent to subscribers.'],
-            ['Hardware bypass', 'ExampleVendor Bypass Switches pass traffic through if DPI unavailable.'],
+            ['Hardware bypass', 'Bypass switches pass traffic through if DPI unavailable.'],
             ['Kubernetes self-healing', 'Failed containers/pods automatically restarted. Unhealthy nodes replaced.'],
             ['Geographic redundancy', 'Instances across multiple data centers for site-level resilience.'],
             ['Disaster recovery', 'Automated DR procedures with defined RPO/RTO targets.'],

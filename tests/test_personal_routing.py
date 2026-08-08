@@ -4,7 +4,7 @@ and slip past the engine-tree-clean guard. (2026-06-26 exec-deferral lift.)
 Before the fix, config/routing-map.yaml had no rule for personal/, so legacy-shaped
 exec data under personal/ resolved to the engine default and the engine guard
 (which flags only private/corporate destinations) never caught it. Only GitHub's
-server-side write-deny stopped a real leak on Alex's machine; these tests pin the
+server-side write-deny stopped a real leak on an executive's machine; these tests pin the
 local guard so the protection no longer depends on remote permissions.
 """
 import sys

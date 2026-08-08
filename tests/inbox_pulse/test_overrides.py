@@ -23,7 +23,7 @@ SAMPLE_YAML = textwrap.dedent("""\
     sender_overrides:
       always_critical:
         - alice@31c.io
-        - alpha@example.com
+        - dave@example.com
       always_important: []
       always_normal:
         - "newsletter@*"
@@ -122,7 +122,7 @@ def test_load_invalid_yaml_keeps_prior_config_no_crash(rules_yaml):
 def test_match_sender_exact(engine):
     """4. Exact match on always_critical address."""
     assert engine.match_sender("alice@31c.io") == "always_critical"
-    assert engine.match_sender("alpha@example.com") == "always_critical"
+    assert engine.match_sender("dave@example.com") == "always_critical"
 
 
 def test_match_sender_glob_prefix(engine):

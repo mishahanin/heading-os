@@ -15,7 +15,7 @@ def crm_workspace(tmp_path, monkeypatch):
     (crm / "address-book" / "karl-mertens.md").write_text(
         "---\n"
         "slug: karl-mertens\n"
-        "name: Alex Rivera\n"
+        "name: Karl Mertens\n"
         "canonical_email: karl@rivex.com\n"
         "other_emails:\n"
         "  - karl.mertens@rivex.com\n"
@@ -110,12 +110,12 @@ def test_log_outbound_strips_html_body(crm_workspace):
     2026-06-09 contamination where raw tags landed in 7 contact files."""
     from scripts.utils.crm_autolog import log_outbound
     html_body = (
-        "<p>Morgan,</p><p>Robin flagged that only 2 of 4 ExampleVendor cards are "
+        "<p>Dana,</p><p>Nolan flagged that only 2 of 4 bypass cards are "
         "detected &amp; asked for a war room.</p><p>Misha</p>"
     )
     result = log_outbound(
         recipient_email="karl@rivex.com",
-        subject="the second deployment region status",
+        subject="the pilot deployment status",
         body_excerpt=html_body,
         date="2026-06-09",
         workspace_root=crm_workspace,
@@ -124,7 +124,7 @@ def test_log_outbound_strips_html_body(crm_workspace):
     rel_text = (crm_workspace / "crm" / "contacts" / "karl-mertens.md").read_text(encoding="utf-8")
     assert "<p>" not in rel_text
     assert "&amp;" not in rel_text  # entities unescaped
-    assert "Morgan, Robin flagged" in rel_text
+    assert "Dana, Nolan flagged" in rel_text
     assert "war room. & asked" not in rel_text  # words don't run together across tags
 
 

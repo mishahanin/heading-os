@@ -37,7 +37,7 @@ Last Verified: 2026-04-21
 
 **Cadence:** Blog 2x/month, Whitepaper quarterly
 
-**Blog contributors:** Misha (strategic), Morgan (technical architecture), Casey (AI/ML)
+**Blog contributors:** Misha (strategic), the architecture lead (technical architecture), the AI/ML lead (AI/ML)
 
 **Whitepaper roadmap:**
 - Q2 2026: "The End of Blind Networks: How AI-Native DPI+ Restores Sovereign Visibility"

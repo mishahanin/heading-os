@@ -51,7 +51,7 @@ relationship line and surfaces in the first PartnerCo call afterwards.
 ## Point 2: [HIGH] Premature exclusivity
 
 **Premature exclusivity.** Exclusive resale before a closed deal removes
-your second-mover leverage with Rune and Maya, and PartnerCo has no signed
+your second-mover leverage with Rhea and Maya, and PartnerCo has no signed
 revenue commitment yet to justify the trade.
 
 /devil honesty floor: I could only produce 2 substantive points from

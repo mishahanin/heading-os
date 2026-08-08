@@ -61,7 +61,7 @@ def test_exec_slug_named_sibling_is_the_personal_root(tmp_path, monkeypatch):
 
 
 def test_exec_generic_sibling_is_the_personal_root(tmp_path, monkeypatch):
-    """Alex's actual layout: data repo cloned as generic `../.heading-os-data`."""
+    """An executive's real-world layout: data repo cloned as generic `../.heading-os-data`."""
     engine = _make_exec_engine(tmp_path, slug="jane-doe")
     data = tmp_path / ".heading-os-data"
     (data / "crm" / "contacts").mkdir(parents=True)

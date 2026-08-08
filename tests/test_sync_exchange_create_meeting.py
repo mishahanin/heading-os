@@ -62,10 +62,10 @@ def test_send_invites_with_attendees_sends_invite(monkeypatch):
     created = _patch_exchange_globals(monkeypatch)
     sync_exchange.create_meeting(
         _fake_account(),
-        subject="31C / PartnerCo - technical call",
+        subject="31C / ExampleCorp - technical call",
         start_time="2026-07-16 11:00",
         duration_minutes=60,
-        attendees=["partner.contact@example.com"],
+        attendees=["dana.reyes@example.com"],
         send_invites=True,
         timezone_str="Asia/Dubai",
     )
@@ -79,7 +79,7 @@ def test_no_send_invites_is_hold_only(monkeypatch):
         _fake_account(),
         subject="Hold",
         start_time="2026-07-16 11:00",
-        attendees=["partner.contact@example.com"],
+        attendees=["dana.reyes@example.com"],
         send_invites=False,
         timezone_str="Asia/Dubai",
     )

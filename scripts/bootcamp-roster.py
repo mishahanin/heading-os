@@ -17,7 +17,7 @@ Writes:
 Logic:
   - Filter out Public DLs and shared/system mailboxes
   - Filter out non-Tribe members (resellers, shareholders) listed in the org-chart config
-  - Override GAL title with org chart title where chart is post-restructure (Apr 19)
+  - Override GAL title with org chart title where the chart is the current revision
   - Tag each Tribe member with: Function, Reports To, In prelim?, Tech track?, Ops/Exec track?, Rationale
 """
 from __future__ import annotations
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -33,7 +34,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.workspace import get_datastore_dir, get_outputs_dir, get_workspace_root, resolve_config_with_example
+from scripts.utils.workspace import (
+    get_datastore_dir,
+    get_default_tz,
+    get_outputs_dir,
+    get_workspace_root,
+    resolve_config_with_example,
+)
 
 WS = get_workspace_root()
 GAL_JSON = get_outputs_dir() / "_sync" / "gal-31c.io.json"
@@ -134,7 +141,7 @@ def in_prelim(display_name: str, email_local: str, prelim: set[str]) -> bool:
     # Exact first-name hit
     if first_name in prelim:
         return True
-    # Initials + last-name (e.g., "E. Nolan" matches "Erik Nolan")
+    # Initials + last-name (e.g., "K. Mertens" matches "Karl Mertens")
     initial_form = f"{first_name[0]}. {last_name}".lower() if last_name else ""
     initial_form_no_space = f"{first_name[0]}.{last_name}".lower() if last_name else ""
     if initial_form in prelim or initial_form_no_space in prelim:
@@ -184,7 +191,7 @@ def build_roster() -> tuple[list[dict], dict]:
             in_chart = "Y"
         else:
             title = gal_title or "TBD"
-            function = "TBD - not in Apr 19 chart"
+            function = "TBD - not in the org chart"
             reports_to = "TBD"
             in_chart = "N"
 
@@ -257,14 +264,15 @@ def write_excel(rows: list[dict], excluded: dict):
     ws["A1"] = _EVENT.get("title", "Bootcamp - Tribe Roster & Track Recommendations")
     ws["A1"].font = Font(bold=True, size=14)
     ws.merge_cells("A1:K1")
-    ws["A2"] = "Tribe Roster & Track Recommendations | Generated 2026-05-01 from Exchange GAL + Apr 19 v3 Org Chart"
+    generated = datetime.now(get_default_tz()).date().isoformat()
+    ws["A2"] = f"Tribe Roster & Track Recommendations | Generated {generated} from Exchange GAL + org chart"
     ws["A2"].font = Font(italic=True, color="666666")
     ws.merge_cells("A2:K2")
 
     headers = [
         "#", "Name", "Email", "Title (reconciled)", "GAL Title (raw)",
         "Function / Department", "Reports To",
-        "In Apr 19 Chart?", "In Prelim List?",
+        "In Org Chart?", "In Prelim List?",
         "Attend Tech Track?", "Attend Ops/Exec Track?", "Rationale",
     ]
     for col, h in enumerate(headers, 1):
@@ -314,9 +322,9 @@ def write_excel(rows: list[dict], excluded: dict):
         ("Recommended for Ops/Exec track", ops_count),
         ("Recommended for BOTH passes", both_count),
         ("Unknown role (needs CEO confirmation)", unknown_count),
-        ("In Apr 19 Org Chart", sum(1 for r in rows if r["in_chart"] == "Y")),
-        ("Not in Apr 19 Chart (newer/contractors)", sum(1 for r in rows if r["in_chart"] == "N")),
-        ("In your preliminary 16-person list", sum(1 for r in rows if r["in_prelim"] == "Y")),
+        ("In org chart", sum(1 for r in rows if r["in_chart"] == "Y")),
+        ("Not in org chart (newer/contractors)", sum(1 for r in rows if r["in_chart"] == "N")),
+        ("In the preliminary list", sum(1 for r in rows if r["in_prelim"] == "Y")),
         ("", ""),
         ("Excluded — Public DLs", len(excluded["public_dl"])),
         ("Excluded — Shared/system mailboxes", len(excluded["shared_mailbox"])),

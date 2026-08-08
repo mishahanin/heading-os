@@ -18,7 +18,7 @@ def fake_workspace(tmp_path, monkeypatch):
     entity.write_text(
         "---\n"
         "slug: karl-mertens\n"
-        "name: Alex Rivera\n"
+        "name: Karl Mertens\n"
         "canonical_email: karl.mertens@rivex.com\n"
         "other_emails:\n"
         "  - karl.mertens@rivex.com\n"
@@ -27,7 +27,7 @@ def fake_workspace(tmp_path, monkeypatch):
         "created: 2026-03-15\n"
         "linkedin: https://www.linkedin.com/in/karlmertens/\n"
         "---\n\n"
-        "# Alex Rivera\n\nBiographical body here.\n",
+        "# Karl Mertens\n\nBiographical body here.\n",
         encoding="utf-8",
     )
 
@@ -62,7 +62,7 @@ def fake_workspace(tmp_path, monkeypatch):
 def test_load_entity_returns_parsed_frontmatter(fake_workspace):
     from scripts.utils.crm import load_entity
     entity = load_entity("karl-mertens", workspace_root=fake_workspace)
-    assert entity["name"] == "Alex Rivera"
+    assert entity["name"] == "Karl Mertens"
     assert entity["canonical_email"] == "karl.mertens@rivex.com"
     assert "karl.mertens@rivex.com" in entity["other_emails"]
     assert entity["employer"] == "AllianceCo"
@@ -78,7 +78,7 @@ def test_resolve_entity_ref_loads_linked_entity(fake_workspace):
     rel = {"entity_ref": "karl-mertens"}
     entity = resolve_entity_ref(rel, workspace_root=fake_workspace)
     assert entity is not None
-    assert entity["name"] == "Alex Rivera"
+    assert entity["name"] == "Karl Mertens"
 
 
 def test_resolve_entity_ref_returns_none_for_dangling(fake_workspace):
@@ -98,7 +98,7 @@ def test_merge_entity_and_relationship_combines_facts(fake_workspace):
     }
     merged = merge_entity_and_relationship(entity, rel)
     # From entity:
-    assert merged["name"] == "Alex Rivera"
+    assert merged["name"] == "Karl Mertens"
     assert merged["company"] == "AllianceCo"  # employer renamed to company in merge
     assert merged["email"] == "karl.mertens@rivex.com"
     # From relationship:
@@ -157,7 +157,7 @@ def test_scan_contacts_merges_entity_facts(fake_workspace):
     assert len(contacts) == 1
     assert dangling_refs == []
     c = contacts[0]
-    assert c["name"] == "Alex Rivera"    # from entity
+    assert c["name"] == "Karl Mertens"    # from entity
     assert c["company"] == "AllianceCo"   # from entity (employer)
     assert c["type"] == "partner"              # from relationship (relationship_type)
     assert c["last_touch"] == "2026-05-11"     # from relationship

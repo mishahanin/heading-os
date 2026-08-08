@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-09
+
+The release the engine grew a memory, a method, and ears. Recall stopped being a list somebody had to remember to read and became relevance computed against what was just typed, with "I do not know" as a first-class answer and no path that turns a quiet memory into a deletion. Canopus, the build standard every non-trivial change now passes through, shrank from thirteen enforced moments to seven and moved its enforcement onto tools that already existed, after measurement found 93% of the hand-built prevention surface defeatable by one shell command. Local speech-to-text and layout-aware document reading landed, so a recorded call becomes the thread log, the CRM entries, and the drafted follow-ups it should have produced, on the operator's own machine. And four failures that had been invisible precisely because every health surface reported green were found and fixed.
+
+The reader-facing release note is [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md) ([published page](https://mishahanin.github.io/heading-os/RELEASE-NOTES.html)). What follows is the commit-level record.
+
+### Added
+
+- **`DISCLAIMER.md` at the repository root**, version 1.0, effective 8 August 2026: the project's notice on names, examples, and data. It declares every example name, company, contact detail, figure, and scenario in the engine and in anything generated from it to be invented, holds that declaration even where a placeholder coincides with something real, names the one deliberate exception (the author's own identity and the 31 Concept ownership disclaimer), and states in advance the position on content that reaches the published tree in error. It also carries a no-questions-asked correction route: a request to `misha.hanin@odinix.com` with the subject `HEADING OS naming` is enough, with acknowledgement inside five business days and no requirement to demonstrate harm or assert a right. Short forms for reuse in generated documents and page footers ship with it. Referenced from `NOTICE`, `README.md`, and section 8 of the release note.
+- **`docs/RELEASE-NOTES.md`** (and its generated page), the first reader-facing release note the project has published: what changed, why it changed, what it buys, and an honest-limits section naming what the release does not do. Linked from the site nav under Reference.
+
 ### Changed
 
 - **Auto-memory is never pruned; a memory that goes unused sinks in ranking and
@@ -1130,7 +1141,8 @@ Initial public release.
 - **Memory and ODIN**: a local associative-memory index behind `/recall` and a persistent knowledge brain.
 - The published documentation site at [mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/), the deployment guide, and the focused setup guides for models, integrations, and personalization.
 
-[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/mishahanin/heading-os/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mishahanin/heading-os/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mishahanin/heading-os/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mishahanin/heading-os/compare/v0.4.1...v0.5.0

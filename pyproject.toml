@@ -17,7 +17,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "heading-os-engine"
-version = "0.7.0"
+version = "0.8.0"
 description = "The operating system an executive runs their company from, built on Claude Code — this repository is the engine (code only; it resolves a separate private data repository at runtime)."
 readme = "README.md"
 license = "Apache-2.0"

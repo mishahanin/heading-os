@@ -19,6 +19,13 @@ License does not grant permission to use these marks except as required for
 reasonable and customary use in describing the origin of the work (see Section 6
 of the License).
 
+Every name, company, contact detail, figure, and scenario that appears as an
+EXAMPLE in this repository, in its documentation, or in anything generated from
+it is fictional and exists only to demonstrate how the software behaves. Any
+resemblance to a real person or organisation is coincidental and unintended. The
+full notice, including the route to have an example changed on request, is in
+DISCLAIMER.md at the root of this repository.
+
 This repository is the ENGINE — code only. It is designed to operate against a
 separate, private data repository that it never contains. See README.md and
 docs/DEPLOYMENT.md for the architecture.

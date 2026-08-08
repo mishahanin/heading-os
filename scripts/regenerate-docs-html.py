@@ -264,6 +264,7 @@ SITE_NAV_GROUPS = [
         ("EXTENDING.html", "Extending the engine"),
         ("DOCS-PIPELINE.html", "Docs pipeline"),
         ("GLOSSARY.html", "Glossary"),
+        ("RELEASE-NOTES.html", "Release notes"),
         ("https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md", "Roadmap"),
         ("https://github.com/mishahanin/heading-os", "GitHub repository"),
     ]),

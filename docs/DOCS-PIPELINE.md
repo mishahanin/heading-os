@@ -25,7 +25,7 @@ The sidebar nav is defined once in `SITE_NAV_GROUPS`; the light theme lives in
 
 ## Two page classes
 
-### 1. Markdown-sourced (regenerated) - 19 pages
+### 1. Markdown-sourced (regenerated) - 21 pages
 
 The `.md` is the source of truth; the `.html` is generated and must never be
 hand-edited. Editing the `.md` without regenerating is caught by the drift guard.
@@ -33,8 +33,9 @@ hand-edited. Editing the `.md` without regenerating is caught by the drift guard
 `ARCHITECTURE`, `CONFIGURATION`, `DEPLOYMENT`, `DOCS-PIPELINE` (this page),
 `EMERGENCY-PROCEDURES`, `EXTENDING`, `GLOSSARY`, `HOOKS-REFERENCE`,
 `INTEGRATIONS-SETUP`, `MAKE-IT-YOURS`, `MODELS-SETUP`, `PLUGINS`, `QUICKSTART`,
-`RULES-REFERENCE`, `SECURITY-MODEL`, `TELEGRAM-AND-ALERTS`, `THREAT-MODEL`,
-`TROUBLESHOOTING`, `engine-data-segregation-contract`, `memory-lifecycle`.
+`RELEASE-NOTES`, `RULES-REFERENCE`, `SECURITY-MODEL`, `TELEGRAM-AND-ALERTS`,
+`THREAT-MODEL`, `TROUBLESHOOTING`, `engine-data-segregation-contract`,
+`memory-lifecycle`.
 
 `memory-lifecycle` carries a Mermaid diagram. The generator renders a ```` ```mermaid ````
 fence to a `<pre class="mermaid">` block and injects the vendored `assets/mermaid.min.js`

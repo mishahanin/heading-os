@@ -67,6 +67,7 @@
       <a href="EXTENDING.html">Extending the engine</a>
       <a href="DOCS-PIPELINE.html" class="active">Docs pipeline</a>
       <a href="GLOSSARY.html">Glossary</a>
+      <a href="RELEASE-NOTES.html">Release notes</a>
       <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
       <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
     </div>
@@ -116,14 +117,15 @@ how to edit each, and how the drift guard keeps them honest.</p>
 <code>docs/assets/docs.css</code>; client-side search is <code>docs/assets/search.js</code> backed by
 <code>docs/assets/search-index.json</code>.</p>
 <h2 id="two-page-classes">Two page classes</h2>
-<h3 id="1-markdown-sourced-regenerated-19-pages">1. Markdown-sourced (regenerated) - 19 pages</h3>
+<h3 id="1-markdown-sourced-regenerated-21-pages">1. Markdown-sourced (regenerated) - 21 pages</h3>
 <p>The <code>.md</code> is the source of truth; the <code>.html</code> is generated and must never be
 hand-edited. Editing the <code>.md</code> without regenerating is caught by the drift guard.</p>
 <p><code>ARCHITECTURE</code>, <code>CONFIGURATION</code>, <code>DEPLOYMENT</code>, <code>DOCS-PIPELINE</code> (this page),
 <code>EMERGENCY-PROCEDURES</code>, <code>EXTENDING</code>, <code>GLOSSARY</code>, <code>HOOKS-REFERENCE</code>,
 <code>INTEGRATIONS-SETUP</code>, <code>MAKE-IT-YOURS</code>, <code>MODELS-SETUP</code>, <code>PLUGINS</code>, <code>QUICKSTART</code>,
-<code>RULES-REFERENCE</code>, <code>SECURITY-MODEL</code>, <code>TELEGRAM-AND-ALERTS</code>, <code>THREAT-MODEL</code>,
-<code>TROUBLESHOOTING</code>, <code>engine-data-segregation-contract</code>, <code>memory-lifecycle</code>.</p>
+<code>RELEASE-NOTES</code>, <code>RULES-REFERENCE</code>, <code>SECURITY-MODEL</code>, <code>TELEGRAM-AND-ALERTS</code>,
+<code>THREAT-MODEL</code>, <code>TROUBLESHOOTING</code>, <code>engine-data-segregation-contract</code>,
+<code>memory-lifecycle</code>.</p>
 <p><code>memory-lifecycle</code> carries a Mermaid diagram. The generator renders a <code>```mermaid</code>
 fence to a <code>&lt;pre class="mermaid"&gt;</code> block and injects the vendored <code>assets/mermaid.min.js</code>
 on that page only (a per-page conditional), so every other page stays byte-identical and

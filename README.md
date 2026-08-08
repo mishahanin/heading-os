@@ -67,7 +67,7 @@ You clone the engine; you create your own private data repository ([one command]
 
 ## By the numbers
 
-Every figure here is produced by CI, not asserted by hand. Counts as of `v0.7.0`, kept honest by `scripts/dev/check-readme-numbers.py`.
+Every figure here is produced by CI, not asserted by hand. Counts as of `v0.8.0`, kept honest by `scripts/dev/check-readme-numbers.py`.
 
 - **538 security tests**, run on every commit by the [`security-tests`](.github/workflows/ci.yml) job over [`tests/security/`](tests/security). This is the suite that proves the guarantees below.
 - **6 enforcement layers** hold the engine and data apart: a [bypass guard](tests/test_data_root_no_bypass.py), a [leak guard](scripts/leak-guard.py), a data-path redirect hook, a build partition, a [runtime tree-clean check](tests/test_engine_tree_clean.py), and an [unbypassable push-time wall](scripts/push-all.py).
@@ -137,7 +137,9 @@ If you find a vulnerability, please report it privately (see SECURITY.md) rather
 ## Status
 
 <!-- version: keep in sync with pyproject.toml; checked by scripts/check-version-sync.py -->
-`v0.7.0`. The architecture, the security model, and the data seam are stable and load-bearing. Skills and daemons evolve. Interfaces may change between minor versions while the project is pre-1.0. See **[ROADMAP.md](ROADMAP.md)** for direction and **[CHANGELOG.md](CHANGELOG.md)** for what has changed.
+`v0.8.0`. The architecture, the security model, and the data seam are stable and load-bearing. Skills and daemons evolve. Interfaces may change between minor versions while the project is pre-1.0. See **[ROADMAP.md](ROADMAP.md)** for direction and **[CHANGELOG.md](CHANGELOG.md)** for what has changed.
+
+What v0.8.0 changed, written for a reader rather than for a diff: **[docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md)** ([published page](https://mishahanin.github.io/heading-os/RELEASE-NOTES.html)).
 
 ## Contributing
 
@@ -150,6 +152,8 @@ Apache License 2.0 — see **[LICENSE](LICENSE)** and **[NOTICE](NOTICE)**. You 
 ## Ownership & disclaimer
 
 HEADING OS is a personal project created and maintained by **Misha Hanin**. Misha is the Founder & CEO of [31 Concept](https://31c.io) (31C) and uses HEADING OS in his own work and life, but HEADING OS is his personal project. **31 Concept is not involved in HEADING OS, does not maintain, sponsor, or endorse it, and bears no responsibility or liability for it.** Any vocabulary that resembles 31C's (ODUN.ONE, TrustONE, DPI+, Tribe, and similar) appears only as illustrative example data and does not imply 31C involvement.
+
+Every name, company, contact detail, figure, and scenario used as an **example** anywhere in this repository, its documentation, or anything generated from it is **fictional** and exists only to show how the software behaves; any resemblance to a real person or organisation is coincidental and unintended. If an example resembles you, write to `misha.hanin@odinix.com` with the subject `HEADING OS naming` and it will be changed — no need to demonstrate harm or assert a right. Full notice: **[DISCLAIMER.md](DISCLAIMER.md)**.
 
 ## Author
 

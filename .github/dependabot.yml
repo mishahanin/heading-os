@@ -4,6 +4,16 @@
 # point-in-time gate at commit time; Dependabot is the continuous watch that opens
 # a PR the moment a new CVE lands on a pinned dependency.
 #
+# pip VERSION updates are OFF (2026-08-08, CEO decision). The canonical dependency
+# refresh path is `uv` against pyproject.toml, and requirements.txt is a generated
+# export, so a Dependabot pip version PR is never merged here — it only spends CI
+# minutes and mail. Each pip ecosystem therefore carries
+# `open-pull-requests-limit: 0`, which GitHub documents as "disable version updates
+# for this package manager". SECURITY updates are unaffected by that setting and
+# keep flowing, which is the part that was ever wanted. github-actions version
+# updates stay ON: the SHA pins (F-1.5) would silently rot without them.
+# To re-enable a pip ecosystem, restore its previous limit (10 / 5 / 5).
+#
 # Schema: https://docs.github.com/code-security/dependabot/dependabot-version-updates
 version: 2
 
@@ -14,7 +24,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 10
+    # 0 = version updates off (was 10). Security updates unaffected.
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
     # Collapse minor/patch bumps into one PR per run to cut review noise; majors
@@ -54,7 +65,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    # 0 = version updates off (was 5). Security updates unaffected.
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
     groups:
@@ -69,7 +81,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    # 0 = version updates off (was 5). Security updates unaffected.
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
     groups:

@@ -22,6 +22,8 @@ Checks performed:
   7. Per-paragraph specificity (proper noun / number / named entity)
   8. Title Case headings detection
   9. Hedge density
+ 10. Founder-blog slop phrases (throat-clearing, emphasis crutches, meta-commentary)
+ 11. False agency (inanimate subject taking a human verb)
 
 Exit codes:
   0 - clean (or strict-mode pass)
@@ -209,6 +211,12 @@ BANNED_PHRASES = [
     # Other dramatic / theatrical
     "hustle and bustle",
     "it's like having",
+    # Meeting-room jargon (added 2026-08-09 from stop-slop)
+    "double down",
+    "take a step back",
+    "circle back",
+    "on the same page",
+    "lean into",
 ]
 
 # Structural patterns - flagged as ADVISORY warnings (NOT errors).
@@ -288,6 +296,110 @@ HEDGE_PHRASES = [
     "to a large extent", "to some extent",
     "more or less", "for the most part",
 ]
+
+# Founder-blog slop phrases, adapted 2026-08-09 from hardikpandya/stop-slop (MIT).
+# Our pre-existing catalogue was built from the encyclopaedic/marketing AI corpus
+# (testament, tapestry, boasts). This block covers the LinkedIn/Substack register:
+# announcement openers, manufactured emphasis, and essays narrating their own
+# structure. Literal, high-precision matches - flagged as errors like BANNED_PHRASES.
+SLOP_PHRASES = {
+    "throat_clearing": [
+        "here's the thing",
+        "here's the problem",
+        "here's what",
+        "here's this",
+        "here's that",
+        "here's why",
+        "the uncomfortable truth is",
+        "let me be clear",
+        "the truth is,",
+        "i'll say it again",
+        "i'm going to be honest",
+        "can we talk about",
+    ],
+    "emphasis_crutch": [
+        "full stop.",
+        "let that sink in",
+        "make no mistake",
+        "this matters because",
+    ],
+    "meta_commentary": [
+        "plot twist:",
+        "spoiler:",
+        "you already know this, but",
+        "but that's another post",
+        "a feature, not a bug",
+        "the rest of this essay",
+        "let me walk you through",
+        "in this section, we'll",
+        "as we'll see",
+        "i want to explore",
+    ],
+    "rhetorical_setup": [
+        "think about it:",
+        "what if i told you",
+        "and that's okay.",
+    ],
+    "vague_declarative": [
+        "the implications are significant",
+        "the stakes are high",
+        "the reasons are structural",
+        "the consequences are real",
+        "this is the deepest problem",
+    ],
+}
+
+# Slop patterns needing a boundary a substring match cannot express.
+SLOP_REGEXES = [
+    # Standalone "Period." as emphasis, not the common noun ("the reporting period.")
+    ("emphasis_crutch", re.compile(r"[.!?]\s+Period\."), "Period."),
+    # "It turns out" as an opener, not the literal idiom ("if it turns out well")
+    ("throat_clearing", re.compile(r"(?:^|[.!?]\s+|\n)It turns out\b"), "it turns out"),
+]
+
+# False agency: an inanimate subject taking a verb only a person can take.
+# The model reaches for this because it avoids naming the actor. Verbs that read
+# as idiomatic in technical prose (lives, listens, chooses, refuses, says, knows)
+# are deliberately absent - precision matters more than recall on a heuristic.
+FALSE_AGENCY_SUBJECTS = [
+    "complaint", "decision", "conversation", "discussion", "debate", "culture",
+    "data", "market", "bet", "idea", "narrative", "story", "process", "system",
+    "technology", "platform", "algorithm", "model", "report", "metric", "number",
+    "result", "trend", "strategy", "plan", "architecture", "design", "code",
+    "product", "feature", "project", "roadmap", "meeting", "question", "answer",
+    "problem", "solution", "industry", "framework", "pipeline", "workflow",
+    "dashboard", "document", "message", "email", "deal", "contract", "spec",
+    "thread", "backlog", "deadline", "budget", "price",
+]
+
+FALSE_AGENCY_VERBS = [
+    "tells", "told",
+    "decides", "decided",
+    "emerges", "emerged",
+    "shifts", "shifted",
+    "rewards", "rewarded",
+    "punishes", "punished",
+    "believes", "believed",
+    "thinks", "thought",
+    "demands", "demanded",
+    "insists", "insisted",
+    "argues", "argued",
+    "admits", "admitted",
+    "hopes", "hoped",
+    "worries", "worried",
+    "fights", "fought",
+    "dies", "died",
+    "moves toward", "moved toward", "moves towards", "moved towards",
+]
+
+FALSE_AGENCY_RE = re.compile(
+    r"\b(?:the|this|that|a|an|its|their|our)\s+(?:\w+\s+)?("
+    + "|".join(sorted(FALSE_AGENCY_SUBJECTS, key=len, reverse=True))
+    + r")\s+("
+    + "|".join(sorted(FALSE_AGENCY_VERBS, key=len, reverse=True))
+    + r")\b(?!\s+by\b)",
+    re.IGNORECASE,
+)
 
 # Title Case heading detection (line starting with # and most words capitalised)
 TITLE_CASE_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
@@ -708,6 +820,76 @@ def check_hedge_density(text):
     return findings
 
 
+def check_slop_phrases(text):
+    """Flag founder-blog slop: announcement openers, manufactured emphasis, meta-commentary.
+
+    Adapted 2026-08-09 from hardikpandya/stop-slop (MIT). Curly apostrophes are
+    normalised to ASCII for matching; U+2019 is a one-character substitution, so
+    offsets into the original text are preserved and snippets stay accurate.
+    """
+    findings = []
+    norm = text.replace("’", "'")
+    for category, phrases in SLOP_PHRASES.items():
+        for phrase in phrases:
+            # Word boundaries only where the phrase edge is a word character, so
+            # "here's this" cannot match inside "There's this" and "plot twist:"
+            # still matches at its trailing colon.
+            lead = r"\b" if phrase[0].isalnum() else ""
+            tail = r"\b" if phrase[-1].isalnum() else ""
+            pattern = re.compile(lead + re.escape(phrase) + tail, re.IGNORECASE)
+            for m in pattern.finditer(norm):
+                findings.append({
+                    "type": "slop_phrase",
+                    "severity": "error",
+                    "category": category,
+                    "phrase": phrase,
+                    "position": m.start(),
+                    "context": _snippet(text, m.start(), m.end()),
+                })
+    seen = {(f["position"], f["phrase"]) for f in findings}
+    for category, pattern, label in SLOP_REGEXES:
+        for m in pattern.finditer(norm):
+            if (m.start(), label) in seen:
+                continue
+            findings.append({
+                "type": "slop_phrase",
+                "severity": "error",
+                "category": category,
+                "phrase": label,
+                "position": m.start(),
+                "context": _snippet(text, m.start(), m.end()),
+            })
+    return findings
+
+
+def check_false_agency(text):
+    """Flag an inanimate subject taking a verb only a person can take.
+
+    "The complaint becomes a fix" hides whoever fixed it; "the decision emerged"
+    hides whoever decided. Advisory (warning), not blocking: the detection is a
+    determiner-noun-verb heuristic without a POS tagger, and some hits are
+    legitimate idiom. The fix is to name the human, or use "you".
+
+    Known limitation: a past participle in a reduced relative clause reads as a
+    verb to this regex. "The decision told by the board" is excluded by the
+    trailing-`by` guard, but "a story told after the fact" still flags. Measured
+    at one hit across 1337 workspace prose files on 2026-08-09; not worth a
+    parser. Treat such hits as noise rather than filing them as a defect.
+    """
+    findings = []
+    for m in FALSE_AGENCY_RE.finditer(text):
+        findings.append({
+            "type": "false_agency",
+            "severity": "warning",
+            "subject": m.group(1),
+            "verb": m.group(2),
+            "position": m.start(),
+            "description": f"'{m.group(1)} {m.group(2)}' - name the person who acted, or use 'you'",
+            "context": _snippet(text, m.start(), m.end()),
+        })
+    return findings
+
+
 def check_title_case_headings(text):
     """Flag markdown headings that use Title Case For Most Words."""
     findings = []
@@ -764,6 +946,8 @@ def audit(text, strict=False):
     findings += check_double_hyphens(prose)  # calibrated 2026-04-28 per Datapoint 9 - was check_em_dashes
     findings += check_ing_tail_phrases(prose)  # new 2026-04-28 from PDF source
     findings += check_sentence_start_additionally(prose)  # new 2026-04-28 from PDF source
+    findings += check_slop_phrases(prose)  # new 2026-08-09 from stop-slop
+    findings += check_false_agency(prose)  # new 2026-08-09 from stop-slop
     findings += check_burstiness(text)  # already strips internally
     findings += check_over_fragmentation(text)  # calibrated against HEADING test 2026-04-28
     findings += check_specificity(text)  # already strips internally
@@ -819,6 +1003,8 @@ def print_report(result, source):
                 print(f"    {RED}{t}{RESET}: {e['description']}")
             elif t == "ing_tail_phrase":
                 print(f"    {RED}{t}{RESET}: '{e['phrase']}' - {e.get('context','')}")
+            elif t == "slop_phrase":
+                print(f"    {RED}{e['category']}{RESET}: '{e['phrase']}' - {e.get('context','')}")
             else:
                 print(f"    {RED}{t}{RESET}: {e.get('description', e)}")
         if len(errors) > 20:
@@ -841,6 +1027,8 @@ def print_report(result, source):
                 print(f"    {YELLOW}hedges{RESET}: {w['description']}")
             elif t == "title_case_heading":
                 print(f"    {YELLOW}title-case{RESET}: '{w['heading']}'")
+            elif t == "false_agency":
+                print(f"    {YELLOW}false-agency{RESET}: {w['description']} - {w.get('context','')}")
             else:
                 print(f"    {YELLOW}{t}{RESET}: {w.get('description', w)}")
         if len(warnings) > 15:

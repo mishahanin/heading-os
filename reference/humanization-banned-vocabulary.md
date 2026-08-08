@@ -1,7 +1,10 @@
 # Humanisation — Banned Vocabulary Catalog
 
-> Last Updated: 2026-05-11
+> Last Updated: 2026-08-09
 > Source: `.claude/rules/humanization.md` (full vocabulary catalog extracted on 2026-05-11)
+> Founder-blog sections (false agency, throat-clearing, emphasis crutches,
+> meta-commentary, narrator distance, passive voice) adapted 2026-08-09 from
+> [hardikpandya/stop-slop](https://github.com/hardikpandya/stop-slop), MIT.
 
 Full per-category banned word and phrase lists. Consult before any outbound prose voice pass (LinkedIn, email, proposal, letter, Tribe message, knowledge note). Task 10 will trim the active rule to point readers here for the full catalog; until then, this file IS the source-of-truth for the long-tail vocabulary list.
 
@@ -170,6 +173,142 @@ Do not segregate content into formulaic sections:
 - Rigid outline structures with predictable section headings on every article
 
 Integrate challenges and significance naturally; remove explicit "Why It Matters" sections.
+
+---
+
+## The second register (added 2026-08-09)
+
+Everything above catalogues one dialect of slop: the encyclopaedic and marketing
+register (`testament`, `tapestry`, `boasts`, `evolving landscape`). The sections
+below catalogue the other one, the founder-blog register of LinkedIn and
+Substack. Misha writes in the second register far more often than the first, so
+these sections carry more weight for outbound posts, Tribe messages and letters
+than the vocabulary lists above.
+
+Mechanically checked by `check_slop_phrases` (error) and `check_false_agency`
+(warning) in `scripts/humanization-check.py`.
+
+#### Banned throat-clearing openers
+
+An announcement before the point. Cut it and state the point.
+
+- "Here's the thing:" and every "here's what / this / that / why" construction
+- "Here's the problem"
+- "The uncomfortable truth is"
+- "It turns out" (as a sentence opener; the literal idiom "if it turns out well" is fine)
+- "Let me be clear"
+- "The truth is,"
+- "I'll say it again:"
+- "I'm going to be honest"
+- "Can we talk about"
+
+#### Banned emphasis crutches
+
+These add no meaning. Delete them; let the sentence carry its own weight.
+
+- "Full stop." / "Period." (as standalone emphasis)
+- "Let that sink in."
+- "Make no mistake"
+- "This matters because"
+
+#### Banned meta-commentary
+
+The text should move, not narrate its own structure.
+
+- "Plot twist:" / "Spoiler:"
+- "You already know this, but"
+- "But that's another post"
+- "X is a feature, not a bug"
+- "The rest of this essay explains..."
+- "Let me walk you through..."
+- "In this section, we'll..." / "As we'll see..."
+- "I want to explore..."
+
+#### Banned rhetorical setups
+
+These announce insight instead of delivering it.
+
+- "What if I told you..."
+- "Think about it:"
+- "And that's okay." (unnecessary permission)
+
+#### Banned vague declaratives
+
+A sentence that announces importance without naming the thing. This is
+fundamental 1 (specificity density) stated as a phrase list.
+
+- "The reasons are structural"
+- "The implications are significant"
+- "The stakes are high"
+- "The consequences are real"
+- "This is the deepest problem"
+
+Replace with the specific reason, implication or stake. If the specific is not
+known, ask for it. A fabricated specific is worse than a missing one.
+
+#### False agency (name the actor)
+
+An inanimate subject taking a verb only a person can take. The model reaches for
+this because it avoids naming who acted.
+
+| Pattern | What actually happened |
+|---|---|
+| "a complaint becomes a fix" | Someone fixed it. |
+| "the decision emerged" | Someone decided. |
+| "the culture shifted" | People changed behaviour. |
+| "the conversation moved toward pricing" | Someone steered it there. |
+| "the data tells us" | Someone read it and drew a conclusion. |
+| "the market rewards X" | Buyers pay for X. |
+| "a bet lives or dies in days" | Someone kills the project or ships it. |
+
+Fix: name the human. "Boris rebuilt the topology on 3 July" beats "the
+architecture evolved". When no specific person fits, use "you" and put the
+reader in the seat.
+
+Verbs that read as idiom in technical prose stay allowed and are deliberately
+absent from the checker: `lives` ("the ID lives in os.environ"), `listens`,
+`chooses`, `refuses`, `says`, `knows`, `runs`, `shows`. The check flags only
+verbs that carry human intent.
+
+#### Narrator-from-a-distance
+
+Floating above the scene instead of putting the reader in it. Not mechanically
+checked; a voice-pass judgement call.
+
+- "Nobody designed this." → "You don't sit down one day and decide to..."
+- "People tend to..." → name who, or address the reader as "you"
+- "This happens because..." / "This is why..." → lecturer voice; state the cause
+
+#### Passive voice
+
+Every sentence needs a subject doing something. Passive voice hides the actor.
+Not mechanically checked: regex passive detection without a POS tagger produces
+more noise than signal. Catch it in the read-aloud pass.
+
+- "X was created" → name who created it
+- "It is believed that" → name who believes it
+- "Mistakes were made" → name who made them
+- "The decision was reached" → name who decided
+
+#### Adopted with edits, not wholesale
+
+Four stop-slop rules were examined and rejected against our own empirical basis
+(`reference/humanization-empirical-basis.md`). Do not re-import them:
+
+- **Ban all em-dashes.** Datapoints 7 and 8 show em-dash to hyphen conversion
+  makes sub-15% prose score worse. Misha's own standing preference already
+  covers this better: restructure the sentence, never substitute a hyphen.
+- **Kill every adverb.** No detector support, and it walks straight into the
+  vacuum trap (removal without replacement).
+- **Replace three-item lists with two.** Our falsifications found three-fold
+  lists are not a consistent AI tell on their own.
+- **Never start a sentence with a Wh- word.** Mechanical, and it mangles
+  technical prose.
+
+stop-slop also has no calibration gate. It applies its rules to any text
+unconditionally, which would regress prose already passing a detector. Step 0 of
+`.claude/rules/humanization.md` governs; these lists inform the rewrite, they
+never authorise one.
 <!-- audit-skip-end -->
 
 #### Empty structural patterns (CONDITIONAL on vacuous Y)

@@ -106,7 +106,7 @@ def _domain_of(addr: str) -> str:
 
     Examples::
 
-        _domain_of("charlie@example.com") -> "northgate.com"
+        _domain_of("charlie@northgate.com") -> "northgate.com"
         _domain_of("no-at-sign")             -> ""
         _domain_of("")                        -> ""
     """

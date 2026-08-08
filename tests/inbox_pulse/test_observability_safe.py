@@ -115,7 +115,7 @@ def test_metadata_only_keys_captured(monkeypatch: pytest.MonkeyPatch) -> None:
             return {"tier": "CRITICAL", "confidence": 0.95}
 
         result = classify(
-            email_addr="charlie@example.com",
+            email_addr="charlie@northgate.com",
             subject="Re: deal",
             body="Long body here...",
         )
@@ -146,7 +146,7 @@ def test_metadata_only_keys_captured(monkeypatch: pytest.MonkeyPatch) -> None:
     all_meta_json = json.dumps(captured_metadata)
     assert "Long body here..." not in all_meta_json, "Body text leaked into metadata"
     assert "Re: deal" not in all_meta_json, "Subject text leaked into metadata"
-    assert "charlie@example.com" not in all_meta_json, "Full sender address leaked"
+    assert "charlie@northgate.com" not in all_meta_json, "Full sender address leaked"
 
 
 # ---------------------------------------------------------------------------

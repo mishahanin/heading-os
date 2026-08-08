@@ -225,7 +225,7 @@ def test_is_breakthrough_sender_glob_match(tmp_path):
     eng = RulesEngine(yaml_path=p)
     assert eng.is_breakthrough_sender("alice@31c.io") is True
     assert eng.is_breakthrough_sender("partner@northgate.com") is True
-    assert eng.is_breakthrough_sender("charlie@example.com") is True
+    assert eng.is_breakthrough_sender("charlie@northgate.com") is True
     assert eng.is_breakthrough_sender("unknown@other.com") is False
 
 

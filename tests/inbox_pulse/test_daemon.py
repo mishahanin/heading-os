@@ -185,7 +185,7 @@ def test_domain_of_extracts_domain_part():
     """_domain_of correctly extracts domain or returns empty string."""
     mod = _import_daemon()
 
-    assert mod._domain_of("charlie@example.com") == "northgate.com"
+    assert mod._domain_of("charlie@northgate.com") == "northgate.com"
     assert mod._domain_of("no-at-sign") == ""
     assert mod._domain_of("") == ""
     assert mod._domain_of("user@sub.example.org") == "sub.example.org"

@@ -59,9 +59,12 @@ honest. Two conventions keep it so:
   its one-line hook in the same change, so pointers never silently diverge.
 
 `scripts/memory-hygiene.py` enforces the volatile-hook convention mechanically
-(advisory). Prune and consolidate the index actively (`/memory-hygiene`, `/dream`,
-`expires:`), so "remember everything" stays a lean index plus disciplined
-retrieval, not a warehouse held resident.
+(advisory). Consolidate the index actively (`/memory-hygiene`, `/dream`) so
+"remember everything" stays a lean index plus disciplined retrieval, not a
+warehouse held resident. Consolidation means merging near-duplicates into one
+survivor that carries both facts, and keeping hooks short. It never means
+removing a fact: auto-memory is never pruned, and deletion happens only on an
+explicit instruction from the operator.
 
 ## How this composes
 

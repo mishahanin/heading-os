@@ -36,22 +36,6 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# Google API names are bound lazily (F-2.1: import stays pure).
-Request = Credentials = InstalledAppFlow = build = None
-
-
-def _ensure_google():
-    global Request, Credentials, InstalledAppFlow, build
-    if build is not None:
-        return
-    from scripts.utils.optdeps import require
-    require("google", extra="ai-extra")
-    from google.auth.transport.requests import Request
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    from googleapiclient.discovery import build
-
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -62,40 +46,21 @@ from scripts.utils.workspace import load_env  # noqa: E402
 
 load_env(PROJECT_ROOT)
 
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.modify",
-]
-CREDS_PATH = os.getenv(
-    "GOOGLE_GMAIL_CREDENTIALS_PATH",
-    os.getenv(
-        "GOOGLE_CONTACTS_CREDENTIALS_PATH",
-        str(PROJECT_ROOT / ".sessions" / "google" / "credentials.json"),
-    ),
-)
-TOKEN_PATH = str(PROJECT_ROOT / ".sessions" / "google" / "gmail_token.json")
-
 
 def get_service():
-    _ensure_google()
-    creds = None
-    if os.path.exists(TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists(CREDS_PATH):
-                print(f"ERROR: credentials.json not found at {CREDS_PATH}")
-                print("Place your Google OAuth credentials there or set GOOGLE_GMAIL_CREDENTIALS_PATH in .env")
-                sys.exit(1)
-            flow = InstalledAppFlow.from_client_secrets_file(CREDS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        os.makedirs(os.path.dirname(TOKEN_PATH), mode=0o700, exist_ok=True)
-        with open(TOKEN_PATH, "w") as f:
-            f.write(creds.to_json())
-        os.chmod(TOKEN_PATH, 0o600)
-    return build("gmail", "v1", credentials=creds)
+    """Authorized Gmail service.
+
+    The OAuth handling lives in `scripts/utils/gmail_auth`, shared with
+    `scripts/gmail-send.py`, so one token definition serves both. The import
+    stays inside the function to keep module import pure (F-2.1).
+    """
+    from scripts.utils.gmail_auth import get_service as _get_service
+
+    try:
+        return _get_service()
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
 
 
 def get_header(headers, name):

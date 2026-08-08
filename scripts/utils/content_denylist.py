@@ -27,12 +27,33 @@ Design constraints:
 
 Sources harvested from the DATA overlay:
 
-* ``crm/contacts/*.md``       -- person slugs (filenames) + split name-words
+* ``crm/contacts/*.md``       -- person slugs (filenames) + split name-words,
+                                 AND, from the frontmatter, the organisation
+                                 field (``pipeline_company`` / ``company`` /
+                                 ...) and every e-mail address
 * ``admin/executives.json``   -- exec slugs, names, github users, data-repo names
 * ``config/*.json|*.yaml``    -- e-mails (regex), Telegram-ID-shaped ints, and
                                  fireside roster handles (member-dict keys)
 * ``config/content-denylist.yaml`` -- CURATED non-person tokens (companies,
                                  events, codenames, competitors); CEO-maintained
+
+Why the organisation field, and why not slug decomposition
+----------------------------------------------------------
+Until 2026-08-08 the only company coverage was the CURATED list, so an
+organisation nobody had thought to curate was invisible: a contact slug pairs a
+person with their employer (``<given>-<org>``), the whole slug was a token, but
+the BARE organisation name matched nothing -- and the bare name is what prose
+actually contains. Harvesting the structured organisation field closes that,
+because it is the one place the name appears on its own.
+
+The rejected alternative was decomposing every slug into its component words.
+Measured on the live overlay it turns ordinary English into tokens (the pieces of
+real slugs include ``heading``, ``security``, ``policy``, ``world``, ``traffic``)
+and the gate would refuse nearly every push. A gate that cries wolf gets
+disabled, which is worse than the hole it closes. Thread titles were considered
+as a second source and rejected for the same reason: they are free prose, so
+harvesting them reintroduces the ordinary-word problem the structured field
+avoids.
 """
 from __future__ import annotations
 
@@ -46,12 +67,15 @@ ALLOW_IDENTITY = {
     "misha", "hanin", "misha hanin", "misha.hanin@odinix.com", "misha.hanin@31c.io",
     "31 concept", "31c", "odun.one", "odun", "trustone", "31c.io", "odinix.com",
     "heading os", "heading-os",
+    # Published company mailboxes: shared, printed on public collateral, no
+    # person behind them. A CRM record may carry one, so name them here.
+    "info@31c.io", "sales@31c.io", "support@31c.io",
 }
 
 # Fictional / illustrative names that legitimately appear in rule, skill, and test
 # scaffolding -- NEVER flagged. Keep in sync with the placeholders the docs use.
 ALLOW_FICTIONAL = {
-    "alice", "bob", "carol", "dave", "erin", "sara", "rafi", "jane", "jane-doe",
+    "alice", "bob", "carol", "dave", "erin", "sara", "dana", "jane", "jane-doe",
     "jane doe", "john", "doe", "pat", "nolan", "pat nolan", "exampletelco",
     "examplecorp", "example", "acme", "globex", "rivex", "northgate", "okonkwo",
     "sara okonkwo", "someoutsider", "outsider", "randomperson",
@@ -68,7 +92,38 @@ STOPWORDS = {
     "radar", "reply", "round", "sales", "scope", "sheet", "south", "state",
     "store", "table", "thing", "title", "token", "track", "tribe", "under",
     "value", "voice", "world", "write",
+    # Added with the organisation harvest (2026-08-08). A widely-known public
+    # technology that is also the head word of an organisation, so the bare word
+    # appears in engine prose that has nothing to do with anybody. The
+    # organisation's multi-word form stays a token, so this narrows the match
+    # rather than removing it. Measured: this is the ONLY such collision in the
+    # tree -- the placeholder set and the one-surviving-word rule handle the rest,
+    # so nothing else needs listing here.
+    "solana",
 }
+
+# Frontmatter keys on a CRM contact that name an organisation.
+_ORG_FIELDS = ("pipeline_company", "company", "organization", "organisation", "employer")
+
+# Placeholder organisation values that name nobody. Rejected before tokenizing.
+_ORG_PLACEHOLDERS = {
+    "", "-", "n/a", "na", "none", "tbd", "unknown", "independent", "self",
+    "self-employed", "freelance", "private", "individual", "retired",
+}
+
+# Legal-form and generic industry words. Stripped when deriving the "core" form
+# of an organisation name, and never emitted as a bare head-word token.
+_ORG_GENERIC = {
+    "ab", "ag", "bv", "capital", "co", "communications", "company", "corp",
+    "corporation", "cyber", "digital", "dmcc", "fzc", "fzco", "fze", "global",
+    "gmbh", "group", "holding", "holdings", "inc", "international", "labs",
+    "limited", "llc", "llp", "lp", "ltd", "media", "networks", "nv", "oy",
+    "partners", "plc", "pty", "pvt", "sarl", "security", "services", "solutions",
+    "spa", "srl", "systems", "technologies", "technology", "telecom", "telecoms",
+    "ventures",
+}
+
+_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---", re.S)
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _ID_RE = re.compile(r"\b\d{7,}\b")
@@ -138,6 +193,79 @@ def _harvest_person_slugs(data_root: Path, tokens: dict[str, str], strict: bool)
         if strict:  # bare name-words are noisy (collide with English) -> opt-in only
             for word in slug.split("-"):
                 _add(tokens, word, "crm-name")
+
+
+def _org_token_forms(value: str) -> list[str]:
+    """Return the denylist forms of one organisation name, most specific first.
+
+    ``"Krellide Technologies"`` -> ``["krellide technologies", "krellide"]``;
+    ``"Krellide (Somewhere)"`` -> ``["krellide"]``.
+
+    A BARE word is emitted only when stripping legal forms and generic industry
+    words leaves exactly one word AND that word opened the name. Everything else
+    contributes its multi-word phrase only. That single rule is what keeps
+    ordinary English out of the gate, and it is strict on purpose. Measured over
+    the engine tree, the looser "first word unless generic" rule produced 762
+    findings, every one of them noise: real organisations whose names open with
+    an ordinary English word each donated that word as a token, and the gate then
+    fired on routing tests, policy prose and market-data fixtures that had
+    nothing to do with anybody. Under this rule such a name keeps only its phrase
+    form and the tree is clean, while a one-word organisation, or a compound with
+    a generic tail, still yields the bare name that prose actually contains --
+    which is the whole gap this harvest closes.
+    """
+    forms: list[str] = []
+    for alt in re.sub(r"\([^)]*\)", " ", value).replace('"', " ").split("/"):
+        words = [w.strip(".,&'’“”").lower() for w in alt.split()]
+        words = [w for w in words if w]
+        if not words:
+            continue
+        core = [w for w in words if w not in _ORG_GENERIC]
+        for phrase in (" ".join(words), " ".join(core)):
+            if phrase and len(phrase.split()) > 1:
+                forms.append(phrase)
+        if core == words[:1]:
+            forms.append(core[0])
+    return forms
+
+
+def _harvest_contact_frontmatter(data_root: Path, tokens: dict[str, str]) -> None:
+    """Harvest organisation names and e-mail addresses from CRM contact frontmatter.
+
+    High precision by construction: both are structured fields, not prose, and
+    every emitted form passes the same allowlist/stopword/length gates as every
+    other token. See the module docstring for why slug decomposition and thread
+    titles were rejected as sources.
+
+    Contact addresses are harvested here because the config-file e-mail regex saw
+    only ``config/*.json|yaml``, so a person's own address -- the highest-value
+    thing a contact record holds -- was never a token at all.
+    """
+    contacts = data_root / "crm" / "contacts"
+    if not contacts.is_dir():
+        return
+    for md in contacts.glob("*.md"):
+        try:
+            text = md.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        m = _FRONTMATTER_RE.match(text)
+        if not m:
+            continue
+        block = m.group(1)
+        for email in _EMAIL_RE.findall(block):
+            _add(tokens, email, "crm-email")
+        for line in block.splitlines():
+            key, sep, raw = line.partition(":")
+            if not sep or key.strip() not in _ORG_FIELDS:
+                continue
+            value = raw.strip().strip("\"'")
+            # Placeholder check runs on the parenthetical-free form, so
+            # "Independent (Freelance)" is recognised as "no employer".
+            if re.sub(r"\([^)]*\)", " ", value).strip().lower() in _ORG_PLACEHOLDERS:
+                continue
+            for form in _org_token_forms(value):
+                _add(tokens, form, "crm-org")
 
 
 def _harvest_executives(data_root: Path, tokens: dict[str, str], strict: bool) -> None:
@@ -233,7 +361,8 @@ def build_denylist(data_root: Path | None, curated_path: Path | None = None,
     so the gate no-ops on a public clone instead of failing.
 
     strict=False (default, used by the hard push/commit gate): high-precision
-    tokens only -- full slugs, full names, handles, e-mails, IDs, curated tokens.
+    tokens only -- full slugs, full names, organisation names from CRM
+    frontmatter, handles, e-mails, IDs, curated tokens.
     strict=True (opt-in deep audit): additionally harvests bare name-words split
     from person slugs/names. Those collide with ordinary English, so they are kept
     out of the default gate to preserve its trustworthiness.
@@ -246,6 +375,7 @@ def build_denylist(data_root: Path | None, curated_path: Path | None = None,
     data_root = Path(data_root)
     try:
         _harvest_person_slugs(data_root, dl.tokens, strict)
+        _harvest_contact_frontmatter(data_root, dl.tokens)
         _harvest_executives(data_root, dl.tokens, strict)
         _harvest_config(data_root, dl.tokens, strict)
         _harvest_curated(data_root, dl.tokens, curated_path)

@@ -24,8 +24,26 @@ def _make_overlay(tmp_path: Path) -> Path:
     (data / "crm" / "contacts").mkdir(parents=True)
     (data / "admin").mkdir(parents=True)
     (data / "config").mkdir(parents=True)
-    # a real-ish CRM contact (slug = filename)
-    (data / "crm" / "contacts" / "zenon-makarios.md").write_text("# x", encoding="utf-8")
+    # a real-ish CRM contact (slug = filename) with organisation + e-mail frontmatter
+    (data / "crm" / "contacts" / "zenon-makarios.md").write_text(
+        "---\n"
+        "name: Zenon Makarios\n"
+        "email: zenon@vorlite.test\n"
+        "pipeline_company: Vorlite (Somewhere)\n"
+        "---\n\n# x", encoding="utf-8")
+    # one-word org with a generic tail -> bare head word is a token
+    (data / "crm" / "contacts" / "hale-quorix.md").write_text(
+        "---\npipeline_company: Quorix Technologies\n---\n", encoding="utf-8")
+    # org opening with an ordinary English word -> phrase only, NEVER the word
+    (data / "crm" / "contacts" / "ida-route.md").write_text(
+        "---\npipeline_company: Route Zenthar\n---\n", encoding="utf-8")
+    (data / "crm" / "contacts" / "ola-policy.md").write_text(
+        "---\npipeline_company: Policy Vorlite Experts\n---\n", encoding="utf-8")
+    # placeholder employer values name nobody
+    (data / "crm" / "contacts" / "una-none.md").write_text(
+        "---\npipeline_company: Independent (Freelance)\n---\n", encoding="utf-8")
+    (data / "crm" / "contacts" / "urs-none.md").write_text(
+        "---\npipeline_company: Unknown\n---\n", encoding="utf-8")
     # executives
     (data / "admin" / "executives.json").write_text(
         json.dumps({"executives": [
@@ -82,6 +100,45 @@ def test_word_boundary_no_substring_false_positive(tmp_path):
     # 'qorvath' must not match when glued inside a larger identifier
     assert dl.scan_text("qorvathic_helper = 1") == []
     assert dl.scan_text("xqorvath = 1") == []
+
+
+def test_flags_bare_organisation_name(tmp_path):
+    """The 2026-08-08 hole: a contact slug pairs person+employer, so the whole
+    slug was a token while the BARE organisation name -- what prose actually
+    contains -- matched nothing. Both forms must flag now."""
+    dl = build_denylist(_make_overlay(tmp_path))
+    for leaked in (
+        "Vorlite",                                   # one-word org, bare
+        "subject='31C / Quorix - technical call'",   # compound org, bare head word
+        'attendees=["someone@quorix.tech"]',         # bare name inside a domain
+        "the Route Zenthar integration",             # ordinary-word org, phrase form
+    ):
+        assert dl.scan_text(leaked), f"MISSED a real organisation in: {leaked!r}"
+
+
+def test_flags_contact_email_from_crm_frontmatter(tmp_path):
+    """A contact's own address lives in CRM frontmatter, which the config-only
+    e-mail regex never read."""
+    dl = build_denylist(_make_overlay(tmp_path))
+    assert dl.scan_text('attendees=["zenon@vorlite.test"]')
+
+
+def test_organisation_harvest_produces_no_ordinary_word_tokens(tmp_path):
+    """The harvest must never turn an organisation's ordinary-English opening
+    word into a bare token -- that is the failure mode that makes a gate cry
+    wolf until somebody disables it. Phrase-form matching is the fix, so these
+    sentences (which use the words, never the names) must stay silent."""
+    dl = build_denylist(_make_overlay(tmp_path))
+    for benign in (
+        "route the request through the policy engine",
+        "traffic experts disagree about the route",
+        "an independent reviewer, employer unknown",
+        "mobile clients follow the same policy",
+    ):
+        assert dl.scan_text(benign) == [], f"false positive on: {benign!r}"
+    for word in ("route", "policy", "traffic", "experts", "mobile",
+                 "independent", "unknown"):
+        assert word not in dl.tokens, f"ordinary word harvested as a token: {word}"
 
 
 def test_degrades_without_overlay():

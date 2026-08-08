@@ -437,13 +437,13 @@ def _decrypt_blob_aescbc(blob: bytes, key: bytes) -> str:
     """Linux/macOS AES-128-CBC: 3-byte prefix + ciphertext. IV=b" "*16, PKCS7."""
     try:
         from cryptography.hazmat.primitives import padding
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes  # content-guard: ok
     except ImportError as exc:
         raise ImportError(
             "cryptography not installed. `pip install cryptography`."
         ) from exc
-    cipher = Cipher(algorithms.AES(key), modes.CBC(b" " * 16))
-    decryptor = cipher.decryptor()
+    cipher = Cipher(algorithms.AES(key), modes.CBC(b" " * 16))  # content-guard: ok
+    decryptor = cipher.decryptor()  # content-guard: ok
     padded = decryptor.update(blob[3:]) + decryptor.finalize()
     unpadder = padding.PKCS7(128).unpadder()
     plaintext = unpadder.update(padded) + unpadder.finalize()

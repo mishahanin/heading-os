@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Canopus, the build standard</title>
+<meta name="description" content="How anything non-trivial gets built into HEADING OS. Canopus answers one">
+<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <a class="brand" href="index.html"><img class="brand-logo" src="assets/logo.webp" alt=""> HEADING OS</a>
+  <p class="tagline">Operations engine for an AI executive assistant</p>
+  <div class="search-box">
+    <input type="search" id="doc-search" class="search-input" placeholder="Search docs" autocomplete="off" spellcheck="false" aria-label="Search the documentation">
+    <div class="search-results" id="search-results" role="listbox" hidden></div>
+  </div>
+  <button class="menu-toggle" onclick="document.getElementById('navbody').classList.toggle('open')">Menu</button>
+  <div class="nav-body" id="navbody">
+    <div class="nav-group">
+      <div class="label">Get started</div>
+      <a href="index.html">Overview</a>
+      <a href="prerequisites.html">Prerequisites &amp; install</a>
+      <a href="DEPLOYMENT.html">Full deployment guide</a>
+      <a href="QUICKSTART.html">Quickstart</a>
+      <a href="PLUGINS.html">Install as a plugin</a>
+      <a href="MAKE-IT-YOURS.html">Make it yours</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Operate</div>
+      <a href="daemons.html">Daemons &amp; scheduled tasks</a>
+      <a href="memory-odin.html">Memory &amp; ODIN</a>
+      <a href="memory-lifecycle.html">Memory lifecycle</a>
+      <a href="MODELS-SETUP.html">AI models</a>
+      <a href="INTEGRATIONS-SETUP.html">Integrations &amp; credentials</a>
+      <a href="TELEGRAM-AND-ALERTS.html">Telegram &amp; alerts</a>
+      <a href="TROUBLESHOOTING.html">Troubleshooting</a>
+      <a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Skills catalog</div>
+      <a href="skills-mcp-plugins.html">Catalog index · MCP &amp; plugins</a>
+      <a href="skills-intel.html">Intel</a>
+      <a href="skills-communication.html">Communication</a>
+      <a href="skills-content-design.html">Content &amp; design</a>
+      <a href="skills-crm.html">CRM</a>
+      <a href="skills-strategy.html">Strategy</a>
+      <a href="skills-operations-daily.html">Operations: daily</a>
+      <a href="skills-operations-quality.html">Operations: review</a>
+      <a href="skills-operations-infra.html">Operations: infra</a>
+    </div>
+    <div class="nav-group">
+      <div class="label">Reference</div>
+      <a href="ARCHITECTURE.html">Architecture</a>
+      <a href="data-structure.html">Data overlay structure</a>
+      <a href="RULES-REFERENCE.html">Rules reference</a>
+      <a href="HOOKS-REFERENCE.html">Hooks reference</a>
+      <a href="CONFIGURATION.html">Configuration</a>
+      <a href="SECURITY-MODEL.html">Security model</a>
+      <a href="THREAT-MODEL.html">Threat model</a>
+      <a href="engine-data-segregation-contract.html">Engine/data contract</a>
+      <a href="EXTENDING.html">Extending the engine</a>
+      <a href="CANOPUS.html" class="active">Canopus: the build standard</a>
+      <a href="DOCS-PIPELINE.html">Docs pipeline</a>
+      <a href="GLOSSARY.html">Glossary</a>
+      <a href="RELEASE-NOTES.html">Release notes</a>
+      <a href="https://github.com/mishahanin/heading-os/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/mishahanin/heading-os">GitHub repository</a>
+    </div>
+  </div>
+</aside>
+<main class="content">
+  <h1>Canopus, the build standard</h1>
+  <p class="page-meta">How anything non-trivial gets built into HEADING OS. Canopus answers one</p>
+  <!-- version: 1.0.0 | last-updated: 2026-08-09 -->
+
+<p>How anything non-trivial gets built into HEADING OS. Canopus answers one
+governance question: <strong>how do you let an AI build real capability into a system
+you depend on, without ever having to take its word for it?</strong></p>
+<p>It is a named, numbered, repeatable procedure. Every non-trivial change to the
+engine goes through it. Typo fixes and configuration edits do not, deliberately,
+because a process everybody skips is worse than no process.</p>
+<p>Two of its seven steps belong to the operator. The assistant is forbidden from
+taking either on their behalf, because a standard whose approvals the assistant
+can grant itself is a standard with zero approvals.</p>
+<p>The steps are defined as data in <code>scripts/utils/canopus_steps.py</code>, which is their
+only definition. This page and the <code>/canopus</code> skill both summarise that module;
+neither may renumber it.</p>
+<div class="admonition warning">
+<p class="admonition-title">The one thing Canopus exists to prevent</p>
+<p>A test too weak to decide anything, passing as a test that decided
+something. Across 62 recorded slices, a test was never once weakened after
+the fact to make a failure go away. It was born too weak thirty times. The
+green light to distrust is the one that no wrong version of the code was
+ever made to fail.</p>
+</div>
+<h2 id="the-four-acts">The four acts</h2>
+<table>
+<thead>
+<tr>
+<th>Act</th>
+<th>Steps</th>
+<th>The point of it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1. Decide</strong></td>
+<td>1 to 4</td>
+<td>Nothing is built yet</td>
+</tr>
+<tr>
+<td><strong>2. Build</strong></td>
+<td>5</td>
+<td>The implementer is not the planner</td>
+</tr>
+<tr>
+<td><strong>3. Check</strong></td>
+<td>6</td>
+<td>Green is not the same as right</td>
+</tr>
+<tr>
+<td><strong>4. Production</strong></td>
+<td>7</td>
+<td>The undo is named before it is needed</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-seven-steps">The seven steps</h2>
+<p><strong>1. Define the Value</strong> <em>(Act 1)</em></p>
+<p>One sentence saying what would be worth having, in business terms. Not &ldquo;add a
+module&rdquo;, but &ldquo;a weekly digest that tells me which suppliers slipped this week, so
+I stop finding out at the quarterly review&rdquo;. It goes into the slice record
+verbatim, and step 6 measures the built thing against it.</p>
+<p><em>What it buys:</em> a stated purpose you can hold the finished thing against. Half
+the failures later in this list turn out to be a good build of the wrong idea.</p>
+<p><strong>2. Brainstorm the scope</strong> <em>(Act 1)</em></p>
+<p><code>superpowers:brainstorming</code>, until a scope document says what should be built
+rather than how to build what was asked. What is in, what is deliberately out,
+what the alternatives were, and why they were rejected. The rejected options are
+written down, not discarded, so nobody re-litigates them in three months.</p>
+<p><em>What it buys:</em> the argument happens while changing your mind is still free.</p>
+<p><strong>3. Write the plan</strong> <em>(Act 1)</em></p>
+<p><code>superpowers:writing-plans</code>. The plan states three to five success criteria, each
+written so that a single test can decide it, in the form <em>when this happens, the
+system shall do that</em>. The criteria are not brainstormed from what came to mind:
+they come from a partition of the input domain, one row per value class with the
+awkward edges included, and the name of the test that decides each.</p>
+<p>The criteria then become <strong>real test files</strong> rather than a description of them,
+written before a single line of the implementation exists. Those files are the
+contract. They fail, correctly, because there is nothing yet to make them pass.</p>
+<p>The plan carries a byte budget: 16 KiB warn, 24 KiB hard, because a plan nobody
+finishes reading is a plan whose decisive paragraph nobody read. Both numbers are
+a proposal with operator override, never a gate; nothing refuses a commit over
+them. They were set from 99 real plans (median 23,704 bytes), and 51 of the 99
+would pass the hard number unchanged.</p>
+<p><em>What it buys:</em> the definition of &ldquo;done&rdquo; is fixed in writing, in executable form,
+before anybody is invested in the work.</p>
+<p><strong>4. Scrutinize the plan, apply every finding</strong> <em>(Act 1, the operator&rsquo;s)</em></p>
+<p>An adversarial review runs against the plan, and every finding is applied rather
+than triaged. No code exists yet, so this is the cheapest moment to change
+anything. Then the operator reads it and commits.</p>
+<p>That commit <strong>is</strong> the approval. It captures the plan and the RED contract
+together at one point in time, and that sha is the freeze.</p>
+<p><em>What it buys:</em> a fixed reference point. Anyone can later ask, mechanically,
+whether the delivered work matches what was approved.</p>
+<p><strong>5. Build it, under separation</strong> <em>(Act 2)</em></p>
+<p><code>superpowers:subagent-driven-development</code> dispatches a fresh implementer per task
+plus a reviewer who did not write the code. The session that wrote the plan does
+not implement it. This is not ceremony: an author reviewing their own work
+reproduces their own assumptions with the same weights and reaches the same
+conclusions. Every commit descends from the approval sha.</p>
+<p><em>What it buys:</em> the entity that decides what &ldquo;done&rdquo; means is never the entity
+that declares it done.</p>
+<p><strong>6. Scrutinize the built thing, apply every finding</strong> <em>(Act 3)</em></p>
+<p>Relentless, bounded, and every finding is applied. Anything still open at the end
+goes to the operator rather than being quietly closed. Each finding carries an
+origin, and the origin decides where it goes:</p>
+<ul>
+<li><strong>Code origin.</strong> The build is wrong. Fix it against the existing contract.</li>
+<li><strong>Contract origin.</strong> The test was too weak. Return to step 3 and produce a NEW
+  contract with a new approval, never a patch that leaves the old one green.</li>
+<li><strong>Value origin.</strong> The finished thing reveals that step 1 was wrong. That is the
+  operator&rsquo;s call, because step 1 is where they said what would be worth having.</li>
+</ul>
+<p><em>What it buys:</em> a weak test cannot survive its own slice. Naming the origin is
+what forces it back to step 3 instead of being smoothed over.</p>
+<p><strong>7. Production</strong> <em>(Act 4, the operator&rsquo;s)</em></p>
+<p>The operator ships, on the evidence rather than on a summary, including what the
+contract does NOT cover. Then the slice writes one committed record under
+<code>records/slices/</code>: the value, the approval it descends from, what the reviews
+found, what was fixed, and, in plain words, how to undo it. Which commit to
+revert, which baseline to restore, what to re-run.</p>
+<p><em>What it buys:</em> an audit trail per change, and a rollback path that exists before
+the emergency.</p>
+<h2 id="what-the-machine-can-see-and-what-it-cannot">What the machine can see, and what it cannot</h2>
+<p>Two of the seven steps leave a durable trace in this repository: <strong>step 4</strong> (the
+approval commit and the contract files it carries) and <strong>step 7</strong> (the record
+under <code>records/slices/</code>). The other five are human and agent work that no file
+here records. The scope document and the plan live in the operator&rsquo;s private
+overlay and are referenced by digest, never by path, because this repository is
+public.</p>
+<p><code>canopus_steps.py</code> carries a <code>machine_visible</code> flag per step so a reader of the
+agenda can tell the two steps this repository can evidence from the five it
+cannot.</p>
+<h2 id="the-approval-is-a-commit-not-a-lock-file">The approval is a commit, not a lock file</h2>
+<p><code>git show &lt;sha&gt;:&lt;path&gt;</code> reads the frozen bytes. <code>git diff</code> answers whether the
+contract moved. <code>git merge-base --is-ancestor</code> answers whether the implementation
+descends from the approval. Nothing on the machine holds those bytes down, and
+this page does not claim otherwise.</p>
+<h2 id="three-instruments">Three instruments</h2>
+<h3 id="note-what-actually-happened-here"><code>note</code> — what actually happened here</h3>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>note<span class="w"> </span>&lt;slug&gt;<span class="w"> </span>--value<span class="w"> </span><span class="s2">&quot;&lt;one sentence&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--approval-sha<span class="w"> </span>&lt;sha&gt;<span class="w"> </span>--contract<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--plan-digest<span class="w"> </span>sha256:&lt;...&gt;<span class="w"> </span>--scrutinize-plan<span class="w"> </span><span class="s2">&quot;&lt;step 4 findings, all applied&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--scrutinize-built<span class="w"> </span><span class="s2">&quot;&lt;step 6 findings, all applied&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--undo<span class="w"> </span><span class="s2">&quot;revert &lt;sha&gt;, restore &lt;baseline&gt;, re-run &lt;cmd&gt;&quot;</span>
+</code></pre></div>
+<p>Every flag is required by the record&rsquo;s schema, which refuses an incomplete note
+rather than writing a half-formed one, so the archive cannot fill with entries
+that look complete and say nothing. A slice whose contract has been retired into
+the ordinary suite adds <code>--retired-sha</code> and <code>--promoted-to</code>, and the schema
+refuses the first without the second: a retirement pointing nowhere cannot be
+told apart from a contract that was simply dropped.</p>
+<h3 id="check-did-the-work-honour-the-approval"><code>check</code> — did the work honour the approval</h3>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>check<span class="w"> </span>--range<span class="w"> </span>origin/main..HEAD
+</code></pre></div>
+<p><code>scripts/canopus_check.py</code> reads the records back over the repository they are
+committed to, in four clauses:</p>
+<table>
+<thead>
+<tr>
+<th>Clause</th>
+<th>The question</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>C1</strong></td>
+<td>Did the contract move between its approval and the end of its life?</td>
+</tr>
+<tr>
+<td><strong>C2</strong></td>
+<td>Does HEAD descend from the approval commit?</td>
+</tr>
+<tr>
+<td><strong>C3</strong></td>
+<td>Was the contract genuinely RED at the approval sha, run in a worktree checked out there?</td>
+</tr>
+<tr>
+<td><strong>C4</strong></td>
+<td>Is the target green at HEAD <strong>and does the junit report show it RAN</strong>?</td>
+</tr>
+</tbody>
+</table>
+<p>C4 is written that way because collected is not run, and an all-skipped file
+exits 0.</p>
+<p><strong>No clause reads a timestamp.</strong> <code>GIT_COMMITTER_DATE</code> and <code>GIT_AUTHOR_DATE</code> are
+environment variables, and on 2026-08-06 two of them put an implementation commit
+nine hours before the approval it descends from. Order comes from lineage.</p>
+<p><code>check</code> is a passthrough to <code>canopus_check.py</code>, which is the module CI runs
+directly, so the local reading and the CI reading are the same reading.</p>
+<h3 id="probe-is-this-test-worth-anything"><code>probe</code> — is this test worth anything</h3>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/
+python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>--after-build<span class="w"> </span>tests/test_&lt;subject&gt;.py
+</code></pre></div>
+<p><code>probe</code> measures whether a contract&rsquo;s redness means anything. It null-stubs the
+missing modules and runs the contract twice, each stub carrying different values,
+so a test that never FAILS under either run is vacuous. Passing, skipping and
+erroring all leave a test unproved; only a failure shows it read the value. It
+also runs three deliberately wrong implementations and prints what each one got
+past. The result goes in front of the operator before they approve.</p>
+<p>A skip-family marker (<code>skip</code>, <code>skipif</code>, <code>xfail</code>) that states no reason refuses
+the contract, whether it sits on a test, on a class, or on <code>pytestmark</code>. A
+<code>pytest.skip()</code> inside a test body and a module-scope <code>pytest.importorskip</code> are
+not read, so they remain the reviewer&rsquo;s to catch.</p>
+<p><code>probe --after-build</code> asks the same question at the other end of a slice&rsquo;s life.
+Once a contract is retired into the ordinary suite, nothing re-asks whether the
+tests guarding that code would notice if it were wrong; this flag puts the same
+three wrong implementations in front of shipped code and names every test that
+stayed green under all of them. The page names which modules were actually
+replaced and which were not, because a name that survived a module nothing stood
+in for is not evidence about it. Skipped tests are named separately: a test that
+never ran neither survived a wrong implementation nor went red under one.</p>
+<h2 id="honest-limits">Honest limits</h2>
+<p><strong><code>check</code> reports; it does not block.</strong> A CI step in the <code>sovereignty guards</code> job
+runs <code>canopus_check.py</code> on every push. It reports a broken clause. It does not
+refuse one, because <code>enforce_admins</code> is false on the only push path in use.
+Nothing on the machine prevents a test contract from being edited by whoever is
+implementing against it. Do not describe this as prevention.</p>
+<p><strong><code>probe --after-build</code> is uncalibrated.</strong> It reports and never refuses: exit 0
+whether it names twenty survivors or none, exit 1 only when no reading could be
+made at all. Nobody has calibrated that reading, so it is not wired into a gate
+and must not be.</p>
+<h2 id="why-seven-and-not-thirteen">Why seven, and not thirteen</h2>
+<p>An earlier Canopus had thirteen numbered moments and a large amount of custom
+machinery to enforce them: file locks, freeze manifests, approval gates written
+in code. Measurement retired most of it. <strong>93 percent of that hand-built
+prevention surface could be defeated by a single shell command</strong>, which meant it
+stopped the careless hand and not the determined one, while charging every honest
+change a heavy toll.</p>
+<p>The thirteen were four acts of ceremony around two things git already provides.
+The freeze is a commit. The separation is a dispatch. Everything the retired
+agenda numbered around those two facts was removed on 2026-08-06.</p>
+<p>Thirteen became seven. Enforcement now rests on tools that already exist and are
+already trusted: version control for the freeze, a separate reviewer for the
+separation, and the ordinary test suite for the verdict. Less code to maintain,
+less ceremony per change, and the guarantees that were real are still there.</p>
+<div class="admonition note">
+<p class="admonition-title">Four rules the measurements paid for</p>
+<p><strong>1. Order comes from lineage, never from clocks.</strong> A timestamp is an
+environment variable anyone can set.</p>
+<p><strong>2. The verdict is the suite actually run, not a shortcut.</strong> A deletion
+experiment produced 586 failing tests across 28 files while all three fast
+shortcuts reported success.</p>
+<p><strong>3. Every check is broken on purpose before it is trusted.</strong> An uncalibrated
+check is worse than no check, because it manufactures confidence.</p>
+<p><strong>4. Prove a safeguard is alive, never infer it from silence.</strong> 24 broad
+error handlers were found wrapped around calls into this system, 10 of them
+invisibly. Silence is not evidence.</p>
+</div>
+<h2 id="a-worked-example-end-to-end">A worked example, end to end</h2>
+<p><strong>The ask:</strong> &ldquo;I want a Monday morning digest of which suppliers slipped last
+week.&rdquo;</p>
+<p><strong>Step 1.</strong> Value: <em>a weekly supplier slippage digest, delivered before the
+Monday leadership call, so a slip is discussed in the week it happens rather than
+at quarter end.</em></p>
+<p><strong>Step 2.</strong> Scope: reads the supplier records and the delivery log. Sends to one
+channel. Explicitly out of scope: chasing the supplier, changing any record,
+forecasting.</p>
+<p><strong>Step 3.</strong> Criteria, one test each. When a delivery date passes with no receipt
+logged, the digest shall name that supplier. When nothing slipped, the digest
+shall say so in one line rather than staying silent. When the delivery log cannot
+be read, the digest shall report the failure and shall not send an empty all
+clear. The input partition covers the awkward cases: a supplier with no
+deliveries at all, a delivery logged late but on time, a date exactly on the
+boundary.</p>
+<p><strong>Step 4.</strong> The operator reads the plan, sees that the third criterion is the one
+that saves them from a false all clear, and commits.</p>
+<p><strong>Step 5.</strong> A separate builder implements it. A separate reviewer checks it.</p>
+<p><strong>Step 6.</strong> The review finds that an unreadable log produced an empty digest that
+read as good news. That is a code-origin finding against a criterion that already
+existed, so it is fixed, and the test that always covered it now genuinely bites.</p>
+<p><strong>Step 7.</strong> Ships. The record names the undo in one line: turn off the schedule,
+restore the previous version, run the test suite.</p>
+<h2 id="why-an-executive-should-care">Why an executive should care</h2>
+<table>
+<thead>
+<tr>
+<th>Canopus property</th>
+<th>What it means for the business</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Two human approvals, never delegated</td>
+<td>Nothing enters the system you depend on without you agreeing twice, once to the intent and once to the result.</td>
+</tr>
+<tr>
+<td>Definition of done fixed in advance</td>
+<td>No moving goalposts, in either direction. You cannot be sold a smaller success than the one you approved.</td>
+</tr>
+<tr>
+<td>Builder separated from planner</td>
+<td>The self-assessment problem is removed by construction rather than by good intentions.</td>
+</tr>
+<tr>
+<td>Test strength measured, not assumed</td>
+<td>A green light means something. That is the entire point of the standard.</td>
+</tr>
+<tr>
+<td>Undo written before it is needed</td>
+<td>Recovery is a one-line instruction on file, not an improvisation under pressure.</td>
+</tr>
+<tr>
+<td>One record per change</td>
+<td>A complete, readable audit trail of every meaningful change, with the reasoning attached.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="where-to-go-next">Where to go next</h2>
+<ul>
+<li><strong><a href="EXTENDING.html">Extending the engine</a></strong> — the gates every change runs before
+  &ldquo;done&rdquo;, and where Canopus sits among them.</li>
+<li><strong><a href="RELEASE-NOTES.html">Release notes</a></strong> — section 2 tells the same story for a
+  reader who is not going to run any of these commands.</li>
+<li><code>scripts/utils/canopus_steps.py</code> — the steps as data, the only definition.</li>
+<li><code>records/slices/</code> — the committed record of every slice that has shipped.</li>
+</ul>
+  <footer class="foot">
+    <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
+  </footer>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

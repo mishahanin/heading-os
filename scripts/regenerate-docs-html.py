@@ -262,6 +262,7 @@ SITE_NAV_GROUPS = [
         ("THREAT-MODEL.html", "Threat model"),
         ("engine-data-segregation-contract.html", "Engine/data contract"),
         ("EXTENDING.html", "Extending the engine"),
+        ("CANOPUS.html", "Canopus: the build standard"),
         ("DOCS-PIPELINE.html", "Docs pipeline"),
         ("GLOSSARY.html", "Glossary"),
         ("RELEASE-NOTES.html", "Release notes"),

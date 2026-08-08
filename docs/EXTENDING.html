@@ -65,6 +65,7 @@
       <a href="THREAT-MODEL.html">Threat model</a>
       <a href="engine-data-segregation-contract.html">Engine/data contract</a>
       <a href="EXTENDING.html" class="active">Extending the engine</a>
+      <a href="CANOPUS.html">Canopus: the build standard</a>
       <a href="DOCS-PIPELINE.html">Docs pipeline</a>
       <a href="GLOSSARY.html">Glossary</a>
       <a href="RELEASE-NOTES.html">Release notes</a>
@@ -212,70 +213,30 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
   flags on a pull request.</li>
 </ul>
 <h3 id="the-slice-standard">The slice standard</h3>
-<p>Non-trivial work runs on the seven numbered steps in
-<code>scripts/utils/canopus_steps.py</code>, which is the only definition of them; the
-<code>/canopus</code> skill summarises it and may never renumber it. Two of the seven are
-the operator&rsquo;s: step 4, where he commits the plan and the RED test contract, and
-step 7, where the work ships.</p>
-<p>The approval is a COMMIT, not a lock file. <code>git show &lt;sha&gt;:&lt;path&gt;</code> reads the
-frozen bytes, <code>git diff</code> answers whether the contract moved, and <code>git merge-base
---is-ancestor</code> answers whether the implementation descends from the approval.
-Nothing on this machine holds those bytes down.</p>
-<p>When the slice ships, it writes one committed markdown record per slice under
-<code>records/slices/</code>, engine-relative paths only:</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>note<span class="w"> </span>&lt;slug&gt;<span class="w"> </span>--value<span class="w"> </span><span class="s2">&quot;&lt;one sentence&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--approval-sha<span class="w"> </span>&lt;sha&gt;<span class="w"> </span>--contract<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--plan-digest<span class="w"> </span>sha256:&lt;...&gt;<span class="w"> </span>--scrutinize-plan<span class="w"> </span><span class="s2">&quot;&lt;step 4 findings, all applied&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--scrutinize-built<span class="w"> </span><span class="s2">&quot;&lt;step 6 findings, all applied&gt;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--undo<span class="w"> </span><span class="s2">&quot;revert &lt;sha&gt;, restore &lt;baseline&gt;, re-run &lt;cmd&gt;&quot;</span>
+<p>Non-trivial work runs on Canopus, the build standard: seven numbered steps, two
+of them the operator&rsquo;s own approval moments, and three instruments that measure
+whether the approval meant anything. <strong><a href="CANOPUS.html">Canopus, the build standard</a></strong>
+is the full page: the steps, the four <code>check</code> clauses, what <code>probe</code> reads, and
+the two places the standard reports rather than blocks.</p>
+<p>One criterion is worth carrying here rather than following a link for, because
+it is the one a builder acts on: <code>probe</code> runs the contract twice against
+null-stubbed modules carrying different values, and a test that never FAILS
+under either run is vacuous. Passing, skipping and erroring all leave a test
+unproved; only a failure shows it read the value.</p>
+<p>The three commands you will actually type while contributing:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/<span class="w">   </span><span class="c1"># before approval</span>
+python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>check<span class="w"> </span>--range<span class="w"> </span>origin/main..HEAD<span class="w">       </span><span class="c1"># after the build</span>
+python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>note<span class="w"> </span>&lt;slug&gt;<span class="w"> </span>...<span class="w">                       </span><span class="c1"># when it ships</span>
 </code></pre></div>
-<p>Every flag there is required by the record&rsquo;s schema, which refuses an incomplete
-note rather than writing one. A slice whose contract has been retired into the
-ordinary suite adds <code>--retired-sha</code> and <code>--promoted-to</code>, and the schema refuses
-the first without the second: a retirement pointing nowhere cannot be told apart
-from a contract that was simply dropped.</p>
-<p><code>scripts/canopus_check.py</code> reads those records back over the repository they are
-committed to, in four clauses. C1: the contract did not move between its approval
-and the end of its life. C2: HEAD descends from the approval commit. C3: the
-contract was RED at the approval sha, run in a worktree checked out there. C4:
-the target is green at HEAD <strong>and the junit report shows it RAN</strong>, because
-collected is not run and an all-skipped file exits 0. No clause reads a
-timestamp: <code>GIT_COMMITTER_DATE</code> and <code>GIT_AUTHOR_DATE</code> are environment variables,
-and on 2026-08-06 two of them put an implementation commit nine hours before the
-approval it descends from.</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>check<span class="w"> </span>--range<span class="w"> </span>origin/main..HEAD
-python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/
-python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>--after-build<span class="w"> </span>tests/test_&lt;subject&gt;.py
-</code></pre></div>
-<p><code>check</code> is a passthrough to <code>scripts/canopus_check.py</code>, which is the module CI
-runs directly, so the local reading and the CI reading are the same reading.</p>
-<p><code>probe</code> measures whether a contract&rsquo;s redness means anything: it null-stubs the
-missing modules and runs the contract twice, each stub carrying different values,
-so a test that never FAILS under either run is vacuous. Passing, skipping and
-erroring all leave a test unproved; only a failure shows it read the value. It
-also runs three wrong implementations that exist and prints what each took of the
-red set. A skip-family marker (<code>skip</code>, <code>skipif</code>, <code>xfail</code>) that states no reason
-refuses the contract, whether it sits on a test, on a class, or on <code>pytestmark</code>;
-a <code>pytest.skip()</code> inside a test body and a module-scope <code>pytest.importorskip</code>
-are not read, so they remain the reviewer&rsquo;s to catch.</p>
-<p><code>probe --after-build &lt;test paths&gt;</code> asks the same question at the other end of a
-slice&rsquo;s life. Once a contract is retired into the ordinary suite, nothing
-re-asks whether the tests guarding that code would notice if it were wrong; this
-flag puts the same three wrong implementations in front of shipped code and
-names every test that stayed green under all of them. The page names which
-modules were actually replaced and which were not, because a name that survived
-a module nothing stood in for is not evidence about it, and it names skipped
-tests separately: a test that never ran neither survived a wrong implementation
-nor went red under one. Skipped in the real run it is on a <code>never ran</code> line;
-skipped under a candidate, having passed for real, it is on a <code>sat out</code> line.
-It REPORTS and never refuses (exit 0 whether it names
-twenty survivors or none; exit 1 only when no reading could be made at all).
-Nobody has calibrated this reading, so do not wire it into a gate.</p>
-<p><strong>The honest limit.</strong> A CI step in the <code>sovereignty guards</code> job runs
-<code>canopus_check.py</code> on every push. It REPORTS a broken clause; it does not block
-one, because <code>enforce_admins</code> is false on the only push path in use. Nothing on
-this machine prevents a test contract from being edited by whoever is
-implementing against it. Do not describe this as prevention.</p>
+<p>Two facts worth carrying here rather than looking up. The approval is a COMMIT,
+not a lock file: <code>git show &lt;sha&gt;:&lt;path&gt;</code> reads the frozen bytes, <code>git diff</code>
+answers whether the contract moved, and <code>git merge-base --is-ancestor</code> answers
+whether the implementation descends from the approval. Nothing on this machine
+holds those bytes down, and the CI clause that reads them REPORTS a break rather
+than blocking one. Do not describe either as prevention.</p>
+<p>The steps themselves are defined once, as data, in
+<code>scripts/utils/canopus_steps.py</code>. The <code>/canopus</code> skill and the page above both
+summarise that module; neither may renumber it.</p>
 <hr />
 <h2 id="6-testing-discipline">6. Testing discipline</h2>
 <p>The suite lives in <code>tests/</code> (security tests in <code>tests/security/</code>). Every behavior you

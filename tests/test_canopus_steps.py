@@ -64,6 +64,10 @@ _VACUITY_DOCUMENTS = (
     _SKILL,
     _ROOT / ".claude" / "skills" / "canopus" / "references" / "planning-gate.md",
     _ROOT / "docs" / "EXTENDING.md",
+    # Added 2026-08-09 with the page itself: `docs/CANOPUS.md` is now the
+    # canonical operator-facing description of the standard, so it is where a
+    # reworded inversion of the criterion would do the most damage.
+    _ROOT / "docs" / "CANOPUS.md",
 )
 
 

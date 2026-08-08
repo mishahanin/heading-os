@@ -38,6 +38,8 @@ Keep the bar the engine holds itself to:
 
 Structural or cross-cutting changes get a short design doc first, in [`docs/design/`](docs/design/), before the code. It records the context, the decision taken, and the alternatives rejected, so the direction is reviewable on its own. Small, local fixes do not need one. To start, copy [`docs/design/adr-template.md`](docs/design/adr-template.md); the naming convention and an index of existing records are in [`docs/design/README.md`](docs/design/README.md).
 
+Non-trivial work in this repository runs on **[Canopus](docs/CANOPUS.md)**, the build standard: seven numbered steps, the test contract written and approved before the implementation exists, and one committed record per change naming its own undo. Read that page before proposing anything structural; the contributor-facing commands are summarised in [`docs/EXTENDING.md`](docs/EXTENDING.md).
+
 ## Development setup
 
 The full environment setup is in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The short version:

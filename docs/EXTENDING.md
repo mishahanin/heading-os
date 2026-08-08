@@ -143,82 +143,37 @@ uv run python scripts/run-tests.py                      # the suite
 
 ### The slice standard
 
-Non-trivial work runs on the seven numbered steps in
-`scripts/utils/canopus_steps.py`, which is the only definition of them; the
-`/canopus` skill summarises it and may never renumber it. Two of the seven are
-the operator's: step 4, where he commits the plan and the RED test contract, and
-step 7, where the work ships.
+Non-trivial work runs on Canopus, the build standard: seven numbered steps, two
+of them the operator's own approval moments, and three instruments that measure
+whether the approval meant anything. **[Canopus, the build standard](CANOPUS.html)**
+is the full page: the steps, the four `check` clauses, what `probe` reads, and
+the two places the standard reports rather than blocks.
 
-The approval is a COMMIT, not a lock file. `git show <sha>:<path>` reads the
-frozen bytes, `git diff` answers whether the contract moved, and `git merge-base
---is-ancestor` answers whether the implementation descends from the approval.
-Nothing on this machine holds those bytes down.
+One criterion is worth carrying here rather than following a link for, because
+it is the one a builder acts on: `probe` runs the contract twice against
+null-stubbed modules carrying different values, and a test that never FAILS
+under either run is vacuous. Passing, skipping and erroring all leave a test
+unproved; only a failure shows it read the value.
 
-When the slice ships, it writes one committed markdown record per slice under
-`records/slices/`, engine-relative paths only:
-
-```bash
-python scripts/canopus.py note <slug> --value "<one sentence>" \
-    --approval-sha <sha> --contract tests/contract/<date>-<slug>/ \
-    --plan-digest sha256:<...> --scrutinize-plan "<step 4 findings, all applied>" \
-    --scrutinize-built "<step 6 findings, all applied>" \
-    --undo "revert <sha>, restore <baseline>, re-run <cmd>"
-```
-
-Every flag there is required by the record's schema, which refuses an incomplete
-note rather than writing one. A slice whose contract has been retired into the
-ordinary suite adds `--retired-sha` and `--promoted-to`, and the schema refuses
-the first without the second: a retirement pointing nowhere cannot be told apart
-from a contract that was simply dropped.
-
-`scripts/canopus_check.py` reads those records back over the repository they are
-committed to, in four clauses. C1: the contract did not move between its approval
-and the end of its life. C2: HEAD descends from the approval commit. C3: the
-contract was RED at the approval sha, run in a worktree checked out there. C4:
-the target is green at HEAD **and the junit report shows it RAN**, because
-collected is not run and an all-skipped file exits 0. No clause reads a
-timestamp: `GIT_COMMITTER_DATE` and `GIT_AUTHOR_DATE` are environment variables,
-and on 2026-08-06 two of them put an implementation commit nine hours before the
-approval it descends from.
+The three commands you will actually type while contributing:
 
 ```bash
-python scripts/canopus.py check --range origin/main..HEAD
-python scripts/canopus.py probe tests/contract/<date>-<slug>/
-python scripts/canopus.py probe --after-build tests/test_<subject>.py
+python scripts/canopus.py probe tests/contract/<date>-<slug>/   # before approval
+python scripts/canopus.py check --range origin/main..HEAD       # after the build
+python scripts/canopus.py note <slug> ...                       # when it ships
 ```
 
-`check` is a passthrough to `scripts/canopus_check.py`, which is the module CI
-runs directly, so the local reading and the CI reading are the same reading.
+Two facts worth carrying here rather than looking up. The approval is a COMMIT,
+not a lock file: `git show <sha>:<path>` reads the frozen bytes, `git diff`
+answers whether the contract moved, and `git merge-base --is-ancestor` answers
+whether the implementation descends from the approval. Nothing on this machine
+holds those bytes down, and the CI clause that reads them REPORTS a break rather
+than blocking one. Do not describe either as prevention.
 
-`probe` measures whether a contract's redness means anything: it null-stubs the
-missing modules and runs the contract twice, each stub carrying different values,
-so a test that never FAILS under either run is vacuous. Passing, skipping and
-erroring all leave a test unproved; only a failure shows it read the value. It
-also runs three wrong implementations that exist and prints what each took of the
-red set. A skip-family marker (`skip`, `skipif`, `xfail`) that states no reason
-refuses the contract, whether it sits on a test, on a class, or on `pytestmark`;
-a `pytest.skip()` inside a test body and a module-scope `pytest.importorskip`
-are not read, so they remain the reviewer's to catch.
+The steps themselves are defined once, as data, in
+`scripts/utils/canopus_steps.py`. The `/canopus` skill and the page above both
+summarise that module; neither may renumber it.
 
-`probe --after-build <test paths>` asks the same question at the other end of a
-slice's life. Once a contract is retired into the ordinary suite, nothing
-re-asks whether the tests guarding that code would notice if it were wrong; this
-flag puts the same three wrong implementations in front of shipped code and
-names every test that stayed green under all of them. The page names which
-modules were actually replaced and which were not, because a name that survived
-a module nothing stood in for is not evidence about it, and it names skipped
-tests separately: a test that never ran neither survived a wrong implementation
-nor went red under one. Skipped in the real run it is on a `never ran` line;
-skipped under a candidate, having passed for real, it is on a `sat out` line.
-It REPORTS and never refuses (exit 0 whether it names
-twenty survivors or none; exit 1 only when no reading could be made at all).
-Nobody has calibrated this reading, so do not wire it into a gate.
-
-**The honest limit.** A CI step in the `sovereignty guards` job runs
-`canopus_check.py` on every push. It REPORTS a broken clause; it does not block
-one, because `enforce_admins` is false on the only push path in use. Nothing on
-this machine prevents a test contract from being edited by whoever is
-implementing against it. Do not describe this as prevention.
 ---
 
 ## 6. Testing discipline

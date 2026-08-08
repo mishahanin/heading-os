@@ -75,10 +75,14 @@ ALLOW_IDENTITY = {
 # Fictional / illustrative names that legitimately appear in rule, skill, and test
 # scaffolding -- NEVER flagged. Keep in sync with the placeholders the docs use.
 ALLOW_FICTIONAL = {
-    "alice", "bob", "carol", "dave", "erin", "sara", "dana", "jane", "jane-doe",
+    "alice", "bob", "carol", "dave", "erin", "tamsin", "dana", "jane", "jane-doe",
     "jane doe", "john", "doe", "pat", "nolan", "pat nolan", "exampletelco",
-    "examplecorp", "example", "acme", "globex", "rivex", "northgate", "okonkwo",
-    "sara okonkwo", "someoutsider", "outsider", "randomperson",
+    "examplecorp", "example", "acme", "globex", "rivex", "contoso", "okonkwo",
+    "tamsin okonkwo", "someoutsider", "outsider", "randomperson",
+    # 2026-08-08: the two placeholder personas carried first names that also
+    # belong to real CRM contacts, so a reader could wrongly connect a fixture to
+    # a person. Renamed suite-wide to Marlow / Tamsin, which match no contact.
+    "marlow", "carter", "marlow carter", "rivera", "marlow rivera",
 }
 
 # Common words that can surface as a CRM name-word (e.g. a surname) but are far

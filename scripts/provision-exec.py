@@ -1096,7 +1096,7 @@ def main():
         description="Provision a new 31C executive workspace.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--name", required=True, help="Full name (e.g., 'Sam Carter')")
+    parser.add_argument("--name", required=True, help="Full name (e.g., 'Marlow Carter')")
     parser.add_argument("--title", required=True, help="Title (e.g., 'CSO')")
     parser.add_argument("--email", required=True, help="Corporate email (e.g., 'bob@31c.io')")
     parser.add_argument("--role", required=True, help="Role identifier (e.g., 'cso')")

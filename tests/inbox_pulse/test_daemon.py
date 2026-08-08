@@ -185,7 +185,7 @@ def test_domain_of_extracts_domain_part():
     """_domain_of correctly extracts domain or returns empty string."""
     mod = _import_daemon()
 
-    assert mod._domain_of("charlie@northgate.com") == "northgate.com"
+    assert mod._domain_of("charlie@contoso.com") == "contoso.com"
     assert mod._domain_of("no-at-sign") == ""
     assert mod._domain_of("") == ""
     assert mod._domain_of("user@sub.example.org") == "sub.example.org"
@@ -289,7 +289,7 @@ def test_main_loop_writes_jsonl_per_event(monkeypatch, tmp_path):
     # fetch_item: returns item with sender + subject
     fake_item = MagicMock()
     fake_item.sender = MagicMock()
-    fake_item.sender.email_address = "alice@northgate.com"
+    fake_item.sender.email_address = "alice@contoso.com"
     fake_item.subject = "Proposal review"
     mock_ews.fetch_item.return_value = fake_item
 
@@ -340,8 +340,8 @@ def test_main_loop_writes_jsonl_per_event(monkeypatch, tmp_path):
         assert "reason_breakdown" in entry
 
         # Sovereignty: only domain, not full address
-        assert entry["sender_domain"] == "northgate.com"
-        assert "alice@northgate.com" not in json.dumps(entry), "Full sender address leaked"
+        assert entry["sender_domain"] == "contoso.com"
+        assert "alice@contoso.com" not in json.dumps(entry), "Full sender address leaked"
 
         # Sovereignty: only length, not subject text
         assert entry["subject_length"] == len("Proposal review")

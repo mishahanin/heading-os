@@ -61,13 +61,13 @@ def test_list_contacts_ceo_only(tmp_path):
 def test_list_contacts_combines_execs(tmp_path):
     ws = _ws(tmp_path)
     _ceo_contact(ws, "alice", "Alice", relationship_type="prospect")
-    _exec_contact(tmp_path, "sam-carter", "jordan-kim", "Jordan Kim",
+    _exec_contact(tmp_path, "marlow-carter", "jordan-kim", "Jordan Kim",
                   relationship_type="prospect")
     d = list_contacts(ws, data_root=ws)
     assert d["total"] == 2
-    assert d["owner_counts"] == {"ceo": 1, "sam-carter": 1}
+    assert d["owner_counts"] == {"ceo": 1, "marlow-carter": 1}
     exec_row = next(c for c in d["contacts"] if c["owner"] != "ceo")
-    assert exec_row["owner_label"] == "Sam Carter"
+    assert exec_row["owner_label"] == "Marlow Carter"
 
 
 def test_list_contacts_skips_misha_hanin_snapshot(tmp_path, monkeypatch):
@@ -98,12 +98,12 @@ def test_list_contacts_slug_collision_across_owners(tmp_path):
     """The same slug under two owners yields two distinct rows."""
     ws = _ws(tmp_path)
     _ceo_contact(ws, "jordan-kim", "Jordan Kim", relationship_type="prospect")
-    _exec_contact(tmp_path, "sam-carter", "jordan-kim", "Jordan Kim",
+    _exec_contact(tmp_path, "marlow-carter", "jordan-kim", "Jordan Kim",
                   relationship_type="prospect")
     d = list_contacts(ws, data_root=ws)
     assert d["total"] == 2
     owners = sorted(c["owner"] for c in d["contacts"] if c["slug"] == "jordan-kim")
-    assert owners == ["ceo", "sam-carter"]
+    assert owners == ["ceo", "marlow-carter"]
 
 
 def test_list_contacts_uncategorised_is_other(tmp_path):
@@ -131,12 +131,12 @@ def test_read_one_contact_ceo(tmp_path):
 
 def test_read_one_contact_exec(tmp_path):
     ws = _ws(tmp_path)
-    _exec_contact(tmp_path, "sam-carter", "jordan-kim", "Jordan Kim",
+    _exec_contact(tmp_path, "marlow-carter", "jordan-kim", "Jordan Kim",
                   relationship_type="prospect")
-    r = read_one_contact(ws, "sam-carter", "jordan-kim", data_root=ws)
+    r = read_one_contact(ws, "marlow-carter", "jordan-kim", data_root=ws)
     assert r["ok"] is True
     assert r["name"] == "Jordan Kim"
-    assert r["owner_label"] == "Sam Carter"
+    assert r["owner_label"] == "Marlow Carter"
 
 
 def test_read_one_contact_rejects_bad_slug(tmp_path):
@@ -167,27 +167,27 @@ def test_read_one_contact_not_found(tmp_path):
 def test_list_contacts_reads_from_per_exec_mirror(tmp_path, monkeypatch):
     """Per-exec mirror at ../31c-crm-{slug}/contacts/ surfaces in the listing."""
     ws = _ws(tmp_path)
-    _per_exec_contact(tmp_path, "sam-carter", "taylor-reed", "Taylor Reed",
+    _per_exec_contact(tmp_path, "marlow-carter", "taylor-reed", "Taylor Reed",
                       relationship_type="prospect")
     monkeypatch.setattr(contacts_src, "get_all_active_exec_slugs",
-                        lambda: ["sam-carter"])
+                        lambda: ["marlow-carter"])
 
     d = list_contacts(ws, data_root=ws)
     assert d["total"] == 1
     row = d["contacts"][0]
-    assert row["owner"] == "sam-carter"
+    assert row["owner"] == "marlow-carter"
     assert row["slug"] == "taylor-reed"
 
 
 def test_per_exec_mirror_wins_over_crm_central(tmp_path, monkeypatch):
     """When both exist, the per-exec mirror is authoritative."""
     ws = _ws(tmp_path)
-    _per_exec_contact(tmp_path, "sam-carter", "jordan-kim", "Jordan from per-exec",
+    _per_exec_contact(tmp_path, "marlow-carter", "jordan-kim", "Jordan from per-exec",
                       relationship_type="prospect")
-    _exec_contact(tmp_path, "sam-carter", "jordan-kim", "Jordan from central stale",
+    _exec_contact(tmp_path, "marlow-carter", "jordan-kim", "Jordan from central stale",
                   relationship_type="prospect")
     monkeypatch.setattr(contacts_src, "get_all_active_exec_slugs",
-                        lambda: ["sam-carter"])
+                        lambda: ["marlow-carter"])
 
     d = list_contacts(ws, data_root=ws)
     assert d["total"] == 1
@@ -210,19 +210,19 @@ def test_falls_back_to_crm_central_when_per_exec_missing(tmp_path, monkeypatch):
 
 def test_read_one_contact_per_exec(tmp_path):
     ws = _ws(tmp_path)
-    _per_exec_contact(tmp_path, "sam-carter", "taylor-reed", "Taylor Reed",
+    _per_exec_contact(tmp_path, "marlow-carter", "taylor-reed", "Taylor Reed",
                       relationship_type="prospect")
-    r = read_one_contact(ws, "sam-carter", "taylor-reed", data_root=ws)
+    r = read_one_contact(ws, "marlow-carter", "taylor-reed", data_root=ws)
     assert r["ok"] is True
     assert r["name"] == "Taylor Reed"
 
 
 def test_read_one_contact_prefers_per_exec_over_central(tmp_path):
     ws = _ws(tmp_path)
-    _per_exec_contact(tmp_path, "sam-carter", "jordan-kim", "Jordan from per-exec",
+    _per_exec_contact(tmp_path, "marlow-carter", "jordan-kim", "Jordan from per-exec",
                       relationship_type="prospect")
-    _exec_contact(tmp_path, "sam-carter", "jordan-kim", "Jordan from central",
+    _exec_contact(tmp_path, "marlow-carter", "jordan-kim", "Jordan from central",
                   relationship_type="prospect")
-    r = read_one_contact(ws, "sam-carter", "jordan-kim", data_root=ws)
+    r = read_one_contact(ws, "marlow-carter", "jordan-kim", data_root=ws)
     assert r["ok"] is True
     assert r["name"] == "Jordan from per-exec"

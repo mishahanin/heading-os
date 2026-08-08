@@ -1,11 +1,11 @@
 [
-  { "query": "look up Sara Okonkwo's phone number in my google contacts", "should_trigger": true },
+  { "query": "look up Tamsin Okonkwo's phone number in my google contacts", "should_trigger": true },
   { "query": "add the Nimbus CEO to my google contacts with her email", "should_trigger": true },
   { "query": "update the phone number for my PartnerCo contact in Google", "should_trigger": true },
   { "query": "search my google contacts for anyone at ExampleTelco", "should_trigger": true },
-  { "query": "pull up the full contact card for Sara Okonkwo from Google", "should_trigger": true },
+  { "query": "pull up the full contact card for Tamsin Okonkwo from Google", "should_trigger": true },
 
-  { "query": "log my call with Sara Okonkwo in the CRM", "should_trigger": false },
+  { "query": "log my call with Tamsin Okonkwo in the CRM", "should_trigger": false },
   { "query": "show me the CRM health radar for overdue contacts", "should_trigger": false },
   { "query": "update PartnerCo's relationship status in my personal CRM", "should_trigger": false }
 ]

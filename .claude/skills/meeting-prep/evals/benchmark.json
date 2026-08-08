@@ -58,9 +58,9 @@
         "total": 7,
         "failures": [
           {
-            "check": "must_mention['Sara']",
+            "check": "must_mention['Tamsin']",
             "passed": false,
-            "detail": "missing 'Sara'"
+            "detail": "missing 'Tamsin'"
           },
           {
             "check": "must_mention['Nimbus']",

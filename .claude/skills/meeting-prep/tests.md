@@ -19,6 +19,6 @@ Prompts that are similar but should NOT activate this skill.
 
 - "dig into the ExampleTelco CTO's background" (OSINT, not meeting prep)
 - "how do we win the Nimbus Telecom deal" (deal-strategy, not meeting prep)
-- "schedule a meeting with Sara for next Tuesday" (calendar task)
+- "schedule a meeting with Tamsin for next Tuesday" (calendar task)
 - "draft the follow-up email after the Atlas Telecom call" (follow-up or email skill)
 - "what happened in yesterday's meeting" (event-debrief, not prep)

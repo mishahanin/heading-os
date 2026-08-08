@@ -6,8 +6,8 @@ import pytest
 def test_groups_exact_email_match():
     from scripts.crm_migrate_to_entity_model import group_records
     records = [
-        {"owner": "exec-a", "name": "Sam Tester", "email": "sam@example.com", "company": "AllianceCo"},
-        {"owner": "exec-b", "name": "Samuel Tester", "email": "sam@example.com", "company": "AllianceCo"},
+        {"owner": "exec-a", "name": "Marlow Tester", "email": "marlow@example.com", "company": "AllianceCo"},
+        {"owner": "exec-b", "name": "Samuel Tester", "email": "marlow@example.com", "company": "AllianceCo"},
     ]
     groups = group_records(records)
     assert len(groups) == 1
@@ -71,24 +71,24 @@ def test_render_address_book_entry_minimal():
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "src.md"
         f.write_text(
-            "---\nname: Sam Tester\nemail: sam@example.com\n---\n\n## Profile\n- Background\n",
+            "---\nname: Marlow Tester\nemail: marlow@example.com\n---\n\n## Profile\n- Background\n",
             encoding="utf-8",
         )
         group = {
-            "proposed_slug": "sam-tester",
-            "canonical_name": "Sam Tester",
+            "proposed_slug": "marlow-tester",
+            "canonical_name": "Marlow Tester",
             "records": [
-                {"owner": "owner-exec-a", "file_path": str(f), "name": "Sam Tester",
-                 "email": "sam@example.com", "company": "Globex & Co", "type": "partner",
+                {"owner": "owner-exec-a", "file_path": str(f), "name": "Marlow Tester",
+                 "email": "marlow@example.com", "company": "Globex & Co", "type": "partner",
                  "phone": "", "linkedin": "", "region": "Germany", "timezone": "Europe/Berlin"},
             ],
             "confidence": "singleton",
         }
         out = render_address_book_entry(group)
-        assert "slug: sam-tester" in out
-        assert "name: Sam Tester" in out
+        assert "slug: marlow-tester" in out
+        assert "name: Marlow Tester" in out
         # canonical_email is quoted by _yaml_quote because '@' is a YAML-special char
-        assert 'canonical_email: "sam@example.com"' in out
+        assert 'canonical_email: "marlow@example.com"' in out
         # employer is quoted by _yaml_quote because '&' is a YAML-special char
         assert 'employer: "Globex & Co"' in out
         assert "canonical_owner: owner-exec-b" in out  # partner -> commercial
@@ -103,7 +103,7 @@ def test_render_relationship_record_minimal():
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "src.md"
         f.write_text(
-            "---\nname: Sam Tester\nemail: sam@example.com\ntype: partner\nlast_touch: 2026-05-11\ncadence: 14\n---\n\n"
+            "---\nname: Marlow Tester\nemail: marlow@example.com\ntype: partner\nlast_touch: 2026-05-11\ncadence: 14\n---\n\n"
             "## Profile\n- Background note\n\n"
             "## Active Commitments\n- Follow up next week\n\n"
             "## Interaction Log\n- 2026-05-11 | Demo call\n",
@@ -112,17 +112,17 @@ def test_render_relationship_record_minimal():
         record = {
             "owner": "owner-exec-a",
             "file_path": str(f),
-            "name": "Sam Tester",
-            "email": "sam@example.com",
+            "name": "Marlow Tester",
+            "email": "marlow@example.com",
             "company": "AllianceCo",
             "type": "partner",
             "last_touch": "2026-05-11",
             "cadence": 14,
             "source": "",
         }
-        out = render_relationship_record(record, entity_slug="sam-tester")
+        out = render_relationship_record(record, entity_slug="marlow-tester")
         # Frontmatter checks:
-        assert "entity_ref: sam-tester" in out
+        assert "entity_ref: marlow-tester" in out
         assert "relationship_type: partner" in out
         assert "last_touch: 2026-05-11" in out
         assert "cadence: 14" in out

@@ -17,7 +17,7 @@ Realistic, messy prompts that SHOULD activate this skill.
 ## Should NOT Trigger (negative)
 Prompts that are similar but should NOT activate this skill.
 
-- "send Sara an email about the proposal" (email, not Telegram)
+- "send Tamsin an email about the proposal" (email, not Telegram)
 - "build a Telegram bot for monitoring alerts" (development task, not messaging)
 - "debug this Telethon script" (code debugging, not using Telegram)
 - "set up the Telegram MCP server" (infrastructure, not messaging)

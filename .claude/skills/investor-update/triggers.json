@@ -7,5 +7,5 @@
 
   { "query": "build a fresh pitch deck to raise our next round from new investors", "should_trigger": false },
   { "query": "assemble the due diligence data room for the fundraise", "should_trigger": false },
-  { "query": "prep me for the board meeting with Sara Okonkwo tomorrow", "should_trigger": false }
+  { "query": "prep me for the board meeting with Tamsin Okonkwo tomorrow", "should_trigger": false }
 ]

@@ -5,7 +5,7 @@
   { "query": "turn all my red-debt contacts into drafts I can approve", "should_trigger": true },
   { "query": "clear the overdue-contact debt by drafting nudges for each one", "should_trigger": true },
 
-  { "query": "send a single follow-up to Sara Okonkwo after our call", "should_trigger": false },
+  { "query": "send a single follow-up to Tamsin Okonkwo after our call", "should_trigger": false },
   { "query": "show me the pipeline and overall contact health in the CRM", "should_trigger": false },
   { "query": "approve and send the first draft waiting in my queue", "should_trigger": false }
 ]

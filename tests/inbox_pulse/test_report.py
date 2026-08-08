@@ -60,7 +60,7 @@ _SAMPLE_ENTRY_HIGH: dict[str, Any] = {
     "ts": "2026-05-29T09:12:00.000000+04:00",
     "event_type": "NewMail",
     "message_id": "AAMkHigh==",
-    "sender_domain": "northgate.com",
+    "sender_domain": "contoso.com",
     "subject_length": 45,
     "mode": "shadow",
     "tier_guess": "HIGH_LIKELY",
@@ -165,7 +165,7 @@ def test_parses_jsonl_correctly():
 
     assert len(entries) == 2
     assert entries[0]["tier_guess"] == "HIGH_LIKELY"
-    assert entries[0]["sender_domain"] == "northgate.com"
+    assert entries[0]["sender_domain"] == "contoso.com"
     assert entries[1]["tier_guess"] == "LOW"
     assert entries[1]["sender_domain"] == "newsletter.example.com"
 

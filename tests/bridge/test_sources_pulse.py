@@ -545,13 +545,13 @@ def test_raise_progress_excludes_wave_3_and_out_of_scope(tmp_path):
         "## UK / Israel (1)\n\n"
         "| # | Firm | Type | HQ | Cheque | Fit | Notes |\n"
         "|---|------|------|----|--------|-----|-------|\n"
-        "| 19 | Glilot Capital (Glilot+ growth platform) | VC | TLV | 10M | MED | x |\n\n"
+        "| 19 | Initech Capital (Initech+ growth platform) | VC | TLV | 10M | MED | x |\n\n"
         "# Decisions locked\n\n"
         "| Slot | Firm | Wave | Notes |\n"
         "|------|------|------|-------|\n"
         "| Wave 3 (deferred) | MGX | TBD | x |\n\n"
         "## Out-of-scope this round\n\n"
-        "- **Glilot+** -- dropped this round.\n"
+        "- **Initech+** -- dropped this round.\n"
     )
     r = raise_progress(tmp_path)
     assert r["total"] == 2

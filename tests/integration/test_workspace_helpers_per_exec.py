@@ -13,9 +13,9 @@ from scripts.utils.workspace import (
 
 
 def test_get_per_exec_repo_path_returns_sibling_directory():
-    path = get_per_exec_repo_path("sam-carter")
+    path = get_per_exec_repo_path("marlow-carter")
     workspace = get_workspace_root()
-    assert path == workspace.parent / "31c-crm-sam-carter"
+    assert path == workspace.parent / "31c-crm-marlow-carter"
 
 
 def test_get_per_exec_repo_path_handles_arbitrary_slug():

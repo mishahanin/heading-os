@@ -31,6 +31,6 @@ Prompts that are similar but should NOT activate this skill.
 - "ещё один вопрос" (Russian numeral "one more question", not Odin the advisor)
 - "draft an email to the investor" (email-draft, not odin)
 - "what do we know about ExampleTelco" (zk brief or osint, no Odin address)
-- "prepare for the meeting with Sara" (meeting-prep, not odin)
+- "prepare for the meeting with Tamsin" (meeting-prep, not odin)
 - "I need to think about this carefully" (deep-think, no Odin address)
 - "analyze this deal" (deal-strategy, no Odin address)

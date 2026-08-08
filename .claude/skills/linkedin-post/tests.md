@@ -18,7 +18,7 @@ Realistic, messy prompts that SHOULD activate this skill.
 Prompts that are similar but should NOT activate this skill.
 
 - "create a 5-part LinkedIn content series on DPI" (linkedin-series, not single post)
-- "draft an email to Sara" (email-draft skill)
+- "draft an email to Tamsin" (email-draft skill)
 - "send a message to the tribe about our TradeExpo success" (tribe-message skill)
 - "write a blog article about sovereign DPI" (general content, not LinkedIn format)
 - "generate an image for my LinkedIn post" (flux-image or image-prompt skill)

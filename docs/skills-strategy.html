@@ -187,7 +187,7 @@ Strategy</h3>
 <p><strong>What it does.</strong> Loads the brand stack (<code>reference/corporate-style-guide.md</code>, terminology, voice, Voss rules) and drafts a four-page deliverable: dark cover, executive opening plus opportunity, solution plus proof, commercial terms plus next steps, with Voss-precise pricing (no round numbers). After an approval gate it assembles a JSON payload and renders through <code>scripts/render-doctype.py --type proposal</code> to PDF and DOCX, then runs the hidden-character scan before reporting.</p>
 <p><strong>How to use it.</strong> Use it for a commercial offer with pricing; for an MOU, LOI, or term sheet use <code>/partnership-doc</code>, for a formal letter without pricing use <code>/corporate-letter</code>, and for a tender use <code>/rfp-response</code>.</p>
 <pre><code>/proposal partnership Acme Corp
-"write a commercial proposal for Northgate Capital"</code></pre>
+"write a commercial proposal for Contoso Capital"</code></pre>
 <p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/proposal.html</code>; brand rules in <code>reference/corporate-style-guide.md</code>; pricing bundles in <code>reference/billion-growth-playbook.md</code>; render output via the <code>--out</code> flag on <code>render-doctype.py</code>. Reference numbering (<code>31C-PROP-{YYYY}-{NNNN}</code>) counts from <code>outputs/documents/_proposal-sequence.txt</code>. Template changes require CEO approval.</p>
 </section>
 
@@ -198,7 +198,7 @@ Strategy</h3>
 <p><strong>What it does.</strong> Loads the brand and guardrail stack, then drafts in a neutral legal-adjacent voice (no Voss moves inside the executed text) with a default clause set: territory, exclusivity, commercial terms, training, marketing, data sovereignty. After an approval gate it renders via <code>scripts/render-doctype.py --type partnership</code> to PDF and DOCX, runs the hidden-character scan, and appends a counsel-review reminder to every output.</p>
 <p><strong>How to use it.</strong> Use it for a legal-adjacent collaboration framework with mutual obligations; for a commercial offer with pricing and module activation use <code>/proposal</code>, and for a formal letter use <code>/corporate-letter</code>.</p>
 <pre><code>/partnership-doc MOU Acme Corp
-"draft an LOI with Northgate Capital"</code></pre>
+"draft an LOI with Contoso Capital"</code></pre>
 <p><strong>Customize.</strong> Locked HTML template at <code>datastore/brand/templates/doctypes/partnership.html</code>; brand rules in <code>reference/corporate-style-guide.md</code>. Reference numbering (<code>31C-{MOU|LOI|TS|PA}-{YYYY}-{NNNN}</code>) counts from <code>outputs/documents/_partnership-sequence.txt</code>. Template changes require CEO approval.</p>
 </section>
 
@@ -242,7 +242,7 @@ Strategy</h3>
 <p><strong>What it does.</strong> Reads the context stack (<code>business-info</code>, <code>current-data</code>, <code>strategy</code>, <code>pipeline</code>) plus the growth playbook and market intelligence, validating specific facts against the datastore, then drafts one of several document types: company overview, financial summary, market analysis, team overview, technology brief, competitive landscape, a due-diligence question response, or a full-room table of contents. An optional <code>/editorial-review</code> structural pass runs before finalizing.</p>
 <p><strong>How to use it.</strong> Use it when preparing for investor conversations or answering diligence questions; for a live pitch deck use <code>/investor-pitch</code>, and for a recurring progress note to existing investors use <code>/investor-update</code>.</p>
 <pre><code>/data-room dd-response vc
-"prepare due diligence materials for Northgate Capital"</code></pre>
+"prepare due diligence materials for Contoso Capital"</code></pre>
 <p><strong>Customize.</strong> No locked template: output is drafted markdown. The <code>type</code> argument selects the document (overview, financial-summary, market-analysis, team-overview, technology-brief, competitive-landscape, dd-response, full-room) and <code>investor_type</code> tunes the framing (strategic, vc, sovereign, pe). Grounding sources are the <code>context/</code> files, <code>reference/billion-growth-playbook.md</code>, and <code>datastore/INDEX.md</code>.</p>
 </section>
 
@@ -264,7 +264,7 @@ Strategy</h3>
 <p><strong>What it does.</strong> Refreshes the local associative-memory index incrementally (<code>scripts/memory-index.py build</code>, ollama <code>bge-m3</code> hybrid dense plus BM25, on-machine, zero API cost), queries it with <code>--json</code> across the Odin brain, threads, CRM, LinkedIn, context, reference, plans, outputs, knowledge, and datastore extracts, then reads the top cited files and composes a cited answer. On a threshold gap it reports the gap plainly rather than guessing; it structurally air-gaps the vault and personal-thread branch.</p>
 <p><strong>How to use it.</strong> Use it to surface something the workspace already knows by meaning; for Odin-brain-only advice use <code>/odin recall</code>, for external intel use <code>/osint</code>, to capture a new note use <code>/zk</code>, and for exact-string search use Grep.</p>
 <pre><code>/recall where did we land on the Acme Corp pricing --collection content
-"have we touched Northgate Capital before"</code></pre>
+"have we touched Contoso Capital before"</code></pre>
 <p><strong>Customize.</strong> The <code>--collection</code> flag switches between <code>content</code> (default, what we know or decided), <code>code</code> (skills and rules), or <code>all</code>; <code>--layer NAME</code> pins one source layer (for example <code>odin</code>, <code>thread</code>, <code>crm</code>, <code>context</code>, <code>outputs</code>). The engine (<code>scripts/memory-index.py</code>) is cross-lingual RU/EN and runs entirely local. CEO-only, never synced to executives.</p>
 </section>
 

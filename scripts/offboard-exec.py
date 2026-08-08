@@ -5,7 +5,7 @@ Revokes GitHub access, archives workspace, preserves CRM contacts,
 optionally reassigns contacts, and logs the offboarding event.
 
 Usage:
-    python offboard-exec.py --exec "sam-carter" [--reassign-to "jordan-blake"]
+    python offboard-exec.py --exec "marlow-carter" [--reassign-to "jordan-blake"]
 """
 
 import argparse
@@ -306,7 +306,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--exec", required=True, dest="exec_slug",
-                        help="Exec slug to offboard (e.g., 'sam-carter')")
+                        help="Exec slug to offboard (e.g., 'marlow-carter')")
     parser.add_argument("--reassign-to", default=None,
                         help="Slug of exec to reassign contacts to")
 

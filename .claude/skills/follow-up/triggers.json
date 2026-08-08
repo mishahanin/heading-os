@@ -1,5 +1,5 @@
 [
-  { "query": "follow up with Sara after our call", "should_trigger": true },
+  { "query": "follow up with Tamsin after our call", "should_trigger": true },
   { "query": "send a follow-up to the PartnerCo contact", "should_trigger": true },
   { "query": "draft a follow-up email after yesterday's meeting", "should_trigger": true },
   { "query": "I need to follow up with the investor who went quiet", "should_trigger": true },

@@ -1,11 +1,11 @@
 [
   { "query": "write to the CEO of PartnerCo about expanding our partnership", "should_trigger": true },
-  { "query": "draft an executive letter to Sara Okonkwo, founder of Nimbus", "should_trigger": true },
+  { "query": "draft an executive letter to Tamsin Okonkwo, founder of Nimbus", "should_trigger": true },
   { "query": "I need some peer correspondence to the ExampleTelco chief exec", "should_trigger": true },
   { "query": "a CEO letter to reconnect with the PartnerCo founder after MWC", "should_trigger": true },
   { "query": "help me reach out founder-to-founder to align on strategy with Nimbus", "should_trigger": true },
 
   { "query": "draft an email to the procurement lead at ExampleTelco about the demo", "should_trigger": false },
   { "query": "write a formal letterhead letter to PartnerCo confirming the agreement", "should_trigger": false },
-  { "query": "send a short note to Sara's assistant to schedule a call", "should_trigger": false }
+  { "query": "send a short note to Tamsin's assistant to schedule a call", "should_trigger": false }
 ]

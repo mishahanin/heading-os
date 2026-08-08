@@ -1,14 +1,14 @@
 answers:
-  exec_full_name: "Sam Carter"
+  exec_full_name: "Marlow Carter"
   exec_role: "Chief Scientist"
   exec_email: "bob@31c.io"
   ceo_voice:
     value: "Analytical."
-    draft: "Sam's analytical voice."
+    draft: "Marlow's analytical voice."
     draft_approved: true
   personal_info:
     value: "20 years networking."
-    draft: "Sam has 20 years in telecom networking."
+    draft: "Marlow has 20 years in telecom networking."
     draft_approved: true
   anthropic_api_key: "TEST-FIXTURE-EXEC"  # pragma: allowlist secret
 skipped:

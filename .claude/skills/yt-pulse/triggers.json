@@ -7,5 +7,5 @@
 
   { "query": "dig into ExampleTelco and give me a full intelligence dossier", "should_trigger": false },
   { "query": "scan X for what people are saying about PartnerCo", "should_trigger": false },
-  { "query": "run background research on Sara Okonkwo before our meeting", "should_trigger": false }
+  { "query": "run background research on Tamsin Okonkwo before our meeting", "should_trigger": false }
 ]

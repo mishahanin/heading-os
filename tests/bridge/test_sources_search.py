@@ -14,7 +14,7 @@ def _setup_workspace(tmp_path):
     (em_dir / "_latest-fetch.json").write_text(json.dumps({
         "run_info": {"timestamp": "2026-05-18T10:00:00+00:00"},
         "conversations": [
-            {"id": "c1", "topic": "Picasso project Lenovo briefing", "priority": "P1",
+            {"id": "c1", "topic": "ExampleProject project Globex briefing", "priority": "P1",
              "latest_datetime": "2026-05-18T08:00:00+00:00", "analysis": {}},
             {"id": "c2", "topic": "Unrelated thread", "priority": "P3",
              "latest_datetime": "2026-05-15T08:00:00+00:00", "analysis": {}},
@@ -24,32 +24,32 @@ def _setup_workspace(tmp_path):
     crm_dir = tmp_path / "crm" / "contacts"
     crm_dir.mkdir(parents=True)
     (crm_dir / "victor-stein.md").write_text(
-        "---\nrelationship_type: tribe-leadership\nlast_touch: 2026-05-15\n---\n\n# Sam Rivera (misha-hanin)\n\nBody.\n",
+        "---\nrelationship_type: tribe-leadership\nlast_touch: 2026-05-15\n---\n\n# Marlow Rivera (operator)\n\nBody.\n",
         encoding="utf-8",
     )
     (crm_dir / "raul-mendez.md").write_text(
-        "---\nrelationship_type: tribe\nlast_touch: 2026-04-28\n---\n\n# Raul Mendez (misha-hanin)\n\nBody.\n",
+        "---\nrelationship_type: tribe\nlast_touch: 2026-04-28\n---\n\n# Raul Mendez (operator)\n\nBody.\n",
         encoding="utf-8",
     )
     # Tasks
     (tmp_path / "outputs" / "operations" / "viraid").mkdir(parents=True)
     (tmp_path / "outputs" / "operations" / "viraid" / "tasks.md").write_text(
         "## Active\n\n"
-        "- [ ] **2026-05-11** | `P1` | Picasso integration call with Lenovo | *Task* | Due: 2026-05-15\n"
+        "- [ ] **2026-05-11** | `P1` | ExampleProject integration call with Globex | *Task* | Due: 2026-05-15\n"
         "- [ ] **2026-05-11** | `P2` | Generic task | *Task* | Due: 2026-05-20\n",
         encoding="utf-8",
     )
     # Library
     kn_dir = tmp_path / "knowledge"
     kn_dir.mkdir()
-    (kn_dir / "picasso.md").write_text(
-        '---\ntitle: "Picasso project lessons"\ntype: position\nupdated: 2026-05-17\n---\n\n# Picasso project lessons\n\nBody.\n',
+    (kn_dir / "exampleproject.md").write_text(
+        '---\ntitle: "ExampleProject project lessons"\ntype: position\nupdated: 2026-05-17\n---\n\n# ExampleProject project lessons\n\nBody.\n',
         encoding="utf-8",
     )
     # Studio: just leave a file in linkedin
     li_dir = tmp_path / "outputs" / "content" / "linkedin"
     li_dir.mkdir(parents=True)
-    (li_dir / "picasso-post.md").write_text("body", encoding="utf-8")
+    (li_dir / "exampleproject-post.md").write_text("body", encoding="utf-8")
     # Day: today's calendar
     cal_dir = tmp_path / "outputs" / "_sync" / "calendar"
     cal_dir.mkdir(parents=True)
@@ -58,15 +58,15 @@ def _setup_workspace(tmp_path):
     # Use local (UTC+4) TZ since today_agenda() reads in local (UTC+4)-local time.
     today_local = datetime.now(timezone.utc).astimezone(ZoneInfo("Etc/GMT-4")).strftime("%Y-%m-%d")
     (cal_dir / f"{today_local}.md").write_text(
-        "| 09:00 | Picasso review | - |\n"
+        "| 09:00 | ExampleProject review | - |\n"
         "| 13:00 | Other meeting | - |\n",
         encoding="utf-8",
     )
     # Capabilities
-    sk_dir = tmp_path / ".claude" / "skills" / "picasso-recap"
+    sk_dir = tmp_path / ".claude" / "skills" / "exampleproject-recap"
     sk_dir.mkdir(parents=True)
     (sk_dir / "SKILL.md").write_text(
-        '---\nname: picasso-recap\ndescription: "Summarize the Picasso project status"\nmetadata:\n  version: "1.0"\n---\n\n# Picasso recap\n',
+        '---\nname: exampleproject-recap\ndescription: "Summarize the ExampleProject project status"\nmetadata:\n  version: "1.0"\n---\n\n# ExampleProject recap\n',
         encoding="utf-8",
     )
 
@@ -80,10 +80,10 @@ def test_empty_query_returns_empty(tmp_path):
     assert result["query"] == ""
 
 
-def test_picasso_hits_all_sources(tmp_path):
+def test_exampleproject_hits_all_sources(tmp_path):
     """A query matching across all sources returns hits in each."""
     _setup_workspace(tmp_path)
-    result = search(tmp_path, "Picasso")
+    result = search(tmp_path, "ExampleProject")
     cats = result["categories"]
     assert "inbox" in cats and len(cats["inbox"]) == 1
     assert "tasks" in cats and len(cats["tasks"]) == 1
@@ -97,8 +97,8 @@ def test_picasso_hits_all_sources(tmp_path):
 def test_case_insensitive(tmp_path):
     """Search is case-insensitive."""
     _setup_workspace(tmp_path)
-    result1 = search(tmp_path, "PICASSO")
-    result2 = search(tmp_path, "picasso")
+    result1 = search(tmp_path, "EXAMPLEPROJECT")
+    result2 = search(tmp_path, "exampleproject")
     assert result1["total"] == result2["total"]
 
 
@@ -116,15 +116,15 @@ def test_tribe_search_by_name(tmp_path):
     _setup_workspace(tmp_path)
     result = search(tmp_path, "Rivera")
     assert "tribe" in result["categories"]
-    assert result["categories"]["tribe"][0]["name"] == "Sam Rivera"
+    assert result["categories"]["tribe"][0]["name"] == "Marlow Rivera"
 
 
 def test_tasks_search_by_description(tmp_path):
     """Tasks search matches the description body."""
     _setup_workspace(tmp_path)
-    result = search(tmp_path, "Lenovo")
+    result = search(tmp_path, "Globex")
     assert "tasks" in result["categories"]
-    assert "Lenovo" in result["categories"]["tasks"][0]["description"]
+    assert "Globex" in result["categories"]["tasks"][0]["description"]
 
 
 def test_limit_per_category(tmp_path):
@@ -134,10 +134,10 @@ def test_limit_per_category(tmp_path):
     crm_dir = tmp_path / "crm" / "contacts"
     for i in range(20):
         (crm_dir / f"member-{i:02d}.md").write_text(
-            f"---\nrelationship_type: tribe\nlast_touch: 2026-05-10\n---\n\n# Picasso Member {i}\n",
+            f"---\nrelationship_type: tribe\nlast_touch: 2026-05-10\n---\n\n# ExampleProject Member {i}\n",
             encoding="utf-8",
         )
-    result = search(tmp_path, "Picasso", limit=5)
+    result = search(tmp_path, "ExampleProject", limit=5)
     assert len(result["categories"]["tribe"]) == 5
 
 
@@ -145,7 +145,7 @@ def test_data_time_is_iso_utc(tmp_path):
     """data_time is ISO 8601 UTC string."""
     _setup_workspace(tmp_path)
     from datetime import datetime
-    result = search(tmp_path, "Picasso")
+    result = search(tmp_path, "ExampleProject")
     parsed = datetime.fromisoformat(result["data_time"])
     assert parsed.tzinfo is not None
 
@@ -171,7 +171,7 @@ def test_pipeline_search_matches_company(tmp_path):
         "## Active Deals\n\n"
         "| Company | Country | Stage | Est. Value | Stage Date | Owner | Next Action | Due Date |\n"
         "|---------|---------|-------|------------|------------|-------|-------------|----------|\n"
-        "| Acme Co | USA | Proposal | $1,000,000 | 2026-05-01 | Misha | Send NDA | - |\n"
+        "| Acme Co | USA | Proposal | $1,000,000 | 2026-05-01 | Operator | Send NDA | - |\n"
     )
     result = search(tmp_path, "Acme")
     assert "pipeline" in result["categories"]
@@ -184,7 +184,7 @@ def test_pipeline_search_matches_next_action(tmp_path):
         "## Active Deals\n\n"
         "| Company | Country | Stage | Est. Value | Stage Date | Owner | Next Action | Due Date |\n"
         "|---------|---------|-------|------------|------------|-------|-------------|----------|\n"
-        "| Acme Co | USA | Proposal | $1,000,000 | 2026-05-01 | Misha | Send NDA tomorrow | - |\n"
+        "| Acme Co | USA | Proposal | $1,000,000 | 2026-05-01 | Operator | Send NDA tomorrow | - |\n"
     )
     result = search(tmp_path, "NDA")
     assert "pipeline" in result["categories"]
@@ -195,11 +195,11 @@ def test_investor_search_matches_firm(tmp_path):
         "## Europe (1)\n\n"
         "| # | Firm | Type | HQ | Cheque | Fit | Notes |\n"
         "|---|------|------|----|--------|-----|-------|\n"
-        "| 8 | DTCP | VC | Hamburg | 20M | HIGH | Telco DNA |\n"
+        "| 8 | Contoso Capital | VC | Hamburg | 20M | HIGH | Telco DNA |\n"
     )
-    result = search(tmp_path, "DTCP")
+    result = search(tmp_path, "Contoso Capital")
     assert "investors" in result["categories"]
-    assert result["categories"]["investors"][0]["firm"] == "DTCP"
+    assert result["categories"]["investors"][0]["firm"] == "Contoso Capital"
 
 
 def test_investor_search_matches_region(tmp_path):
@@ -208,7 +208,7 @@ def test_investor_search_matches_region(tmp_path):
         "## US (1)\n\n"
         "| # | Firm | Type | HQ | Cheque | Fit | Notes |\n"
         "|---|------|------|----|--------|-----|-------|\n"
-        "| 14 | Ten Eleven | VC | London | 50M | HIGH | x |\n"
+        "| 14 | Example Ventures | VC | London | 50M | HIGH | x |\n"
     )
     result = search(tmp_path, "London")
     assert "investors" in result["categories"]
@@ -221,9 +221,9 @@ def test_investor_search_surfaces_sent_status(tmp_path):
         "## Europe (1)\n\n"
         "| # | Firm | Type | HQ | Cheque | Fit | Notes |\n"
         "|---|------|------|----|--------|-----|-------|\n"
-        "| 8 | DTCP | VC | Hamburg | 20M | HIGH | x |\n"
+        "| 8 | Contoso Capital | VC | Hamburg | 20M | HIGH | x |\n"
     )
     mark_sent(tmp_path, 8)
-    result = search(tmp_path, "DTCP")
+    result = search(tmp_path, "Contoso Capital")
     hit = result["categories"]["investors"][0]
     assert hit["sent_date"] is not None

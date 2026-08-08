@@ -5,7 +5,7 @@ Immediately revokes all GitHub access, audits recent commits for suspicious
 activity, updates registry status, and logs the security event.
 
 Usage:
-    python emergency-revoke.py --exec "sam-carter" --reason "laptop stolen"
+    python emergency-revoke.py --exec "marlow-carter" --reason "laptop stolen"
 """
 
 import argparse
@@ -253,7 +253,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--exec", required=True, dest="exec_slug",
-                        help="Exec slug to revoke (e.g., 'sam-carter')")
+                        help="Exec slug to revoke (e.g., 'marlow-carter')")
     parser.add_argument("--reason", required=True,
                         help="Reason for emergency revocation (e.g., 'laptop stolen')")
 

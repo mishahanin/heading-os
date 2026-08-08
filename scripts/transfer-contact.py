@@ -5,7 +5,7 @@ Moves the contact file from one exec's directory to another, updates the
 owner field, logs the transfer, and commits the change.
 
 Usage:
-    python transfer-contact.py --contact "priya-anand" --from "misha-hanin" --to "sam-carter" [--repo PATH]
+    python transfer-contact.py --contact "priya-anand" --from "misha-hanin" --to "marlow-carter" [--repo PATH]
 """
 
 import argparse
@@ -85,7 +85,7 @@ def main() -> None:
     parser.add_argument("--from", dest="from_exec", required=True,
                         help="Source exec slug (e.g. misha-hanin)")
     parser.add_argument("--to", required=True,
-                        help="Target exec slug (e.g. sam-carter)")
+                        help="Target exec slug (e.g. marlow-carter)")
     args = parser.parse_args()
 
     validate_admin()

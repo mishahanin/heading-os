@@ -1,6 +1,6 @@
 [
   { "query": "translate this paragraph into Russian, keep the tone", "should_trigger": true },
-  { "query": "I have a Russian email from Sara Okonkwo, put it into English", "should_trigger": true },
+  { "query": "I have a Russian email from Tamsin Okonkwo, put it into English", "should_trigger": true },
   { "query": "render this English draft in Russian for the Tribe", "should_trigger": true },
   { "query": "give me an English version of this Russian document", "should_trigger": true },
   { "query": "convert this note to English but preserve the register", "should_trigger": true },

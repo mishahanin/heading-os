@@ -23,7 +23,7 @@ For each modality, the audit checks whether any indexed signal exists for the na
 The "entity slug" is the kebab-case lowercase form of the entity name with diacritics stripped.
 
 Examples:
-- "Sara Okonkwo" -> `sara-okonkwo`
+- "Tamsin Okonkwo" -> `tamsin-okonkwo`
 - "Yannis Cole" -> `yannis-cole`
 - "31 Concept" -> `31-concept` (company-mode; rarely used in audits)
 

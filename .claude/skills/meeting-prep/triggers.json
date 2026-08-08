@@ -1,5 +1,5 @@
 [
-  { "query": "meeting prep for Sara Okonkwo from Nimbus", "should_trigger": true },
+  { "query": "meeting prep for Tamsin Okonkwo from Nimbus", "should_trigger": true },
   { "query": "prepare for my meeting with the ExampleTelco team", "should_trigger": true },
   { "query": "briefing for the call with this minister", "should_trigger": true },
   { "query": "get me ready for the partner meeting with PartnerCo", "should_trigger": true },

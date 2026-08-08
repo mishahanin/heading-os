@@ -55,12 +55,12 @@ Your call? Answer "1a, 2c, 3 - custom: ..., 4b, 5a" or "all my picks" to take ev
 
 ## Example B - mix of open + lettered
 
-User: `/align 2` after a request "Schedule a meeting with Sara next week"
+User: `/align 2` after a request "Schedule a meeting with Tamsin next week"
 
 ```
 Aligning against your request. Here's what I think you want:
 
-You want a 1:1 meeting with Sara Okonkwo on the Nimbus opportunity in the
+You want a 1:1 meeting with Tamsin Okonkwo on the Nimbus opportunity in the
 week of 2026-05-19. Default is local time, video conference, 45 minutes.
 
 ## Question 1: Earliest acceptable day
@@ -68,7 +68,7 @@ week of 2026-05-19. Default is local time, video conference, 45 minutes.
 What's the earliest day you'd take the meeting?
 
 My recommendation: 2026-05-19 (Monday). Front-loading the week leaves
-slippage room if Sara pushes.
+slippage room if Tamsin pushes.
 
 ## Question 2: Format
 a) 30 min video on Teams

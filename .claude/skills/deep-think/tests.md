@@ -7,7 +7,7 @@ Realistic, messy prompts that SHOULD activate this skill.
 - "break this down for me: we can either raise now at lower valuation or wait 6 months"
 - "help me reason about whether to prioritize [region A] or [region B] for Q2"
 - "what are we missing in our go-to-market approach"
-- "I need to think about whether Sam should lead the ExampleTelco engagement or if I should stay on it"
+- "I need to think about whether Marlow should lead the ExampleTelco engagement or if I should stay on it"
 - "analyze this carefully -- three VCs want to talk but the terms are all different"
 - "something feels off about the ExampleTelco deal, help me figure out what"
 - "structured thinking on this: build vs buy for the analytics module"

@@ -7,5 +7,5 @@
 
   { "query": "Odin, log this episode of what happened on the ExampleTelco deal", "should_trigger": false },
   { "query": "open a thread to track the PartnerCo negotiation", "should_trigger": false },
-  { "query": "add Sara Okonkwo to the CRM with her contact details", "should_trigger": false }
+  { "query": "add Tamsin Okonkwo to the CRM with her contact details", "should_trigger": false }
 ]

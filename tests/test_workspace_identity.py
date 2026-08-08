@@ -64,7 +64,7 @@ def test_cache_freezes_identity_mid_process(tmp_path, monkeypatch):
     """Mid-process mutation of the file must NOT change what callers observe."""
     identity_file = tmp_path / ".workspace-identity.json"
     identity_file.write_text(
-        json.dumps({"slug": "sam-carter", "type": "exec-workspace", "role": "exec"}),
+        json.dumps({"slug": "marlow-carter", "type": "exec-workspace", "role": "exec"}),
         encoding="utf-8",
     )
     _point_workspace_root(monkeypatch, tmp_path)
@@ -77,17 +77,17 @@ def test_cache_freezes_identity_mid_process(tmp_path, monkeypatch):
     second = ws.get_workspace_identity()
 
     assert first == second
-    assert second["slug"] == "sam-carter"
+    assert second["slug"] == "marlow-carter"
 
 
 def test_get_exec_slug_uses_cached_identity(tmp_path, monkeypatch):
     (tmp_path / ".workspace-identity.json").write_text(
-        json.dumps({"slug": "sam-carter", "type": "exec-workspace", "role": "exec"}),
+        json.dumps({"slug": "marlow-carter", "type": "exec-workspace", "role": "exec"}),
         encoding="utf-8",
     )
     _point_workspace_root(monkeypatch, tmp_path)
 
-    assert ws.get_exec_slug() == "sam-carter"
+    assert ws.get_exec_slug() == "marlow-carter"
 
 
 def test_separate_workspace_roots_get_separate_cache_entries(tmp_path, monkeypatch):

@@ -5,7 +5,7 @@
   { "query": "put together a candidate evaluation scorecard for this leadership role", "should_trigger": true },
   { "query": "I'm interviewing a product manager next week, prepare the questions", "should_trigger": true },
 
-  { "query": "dig up background on the candidate Sara Okonkwo before we talk", "should_trigger": false },
+  { "query": "dig up background on the candidate Tamsin Okonkwo before we talk", "should_trigger": false },
   { "query": "run due diligence on this job applicant's history", "should_trigger": false },
   { "query": "investigate the PartnerCo founder before our meeting", "should_trigger": false }
 ]

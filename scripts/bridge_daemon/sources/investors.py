@@ -113,20 +113,23 @@ def _parse_status_from_decisions(text: str) -> dict[str, str]:
     statuses: dict[str, str] = {}
     in_section = False
     in_table = False
+    in_out_of_scope = False
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("# Decisions locked") or stripped.startswith("## In-scope firms"):
             in_section = True
+            in_out_of_scope = False
             continue
         if in_section and stripped.startswith("#"):
             # Next major heading - leave section unless it's just a sub-header.
             if stripped.startswith("# ") or stripped.startswith("## Out-of-scope"):
                 if stripped.startswith("## Out-of-scope"):
-                    # Special-case: capture out-of-scope list separately below.
-                    pass
+                    # Enter the out-of-scope list; its bullets are read below.
+                    in_out_of_scope = True
                 else:
                     # Walked off the section.
                     in_table = False
+                    in_out_of_scope = False
                     if stripped.startswith("# "):
                         in_section = False
                     continue
@@ -161,10 +164,19 @@ def _parse_status_from_decisions(text: str) -> dict[str, str]:
                 if not clean:
                     continue
                 statuses[clean.lower()] = status_token
-        # Out-of-scope list (Glilot+).
-        if "Glilot+" in stripped and ("out" in stripped.lower() or "dropped" in stripped.lower()):
-            statuses["glilot+"] = "out-of-scope"
-            statuses["glilot"] = "out-of-scope"
+        # Out-of-scope bullets name the firm in bold: "- **Firm+** -- dropped ...".
+        # The name is READ OFF the line rather than hard-coded, so a firm nobody
+        # curated is still captured and no real firm name lives in this file. Both
+        # the written form and its plus-stripped base are registered, because the
+        # regional table usually carries the base name alone.
+        if in_out_of_scope and stripped.startswith("-"):
+            for token in re.findall(r"\*\*(.+?)\*\*", stripped):
+                name = token.strip().lower()
+                base = name.rstrip("+").strip()
+                if name:
+                    statuses[name] = "out-of-scope"
+                if base:
+                    statuses[base] = "out-of-scope"
     return statuses
 
 
@@ -182,7 +194,7 @@ def _first_token(name: str) -> str:
 
 
 def _acronym(name: str) -> str:
-    """Build initialism from capitalized words. 'NATO Innovation Fund' -> 'NIF'."""
+    """Build initialism from capitalized words. 'Northwind Innovation Fund' -> 'NIF'."""
     words = re.findall(r"[A-Z][a-zA-Z]*", name)
     return "".join(w[0] for w in words).upper()
 
@@ -198,14 +210,14 @@ def _match_status(firm_canonical: str, statuses: dict[str, str]) -> str:
             continue
         if key in name_lower or name_lower in key:
             return status
-    # First-token fallback. "Northgate NGCI" vs "Northgate Capital" both
-    # share first significant token "Northgate".
+    # First-token fallback. "Contoso CCI" vs "Contoso Capital" both
+    # share first significant token "Contoso".
     name_first = _first_token(firm_canonical)
     if name_first:
         for key, status in statuses.items():
             if _first_token(key) == name_first:
                 return status
-    # Acronym fallback. "NIF" -> "NATO Innovation Fund".
+    # Acronym fallback. "NIF" -> "Northwind Innovation Fund".
     name_acronym = firm_canonical.upper() if firm_canonical.isupper() else _acronym(firm_canonical)
     if name_acronym and len(name_acronym) >= 2:
         for key, status in statuses.items():
@@ -219,8 +231,8 @@ def _slug_overlap(slug_a: str, slug_b: str, num: int) -> bool:
     considered a match. Strategy:
     - exact equality
     - one is a prefix of the other (e.g. eurazeo vs eurazeo-growth-iv)
-    - both share the first significant token (e.g. northgate-capital vs
-      northgate-capital-international)
+    - both share the first significant token (e.g. contoso-capital vs
+      contoso-capital-international)
     - the e& Capital -> eand-capital convention
     """
     if not slug_a or not slug_b:

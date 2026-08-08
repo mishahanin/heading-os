@@ -151,7 +151,7 @@ Single hyphens; ODUN.ONE / DPI+ / Tribe terminology.
 After producing the meeting briefing, invoke `/brain-audit` with:
 
 - `--sources`: comma-separated list of every file you read during prep (CRM contact, pipeline row, thread entries, OSINT outputs, etc.)
-- `--entity`: the counterpart's full name (and company if relevant, e.g., "Sara Okonkwo (Nimbus)")
+- `--entity`: the counterpart's full name (and company if relevant, e.g., "Tamsin Okonkwo (Nimbus)")
 
 Append the returned three-section footer (`## Brain audit`) to the end of `briefing.md` and to the end of the HTML body. Do not duplicate the audit across the three output formats; the MD and HTML share the same audit block, and the PDF inherits it from the HTML render.
 

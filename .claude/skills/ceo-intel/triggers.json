@@ -5,7 +5,7 @@
   { "query": "what are the biggest global threats I should be tracking right now", "should_trigger": true },
   { "query": "world intel roundup with the macro and security signals relevant to 31C", "should_trigger": true },
 
-  { "query": "dig into Sara Okonkwo and PartnerCo before my meeting", "should_trigger": false },
+  { "query": "dig into Tamsin Okonkwo and PartnerCo before my meeting", "should_trigger": false },
   { "query": "investigate ExampleTelco's leadership and funding history", "should_trigger": false },
   { "query": "who is the CEO of Nimbus and what's their background", "should_trigger": false }
 ]

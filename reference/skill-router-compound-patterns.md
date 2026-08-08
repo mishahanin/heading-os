@@ -25,7 +25,7 @@ When these patterns are detected, hand off to the orchestrator instead of invoki
 
 ## Depth signal examples (Meeting)
 
-- HAS depth: "Prepare thoroughly for meeting with Sara Okonkwo from Nimbus" (named person + company)
+- HAS depth: "Prepare thoroughly for meeting with Tamsin Okonkwo from Nimbus" (named person + company)
 - HAS depth: "Full prep for the ExampleTelco meeting" (company in pipeline + "full prep")
 - HAS depth: "I have an important meeting with [name], research them" (explicit research request)
 - NO depth: "Prepare for the meeting tomorrow" (no person/company, no depth keyword)

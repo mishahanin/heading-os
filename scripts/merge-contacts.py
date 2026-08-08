@@ -5,7 +5,7 @@ Combines YAML frontmatter, interaction logs, and strategic notes from both
 versions into a single authoritative file under the target exec's directory.
 
 Usage:
-    python merge-contacts.py --contact "priya-anand" --from "misha-hanin" --into "sam-carter" [--repo PATH]
+    python merge-contacts.py --contact "priya-anand" --from "misha-hanin" --into "marlow-carter" [--repo PATH]
 """
 
 import argparse
@@ -235,7 +235,7 @@ def main() -> None:
     parser.add_argument("--from", dest="from_exec", required=True,
                         help="Source exec slug (e.g. misha-hanin)")
     parser.add_argument("--into", required=True,
-                        help="Target exec slug (e.g. sam-carter)")
+                        help="Target exec slug (e.g. marlow-carter)")
     args = parser.parse_args()
 
     validate_admin()

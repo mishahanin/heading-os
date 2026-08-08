@@ -14,7 +14,7 @@ YYYY-MM-DD_{type}_{slug}.{ext}
 
 - **`YYYY-MM-DD`** — ISO date the artifact was produced. Always present, always first. Sorts chronologically with `ls`.
 - **`{type}`** — short content-type identifier in kebab-case. Examples: `meeting-prep`, `dashboard`, `linkedin-post`, `osint-brief`, `proposal`, `letter`, `dossier`, `audit`. The type tells a reader what kind of artifact this is without opening it.
-- **`{slug}`** — lowercase kebab-case description, ≤40 characters total. Names the specific subject: who, what, where. Strip articles (`the`, `a`), keep proper nouns. Examples: `exampletelco-q2`, `mwc-prep-sara-okonkwo`, `humanization-rule-deep-research`, `2026-w17-state-check`.
+- **`{slug}`** — lowercase kebab-case description, ≤40 characters total. Names the specific subject: who, what, where. Strip articles (`the`, `a`), keep proper nouns. Examples: `exampletelco-q2`, `mwc-prep-tamsin-okonkwo`, `humanization-rule-deep-research`, `2026-w17-state-check`.
 - **`{ext}`** — `md`, `html`, `pdf`, `docx`, `pptx`, `json` as appropriate. Always lowercase.
 
 ## Examples
@@ -26,7 +26,7 @@ outputs/operations/scrutiny/2026-04-28_scrutiny_deep-audit-report.md
 outputs/intel/osint/2026-04-15_osint_exampletelco.md
 outputs/operations/dashboard/2026-04-22_dashboard_morning.html
 outputs/content/linkedin/2026-04-28_linkedin-post_order-and-chaos.md
-outputs/deliverables/letters/2026-04-21_letter_northgate-capital-introduction.pdf
+outputs/deliverables/letters/2026-04-21_letter_contoso-capital-introduction.pdf
 ```
 
 ## When the standard does not fit
@@ -63,7 +63,7 @@ When a skill produces a new artifact, decide three things in this order:
 
 1. **Date.** Today's date in ISO format. Always present.
 2. **Type.** What kind of artifact is this in one or two words? Pick from existing precedent (see Examples) before inventing a new type. If a new type is genuinely needed, it should be plainly intelligible to a future reader.
-3. **Slug.** What is the most specific identifying phrase about this artifact? Strip articles. Use proper nouns where they identify (`exampletelco`, `northgate-capital`, `sara-okonkwo`). Do not include the type word again (`osint_osint-exampletelco` is redundant).
+3. **Slug.** What is the most specific identifying phrase about this artifact? Strip articles. Use proper nouns where they identify (`exampletelco`, `contoso-capital`, `tamsin-okonkwo`). Do not include the type word again (`osint_osint-exampletelco` is redundant).
 
 Skills that hardcode their own naming schemes should be updated to match this standard during their next edit, unless they fall under "When the standard does not fit" above.
 

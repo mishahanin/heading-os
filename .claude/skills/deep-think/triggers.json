@@ -8,7 +8,7 @@
   { "query": "think step by step about this market-entry risk", "should_trigger": true },
 
   { "query": "what time is the meeting tomorrow", "should_trigger": false },
-  { "query": "draft a follow-up email to Sara", "should_trigger": false },
+  { "query": "draft a follow-up email to Tamsin", "should_trigger": false },
   { "query": "get a second opinion from Gemini and Grok on this", "should_trigger": false },
   { "query": "investigate this company's background", "should_trigger": false },
   { "query": "translate this message to Russian", "should_trigger": false },

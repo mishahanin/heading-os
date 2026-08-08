@@ -216,7 +216,7 @@ def test_is_breakthrough_sender_glob_match(tmp_path):
     yaml_content = textwrap.dedent("""\
         breakthrough_allowlist:
           - alice@31c.io
-          - "*@northgate.com"
+          - "*@contoso.com"
     """)
     p = tmp_path / "breakthrough.yaml"
     p.write_text(yaml_content, encoding="utf-8")
@@ -224,8 +224,8 @@ def test_is_breakthrough_sender_glob_match(tmp_path):
     from scripts.inbox_pulse.overrides import RulesEngine
     eng = RulesEngine(yaml_path=p)
     assert eng.is_breakthrough_sender("alice@31c.io") is True
-    assert eng.is_breakthrough_sender("partner@northgate.com") is True
-    assert eng.is_breakthrough_sender("charlie@northgate.com") is True
+    assert eng.is_breakthrough_sender("partner@contoso.com") is True
+    assert eng.is_breakthrough_sender("charlie@contoso.com") is True
     assert eng.is_breakthrough_sender("unknown@other.com") is False
 
 

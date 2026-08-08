@@ -1,11 +1,11 @@
 [
   { "query": "help me prepare for a tough negotiation with PartnerCo", "should_trigger": true },
-  { "query": "I have a difficult conversation with Sara Okonkwo tomorrow, build me a playbook", "should_trigger": true },
+  { "query": "I have a difficult conversation with Tamsin Okonkwo tomorrow, build me a playbook", "should_trigger": true },
   { "query": "run an accusation audit before I push back on ExampleTelco's terms", "should_trigger": true },
   { "query": "how should I handle this sensitive pricing call with the Nimbus team", "should_trigger": true },
   { "query": "give me calibrated questions and labeling scripts for this partnership talk", "should_trigger": true },
 
   { "query": "pull together a full meeting brief on the ExampleTelco counterpart before Thursday", "should_trigger": false },
   { "query": "work out our deal strategy and how we win the PartnerCo opportunity", "should_trigger": false },
-  { "query": "investigate Sara Okonkwo's background before I meet her", "should_trigger": false }
+  { "query": "investigate Tamsin Okonkwo's background before I meet her", "should_trigger": false }
 ]

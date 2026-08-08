@@ -5171,7 +5171,7 @@ const ROUTES = {
 
 async function renderCurrentPage() {
   const raw = (location.hash || '#/pulse').replace('#/', '');
-  // Split off query string (e.g., "search?q=picasso" -> ["search", "q=picasso"]).
+  // Split off query string (e.g., "search?q=acme" -> ["search", "q=acme"]).
   const [route, queryStr] = raw.split('?');
   // Clear any cross-page interval timers when leaving the page that owns them.
   if (route !== 'pulse' && _nextMeetingTickInterval) {

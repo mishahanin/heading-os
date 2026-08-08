@@ -201,7 +201,7 @@
   type: placeholder
   required: true
   prompt: "Your full name."
-  example: "Sam Carter"
+  example: "Marlow Carter"
   target:
     placeholder: "{EXEC_NAME}"
     files: ["personal/**/*.md"]

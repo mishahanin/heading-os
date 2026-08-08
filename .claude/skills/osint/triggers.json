@@ -1,7 +1,7 @@
 [
   { "query": "investigate the leadership of ExampleTelco", "should_trigger": true },
   { "query": "dig into this company before our call", "should_trigger": true },
-  { "query": "background on Sara Okonkwo at Nimbus", "should_trigger": true },
+  { "query": "background on Tamsin Okonkwo at Nimbus", "should_trigger": true },
   { "query": "run due diligence on this potential partner", "should_trigger": true },
   { "query": "who is the CTO of PartnerCo", "should_trigger": true },
   { "query": "build me a dossier on this fund", "should_trigger": true },

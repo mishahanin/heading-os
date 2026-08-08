@@ -75,8 +75,8 @@ RECOMMENDED ACTIONS -- sweep 2026-06-09 (5 action(s))
   [ ]  1. CRM-log Chris Doyle - mNDA mutual accept             [crm]
   [ ]  2. Reply-> Pat Nolan: how was the partner meeting        [send-gated]
   [ ]  3. Pipeline: Northwind stage-date -> 2026-06-02          [notify]
-  [ ]  4. Forward-> Sam + Lee: suspicious invoice               [send-gated]
-  [ ]  5. Task: chase contract comments (Sam)                   [task]
+  [ ]  4. Forward-> Marlow + Lee: suspicious invoice               [send-gated]
+  [ ]  5. Task: chase contract comments (Marlow)                   [task]
 
 > approve: 1,3,5 | 2 edit: <change> | 4 go | rest skip
 ```

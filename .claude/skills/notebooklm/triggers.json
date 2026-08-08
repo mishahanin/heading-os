@@ -6,6 +6,6 @@
   { "query": "run notebook research to discover new sources on sovereign AI governance", "should_trigger": true },
 
   { "query": "research ExampleTelco before our call and give me a dossier", "should_trigger": false },
-  { "query": "add a quick note about Sara Okonkwo's pricing objection", "should_trigger": false },
+  { "query": "add a quick note about Tamsin Okonkwo's pricing objection", "should_trigger": false },
   { "query": "what's trending on YouTube podcasts about DPI this week", "should_trigger": false }
 ]

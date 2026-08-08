@@ -325,7 +325,7 @@ def test_classify_pipeline_domain_match_adds_2(rules_engine, make_workspace):
     )
     clf = _make_classifier(rules_engine, make_workspace)
     result = clf.classify(
-        sender_email="sara@bigtelco.example",
+        sender_email="tamsin@bigtelco.example",
         subject="POC update",
         now=_fixed_now(),
     )
@@ -904,7 +904,7 @@ def test_classify_internal_nonlead_in_cc_short_circuits_to_normal(make_workspace
 
 
 def test_classify_external_sender_bypasses_rule_falls_through(make_workspace, tmp_path):
-    """External sender (northgate.com not in internal_domains) -> no short-circuit."""
+    """External sender (contoso.com not in internal_domains) -> no short-circuit."""
     from scripts.inbox_pulse.overrides import RulesEngine
     from scripts.inbox_pulse.rules import CheapClassifier
 
@@ -914,13 +914,13 @@ def test_classify_external_sender_bypasses_rule_falls_through(make_workspace, tm
     # Give the external sender a CRM score so the result is not trivially LOW
     _write_crm_contact(
         make_workspace / "crm" / "contacts",
-        slug="nolan-northgate",
-        email="nolan@northgate.com",
+        slug="nolan-contoso",
+        email="nolan@contoso.com",
         relationship_type="investor-active",
     )
     clf = CheapClassifier(rules=engine, workspace_root=make_workspace, account=None, my_email="ceo@31c.io")
     result = clf.classify(
-        sender_email="nolan@northgate.com",
+        sender_email="nolan@contoso.com",
         subject="Series B follow-up",
         now=_fixed_now(),
         recipients_to=["ceo@31c.io"],

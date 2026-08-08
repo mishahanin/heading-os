@@ -50,7 +50,7 @@ Usage:
     python scripts/send-email.py --forward \
         --match-subject "Acme Group" \
         --to "carol@31c.io" "dave@31c.io" \
-        --body "<p>Sam, Alex, ...</p>"
+        --body "<p>Marlow, Alex, ...</p>"
 
     # Most precise: identify the original by exact Exchange item id.
     python scripts/send-email.py --reply --match-id "AAMk..." --body "<p>...</p>"

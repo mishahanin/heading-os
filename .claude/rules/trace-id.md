@@ -8,7 +8,7 @@ paths:
 Last Updated: 2026-06-03
 Last Verified: 2026-06-03
 
-One correlation ID per process tree, so "what happened in this run?" is a single grep across the daemon log surfaces instead of a cross-file timestamp hunt. Implemented by `scripts/utils/trace.py` (mint/get/set) and `scripts/utils/trace_filter.py` (the log-record factory + filter).
+One correlation ID per process tree, so "what happened in this run?" is a single grep across the daemon log surfaces instead of a cross-file timestamp hunt. Implemented by `scripts/utils/tracing.py` (mint/get/set) and `scripts/utils/trace_filter.py` (the log-record factory + filter).
 
 ## Scope (honest)
 

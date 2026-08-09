@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils import trace
+from scripts.utils import tracing
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET
 from scripts.utils.workspace import get_default_tz, get_workspace_root
 
@@ -209,7 +209,7 @@ def cmd_from_card(card_id: str, skill: str | None, case_type: str, as_json: bool
     recipient = card.get("to")
     if recipient:
         input_text = f"to: {recipient}\n{input_text}"
-    trace_id = card.get("trace_id") or trace.get() or "-"
+    trace_id = card.get("trace_id") or tracing.get() or "-"
     target_skill = skill or DEFAULT_CARD_SKILL
 
     draft = _new_draft(description, input_text, trace_id,
@@ -235,7 +235,7 @@ def cmd_offline(skill: str, note: str, input_file: str | None, case_type: str,
         except OSError as e:
             print(f"{RED}cannot read --input-file{RESET}: {e}", file=sys.stderr)
             return 1
-    trace_id = trace.get() or "-"
+    trace_id = tracing.get() or "-"
     draft = _new_draft(note, input_text, trace_id, source="manual", case_type=case_type)
     path = _stage_draft(skill, draft)
     if as_json:

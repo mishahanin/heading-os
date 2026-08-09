@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.utils.venv import venv_python
+from scripts.utils.venv_guard import venv_python
 
 # run-tests.py calls ensure_venv() at import, and ensure_venv() calls os.execv
 # when the running interpreter is not .venv/bin/python. Importing this module

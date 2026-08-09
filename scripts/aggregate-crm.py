@@ -40,7 +40,7 @@ from scripts.utils.workspace import (
     get_workspace_root, load_admin_config, get_data_root,
     get_crm_contacts_dir, get_crm_config_path, get_personal_root,
 )
-from scripts.utils.operator import operator_slug, operator_org
+from scripts.utils.operator_identity import operator_slug, operator_org
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET
 from scripts.utils.markdown import parse_frontmatter_str as _parse_frontmatter
 

@@ -58,7 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Re-exec under the project venv before anything else: the test gate spawns its
 # runner with sys.executable, so the whole chain must inherit the locked deps
 # (the system interpreter lacks pytest-cov). See scripts/utils/venv.py.
-from scripts.utils.venv import ensure_venv  # noqa: E402
+from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
 

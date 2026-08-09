@@ -99,7 +99,7 @@ def test_the_contract_child_is_launched_by_the_project_interpreter(monkeypatch, 
     still names the caller passes any weaker assertion.
     """
     from scripts.utils import canopus_contract
-    from scripts.utils.venv import venv_python
+    from scripts.utils.venv_guard import venv_python
 
     monkeypatch.setattr(sys, "executable", "/decoy/python")
     command = _captured_command(monkeypatch, tree)
@@ -141,7 +141,7 @@ def test_the_choice_is_one_named_function(monkeypatch):
     a path that runs pytest.
     """
     from scripts.utils.canopus_contract import contract_interpreter
-    from scripts.utils.venv import venv_python
+    from scripts.utils.venv_guard import venv_python
 
     monkeypatch.setattr(sys, "executable", "/decoy/python")
 

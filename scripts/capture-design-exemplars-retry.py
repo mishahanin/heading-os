@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils.venv import ensure_venv  # noqa: E402
+from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
 from scripts.utils.colors import CYAN, GREEN, RED, RESET  # noqa: E402

@@ -9,7 +9,7 @@
 # in your own values. That file is gitignored / routed private and never ships in
 # the engine.
 #
-# Resolution precedence (highest wins), see scripts/utils/operator.py:
+# Resolution precedence (highest wins), see scripts/utils/operator_identity.py:
 #   1. environment  HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}
 #   2. data overlay <data-root>/config/operator.yaml
 #   3. engine-local config/operator.yaml   (gitignored; for a data-less clone)

@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import watchdog_core
-from scripts.utils import trace
+from scripts.utils import tracing
 from scripts.utils.colors import BOLD, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.trace_filter import attach
 from scripts.utils.workspace import get_workspace_root
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Adopt an inherited trace ID if present (in-process daemon path sets one),
     # else mint a fresh one for this CLI run.
-    trace.ensure()
+    tracing.ensure()
     import logging
     attach(logging.getLogger("x31c.watchdog"))
 

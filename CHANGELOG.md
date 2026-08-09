@@ -8,6 +8,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **Six modules in the script tree carried standard-library names, and two of
+  them were already breaking on the service VM.** Python puts an executed
+  script's own directory first on `sys.path`, so running any file in
+  `scripts/utils/` handed that directory the right to answer the standard
+  library's own imports. `scripts/utils/operator.py` therefore intercepted
+  `enum`'s `from operator import or_` during interpreter warm-up and died on a
+  circular import through `functools` and `collections`, taking every direct
+  run of every module in that directory with it. `scripts/utils/html.py` failed
+  earlier and more quietly: `from html.parser import HTMLParser` resolved back
+  to itself, so the module could not import its own dependency. Neither
+  reproduced on the development laptop, because the distribution's `.pth` files
+  load `operator` before any workspace file can claim the name; a bare venv on
+  the server had no such head start, which is how an import bug hid behind a
+  green test suite for weeks. Renamed: `operator` to `operator_identity`,
+  `html` to `html_text`, `trace` to `tracing`, `venv` to `venv_guard`,
+  `bridge_daemon/sources/calendar` to `agenda`, and
+  `bridge_daemon/refreshers/email` to `mail`. Every import is package-qualified,
+  so no daemon was ever affected and no public interface changes.
+  `tests/test_no_stdlib_shadowing.py` now fails on any future file in
+  `scripts/` or `.claude/hooks/` that takes a standard-library name.
+
 - **`Maximum` appeared as `Jordanum` in 16 files, and had been shipping that way
   since the repository was first published.** `git log -S` dates it to
   `c1aedf0`, the squashed initial import of 2026-06-29: a find-and-replace during

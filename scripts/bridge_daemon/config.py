@@ -68,7 +68,7 @@ def load_config(workspace_root: Path) -> dict[str, Any]:
     # Resolve the operator's slug through the identity seam when no config layer
     # set it (operator.yaml / env; generic "operator" on a fresh clone).
     if not cfg.get("user_slug"):
-        from scripts.utils.operator import operator_slug
+        from scripts.utils.operator_identity import operator_slug
         cfg["user_slug"] = operator_slug()
     return cfg
 

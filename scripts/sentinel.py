@@ -41,12 +41,12 @@ import yaml
 from scripts.utils import claude_models
 from scripts.utils import daemon_heartbeat  # noqa: E402
 from scripts.utils import telegram_notify  # noqa: E402
-from scripts.utils import trace  # noqa: E402
+from scripts.utils import tracing  # noqa: E402
 from scripts.utils.healthchecks import ping as hc_ping  # noqa: E402
-from scripts.utils.html import strip_html  # noqa: E402
+from scripts.utils.html_text import strip_html  # noqa: E402
 from scripts.utils.llm_fallback import call_anthropic_with_fallback  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
-from scripts.utils.operator import get_operator  # noqa: E402
+from scripts.utils.operator_identity import get_operator  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, get_workspace_root, load_env, resolve_config_with_example  # noqa: E402
 
@@ -1745,7 +1745,7 @@ class Sentinel:
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         # R12: mint trace ID + install record factory before any handler so
         # every line carries [trace_id].
-        trace.mint()
+        tracing.mint()
         install_log_factory()
         logger = logging.getLogger("sentinel")
         logger.setLevel(getattr(logging, self.config.log_level, logging.INFO))

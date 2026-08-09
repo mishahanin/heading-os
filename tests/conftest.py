@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.utils import venv as _venv
+from scripts.utils import venv_guard as _venv
 
 os.environ.setdefault("HEADING_OS_TZ", "Etc/GMT-4")
 

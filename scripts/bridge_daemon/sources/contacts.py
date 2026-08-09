@@ -27,7 +27,7 @@ from scripts.bridge_daemon.sources.tribe import (
 )
 from scripts.utils.paths import get_data_root
 from scripts.utils.workspace import get_all_active_exec_slugs
-from scripts.utils.operator import operator_slug
+from scripts.utils.operator_identity import operator_slug
 
 CRM_CENTRAL_DIRNAME = "31c-crm-central"
 PER_EXEC_REPO_PREFIX = "31c-crm-"

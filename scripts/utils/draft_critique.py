@@ -31,7 +31,7 @@ import json
 from datetime import datetime, timezone
 
 from scripts.utils import claude_models
-from scripts.utils import trace
+from scripts.utils import tracing
 from scripts.utils.observability import observe
 
 # Cheap family by default. A family, never a version: the critic that reads an
@@ -157,7 +157,7 @@ def critique_draft(subject, body, recipient=None, *, model=None) -> dict | None:
             "summary": summary,
             "model": resolved,
             "at": datetime.now(timezone.utc).isoformat(),
-            "trace_id": trace.get() or "-",
+            "trace_id": tracing.get() or "-",
         }
     except Exception:
         # Advisory only: a critique failure must never propagate. Skip silently;

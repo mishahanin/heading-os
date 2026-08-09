@@ -38,7 +38,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from scripts.utils import telegram_notify
-from scripts.utils import trace
+from scripts.utils import tracing
 from scripts.utils.workspace import get_workspace_root
 
 # Injected at bridge startup via init().  None until then (graceful degradation).
@@ -137,7 +137,7 @@ def alert(severity: str, summary: str, detail: str = "", *, source: str = "") ->
         is always True.
     """
     sev = severity if severity in SEVERITIES else "warning"
-    tid = trace.get() or "-"
+    tid = tracing.get() or "-"
     fired = {"telegram": False, "card": False, "log": False}
 
     # Log is the always-on floor. The factory in trace_filter stamps trace_id

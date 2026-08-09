@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils import daemon_heartbeat, trace
+from scripts.utils import daemon_heartbeat, tracing
 
 
 def _heartbeat_path(root: Path, name: str) -> Path:
@@ -22,11 +22,11 @@ def _heartbeat_path(root: Path, name: str) -> Path:
 
 def test_beat_writes_well_formed_file_with_trace_id(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon_heartbeat, "get_workspace_root", lambda: tmp_path)
-    trace.set("test-trace-id-abc123")
+    tracing.set("test-trace-id-abc123")
     try:
         daemon_heartbeat.beat("sync-exchange", config_version="3")
     finally:
-        trace.clear()
+        tracing.clear()
 
     path = _heartbeat_path(tmp_path, "sync-exchange")
     assert path.exists()

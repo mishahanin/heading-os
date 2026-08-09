@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-from scripts.utils.venv import ensure_venv  # noqa: E402
+from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
 # exchangelib names are bound lazily (F-2.1: import stays pure). The daemon
@@ -59,7 +59,7 @@ def _ensure_exchangelib():
     )
 
 
-from scripts.utils.html import strip_html  # noqa: E402
+from scripts.utils.html_text import strip_html  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_default_tz, get_default_tz_name, get_outputs_dir, get_workspace_root, load_env  # noqa: E402
 
 # ============================================================

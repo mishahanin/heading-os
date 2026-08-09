@@ -17,7 +17,7 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_env
-from scripts.utils.operator import operator_slug
+from scripts.utils.operator_identity import operator_slug
 from scripts.utils.paths import get_data_root
 
 from scripts.bridge_daemon._atomic import atomic_write_text
@@ -34,14 +34,14 @@ from scripts.bridge_daemon.config import (
 )
 from scripts.bridge_daemon.error_tracker import install_handler as install_error_tracker
 from scripts.bridge_daemon.heartbeat import write_heartbeat
-from scripts.bridge_daemon.refreshers import email as r_email
+from scripts.bridge_daemon.refreshers import mail as r_mail
 from scripts.bridge_daemon.refreshers import inflight as r_inflight
 from scripts.bridge_daemon.refreshers import pulse as r_pulse
 from scripts.bridge_daemon.scheduler import build_scheduler
 from scripts.bridge_daemon.state import State
 from scripts.bridge_daemon.watcher import start_observer
 from scripts.utils import daemon_heartbeat
-from scripts.utils import trace
+from scripts.utils import tracing
 from scripts.utils.trace_filter import install_log_factory
 
 LOG_PATH = WORKSPACE_ROOT / ".daemon-state" / "bridge.log"
@@ -394,7 +394,7 @@ def start_daemon(explicit_port: int | None = None):
     # R12: mint a trace ID for this daemon's process tree and install the
     # record factory before any logging so every line (and every subprocess
     # this daemon spawns) carries the same [trace_id].
-    trace.mint()
+    tracing.mint()
     install_log_factory()
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     # Rotating handler: 1 MB per file, 3 backups (~4 MB total cap).
@@ -470,7 +470,7 @@ def start_daemon(explicit_port: int | None = None):
                 logging.warning(f"config reconcile failed (non-fatal): {e}")
 
         jobs = {
-            "email": lambda: r_email.refresh(WORKSPACE_ROOT, state),
+            "email": lambda: r_mail.refresh(WORKSPACE_ROOT, state),
             "inflight": lambda: r_inflight.refresh(WORKSPACE_ROOT, state),
             # Phase 2 (2026-05-24): pulse refresher computes the full payload
             # off the request path and writes .daemon-state/pulse-snapshot.json.

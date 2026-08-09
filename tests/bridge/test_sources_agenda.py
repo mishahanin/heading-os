@@ -1,7 +1,7 @@
 """Unit tests for /day calendar source - full today's agenda parsing."""
 from datetime import datetime, timezone
 
-from scripts.bridge_daemon.sources.calendar import today_agenda
+from scripts.bridge_daemon.sources.agenda import today_agenda
 
 
 def _write_today(workspace_root, content, date_str):

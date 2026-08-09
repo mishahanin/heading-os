@@ -10,11 +10,11 @@ deferred (see plans/2026-06-03-now-phase-spine.md, Design Decision 1).
 
 Usage::
 
-    from scripts.utils import trace
-    trace.mint()                 # at daemon / CLI-script entry, before logging
-    tid = trace.get()            # current ID, or None
-    trace.set("known-id")        # adopt an externally-supplied ID
-    trace.clear()                # drop it (tests)
+    from scripts.utils import tracing
+    tracing.mint()                 # at daemon / CLI-script entry, before logging
+    tid = tracing.get()            # current ID, or None
+    tracing.set("known-id")        # adopt an externally-supplied ID
+    tracing.clear()                # drop it (tests)
 
 Pair with ``scripts.utils.trace_filter.install_log_factory()`` so every log
 record carries the ID, then add ``[%(trace_id)s]`` to the log formatter.

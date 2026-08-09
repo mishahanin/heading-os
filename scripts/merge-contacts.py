@@ -22,7 +22,7 @@ from scripts.utils.workspace import (
     get_per_exec_repo_path, get_all_active_exec_slugs,
     get_crm_contacts_dir,
 )
-from scripts.utils.operator import operator_slug
+from scripts.utils.operator_identity import operator_slug
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 
 

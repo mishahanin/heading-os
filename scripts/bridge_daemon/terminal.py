@@ -165,7 +165,7 @@ def _build_initial_prompt(action: str, context: dict | None) -> str:
         # Template the whole voice clause off the operator seam: the name AND the
         # voice-reference path are personalized, resolved from operator.yaml / env
         # (generic "Operator" / "reference/voice.md" on a fresh clone).
-        from scripts.utils.operator import get_operator
+        from scripts.utils.operator_identity import get_operator
         op = get_operator()
         op_name = op["name"]
         op_voice = op["voice_reference"]

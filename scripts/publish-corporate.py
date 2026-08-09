@@ -51,7 +51,7 @@ from scripts.utils.workspace import (  # noqa: E402
     get_routing_destination,
     get_workspace_root,
 )
-from scripts.utils.operator import operator_slug  # noqa: E402
+from scripts.utils.operator_identity import operator_slug  # noqa: E402
 
 # Identity gate reads .workspace-identity.json from the engine clone root.
 WORKSPACE_ROOT = get_workspace_root()

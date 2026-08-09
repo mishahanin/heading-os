@@ -15,14 +15,14 @@ Two mechanisms, use either or both:
 ``attach(logger, fmt=...)`` is a convenience that installs the factory, adds a
 ``TraceFilter`` to ``logger``, and applies a formatter to its handlers.
 
-See ``scripts.utils.trace`` for minting and ``.claude/rules/trace-id.md`` for
+See ``scripts.utils.tracing`` for minting and ``.claude/rules/trace-id.md`` for
 the convention.
 """
 from __future__ import annotations
 
 import logging
 
-from scripts.utils import trace
+from scripts.utils import tracing
 
 # Standard log line format with the trace ID bracketed before the message.
 DEFAULT_FORMAT = "%(asctime)s %(levelname)s [%(trace_id)s] %(message)s"
@@ -34,7 +34,7 @@ class TraceFilter(logging.Filter):
     """Inject the current trace ID onto each record as ``trace_id``."""
 
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
-        record.trace_id = trace.get() or "-"
+        record.trace_id = tracing.get() or "-"
         return True
 
 
@@ -44,7 +44,7 @@ def install_log_factory() -> None:
     Idempotent: safe to call from every daemon/script entry. Wraps whatever
     factory is currently installed so we compose with other custom factories.
     The ID is read at record-creation time, so it reflects the value set by
-    ``trace.mint()`` for the life of the process.
+    ``tracing.mint()`` for the life of the process.
     """
     global _factory_installed
     if _factory_installed:
@@ -55,7 +55,7 @@ def install_log_factory() -> None:
         record = existing(*args, **kwargs)
         # Only set when absent so an explicit TraceFilter or adapter can win.
         if not hasattr(record, "trace_id"):
-            record.trace_id = trace.get() or "-"
+            record.trace_id = tracing.get() or "-"
         return record
 
     logging.setLogRecordFactory(_factory)

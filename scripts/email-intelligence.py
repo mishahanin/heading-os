@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.api import load_api_key
 from scripts.utils import claude_models
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.html import strip_html
+from scripts.utils.html_text import strip_html
 from scripts.utils.llm_fallback import call_anthropic_with_fallback
 from scripts.utils.observability import observe
 from scripts.utils.workspace import get_workspace_root, load_env, resolve_config_with_example, get_outputs_dir, get_crm_contacts_dir, get_context_dir, get_default_tz

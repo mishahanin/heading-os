@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils.venv import ensure_venv  # noqa: E402
+from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
 from scripts.utils.workspace import get_datastore_dir, get_outputs_dir

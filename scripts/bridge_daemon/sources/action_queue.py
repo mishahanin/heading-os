@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
-from scripts.utils import dead_letter, tool_risk, trace
+from scripts.utils import dead_letter, tool_risk, tracing
 
 QUEUE_FILE = "outputs/operations/action-queue/queue.json"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
 DISPOSITION_LOG = "outputs/operations/action-queue/disposition-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
@@ -86,7 +86,7 @@ def _write_queue(workspace_root: Path, data: dict) -> None:
 
 def _log_event(workspace_root: Path, event: dict) -> None:
     """Append one audit event to disposition-log.jsonl. Caller holds _LOCK."""
-    event = {"ts": _now_iso(), "trace_id": trace.get() or "-", **event}
+    event = {"ts": _now_iso(), "trace_id": tracing.get() or "-", **event}
     log_path = workspace_root / DISPOSITION_LOG
     log_path.parent.mkdir(parents=True, exist_ok=True)
     existing = ""
@@ -184,7 +184,7 @@ def append_cards(workspace_root: Path, cards: list[dict]) -> dict:
             card["created_at"] = card.get("created_at") or _now_iso()
             card["status"] = "pending"
             card["tier"] = tool_risk.tier_for(card["action_type"])
-            card.setdefault("trace_id", trace.get() or "-")
+            card.setdefault("trace_id", tracing.get() or "-")
             card.setdefault("priority", "P3")
             card.setdefault("citations", [])
             actions.append(card)

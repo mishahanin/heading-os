@@ -842,7 +842,7 @@ def _today_event_count(workspace_root: Path, data_root: "Path | None" = None) ->
     if data_root is None:
         data_root = get_data_root()
     try:
-        from .calendar import today_agenda
+        from .agenda import today_agenda
         agenda = today_agenda(data_root)
         return len(agenda.get("events") or [])
     except Exception:

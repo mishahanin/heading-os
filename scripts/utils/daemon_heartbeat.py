@@ -19,7 +19,7 @@ Fields written:
 - ``config_loaded_version``: version of the merged config in memory, or "unversioned"
 - ``uptime_s``: seconds since this process imported the module (per-process boot ts)
 - ``last_heartbeat``: ISO-8601 UTC of this write
-- ``trace_id``: the process-tree trace ID (``scripts.utils.trace.get()``), or None
+- ``trace_id``: the process-tree trace ID (``scripts.utils.tracing.get()``), or None
 
 Never raises: a write failure logs a warning so the scheduler keeps ticking and
 only the one beat is lost.
@@ -39,7 +39,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.utils import trace
+from scripts.utils import tracing
 from scripts.utils.workspace import get_workspace_root
 
 # Per-process boot timestamp, captured once at import. uptime_s is measured
@@ -94,7 +94,7 @@ def beat(daemon_name: str, *, config_version: str | None = None) -> None:
             "config_loaded_version": config_version if config_version is not None else "unversioned",
             "uptime_s": int(time.time() - _BOOT_TS),
             "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-            "trace_id": trace.get(),
+            "trace_id": tracing.get(),
         }
         _atomic_write_json(path, payload)
     except OSError as e:

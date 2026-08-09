@@ -659,7 +659,7 @@ def test_a_module_already_imported_when_the_plugin_arms_is_supplied_too(
 
     An import of a module already in `sys.modules` short-circuits there, so the
     claim is real and the wrap never happens. Measured on this repository: the
-    root conftest imports `scripts.utils.venv` at module level, initial conftests
+    root conftest imports `scripts.utils.venv_guard` at module level, initial conftests
     load BEFORE a `-p` plugin's `pytest_configure`, and a contract naming that
     module therefore stayed red for its original reason under BOTH value sets.
     Both runs agreeing "red" is the reading that never fires the vacuity rule, so

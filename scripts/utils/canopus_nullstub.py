@@ -23,7 +23,7 @@ toward refusing a good contract.
 Why the claim is applied twice, on two surfaces. A finder on `sys.meta_path`
 only ever sees imports that REACH it, and an import of a module already in
 `sys.modules` short-circuits there. Measured in this repository, the root
-conftest imports `scripts.utils.venv` at module level and initial conftests load
+conftest imports `scripts.utils.venv_guard` at module level and initial conftests load
 before a `-p` plugin's `pytest_configure`, so a contract naming that module was
 claimed, never stubbed, and stayed red for its original reason under both value
 sets. Both runs agreeing "red" never fires the vacuity rule, so `pytest_configure`
@@ -939,7 +939,7 @@ def pytest_configure(config):
     The second half is not decoration. The finder only ever sees imports that
     reach `sys.meta_path`, and an import of a module already in `sys.modules`
     short-circuits there, so a perfectly good claim is never consulted. Measured
-    on this repository: the root conftest imports `scripts.utils.venv` at module
+    on this repository: the root conftest imports `scripts.utils.venv_guard` at module
     level and initial conftests load BEFORE a `-p` plugin's `pytest_configure`,
     so a contract naming that module stayed red for its original reason under
     BOTH value sets. Both runs agreeing "red" is the reading that never fires the

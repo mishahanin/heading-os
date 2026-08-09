@@ -438,7 +438,7 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         state.bump("inbox")
         return result
 
-    from .sources.calendar import today_agenda as _day_source
+    from .sources.agenda import today_agenda as _day_source
 
     @app.get("/day")
     def day(authorization: str | None = Header(None)):

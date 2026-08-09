@@ -33,7 +33,7 @@ WORKSPACE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE))
 
 from scripts.utils import daemon_heartbeat  # noqa: E402
-from scripts.utils import trace  # noqa: E402
+from scripts.utils import tracing  # noqa: E402
 from scripts.utils.scheduler_defaults import JOB_DEFAULTS  # noqa: E402
 from scripts.utils.trace_filter import install_log_factory  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_default_tz_name, load_env  # noqa: E402
@@ -83,7 +83,7 @@ def _setup_logging() -> logging.Logger:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     # R12: mint this process's trace ID + install the record factory before
     # any handler is built so every line carries [trace_id].
-    trace.mint()
+    tracing.mint()
     install_log_factory()
     logger = logging.getLogger("fireside-daemon")
     if logger.handlers:

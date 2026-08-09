@@ -78,7 +78,7 @@ def get_workspace_identity() -> dict:
     identity_file = root / ".workspace-identity.json"
     if not identity_file.exists():
         # Bootstrap identity: this IS the identity resolver, and the operator seam
-        # (scripts.utils.operator) is built ON TOP of it -- it resolves through
+        # (scripts.utils.operator_identity) is built ON TOP of it -- it resolves through
         # get_data_config_dir() -> get_personal_root() -> is_ceo_workspace() ->
         # get_workspace_identity(), so calling it here would recurse. The
         # de-personalized generic slug is therefore a plain literal, not a seam
@@ -545,7 +545,7 @@ def get_admin_slugs() -> list:
         else:
             # Fleet admins is a distinct concept (plural); the singular operator
             # slug is the sensible one-instance default when admin.json is absent.
-            from scripts.utils.operator import operator_slug
+            from scripts.utils.operator_identity import operator_slug
             ADMIN_SLUGS = [operator_slug()]
     return ADMIN_SLUGS
 
@@ -553,7 +553,7 @@ def get_admin_slugs() -> list:
 def load_github_org() -> str:
     """Load the GitHub org: the operator seam (operator.yaml/env) first, then
     admin.json's github_org, else the seam's value ('' on a fresh clone)."""
-    from scripts.utils.operator import operator_org
+    from scripts.utils.operator_identity import operator_org
     org = operator_org()
     if org:
         return org

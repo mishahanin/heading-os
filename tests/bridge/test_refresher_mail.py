@@ -1,5 +1,5 @@
 import json
-from scripts.bridge_daemon.refreshers.email import read_email_state, count_unread
+from scripts.bridge_daemon.refreshers.mail import read_email_state, count_unread
 
 
 class _FakePath:
@@ -40,7 +40,7 @@ def test_count_unread(workspace_root):
 
 def test_refresh_bumps_inbox_version(workspace_root, monkeypatch):
     """refresh() must call state_obj.bump('inbox'), even when state.json missing."""
-    import scripts.bridge_daemon.refreshers.email as email_mod
+    import scripts.bridge_daemon.refreshers.mail as email_mod
     from scripts.bridge_daemon.state import State
 
     # Force missing-producer branch so this test stays hermetic and doesn't
@@ -57,7 +57,7 @@ def test_refresh_bumps_inbox_version(workspace_root, monkeypatch):
 
 def test_refresh_subprocess_success_bumps_inbox(workspace_root, monkeypatch):
     """When the producer subprocess succeeds, refresh bumps inbox version."""
-    import scripts.bridge_daemon.refreshers.email as email_mod
+    import scripts.bridge_daemon.refreshers.mail as email_mod
     from scripts.bridge_daemon.state import State
     state = State()
     before = state.version("inbox")
@@ -77,7 +77,7 @@ def test_refresh_subprocess_success_bumps_inbox(workspace_root, monkeypatch):
 
 def test_refresh_subprocess_failure_still_bumps_inbox(workspace_root, monkeypatch):
     """A non-zero exit from the producer is logged but doesn't suppress the bump."""
-    import scripts.bridge_daemon.refreshers.email as email_mod
+    import scripts.bridge_daemon.refreshers.mail as email_mod
     from scripts.bridge_daemon.state import State
     state = State()
     before = state.version("inbox")
@@ -95,7 +95,7 @@ def test_refresh_subprocess_failure_still_bumps_inbox(workspace_root, monkeypatc
 
 def test_refresh_subprocess_timeout_still_bumps_inbox(workspace_root, monkeypatch):
     """A TimeoutExpired from the producer is logged but doesn't crash refresh."""
-    import scripts.bridge_daemon.refreshers.email as email_mod
+    import scripts.bridge_daemon.refreshers.mail as email_mod
     from scripts.bridge_daemon.state import State
     import subprocess as sp
     state = State()
@@ -111,7 +111,7 @@ def test_refresh_subprocess_timeout_still_bumps_inbox(workspace_root, monkeypatc
 def test_refresh_missing_producer_warns_and_bumps(workspace_root, monkeypatch):
     """When the producer script is missing, refresh logs a warning and still
     bumps the inbox version (so the dashboard freshness UI advances)."""
-    import scripts.bridge_daemon.refreshers.email as email_mod
+    import scripts.bridge_daemon.refreshers.mail as email_mod
     from scripts.bridge_daemon.state import State
     state = State()
     before = state.version("inbox")

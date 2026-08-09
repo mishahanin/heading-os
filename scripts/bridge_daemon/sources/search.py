@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .capabilities import list_capabilities
-from .calendar import today_agenda
+from .agenda import today_agenda
 from .inbox import read_inbox
 from .investors import list_investors
 from .library import list_library

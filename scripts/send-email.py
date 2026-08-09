@@ -146,7 +146,7 @@ WORKSPACE_ROOT = SCRIPT_DIR.parent
 
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
-from scripts.utils.venv import ensure_venv  # noqa: E402
+from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
 from scripts.utils.workspace import get_data_root, load_env  # noqa: E402

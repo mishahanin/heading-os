@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.utils import venv as _venv
+from scripts.utils import venv_guard as _venv
 
 ROOT = Path(__file__).resolve().parent.parent
 TESTS = ROOT / "tests"

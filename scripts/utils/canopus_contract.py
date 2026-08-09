@@ -60,7 +60,7 @@ from scripts.utils import canopus_nullstub as _nullstub
 # the second re-execs the running process, and this module is imported by the
 # CLI, by the gate's callers and by the suite. An import that could re-exec is a
 # module that cannot be imported from a test.
-from scripts.utils.venv import interpreter_identity, venv_python
+from scripts.utils.venv_guard import interpreter_identity, venv_python
 
 DEFAULT_PATTERNS = ("test_*.py",)
 RED_OUTCOMES = ("failure", "error")

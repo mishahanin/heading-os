@@ -119,7 +119,9 @@ calendar:
   max_duration_minutes: 80
 
 llm:
-  model: "claude-haiku-4-5-20251001"
+  # model: "<explicit model id>"   # optional pin for reproducing one run;
+  # omit it (the default) to track the newest Haiku via
+  # scripts/utils/claude_models.py
   max_tokens: 500
   # Context files loaded at startup for business-aware urgency scoring
   context_files:

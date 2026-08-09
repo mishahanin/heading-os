@@ -39,8 +39,9 @@ triggers the cap early rather than silently under-counting spend).
 Usage::
 
     from scripts.inbox_pulse.cost import record_call, check_daily_cap
+    from scripts.utils import claude_models
 
-    record_call("claude-haiku-4-5-20251001", input_tokens=1500, output_tokens=300)
+    record_call(claude_models.latest("haiku"), input_tokens=1500, output_tokens=300)
     if check_daily_cap():
         raise RuntimeError("Daily LLM spend cap reached -- aborting call")
 """
@@ -161,7 +162,7 @@ def record_call(model: str, input_tokens: int, output_tokens: int) -> None:
     """Record an LLM call's token usage to the daily cost-tracker state file.
 
     Args:
-        model:         Model name string (e.g. "claude-haiku-4-5-20251001").
+        model:         Resolved model id, from claude_models.latest("haiku").
         input_tokens:  Number of input tokens consumed by this call.
         output_tokens: Number of output tokens produced by this call.
 

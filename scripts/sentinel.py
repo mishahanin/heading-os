@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import yaml
 
+from scripts.utils import claude_models
 from scripts.utils import daemon_heartbeat  # noqa: E402
 from scripts.utils import telegram_notify  # noqa: E402
 from scripts.utils import trace  # noqa: E402
@@ -1420,7 +1421,7 @@ Respond ONLY in this JSON format (no markdown, no code fences):
 {{"urgency_score": <1-10>, "reason": "<1 sentence>", "summary": "<2-3 sentences>", "recommended_action": "<specific action using categories above>"}}"""
 
     def __init__(self, config: dict, logger: logging.Logger):
-        self.model = config.get("model", "claude-haiku-4-5-20251001")
+        self.model = config.get("model") or claude_models.latest("haiku")
         self.max_tokens = config.get("max_tokens", 500)
         self.logger = logger
         self.client = None

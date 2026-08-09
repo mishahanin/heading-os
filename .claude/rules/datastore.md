@@ -1,4 +1,3 @@
-<!-- version: 1.0.0 | last-updated: 2026-04-28 -->
 ---
 paths:
   - "outputs/content/**"
@@ -6,6 +5,7 @@ paths:
   - "datastore/**"
 ---
 
+<!-- version: 1.0.0 | last-updated: 2026-04-28 -->
 # DataStore -- Source of Truth
 
 Last Verified: 2026-06-08

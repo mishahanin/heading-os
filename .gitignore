@@ -94,6 +94,9 @@ outputs/browser/firecrawl-cache/
 # DocParse cache (parsed document data, regenerated on demand)
 .cache/docparse/
 
+# Claude model list (rebuildable 24h cache of the Models API)
+.cache/claude-models.json
+
 # Auto-generated sync state (calendar, email, linkedin) - moved out of datastore in restructure
 outputs/_sync/
 

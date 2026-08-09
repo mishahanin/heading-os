@@ -49,6 +49,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils import claude_models  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET  # noqa: E402
 from scripts.utils.observability import observe  # noqa: E402
 from scripts.utils.workspace import get_workspace_root, load_env  # noqa: E402
@@ -203,22 +204,20 @@ def call_skill(system_prompt: str, user_input: str, model: str) -> tuple[str, di
 # Runner
 # ---------------------------------------------------------------------------
 
-# Default model when a skill does not declare its own (e.g. content skills).
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
-
-# Map skill frontmatter model alias to a concrete model ID.
-MODEL_ALIAS = {
-    "haiku": "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-7",
-}
+# Family used when a skill does not declare its own (e.g. content skills). A
+# family, never a version: `claude_models.latest` turns it into today's newest
+# release, so a new Haiku reaches the eval harness without a code edit.
+DEFAULT_FAMILY = "haiku"
 
 
 def resolve_model(frontmatter: dict, override: str | None) -> str:
-    if override:
-        return MODEL_ALIAS.get(override, override)
-    declared = frontmatter.get("model", "")
-    return MODEL_ALIAS.get(declared, declared) if declared else DEFAULT_MODEL
+    """Concrete model id for this run: override, then the skill's declared family.
+
+    A value that is not a known family (`opus`/`sonnet`/`haiku`/`fable`) passes
+    through untouched, so an explicit `--model <id>` still reproduces an old run.
+    """
+    declared = override or frontmatter.get("model", "")
+    return claude_models.resolve(declared, default_family=DEFAULT_FAMILY)
 
 
 def run_one_skill(skill_name: str, case_filter: str | None, model_override: str | None,
@@ -323,7 +322,7 @@ def main() -> int:
     g.add_argument("--skill", help="Skill name (directory under .claude/skills/)")
     g.add_argument("--all", action="store_true", help="Run every skill with an evals/cases/ dir")
     parser.add_argument("--case", help="Run only the case with this id")
-    parser.add_argument("--model", help="Override the model (haiku/sonnet/opus or full id)")
+    parser.add_argument("--model", help="Override the model (haiku/sonnet/opus/fable or full id)")
     parser.add_argument("--dry-run", action="store_true", help="Parse cases without calling the API")
     parser.add_argument("--no-write", action="store_true", help="Do not update benchmark.json")
     args = parser.parse_args()

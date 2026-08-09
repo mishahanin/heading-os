@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils import claude_models
 from scripts.utils.api import load_api_key
 from scripts.utils.observability import observe
 from scripts.utils.search import search_with_fallback, NoBackendsConfigured, SearchBackendError
@@ -37,10 +38,9 @@ from scripts.utils.workspace import (
 )
 
 
-MODELS = {
-    "haiku": "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-6",
-}
+# Families, not versions. `claude_models.latest` resolves each to today's newest
+# release, so this script never needs editing when a new Haiku or Sonnet ships.
+MODEL_FAMILIES = ("haiku", "sonnet")
 
 
 def _slugify(name: str) -> str:
@@ -264,7 +264,7 @@ def compute_resolution_status(canonical: dict, mode: str) -> str:
 
 
 @observe()
-def call_anthropic(target: str, mode: str, search_results: list[dict], model_key: str) -> dict:
+def call_anthropic(target: str, mode: str, search_results: list[dict], model: str) -> dict:
     """Call Anthropic with tool_use to extract structured plan. Returns the tool_use input."""
     import anthropic
 
@@ -297,7 +297,7 @@ def call_anthropic(target: str, mode: str, search_results: list[dict], model_key
     }
 
     response = client.messages.create(
-        model=MODELS[model_key],
+        model=model,
         max_tokens=2000,
         system=[{
             "type": "text",
@@ -322,7 +322,7 @@ def main() -> int:
                         choices=["auto", "company", "person", "market", "technology"])
     parser.add_argument("--output", default="json", choices=["json", "pretty"])
     parser.add_argument("--depth", default="standard", choices=["quick", "standard"])
-    parser.add_argument("--model", default="haiku", choices=["haiku", "sonnet"])
+    parser.add_argument("--model", default="haiku", choices=list(MODEL_FAMILIES))
     args = parser.parse_args()
 
     mode_reason = ""
@@ -359,8 +359,12 @@ def main() -> int:
         seen_urls.add(url)
         deduped.append(r)
 
+    # Resolve ONCE. Re-resolving for the report can straddle a cache expiry or
+    # a mid-run release, and then the output names a model that never ran.
+    model_used = claude_models.latest(args.model)
+
     try:
-        plan = call_anthropic(args.target, mode, deduped, args.model)
+        plan = call_anthropic(args.target, mode, deduped, model_used)
     except Exception as e:  # pragma: no cover - depends on live SDK
         out = {"error": "extraction_failed", "detail": str(e)[:300]}
         print(json.dumps(out, indent=2 if args.output == "pretty" else None))
@@ -375,7 +379,7 @@ def main() -> int:
         "mode_detection": mode_reason if args.mode == "auto" else "explicit",
         "backend_used": backend_used,
         "resolution_status": resolution_status,
-        "model_used": MODELS[args.model],
+        "model_used": model_used,
         **plan,
         "search_queries_used": queries,
         "sources": [{"url": r.get("url", ""), "title": r.get("title", "")} for r in deduped],

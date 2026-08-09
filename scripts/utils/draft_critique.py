@@ -30,16 +30,14 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from scripts.utils import claude_models
 from scripts.utils import trace
 from scripts.utils.observability import observe
 
-# Cheap-model default and alias map (mirrors scripts/run-skill-eval.py).
-_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
-_MODEL_ALIAS = {
-    "haiku": "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-7",
-}
+# Cheap family by default. A family, never a version: the critic that reads an
+# outbound draft before a human sends it should be on the current model without
+# anyone remembering to bump a literal here.
+_DEFAULT_FAMILY = "haiku"
 
 _RISK_LEVELS = ("low", "medium", "high")
 
@@ -65,9 +63,7 @@ _SYSTEM_PROMPT = (
 
 
 def _resolve_model(model: str | None) -> str:
-    if not model:
-        return _DEFAULT_MODEL
-    return _MODEL_ALIAS.get(model, model)
+    return claude_models.resolve(model, default_family=_DEFAULT_FAMILY)
 
 
 def _extract_text(response) -> str:

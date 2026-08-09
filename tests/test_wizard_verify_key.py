@@ -65,7 +65,7 @@ def test_verify_key_anthropic_timeout(monkeypatch):
 
 
 def test_verify_anthropic_uses_env_model_override(monkeypatch):
-    """WIZARD_PING_MODEL env var overrides DEFAULT_PING_MODEL in the POST body."""
+    """WIZARD_PING_MODEL env var overrides the resolved family in the POST body."""
     import json as _json
     mod = _load_verify()
     captured = {}
@@ -86,8 +86,12 @@ def test_verify_anthropic_uses_env_model_override(monkeypatch):
     assert captured["body"]["model"] == "claude-sonnet-X-Y-test-fixture"
 
 
-def test_verify_anthropic_uses_default_model_when_env_unset(monkeypatch):
-    """Without WIZARD_PING_MODEL, requests use DEFAULT_PING_MODEL."""
+def test_verify_anthropic_uses_the_resolved_family_when_env_unset(monkeypatch):
+    """Without WIZARD_PING_MODEL, the ping resolves PING_FAMILY to a live model.
+
+    Asserts the family, not a release: the whole point of the 2026-08-09 change
+    is that this script keeps working when the model it used to name is retired.
+    """
     import json as _json
     mod = _load_verify()
     captured = {}
@@ -105,4 +109,29 @@ def test_verify_anthropic_uses_default_model_when_env_unset(monkeypatch):
     monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.delenv("WIZARD_PING_MODEL", raising=False)
     mod.verify_anthropic("TEST-FIXTURE-KEY")
-    assert captured["body"]["model"] == mod.DEFAULT_PING_MODEL
+    sent = captured["body"]["model"]
+    assert sent.startswith(f"claude-{mod.PING_FAMILY}-"), sent
+
+
+def test_the_wizard_import_chain_stays_stdlib_only():
+    """The setup wizard must run on a fresh clone, before `uv sync` installs anything.
+
+    `wizard-verify-key.py` imports `scripts.utils.claude_models`, which reaches
+    `scripts.utils.workspace` and `scripts.utils.paths`. Both keep their
+    non-stdlib imports lazy today (`yaml` at workspace.py:435, a migrations
+    import at paths.py:196). Either one promoted to module level would strand the
+    wizard on an interpreter without the dependencies, silently. The comment in
+    the script says so; this asserts it.
+    """
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, '.');"
+         "import scripts.utils.claude_models;"
+         "print([n for n in sys.modules if n in ('yaml', 'requests', 'anthropic', 'numpy')])"],
+        capture_output=True, text=True, cwd=str(REPO),
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "[]", (
+        f"a third-party module is now imported at module level in the wizard's "
+        f"chain: {out.stdout.strip()}. The setup wizard runs before dependencies "
+        f"are installed.")

@@ -19,17 +19,27 @@ import socket
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# The resolver's transitive imports are stdlib-only TODAY, which is what keeps
+# this script runnable on a fresh clone before `uv sync`. It holds by luck of
+# two workspace modules keeping their non-stdlib imports lazy, so
+# tests/test_wizard_verify_key.py asserts it in a subprocess rather than
+# trusting this comment.
+from scripts.utils import claude_models  # noqa: E402
 
 TIMEOUT = 5.0
 
-# Model used for the live-ping test. Kept at module level so it can be
-# updated when the current model is retired. Override at runtime via
-# the WIZARD_PING_MODEL environment variable without editing this file.
-DEFAULT_PING_MODEL = "claude-haiku-4-5-20251001"
+# Family used for the live-ping test. Resolved to the newest Haiku at call
+# time, so a retired model can never strand the setup wizard. Override at
+# runtime via the WIZARD_PING_MODEL environment variable.
+PING_FAMILY = "haiku"
 
 
 def verify_anthropic(key: str):
-    model = os.environ.get("WIZARD_PING_MODEL", DEFAULT_PING_MODEL)
+    model = os.environ.get("WIZARD_PING_MODEL") or claude_models.latest(PING_FAMILY)
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
         method="POST",

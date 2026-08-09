@@ -1,4 +1,3 @@
-<!-- version: 1.3.2 | last-updated: 2026-07-20 -->
 ---
 paths:
   - ".claude/skills/**"
@@ -8,6 +7,7 @@ paths:
   - "templates/**"
 ---
 
+<!-- version: 1.3.2 | last-updated: 2026-07-20 -->
 # Development Standards
 
 Last Verified: 2026-07-08

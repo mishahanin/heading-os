@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.api import load_api_key
+from scripts.utils import claude_models
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.html import strip_html
 from scripts.utils.llm_fallback import call_anthropic_with_fallback
@@ -653,7 +654,7 @@ def analyze_conversations(conversations: list[dict], crm_map: dict, pipeline_tex
         try:
             result = call_anthropic_with_fallback(
                 client=client,
-                model="claude-haiku-4-5-20251001",
+                model=claude_models.latest("haiku"),
                 max_tokens=500 * len(batch),
                 system=[{
                     "type": "text",

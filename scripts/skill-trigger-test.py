@@ -26,7 +26,7 @@ Usage:
   python scripts/skill-trigger-test.py --all
   python scripts/skill-trigger-test.py --all --json
   python scripts/skill-trigger-test.py --all --strict --threshold 0.9
-  python scripts/skill-trigger-test.py --skill osint --model claude-haiku-4-5-20251001
+  python scripts/skill-trigger-test.py --skill osint --model haiku
 
 Exit codes: 0 completed (advisory, or strict-pass), 1 strict-threshold breached,
 2 setup error, 3 API/key error.
@@ -42,6 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils import claude_models  # noqa: E402
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.router_payload import (  # noqa: E402
     load_skill_description,
@@ -79,12 +80,10 @@ def list_skills_with_triggers() -> list[str]:
     return out
 
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
-MODEL_ALIAS = {
-    "haiku": "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-8",
-}
+# The judge runs on a family, never a version, so a new Sonnet judges routing
+# the day it ships. `claude_models.resolve` passes an explicit model id through
+# untouched for a caller reproducing an older judge run.
+DEFAULT_FAMILY = "sonnet"
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
                         "(a skill-router.md change widens to all)")
     parser.add_argument("--base", default="origin/main",
                         help="Diff base for --changed (default origin/main)")
-    parser.add_argument("--model", help="Judge model (haiku/sonnet/opus or full id)", default="sonnet")
+    parser.add_argument("--model", help="Judge model (haiku/sonnet/opus/fable or full id)", default="sonnet")
     parser.add_argument("--json", action="store_true", help="Emit structured JSON instead of text")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero if a skill's pass rate < threshold")
     parser.add_argument("--threshold", type=float, default=0.9, help="Strict pass-rate threshold (default 0.9)")
@@ -273,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{RED}ERROR{RESET}: anthropic SDK not installed.", file=sys.stderr)
         return 3
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    model = MODEL_ALIAS.get(args.model, args.model)
+    model = claude_models.resolve(args.model, default_family=DEFAULT_FAMILY)
 
     router_rules = load_full_router_rules()
     t0 = time.time()

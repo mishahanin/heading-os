@@ -16,7 +16,7 @@ inline budget.
 **Date:** YYYY-MM-DD
 **Mode:** [Company | Person | Market | Technology]
 **Analyst:** Claude OSINT Engine
-**Depth:** [Standard | Deep | Jordanum]
+**Depth:** [Standard | Deep | Maximum]
 **Context:** [Why this intelligence was gathered]
 
 ---

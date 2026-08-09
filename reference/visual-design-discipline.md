@@ -311,7 +311,7 @@ Reference exemplars: status.stripe.com (navy canvas, brand-green wordmark, singl
 ### 5.7 Public web / marketing site
 
 - 31C brand identity visible above the fold without needing the logo to identify the company. If the site without the logo could be from any sovereign-tech vendor in the category, the visual register has failed.
-- One hero element per page. Jordanum 4 discrete elements above the fold (Pass 4 empirical: Linear, Vercel, Stripe, Plausible all stay under 4).
+- One hero element per page. Maximum 4 discrete elements above the fold (Pass 4 empirical: Linear, Vercel, Stripe, Plausible all stay under 4).
 - "Trusted by" logo strip is permitted but it must be real customers with cleared distribution. No fake logos.
 - Footer construction: 31C-specific, not the universal four-column-link-grid pattern.
 

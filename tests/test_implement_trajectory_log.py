@@ -411,3 +411,178 @@ def test_reconcile_skipped_on_git_error(traj_dir, monkeypatch):
     monkeypatch.setattr(itl, "_git_changed_files", lambda gh: set())
     _write_traj("rge", _recon_events("deadbeef", ["a.py"]))
     assert itl.verify_trajectory("rge") == []
+
+
+# ============================================================
+# Plan reconciliation (2026-08-09 scrutiny: M1, M2, N1, L2)
+# ============================================================
+# Three findings from that audit were one shape: the run diverged from its own
+# plan and only the write-up noticed. A write-up authored by whoever diverged is
+# the weakest available check, so these read the plan file.
+_PLAN = """# Plan
+
+### Step 1: Do the thing
+
+**Files affected:**
+
+- `scripts/alpha.py`
+- `reference/workspace-overview.md`
+
+---
+
+## Implementation Notes
+
+### Deviations from Plan
+
+1. **First.** Because.
+2. **Second.** Because.
+
+### Issues Encountered
+
+None.
+"""
+
+
+def _plan_file(tmp_path, text=_PLAN):
+    p = tmp_path / "2026-08-09-a-plan.md"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def _plan_events(plan_path, recorded, deviations=0, deviation_first=False):
+    """Structurally clean run naming `plan_path`, recording `recorded`."""
+    events = [
+        {"event_type": "run_start", "step_number": 0,
+         "payload": {"plan_path": str(plan_path)}},
+    ]
+    if deviation_first:
+        events.append({"event_type": "deviation", "step_number": 1,
+                       "payload": {"step": 1, "reason": "r", "what_changed": "w"}})
+    events.append({"event_type": "step_start", "step_number": 1, "payload": {"step": 1}})
+    for _ in range(deviations):
+        events.append({"event_type": "deviation", "step_number": 1,
+                       "payload": {"step": 1, "reason": "r", "what_changed": "w"}})
+    events += [
+        {"event_type": "step_end", "step_number": 1,
+         "payload": {"step": 1, "files_affected": list(recorded), "status": "ok"}},
+        {"event_type": "validation_check", "step_number": None,
+         "payload": {"check": "pytest", "passed": True, "detail": "ok"}},
+        {"event_type": "run_end", "step_number": None, "payload": {"summary": "ok"}},
+    ]
+    return events
+
+
+def test_planned_files_parses_the_block(tmp_path):
+    assert itl.planned_files(_PLAN) == {
+        "scripts/alpha.py", "reference/workspace-overview.md"}
+
+
+def test_declared_deviation_count(tmp_path):
+    assert itl.declared_deviation_count(_PLAN) == 2
+    assert itl.declared_deviation_count("# Plan\n\nno notes here\n") == 0
+
+
+def test_covers_is_anchored_on_a_separator():
+    assert itl._covers("scripts/alpha.py", "scripts/alpha.py")
+    assert itl._covers("engine/scripts/alpha.py", "scripts/alpha.py")
+    # The defect this guards: a suffix match that is not a path boundary.
+    assert not itl._covers("scripts/scrutinize_record.py", "record.py")
+
+
+def test_verify_flags_planned_file_recorded_nowhere(traj_dir, tmp_path):
+    """M1: the run edited the one file its step named, and recorded four others."""
+    plan = _plan_file(tmp_path)
+    _write_traj("pf1", _plan_events(plan, ["scripts/alpha.py"], deviations=2))
+    defects = itl.verify_trajectory("pf1")
+    assert any("reference/workspace-overview.md" in d and "no step's files_affected" in d
+               for d in defects)
+    assert not any("scripts/alpha.py" in d for d in defects)
+
+
+def test_verify_clean_when_every_planned_file_is_recorded(traj_dir, tmp_path):
+    plan = _plan_file(tmp_path)
+    _write_traj("pf2", _plan_events(
+        plan, ["scripts/alpha.py", "reference/workspace-overview.md"], deviations=2))
+    assert itl.verify_trajectory("pf2") == []
+
+
+def test_verify_accepts_a_planned_file_recorded_under_another_prefix(traj_dir, tmp_path):
+    """The plan writes repo-relative; a run may record the overlay prefix."""
+    plan = _plan_file(tmp_path)
+    _write_traj("pf3", _plan_events(
+        plan,
+        ["scripts/alpha.py", ".heading-os-data/reference/workspace-overview.md"],
+        deviations=2))
+    assert itl.verify_trajectory("pf3") == []
+
+
+def test_verify_flags_undeclared_deviation_shortfall(traj_dir, tmp_path):
+    """M2: the plan declared six deviations, the trajectory carried five."""
+    plan = _plan_file(tmp_path)
+    _write_traj("pf4", _plan_events(
+        plan, ["scripts/alpha.py", "reference/workspace-overview.md"], deviations=1))
+    defects = itl.verify_trajectory("pf4")
+    assert any("declares 2 deviation(s)" in d and "carries 1 deviation event(s)" in d
+               for d in defects)
+
+
+def test_verify_does_not_flag_more_events_than_declared(traj_dir, tmp_path):
+    """Only the shortfall matters: an extra event is a run that over-recorded."""
+    plan = _plan_file(tmp_path)
+    _write_traj("pf5", _plan_events(
+        plan, ["scripts/alpha.py", "reference/workspace-overview.md"], deviations=3))
+    assert not any("deviation event(s)" in d for d in itl.verify_trajectory("pf5"))
+
+
+def test_verify_is_silent_when_the_plan_cannot_be_found(traj_dir, tmp_path):
+    """A missing plan is not a trajectory defect."""
+    missing = tmp_path / "nope" / "2026-08-09-gone.md"
+    _write_traj("pf6", _plan_events(missing, ["scripts/alpha.py"]))
+    assert itl.verify_trajectory("pf6") == []
+
+
+def test_verify_flags_deviation_before_its_step_start(traj_dir, tmp_path):
+    """L2: a consumer reading in order sees a deviation for a step not begun."""
+    plan = _plan_file(tmp_path)
+    _write_traj("pf7", _plan_events(
+        plan, ["scripts/alpha.py", "reference/workspace-overview.md"],
+        deviations=1, deviation_first=True))
+    defects = itl.verify_trajectory("pf7")
+    assert any("deviation for step 1" in d and "precedes" in d for d in defects)
+
+
+def test_verify_exempts_a_wave_scoped_deviation_from_the_ordering_check(traj_dir):
+    """A deferred wave emits no step_start at all, by design."""
+    events = [
+        {"event_type": "run_start", "step_number": 0, "payload": {}},
+        {"event_type": "deviation", "step_number": 4,
+         "payload": {"step": 4, "scope": "wave", "wave": 2, "reason": "deferred"}},
+        {"event_type": "validation_check", "step_number": None,
+         "payload": {"check": "pytest", "passed": True, "detail": "ok"}},
+        {"event_type": "run_end", "step_number": None, "payload": {"summary": "ok"}},
+    ]
+    _write_traj("pf8", events)
+    assert not any("precedes" in d for d in itl.verify_trajectory("pf8"))
+
+
+# ============================================================
+# --list-files
+# ============================================================
+def test_list_files_prints_the_deduped_union(traj_dir, capsys):
+    events = [
+        {"event_type": "run_start", "step_number": 0, "payload": {}},
+        {"event_type": "step_start", "step_number": 1, "payload": {"step": 1}},
+        {"event_type": "step_end", "step_number": 1,
+         "payload": {"step": 1, "files_affected": ["b.py", "a.py"], "status": "ok"}},
+        {"event_type": "step_start", "step_number": 2, "payload": {"step": 2}},
+        {"event_type": "step_end", "step_number": 2,
+         "payload": {"step": 2, "files_affected": ["a.py", "c.md"], "status": "ok"}},
+        {"event_type": "run_end", "step_number": None, "payload": {"summary": "ok"}},
+    ]
+    _write_traj("lf1", events)
+    assert itl.main(["--list-files", "--run-id", "lf1"]) == 0
+    assert capsys.readouterr().out.split() == ["a.py", "b.py", "c.md"]
+
+
+def test_list_files_missing_trajectory_exits_3(traj_dir):
+    assert itl.main(["--list-files", "--run-id", "nope"]) == 3

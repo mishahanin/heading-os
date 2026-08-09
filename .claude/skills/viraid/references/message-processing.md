@@ -103,7 +103,7 @@ For each unprocessed message, enrich based on content:
    - Protected blocks: no Wed AM (CEO Deep Work 09:30-12:00), no Fri PM (CEO Weekly Review 14:00-15:30, then close after 15:30), no before 09:30, no weekends
    - Day themes: external calls on Wed PM, 1:1s on Thu, etc.
    - Minimum 15-min gap between meetings
-   - Jordanum 3 consecutive meetings
+   - Maximum 3 consecutive meetings
 5. Propose specific available time slots -- **NEVER suggest a time without verifying it's free**
 6. Even for focus time blocking (not a meeting with others), still check availability
 

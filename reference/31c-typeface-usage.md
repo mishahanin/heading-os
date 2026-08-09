@@ -78,7 +78,7 @@ The 31C TypeFace is a **display/accent font only**. It is never used for readabl
 - **Never for headings or titles.** All headings use GT Standard M Medium.
 - **Never for body text or descriptions.** All body text uses GT Standard M Light.
 - **Never for labels or captions.** These use GT Standard M Medium or M Light.
-- **Never for long text.** Jordanum practical length is a short phrase like "Thank you!"
+- **Never for long text.** Maximum practical length is a short phrase like "Thank you!"
 - **Never for alphabetical characters in running text.** The typeface is optimized for numerals and short display words, not paragraph readability.
 
 ---

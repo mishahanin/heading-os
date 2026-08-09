@@ -107,7 +107,7 @@ This lens ships ahead of the R3 (FP rate aggregate) and R11 (Cohen's kappa human
 
 **Re-evaluation trigger:** revisit calibration once BOTH conditions hold:
 
-1. At least 30 days of trajectory FP records have accumulated in `outputs/operations/scrutiny/_fp_log.jsonl` (target ~10+ flagged trajectory findings)
+1. At least 30 days of trajectory FP records have accumulated as `fp_flag` rows in `outputs/operations/scrutiny/runs.jsonl` (target ~10+ flagged trajectory findings)
 2. At least one R11 quarterly scoring sheet from `scripts/scrutinize-replay.py --since 90d` has been filled by the CEO with trajectory findings included in the sample
 
 **Tracker thread:** `threads/business/2026-05-27-r12-calibration-debt-clearance.md` (opened 2026-05-27, status: active) - mechanical deadline + acceptance criteria. Earliest re-evaluation date: 2026-06-27. Updated when the debt is cleared.

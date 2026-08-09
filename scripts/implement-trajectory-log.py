@@ -7,7 +7,7 @@ review accuracy from 70% to 90% vs outcome-only. This helper is the
 emission side of that pattern. /scrutinize trajectory:<run_id> is the
 audit side (see .claude/skills/scrutinize/references/trajectory-evaluation.md).
 
-Three subcommands:
+Four subcommands:
 
   --new --plan <plan-path>
       Mint a new run_id and create the trajectory JSONL with an opening
@@ -52,9 +52,19 @@ Three subcommands:
       run (before any commit / git pull) and degrades to a no-op when git_head
       is "unknown" or git is unavailable. Plus a validation-gate check
       (advisory): a completed run with zero validation_check events is flagged so
-      Phase 3 gates are logged as structured events, not only prose. Prints defects and exits 1 on any
+      Phase 3 gates are logged as structured events, not only prose. Plus three
+      plan-derived advisories (silent when the plan cannot be located): a file
+      listed under a plan step's "Files affected" that appears in no step's
+      files_affected; a plan whose Implementation Notes declare more deviations
+      than the trajectory carries as events; a deviation emitted before its own
+      step's step_start. Prints defects and exits 1 on any
       defect, 0 when clean. Read-only; never mutates the audit record.
       /implement calls this in Phase 5 after run_end (advisory).
+
+  --list-files --run-id <id>
+      Print the union of every step's files_affected, one literal path per
+      line, so the Phase 3 hidden-character scan reads its file list off the
+      record instead of assembling it by hand.
 
 Event types: run_start, step_start, step_end, validation_check,
               evaluation_result, deviation, wave_start, wave_end, run_end.
@@ -91,6 +101,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -100,7 +111,11 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.workspace import get_outputs_dir, get_workspace_root  # noqa: E402
+from scripts.utils.workspace import (  # noqa: E402
+    get_outputs_dir,
+    get_plans_dir,
+    get_workspace_root,
+)
 
 WORKSPACE_ROOT = get_workspace_root()
 TRAJECTORY_DIR = get_outputs_dir() / "operations" / "implement"
@@ -502,6 +517,83 @@ def cmd_event(args: argparse.Namespace) -> int:
 # ============================================================
 _GLOB_CHARS = ("*", "{", "}")
 
+# The plan is the other half of the record. Three of the 2026-08-09 scrutiny
+# findings (M1, M2, N1) were all one shape: the run diverged from its own plan
+# and only the narrative noticed. A narrative written by the same author that
+# diverged is the weakest possible check, so these read the plan file itself.
+_PLAN_FILES_HEADING = "**Files affected:**"
+_PLAN_DEVIATIONS_HEADING = "### Deviations from Plan"
+_BACKTICKED = re.compile(r"`([^`]+)`")
+_NUMBERED_ITEM = re.compile(r"^\d+\.\s")
+
+
+def resolve_plan_path(plan_path: str) -> Path | None:
+    """Locate the plan a run_start names. None when it cannot be found.
+
+    The recorded path is relative and the plans live in the DATA overlay, so a
+    bare `WORKSPACE_ROOT / plan_path` misses. Every plan-derived check degrades
+    to silence when this returns None - a missing plan is not a trajectory
+    defect.
+    """
+    raw = Path(plan_path)
+    candidates = [raw, get_plans_dir() / raw.name, WORKSPACE_ROOT / raw]
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def planned_files(plan_text: str) -> set[str]:
+    """Every path listed under a `**Files affected:**` block in the plan."""
+    out: set[str] = set()
+    lines = plan_text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() != _PLAN_FILES_HEADING:
+            continue
+        for follow in lines[i + 1:]:
+            stripped = follow.strip()
+            if not stripped:
+                continue
+            if not stripped.startswith("- "):
+                break
+            for token in _BACKTICKED.findall(stripped):
+                token = token.strip()
+                if "/" in token or "." in token:
+                    out.add(token)
+    return out
+
+
+def declared_deviation_count(plan_text: str) -> int:
+    """How many deviations the plan's Implementation Notes claim."""
+    lines = plan_text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines)
+                     if line.strip() == _PLAN_DEVIATIONS_HEADING)
+    except StopIteration:
+        return 0
+    count = 0
+    for line in lines[start + 1:]:
+        if line.startswith(("### ", "## ")):
+            break
+        if _NUMBERED_ITEM.match(line):
+            count += 1
+    return count
+
+
+def _covers(recorded: str, planned: str) -> bool:
+    """Whether a recorded path and a planned path name the same file.
+
+    Suffix-tolerant in both directions: the plan writes a repo-relative path and
+    a run may record it with a different prefix (engine vs data overlay). Anchored
+    on a path separator so `record.py` never matches `scrutinize_record.py`.
+    """
+    if recorded == planned:
+        return True
+    return recorded.endswith("/" + planned) or planned.endswith("/" + recorded)
+
 
 def _git_changed_files(git_head: str) -> set[str]:
     """Engine working-tree change set since git_head: tracked diff ∪ untracked.
@@ -756,7 +848,99 @@ def verify_trajectory(run_id: str) -> list[str]:
             "(advisory) run has a run_end but zero validation_check events; "
             "Phase 3 gates should emit validation_check events, not only prose notes")
 
+    # Deviation ordering (advisory). A deviation for step N emitted before that
+    # step's step_start reads, to anyone consuming the JSONL in order, as a
+    # divergence from a step that has not begun. Wave-scoped deviations are
+    # exempt by design: a deferred wave never emits a step_start at all.
+    seen_starts: set = set()
+    for idx, e in enumerate(events):
+        et = e.get("event_type")
+        sn = e.get("step_number")
+        if et == "step_start":
+            seen_starts.add(sn)
+        elif et == "deviation":
+            if (e.get("payload") or {}).get("scope") == "wave":
+                continue
+            if sn is not None and sn not in seen_starts:
+                defects.append(
+                    f"(advisory) deviation for step {sn} at position {idx} precedes "
+                    f"that step's step_start")
+
+    defects.extend(_plan_reconciliation(events))
     return defects
+
+
+def _plan_reconciliation(events: list[dict]) -> list[str]:
+    """Advisory checks that read the run's plan file. Silent when unavailable.
+
+    Two findings from the 2026-08-09 scrutiny live here. A file the plan lists
+    for a step but no step ever records (M1: the run edited the one file its
+    step named, and named four others instead). And a run whose plan declares
+    more deviations in prose than the trajectory carries as events (M2: two of
+    six, one of them inside a step recorded `ok`) - the narrative is what the
+    event record exists to be checkable against, so the narrative claiming more
+    is the direction that matters.
+    """
+    defects: list[str] = []
+    plan_ref = ""
+    for e in events:
+        if e.get("event_type") == "run_start":
+            plan_ref = str((e.get("payload") or {}).get("plan_path") or "")
+            break
+    if not plan_ref:
+        return defects
+    plan_file = resolve_plan_path(plan_ref)
+    if plan_file is None:
+        return defects
+    try:
+        plan_text = plan_file.read_text(encoding="utf-8")
+    except OSError:
+        return defects
+
+    recorded: set[str] = set()
+    for e in events:
+        if e.get("event_type") == "step_end":
+            for entry in (e.get("payload") or {}).get("files_affected") or []:
+                recorded.add(str(entry))
+    for planned in sorted(planned_files(plan_text)):
+        if not any(_covers(r, planned) for r in recorded):
+            defects.append(
+                f"(advisory) {planned} is listed under a plan step's Files affected "
+                f"but appears in no step's files_affected")
+
+    declared = declared_deviation_count(plan_text)
+    emitted = sum(1 for e in events if e.get("event_type") == "deviation")
+    if declared > emitted:
+        defects.append(
+            f"(advisory) the plan declares {declared} deviation(s) in its "
+            f"Implementation Notes but the trajectory carries {emitted} deviation "
+            f"event(s); emit the event at the moment of divergence, not at write-up")
+    return defects
+
+
+def cmd_files(args: argparse.Namespace) -> int:
+    """Print the union of every step's files_affected, one literal path per line.
+
+    So the Phase 3 hidden-character scan reads its file list off the record
+    instead of being assembled by hand. The 2026-08-09 run scanned 11 files for a
+    run that touched 22; nothing had escaped, but the evidence covered half the
+    surface it claimed to.
+    """
+    if not args.run_id:
+        print(f"{RED}ERROR: --list-files requires --run-id <id>{RESET}", file=sys.stderr)
+        return 2
+    path = trajectory_path(args.run_id)
+    if not path.exists():
+        print(f"{RED}ERROR: trajectory not found: {path}.{RESET}", file=sys.stderr)
+        return 3
+    out: set[str] = set()
+    for e in _read_events(path):
+        if e.get("event_type") == "step_end":
+            for entry in (e.get("payload") or {}).get("files_affected") or []:
+                out.add(str(entry))
+    for entry in sorted(out):
+        print(entry)
+    return 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -796,6 +980,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_argument("--verify", action="store_true",
                      help="Structurally self-check an existing trajectory "
                           "(exit 1 on any defect, 0 when clean).")
+    sub.add_argument("--list-files", dest="list_files", action="store_true",
+                     help="Print the union of every step's files_affected, one "
+                          "literal path per line (feeds the Phase 3 scan list).")
 
     parser.add_argument("--plan", help="Plan file path (required with --new).")
     parser.add_argument("--run-id", help="Existing run_id (required with --event).")
@@ -864,6 +1051,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_event(args)
     if args.verify:
         return cmd_verify(args)
+    if args.list_files:
+        return cmd_files(args)
     return 2
 
 

@@ -106,8 +106,13 @@ LENS_GLOBS: tuple[tuple[str, str], ...] = (
 )
 
 # The scheduler lens is content-triggered, not path-triggered: a daemon is a
-# plain .py file and only its imports say it schedules anything.
-_SCHEDULER_MARKERS = ("apscheduler", "add_job")
+# plain .py file and only its imports say it schedules anything. The trigger is
+# read from the SYNTAX, not from a substring search, because a substring search
+# fires on any file that merely mentions scheduling - including this one, whose
+# first live run matched its own marker table (2026-08-09 /scrutinize). A lens
+# whose value is precision cannot open by flagging its own definition.
+_SCHEDULER_IMPORT = "apscheduler"
+_SCHEDULER_CALL = "add_job"
 
 # Import name is not distribution name. Assuming they are equal is how a currency
 # check silently reports on a package nobody depends on.
@@ -127,6 +132,32 @@ IMPORT_TO_DISTRIBUTION: dict[str, str] = {
 }
 
 
+def schedules_work(path: str) -> bool:
+    """True when a Python file IMPORTS a scheduler or CALLS add_job.
+
+    Syntax, not substring: a string literal naming `add_job`, a docstring about
+    APScheduler, or a test fixture mentioning either is not a scheduler and must
+    not fire the lens. An unreadable or unparsable file is not one either.
+    """
+    try:
+        tree = ast.parse(Path(path).read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, SyntaxError, ValueError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name.split(".")[0].lower() == _SCHEDULER_IMPORT for a in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0].lower() == _SCHEDULER_IMPORT:
+                return True
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = getattr(func, "attr", None) or getattr(func, "id", None)
+            if name == _SCHEDULER_CALL:
+                return True
+    return False
+
+
 def lenses_for(paths: list[str]) -> list[str]:
     """Which lenses fire for this scope. Order is stable, duplicates removed."""
     fired: list[str] = []
@@ -135,13 +166,8 @@ def lenses_for(paths: list[str]) -> list[str]:
         for lens, glob in LENS_GLOBS:
             if fnmatch.fnmatch(p, glob) and lens not in fired:
                 fired.append(lens)
-        if "scheduler" not in fired and p.endswith(".py"):
-            try:
-                text = Path(p).read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            if any(marker in text for marker in _SCHEDULER_MARKERS):
-                fired.append("scheduler")
+        if "scheduler" not in fired and p.endswith(".py") and schedules_work(p):
+            fired.append("scheduler")
     return fired
 
 

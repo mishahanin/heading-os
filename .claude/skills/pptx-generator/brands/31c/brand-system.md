@@ -201,7 +201,7 @@ Standard footer on all non-title slides:
 - Clear hierarchy: one main message per slide
 - Breathing room: 40% of the slide should be empty space
 - Black background: always
-- Jordanum 6 lines of text (less is better)
+- Maximum 6 lines of text (less is better)
 - One accent color per element (don't mix blue-purple and orange on the same text)
 
 ---

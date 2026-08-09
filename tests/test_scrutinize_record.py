@@ -203,3 +203,26 @@ def test_validate_flags_a_report_with_no_refutation_header(runs, tmp_path):
                  encoding="utf-8")
     defects = rec.validate(run_id="r1", report_path=p)
     assert any("Refutation:" in d for d in defects)
+
+
+# ============================================================
+# Cross-run reads (added 2026-08-09 for the single-channel fp tally)
+# ============================================================
+def test_rows_of_kind_spans_runs(runs):
+    rec.append_row(run_id="r1", kind="pass_start", target="file:x")
+    rec.append_row(run_id="r1", kind="fp_flag", target="file:x", finding_id="H1")
+    rec.append_row(run_id="r2", kind="fp_flag", target="dir:y", finding_id="M2")
+    flags = rec.rows_of_kind("fp_flag")
+    assert [(r["run_id"], r["finding_id"]) for r in flags] == [("r1", "H1"), ("r2", "M2")]
+
+
+def test_rows_of_kind_is_empty_without_a_record(runs):
+    assert rec.rows_of_kind("fp_flag") == []
+
+
+def test_iter_rows_skips_a_malformed_line(runs):
+    rec.append_row(run_id="r1", kind="pass_start", target="file:x")
+    with runs.open("a", encoding="utf-8") as fh:
+        fh.write("{not json\n")
+    rec.append_row(run_id="r1", kind="fp_flag", target="file:x", finding_id="H1")
+    assert [r["kind"] for r in rec.iter_rows()] == ["pass_start", "fp_flag"]

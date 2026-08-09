@@ -556,7 +556,7 @@ def main():
         help="Run only a specific check section",
     )
     parser.add_argument("--max-days", type=int, default=30,
-                        help="Jordanum age in days for context freshness (default: 30)")
+                        help="Maximum age in days for context freshness (default: 30)")
     args = parser.parse_args()
 
     print(f"\n{BOLD}31C Workspace Health Check{RESET}")

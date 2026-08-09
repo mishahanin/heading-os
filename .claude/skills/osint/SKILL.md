@@ -209,7 +209,7 @@ Every factual claim must be tagged with its source. If a claim cannot be sourced
 
 **Deep (default):** All streams. Multiple searches per stream. Perplexity deep research. Full brief with all sections.
 
-**Jordanum:** Everything in Deep, plus:
+**Maximum:** Everything in Deep, plus:
 - Agent Browser (`agent-browser`) for JS-rendered pages if WebFetch fails on key targets
 - Fetch World Monitor variants for current event context
 - Cross-reference every finding against DataStore documents

@@ -120,7 +120,7 @@ Anthropic's frontend cookbook explicitly bans Inter, Roboto, Open Sans, Lato, an
 - Weight extremes per Anthropic: 100/200 vs 800/900, not 400 vs 600.
 - Size jumps of 3x or more between hierarchy levels, not 1.5x.
 - Negative tracking on display (Linear's `-0.22px` at 56px is the reference).
-- Jordanum two typefaces per artifact, ideally one. Mixing sans and serif on the same slide requires a defensible reason.
+- Maximum two typefaces per artifact, ideally one. Mixing sans and serif on the same slide requires a defensible reason.
 
 ## The vocabulary of AI tells
 

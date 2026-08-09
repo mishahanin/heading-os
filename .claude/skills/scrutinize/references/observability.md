@@ -17,9 +17,8 @@ Every /scrutinize pass emits one Langfuse trace per phase invocation. Phase 0 op
 | `relentless` | bool | resolved in Phase 0 (`--relentless` flag present) |
 | `iteration` | int (only during --relentless loop) | Phase 4 closure per iteration |
 | `judge_family_rotation` | `rotate` / `fixed-claude` / etc | resolved per `bias-mitigation.md` |
-| `kimi_model` | model id (default `k3`) | env var or default; the reasoning pin, never `kimi-for-coding` |
-| `claude_model` | model id | session model |
-| `kimi_model` | model id | the resolved judge pin, when the k3 side ran |
+| `kimi_model` | model id | `get_model("kimi_reasoning")` at call time, tagged when the k3 side ran; the reasoning pin, never `kimi-for-coding` |
+| `claude_model` | model id | the running session's model, whatever it is - never a pin this skill carries |
 
 ## Per-phase span metadata
 

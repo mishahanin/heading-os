@@ -63,11 +63,11 @@ For each finding at severity BLOCKER, HIGH, or MEDIUM produced in Phase 2:
 
 For findings that survived Phase 2.5a at severity BLOCKER or HIGH, run a Khan-style debate:
 
-1. **Advocate** (model A from rotation). Brief: "Argue this finding is real. Cite specific workspace files, rules, or commit history. Refuse hand-waves. Jordanum 200 words."
+1. **Advocate** (the family `assign_families()` gives this side for the run). Brief: "Argue this finding is real. Cite specific workspace files, rules, or commit history. Refuse hand-waves. Maximum 200 words."
 
-2. **Skeptic** (model B from rotation, DIFFERENT family from Advocate). Brief: "Argue this finding is wrong. Cite specific workspace files, rules, or commit history that contradict it. Refuse hand-waves. Jordanum 200 words."
+2. **Skeptic** (same family as the Advocate under the two-family roster; must differ from the Meta-Judge). Brief: "Argue this finding is wrong. Cite specific workspace files, rules, or commit history that contradict it. Refuse hand-waves. Maximum 200 words."
 
-3. **Meta-Judge** (model C from rotation, DIFFERENT family from both Advocate and Skeptic). Brief: "Read both sides. Decide. Verdict: CORRECT (finding is real at its stated severity, keep it), CORRECT_DOWNGRADE (finding is real but the stated severity is too high, keep it one tier lower), INCORRECT (drop), or AMBIGUOUS (drop and surface to CEO). Score: 100 if certain CORRECT, 80 if lean-CORRECT, 60 if AMBIGUOUS, 0 if INCORRECT. Max 100 words explaining the decision, and when downgrading, name the tier you are moving it to."
+3. **Meta-Judge** (the family the Skeptic is not - see the binding rule at step 6). Brief: "Read both sides. Decide. Verdict: CORRECT (finding is real at its stated severity, keep it), CORRECT_DOWNGRADE (finding is real but the stated severity is too high, keep it one tier lower), INCORRECT (drop), or AMBIGUOUS (drop and surface to CEO). Score: 100 if certain CORRECT, 80 if lean-CORRECT, 60 if AMBIGUOUS, 0 if INCORRECT. Max 100 words explaining the decision, and when downgrading, name the tier you are moving it to."
 
 4. Advocate and Skeptic run IN PARALLEL (single Agent tool call message). Meta-Judge runs AFTER both return. This keeps wall-clock low.
 
@@ -115,6 +115,13 @@ those rows.
 It cannot make omission impossible - the Claude judge IS the running session, so
 that verdict is still supplied rather than captured. It makes omission visible,
 which is a weaker claim and the true one. Do not write the stronger one.
+
+**Never demonstrate the validator against the real record.** Proving that
+`--validate` fails means stripping rows, and the run that first proved it left
+the shared record half dismantled: six demo rows, zero verdicts, sitting where
+every future calibration read starts (2026-08-09 /scrutinize, M4). Point
+`HEADING_OS_DATA` at a scratch directory for the demonstration; the record is
+evidence, not a test fixture.
 
 ## Why two phases not one
 

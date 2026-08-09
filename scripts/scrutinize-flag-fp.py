@@ -2,12 +2,10 @@
 """Record one or more CEO false-positive flags on a /scrutinize finding.
 
 Invoked by /scrutinize Phase 3 when the CEO replies with
-`flag-as-fp <ids>` in the approval block. Each ID gets one JSONL record
-in outputs/operations/scrutiny/_fp_log.jsonl.
+`flag-as-fp <ids>` in the approval block. Each ID gets one `fp_flag` row in
+outputs/operations/scrutiny/runs.jsonl, beside the verdict it disagrees with.
 
 The CEO never opens the JSONL - this is the only writing path.
-The record (outputs/operations/scrutiny/runs.jsonl) carries the calibration
-table.
 
 Usage:
   python scripts/scrutinize-flag-fp.py \
@@ -29,7 +27,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from collections import Counter
@@ -39,12 +36,11 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
-from scripts.utils.scrutinize_record import append_row  # noqa: E402
+from scripts.utils.scrutinize_record import append_row, rows_of_kind  # noqa: E402
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 
 SCRUTINY_DIR = get_outputs_dir() / "operations" / "scrutiny"
-FP_LOG_PATH = SCRUTINY_DIR / "_fp_log.jsonl"
 
 # Finding line pattern in saved scrutiny reports.
 # Matches: [B1] (conf: 92) <statement>
@@ -112,23 +108,21 @@ def parse_target_type(scrutiny_id: str) -> str:
 
 
 def append_records(records: list[dict]) -> None:
-    """Append to _fp_log.jsonl AND to the shared run record.
+    """Append one `fp_flag` row per flagged finding, to the one record.
 
-    Two writes, one of which is transitional. `_fp_log.jsonl` keeps the legacy
-    shape that the tally below reads. The second write is the point: since
-    2026-08-09 every judged event in a scrutiny pass lands in one channel,
-    `runs.jsonl`, so a CEO disagreement is countable beside the verdicts it
-    disagrees with rather than in a file of its own that nothing else joins.
+    One channel, which is what the plan asked for and what the first pass did not
+    deliver: it kept writing `_fp_log.jsonl` beside the record and called the
+    second write transitional. That legacy log is the one whose permanent
+    emptiness (zero records in 75 runs) justified deleting its 327-line
+    aggregator in the same change, so keeping it alive as a second destination
+    preserved exactly the split the change existed to close. Dropped 2026-08-09
+    on the scrutiny of that run.
 
-    The disagreement is the only ground truth this system will ever get, which is
-    why the human channel survived while its 327-line aggregator did not: that
-    aggregator rendered a calibration table over a log which, after 75 runs, had
-    never received a single record.
+    A CEO disagreement is the only ground truth this system will ever get, so it
+    is stored beside the verdicts it disagrees with rather than in a file nothing
+    else joins.
     """
     SCRUTINY_DIR.mkdir(parents=True, exist_ok=True)
-    with FP_LOG_PATH.open("a", encoding="utf-8") as f:
-        for rec in records:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     for rec in records:
         append_row(
             run_id=rec["scrutiny_id"],
@@ -142,25 +136,22 @@ def append_records(records: list[dict]) -> None:
 
 
 def print_running_tally() -> None:
-    """Print FP counts by severity from the current JSONL state."""
-    if not FP_LOG_PATH.exists():
-        print(f"  Tally: 0 FPs recorded.")
+    """Print FP counts by severity from the record's `fp_flag` rows.
+
+    Severity comes from the finding id's letter, the same mapping the report
+    parser uses, so the row needs no severity column of its own.
+    """
+    rows = rows_of_kind("fp_flag")
+    if not rows:
+        print("  Tally: 0 FPs recorded.")
         return
-    counts: Counter[str] = Counter()
-    total = 0
-    for line in FP_LOG_PATH.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        counts[rec.get("severity", "UNKNOWN")] += 1
-        total += 1
+    counts: Counter[str] = Counter(
+        SEVERITY_PREFIX.get(str(r.get("finding_id") or "")[:1], "UNKNOWN")
+        for r in rows
+    )
     parts = [f"{sev}={counts.get(sev, 0)}"
              for sev in ("BLOCKER", "HIGH", "MEDIUM", "LOW", "NIT")]
-    print(f"  FP tally: {total} recorded - " + ", ".join(parts))
+    print(f"  FP tally: {len(rows)} recorded - " + ", ".join(parts))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -210,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
 
     append_records(records)
 
-    print(f"{GREEN}Flagged {len(records)} finding(s) as FP in {FP_LOG_PATH.name}:{RESET}")
+    print(f"{GREEN}Flagged {len(records)} finding(s) as FP in runs.jsonl:{RESET}")
     for rec in records:
         conf_str = f"conf={rec['confidence']}" if rec['confidence'] is not None else "conf=?"
         print(f"  [{rec['finding_id']}] {rec['severity']} {conf_str} - "

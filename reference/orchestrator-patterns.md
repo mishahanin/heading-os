@@ -117,7 +117,7 @@ For each approved: send via scripts/send-email.py, write CRM interaction log, co
 
 DEGRADATION: If one draft fails, present the others. Offer retry.
 
-CONCURRENCY LIMIT: Jordanum 5 parallel agents. If >5 contacts, batch in groups of 5.
+CONCURRENCY LIMIT: Maximum 5 parallel agents. If >5 contacts, batch in groups of 5.
 
 ---
 

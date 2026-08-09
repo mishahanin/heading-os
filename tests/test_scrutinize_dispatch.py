@@ -165,6 +165,45 @@ def test_scheduler_lens_fires_on_an_apscheduler_import(tmp_path):
     assert "scheduler" in disp.lenses_for([str(f)])
 
 
+def test_scheduler_lens_fires_on_a_plain_import(tmp_path):
+    f = tmp_path / "daemon.py"
+    f.write_text("import apscheduler\n")
+    assert "scheduler" in disp.lenses_for([str(f)])
+
+
+def test_scheduler_lens_fires_on_an_add_job_call(tmp_path):
+    f = tmp_path / "sched.py"
+    f.write_text("def go(s):\n    s.add_job(tick, 'interval', minutes=1)\n")
+    assert "scheduler" in disp.lenses_for([str(f)])
+
+
+def test_scheduler_lens_does_not_fire_on_a_file_that_merely_mentions_scheduling(tmp_path):
+    """The self-match the lens opened its life with, 2026-08-09 /scrutinize.
+
+    A marker table holding the strings, a docstring about APScheduler, and a test
+    fixture naming add_job are all files ABOUT scheduling, not files that
+    schedule. A substring scan cannot tell them apart; the AST can.
+    """
+    f = tmp_path / "lens_table.py"
+    f.write_text(
+        '"""Fires on apscheduler imports and add_job calls."""\n'
+        '_MARKERS = ("apscheduler", "add_job")\n'
+        'NOTE = "the daemon must call add_job with a grace time"\n')
+    assert "scheduler" not in disp.lenses_for([str(f)])
+
+
+def test_the_dispatcher_no_longer_fires_the_scheduler_lens_on_itself():
+    """The regression in its literal form: the lens flagged its own definition."""
+    here = Path(__file__).resolve().parent.parent / "scripts" / "scrutinize-dispatch.py"
+    assert "scheduler" not in disp.lenses_for([str(here)])
+
+
+def test_scheduler_lens_ignores_an_unparsable_file(tmp_path):
+    f = tmp_path / "broken.py"
+    f.write_text("def (((:\n")
+    assert disp.lenses_for([str(f)]) == []
+
+
 def test_role_scan_writes_one_row_per_firing_lens(runs):
     disp.role_scan(run_id="r1", target="dir:scripts",
                    paths=["scripts/templates/systemd/reminders.timer",
@@ -251,3 +290,51 @@ def test_promote_without_a_prior_reproduction_is_refused(runs):
                       cmd=["python3", "-c", "pass"])
     assert rc != 0
     assert [r for r in _rows(runs) if r["verdict"] == "FALSIFIED"] == []
+
+
+# ============================================================
+# flag-as-fp writes ONE channel (2026-08-09 scrutiny, H2)
+# ============================================================
+# The plan said "one channel instead of two"; the first implementation kept
+# writing the legacy `_fp_log.jsonl` beside the record and called the second
+# write transitional. That legacy log is the one whose permanent emptiness
+# justified deleting its aggregator in the same change.
+def _load_flag_fp(tmp_path, monkeypatch):
+    import importlib.util
+
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "scrutinize_flag_fp", root / "scripts" / "scrutinize-flag-fp.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "SCRUTINY_DIR", tmp_path)
+    return mod
+
+
+def test_flag_fp_writes_only_the_record(tmp_path, monkeypatch, runs):
+    mod = _load_flag_fp(tmp_path, monkeypatch)
+    mod.append_records([{
+        "scrutiny_id": "2026-08-09-x", "finding_id": "H1",
+        "confidence": 88, "target_type": "trajectory",
+    }])
+    rows = _rows(runs)
+    assert [(r["kind"], r["finding_id"], r["writer"]) for r in rows] == [
+        ("fp_flag", "H1", "flag-fp")]
+    assert not (tmp_path / "_fp_log.jsonl").exists()
+
+
+def test_flag_fp_tally_counts_severity_from_the_record(tmp_path, monkeypatch, runs, capsys):
+    mod = _load_flag_fp(tmp_path, monkeypatch)
+    mod.append_records([
+        {"scrutiny_id": "s1", "finding_id": "H1", "confidence": 90, "target_type": "file"},
+        {"scrutiny_id": "s1", "finding_id": "M2", "confidence": 70, "target_type": "file"},
+    ])
+    mod.print_running_tally()
+    out = capsys.readouterr().out
+    assert "2 recorded" in out and "HIGH=1" in out and "MEDIUM=1" in out
+
+
+def test_flag_fp_tally_on_an_empty_record(tmp_path, monkeypatch, runs, capsys):
+    mod = _load_flag_fp(tmp_path, monkeypatch)
+    mod.print_running_tally()
+    assert "0 FPs recorded" in capsys.readouterr().out

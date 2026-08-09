@@ -2,8 +2,8 @@
 """Generate a CEO scoring sheet for /scrutinize human-agreement benchmark.
 
 Closes R11 from the 2026-05-27 meta-review of /scrutinize. Samples saved
-scrutiny reports + cross-references the FP log to produce a Markdown
-scoring sheet the CEO fills in. The filled sheet feeds Cohen's kappa
+scrutiny reports + cross-references the record's fp_flag rows to produce a
+Markdown scoring sheet the CEO fills in. The filled sheet feeds Cohen's kappa
 computation (CEO vs scrutinize, CEO vs the external judge)
 to establish a measured agreement baseline.
 
@@ -42,7 +42,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import re
 import sys
@@ -55,12 +54,11 @@ from typing import Iterable
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
-from scripts.utils.scrutinize_record import rows_for  # noqa: E402
+from scripts.utils.scrutinize_record import rows_for, rows_of_kind  # noqa: E402
 from scripts.utils.colors import CYAN, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_outputs_dir  # noqa: E402
 
 SCRUTINY_DIR = get_outputs_dir() / "operations" / "scrutiny"
-FP_LOG_PATH = SCRUTINY_DIR / "_fp_log.jsonl"
 
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 _FINDING_RE = re.compile(
@@ -79,7 +77,7 @@ class FindingSample:
     statement: str
     location: str
     evidence: str
-    was_flagged_fp: bool  # ground truth from _fp_log.jsonl
+    was_flagged_fp: bool  # ground truth from the record's fp_flag rows
 
 
 # ============================================================
@@ -109,20 +107,16 @@ def list_reports_in_range(date_from: datetime, date_to: datetime) -> list[Path]:
 
 
 def load_fp_set() -> set[tuple[str, str]]:
-    """Returns set of (scrutiny_id, finding_id) flagged as FP."""
-    if not FP_LOG_PATH.exists():
-        return set()
+    """(run_id, finding_id) pairs the CEO flagged as false positives.
+
+    Read from the record's `fp_flag` rows. The legacy `_fp_log.jsonl` this used
+    to read was dropped as a destination on 2026-08-09 and never existed on disk:
+    it received zero records across 75 runs, which is why its aggregator was
+    deleted. Nothing historical is lost by reading one channel.
+    """
     out: set[tuple[str, str]] = set()
-    for line in FP_LOG_PATH.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        sid = rec.get("scrutiny_id")
-        fid = rec.get("finding_id")
+    for row in rows_of_kind("fp_flag"):
+        sid, fid = row.get("run_id"), row.get("finding_id")
         if sid and fid:
             out.add((sid, fid))
     return out

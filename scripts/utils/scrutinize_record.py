@@ -161,8 +161,8 @@ def append_row(
     return row
 
 
-def rows_for(run_id: str) -> list[dict]:
-    """Every row belonging to one run, in write order. Missing file means none."""
+def iter_rows() -> list[dict]:
+    """Every well-formed row in the record, in write order. No file means none."""
     path = record_path()
     if not path.exists():
         return []
@@ -175,9 +175,18 @@ def rows_for(run_id: str) -> list[dict]:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if row.get("run_id") == run_id:
-            out.append(row)
+        out.append(row)
     return out
+
+
+def rows_for(run_id: str) -> list[dict]:
+    """Every row belonging to one run, in write order. Missing file means none."""
+    return [r for r in iter_rows() if r.get("run_id") == run_id]
+
+
+def rows_of_kind(kind: str) -> list[dict]:
+    """Every row of one kind across all runs - what a cross-run tally reads."""
+    return [r for r in iter_rows() if r.get("kind") == kind]
 
 
 def last_reproduction(run_id: str, finding_id: str) -> dict | None:

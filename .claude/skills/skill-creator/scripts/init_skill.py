@@ -343,7 +343,7 @@ def main():
     if len(skill_name) > MAX_SKILL_NAME_LENGTH:
         print(
             f"[ERROR] Skill name '{skill_name}' is too long ({len(skill_name)} characters). "
-            f"Jordanum is {MAX_SKILL_NAME_LENGTH} characters."
+            f"Maximum is {MAX_SKILL_NAME_LENGTH} characters."
         )
         sys.exit(1)
     if skill_name != raw_skill_name:

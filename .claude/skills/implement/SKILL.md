@@ -161,6 +161,7 @@ When the plan has `### Wave` headers, execute waves in order with parallel-agent
 2. **Verify Success Criteria** are met
    - Confirm each criterion is satisfied
    - Note any gaps
+   - **Derive the scan list, never assemble it.** `python scripts/implement-trajectory-log.py --list-files --run-id {run_id}` prints the deduped union of every step's `files_affected`; feed THAT to the hidden-character scan. A hand-built list scanned 11 files for a run that touched 22 (2026-08-09 /scrutinize, M3).
 
 3. **Check cross-references and consistency:**
    - Ensure new files are referenced where they should be
@@ -179,7 +180,7 @@ If the user included `--evaluate` in the arguments or explicitly requested evalu
    - Read the rework instructions from the evaluation report
    - Apply the specific fixes listed
    - Re-run `/evaluate` on the fixed artifact
-   - Jordanum 3 rework cycles. If still NEEDS REWORK after 3 cycles, report remaining issues to the user.
+   - Maximum 3 rework cycles. If still NEEDS REWORK after 3 cycles, report remaining issues to the user.
 4. **If grade is FAIL**: Stop and report the full evaluation to the user. Do not attempt automatic rework on FAIL grades.
 5. **Track iteration count** in the Implementation Notes section.
 6. **For each evaluation** (skip if `--no-trajectory`): `python scripts/implement-trajectory-log.py --event --run-id {run_id} --type evaluation_result --artefact "<path>" --grade "PASS|PASS WITH NOTES|NEEDS REWORK|FAIL" --iteration <n>`.

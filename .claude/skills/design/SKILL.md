@@ -93,7 +93,7 @@ python3 scripts/design-studio.py render \
 - Use CSS custom properties from brand.css: `var(--accent)`, `var(--bg)`, `var(--text)`, etc.
 - Use utility classes from brand.css: `.card`, `.container`, `.grid-2`, `.accent`, `.display`
 - Dark backgrounds ONLY - never white or light
-- Jordanum 6 lines of text per visual
+- Maximum 6 lines of text per visual
 - 40% empty space (breathing room)
 - One main message per visual
 

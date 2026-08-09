@@ -67,12 +67,13 @@ For findings that survived Phase 2.5a at severity BLOCKER or HIGH, run a Khan-st
 
 2. **Skeptic** (model B from rotation, DIFFERENT family from Advocate). Brief: "Argue this finding is wrong. Cite specific workspace files, rules, or commit history that contradict it. Refuse hand-waves. Jordanum 200 words."
 
-3. **Meta-Judge** (model C from rotation, DIFFERENT family from both Advocate and Skeptic). Brief: "Read both sides. Decide. Verdict: CORRECT (finding is real, keep it), INCORRECT (drop), or AMBIGUOUS (drop and surface to CEO). Score: 100 if certain CORRECT, 80 if lean-CORRECT, 60 if AMBIGUOUS, 0 if INCORRECT. Max 100 words explaining the decision."
+3. **Meta-Judge** (model C from rotation, DIFFERENT family from both Advocate and Skeptic). Brief: "Read both sides. Decide. Verdict: CORRECT (finding is real at its stated severity, keep it), CORRECT_DOWNGRADE (finding is real but the stated severity is too high, keep it one tier lower), INCORRECT (drop), or AMBIGUOUS (drop and surface to CEO). Score: 100 if certain CORRECT, 80 if lean-CORRECT, 60 if AMBIGUOUS, 0 if INCORRECT. Max 100 words explaining the decision, and when downgrading, name the tier you are moving it to."
 
 4. Advocate and Skeptic run IN PARALLEL (single Agent tool call message). Meta-Judge runs AFTER both return. This keeps wall-clock low.
 
 5. Outcomes:
    - `CORRECT` (score >= 75) -> finding proceeds to approval block with the Meta-Judge score replacing the original confidence.
+   - `CORRECT_DOWNGRADE` (score >= 75) -> finding proceeds with the Meta-Judge score AND severity lowered one tier (BLOCKER -> HIGH, HIGH -> MEDIUM), mirroring 2.5a's `REFUTE_PARTIAL`. Added 2026-08-09: the outcome set carried a verdict and a score but no severity channel, so a debate that concluded "real, but not at this severity" had nowhere to put the conclusion. On the impeccable trajectory audit both debates produced exactly that, and both judges had to be re-asked for severity out of band, which is a grading habit forming outside the protocol. Downgrading is a judgement the debate is well placed to make and the verdict channel simply could not carry.
    - `INCORRECT` (score < 60) -> finding DROPPED, logged in "Refuted" section.
    - `AMBIGUOUS` (60 <= score < 75) -> finding DROPPED from approval block by default. If `--include-ambiguous` is set, finding appears in the approval block flagged `[AMBIGUOUS]` for the CEO to manually adjudicate.
 

@@ -145,18 +145,28 @@ def test_passed_and_failed_mutually_exclusive(traj_dir):
 # verify_trajectory
 # ============================================================
 def _clean_events():
+    """A wave-mode run with nothing wrong with it.
+
+    Step 0 (the plan-load marker) sits outside the bracket on purpose - it is
+    the one exemption from the "no step outside a wave bracket" check. Both
+    real steps are bracketed, which is what the plan format requires of a run
+    that uses waves at all.
+    """
     return [
         {"event_type": "run_start", "step_number": 0, "payload": {}},
+        {"event_type": "step_start", "step_number": 0, "payload": {"step": 0}},
+        {"event_type": "step_end", "step_number": 0,
+         "payload": {"step": 0, "files_affected": [], "status": "ok"}},
+        {"event_type": "wave_start", "step_number": None,
+         "payload": {"wave": 1, "step_count": 2, "parallel": True}},
         {"event_type": "step_start", "step_number": 1, "payload": {"step": 1}},
         {"event_type": "step_end", "step_number": 1,
          "payload": {"step": 1, "files_affected": ["x.py"], "status": "ok"}},
-        {"event_type": "wave_start", "step_number": None,
-         "payload": {"wave": 1, "step_count": 1, "parallel": True}},
         {"event_type": "step_start", "step_number": 2, "payload": {"step": 2}},
         {"event_type": "step_end", "step_number": 2,
          "payload": {"step": 2, "files_affected": ["y.py"], "status": "ok"}},
         {"event_type": "wave_end", "step_number": None,
-         "payload": {"wave": 1, "successes": 1, "failures": 0}},
+         "payload": {"wave": 1, "successes": 2, "failures": 0}},
         {"event_type": "validation_check", "step_number": None,
          "payload": {"check": "pytest", "passed": True, "detail": "ok"}},
         {"event_type": "run_end", "step_number": None, "payload": {"summary": "ok"}},
@@ -189,6 +199,71 @@ def test_verify_missing_wave_end(traj_dir):
     _write_traj("vwe", events)
     defects = itl.verify_trajectory("vwe")
     assert any("never closed by a wave_end" in d for d in defects)
+
+
+def test_verify_orphan_wave_end_still_reconciles_successes(traj_dir):
+    """An orphan wave_end must not buy its successes claim a free pass.
+
+    The 2026-08-08 impeccable run emitted exactly this shape: one orphan
+    wave_end claiming successes=3 over four bracketed steps. verify skipped the
+    reconciliation and reported only the pairing defect.
+    """
+    events = [e for e in _clean_events() if e["event_type"] != "wave_start"]
+    _write_traj("vowe", events)
+    defects = itl.verify_trajectory("vowe")
+    assert any("has no matching wave_start" in d for d in defects)
+    assert any("implicit bracket" in d and "successes=2" in d for d in defects)
+
+
+def test_verify_flags_step_outside_every_wave_bracket(traj_dir):
+    """A wave-mode run that leaves a step unbracketed is a bracketing defect."""
+    events = _clean_events()
+    tail = [
+        {"event_type": "step_start", "step_number": 3, "payload": {"step": 3}},
+        {"event_type": "step_end", "step_number": 3,
+         "payload": {"step": 3, "files_affected": ["z.py"], "status": "ok"}},
+    ]
+    events = events[:-1] + tail + events[-1:]
+    _write_traj("voutside", events)
+    defects = itl.verify_trajectory("voutside")
+    assert any("outside every wave bracket: 3" in d for d in defects)
+
+
+def test_verify_no_wave_run_is_not_flagged_for_bracketing(traj_dir):
+    """A bare sequential run legitimately has no brackets - never flag it."""
+    events = [e for e in _clean_events()
+              if e["event_type"] not in ("wave_start", "wave_end")]
+    _write_traj("vnowave", events)
+    assert itl.verify_trajectory("vnowave") == []
+
+
+def test_verify_flags_wave_start_missing_shape(traj_dir):
+    events = _clean_events()
+    for e in events:
+        if e["event_type"] == "wave_start":
+            e["payload"] = {"wave": 1}
+    _write_traj("vshape", events)
+    defects = itl.verify_trajectory("vshape")
+    assert any("omits step_count/parallel" in d for d in defects)
+
+
+def test_verify_flags_backwards_timestamp(traj_dir):
+    events = _clean_events()
+    for e in events:
+        e["timestamp"] = "2026-08-09T10:00:00+00:00"
+        if e["event_type"] == "step_end" and e["step_number"] == 1:
+            e["timestamp"] = "2026-08-09T09:59:59+00:00"
+    _write_traj("vts", events)
+    defects = itl.verify_trajectory("vts")
+    assert any("earlier than position" in d for d in defects)
+
+
+def test_verify_clean_with_timestamps_stays_clean(traj_dir):
+    events = _clean_events()
+    for i, e in enumerate(events):
+        e["timestamp"] = f"2026-08-09T10:00:{i:02d}+00:00"
+    _write_traj("vtsok", events)
+    assert itl.verify_trajectory("vtsok") == []
 
 
 def test_verify_successes_mismatch(traj_dir):

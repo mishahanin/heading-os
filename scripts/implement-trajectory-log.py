@@ -42,8 +42,10 @@ Three subcommands:
   --verify --run-id <id>
       Structurally self-check an existing trajectory: run_start present and
       first, run_end present and last, step_start/step_end pairing,
-      wave_start/wave_end pairing, each wave's bracketed successes count,
-      and literal files_affected paths. Plus a run-level files reconciliation
+      wave_start/wave_end pairing, each wave's successes count (an orphan
+      wave_end is reconciled against its implicit bracket, not skipped), no
+      step outside every bracket in a wave-mode run, and literal
+      files_affected paths. Plus a run-level files reconciliation
       (advisory): the current engine working tree is diffed against
       run_start.git_head and any changed file recorded in no step's
       files_affected is flagged; this is meaningful only immediately after the
@@ -543,12 +545,27 @@ def verify_trajectory(run_id: str) -> list[str]:
     step_start paired with a step_end (open-stack per step_number, so a
     number reused across waves still reconciles); every wave_start paired
     with a wave_end; each wave bracket's wave_end.successes equals the
-    bracketed count of step_end with status ok/deviation; every
+    bracketed count of step_end with status ok/deviation - including an
+    ORPHAN wave_end, reconciled against the implicit bracket since the last
+    wave boundary; in a run that uses waves at all, no step_end (other than
+    the step-0 plan-load marker) sits outside every wave bracket; every
     files_affected entry is a literal path (no glob/shorthand/count token).
+
+    Plus three advisory checks that report without asserting a violation:
+    a wave_start whose payload omits step_count/parallel; a timestamp that
+    goes backwards (clock or emission skew, not a sequencing fault); and the
+    validation-gate check below.
 
     Plus a run-level files reconciliation (advisory): the current engine
     working tree is diffed against run_start.git_head, and any changed engine
     file absent from every step's files_affected is flagged "(advisory) ...".
+    **Scope: the ENGINE tree only.** A run that also writes into the data
+    overlay (a plan, a report, an output artifact) has those writes checked by
+    nothing here, so a clean reconciliation is not full coverage - `cmd_verify`
+    prints that scope explicitly rather than leaving a clean line to imply it.
+    Reconciling the overlay too was considered and rejected: it accumulates
+    unrelated background churn (daemon outputs, auto-memory, the trajectory
+    file itself), which would bury real findings in noise.
     This is meaningful ONLY immediately after the run, against a tree holding
     just this run's changes (before any commit / git pull); re-run later on a
     historical trajectory with a stale-but-valid git_head it will over-flag
@@ -609,20 +626,41 @@ def verify_trajectory(run_id: str) -> list[str]:
                 f"step {sn}: {count} step_start(s) never closed by a step_end")
 
     # wave_start / wave_end pairing + bracketed successes count.
+    #
+    # An orphan wave_end is a bracketing defect, but its successes claim is
+    # still reconciled - against the IMPLICIT bracket running from the last
+    # wave boundary (or run start). The earlier version `continue`d here, so a
+    # run whose only wave_end was an orphan had its successes count checked
+    # against nothing and passed clean while matching neither the declared
+    # membership nor the steps that actually ran (2026-08-09 /scrutinize, M1).
     wave_starts: dict[Any, int] = {}
+    wave_spans: list[tuple[int, int]] = []
+    saw_wave_event = False
+    last_boundary = 0
     for idx, e in enumerate(events):
         et = e.get("event_type")
         payload = e.get("payload") or {}
         if et == "wave_start":
+            saw_wave_event = True
             wave_starts[payload.get("wave")] = idx
+            if "step_count" not in payload or "parallel" not in payload:
+                defects.append(
+                    f"(advisory) wave_start for wave {payload.get('wave')} at "
+                    f"position {idx} omits step_count/parallel; the wave's shape "
+                    f"is unrecoverable from the record")
+            last_boundary = idx
         elif et == "wave_end":
+            saw_wave_event = True
             w = payload.get("wave")
             start_idx = wave_starts.pop(w, None)
             if start_idx is None:
                 defects.append(
                     f"wave_end for wave {w} at position {idx} has no matching wave_start")
-                continue
-            bracket = events[start_idx + 1:idx]
+                bracket_start, implicit = last_boundary, True
+            else:
+                bracket_start, implicit = start_idx, False
+                wave_spans.append((start_idx, idx))
+            bracket = events[bracket_start + 1:idx]
             ok_ends = sum(
                 1 for b in bracket
                 if b.get("event_type") == "step_end"
@@ -630,11 +668,48 @@ def verify_trajectory(run_id: str) -> list[str]:
             )
             declared = payload.get("successes")
             if declared != ok_ends:
+                where = "implicit bracket since the last wave boundary" if implicit \
+                    else "bracketed"
                 defects.append(
-                    f"wave {w}: wave_end.successes={declared} but bracketed "
+                    f"wave {w}: wave_end.successes={declared} but {where} "
                     f"ok/deviation step_end count={ok_ends}")
-    for w in wave_starts:
+            last_boundary = idx
+    for w, start_idx in wave_starts.items():
         defects.append(f"wave {w}: wave_start never closed by a wave_end")
+        wave_spans.append((start_idx, len(events)))
+
+    # Steps outside every wave bracket. Only meaningful in a run that uses
+    # waves at all - a bare sequential run legitimately has none, and the plan
+    # format forbids mixing the two shapes. Step 0 (the plan-load marker) sits
+    # outside by design and is exempt.
+    if saw_wave_event:
+        unbracketed = [
+            e.get("step_number")
+            for idx, e in enumerate(events)
+            if e.get("event_type") == "step_end"
+            and e.get("step_number") != 0
+            and not any(a < idx < b for a, b in wave_spans)
+        ]
+        if unbracketed:
+            defects.append(
+                "wave-mode run has step_end(s) outside every wave bracket: "
+                + ", ".join(str(s) for s in unbracketed))
+
+    # Timestamp monotonicity (advisory). Emission is sequential, so a record
+    # whose timestamp precedes its predecessor is clock or emission skew, not a
+    # sequencing violation - it is reported, never treated as one. Timestamps
+    # are ISO-8601 UTC to the second, so they compare lexicographically; an
+    # event without one is skipped rather than assumed.
+    prev_ts, prev_idx = "", -1
+    for idx, e in enumerate(events):
+        ts = str(e.get("timestamp") or "")
+        if not ts:
+            continue
+        if prev_ts and ts < prev_ts:
+            defects.append(
+                f"(advisory) event at position {idx} carries timestamp {ts}, "
+                f"earlier than position {prev_idx} ({prev_ts})")
+        prev_ts, prev_idx = ts, idx
 
     # files_affected literal-path check (catches the N1 glob/shorthand defect).
     for idx, e in enumerate(events):
@@ -693,6 +768,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print(f"{RED}ERROR: trajectory not found: {path}.{RESET}", file=sys.stderr)
         return 3
     defects = verify_trajectory(args.run_id)
+    # State the reconciliation's scope on every run, clean or not. A clean line
+    # otherwise reads as "every file this run touched is accounted for", which
+    # it is not: the files check covers the engine tree only.
+    print(f"{YELLOW}scope: files reconciliation covers the engine tree "
+          f"({WORKSPACE_ROOT.name}) only; data-overlay writes are not checked.{RESET}",
+          file=sys.stderr)
     if not defects:
         print(f"{GREEN}trajectory clean: {path.name}{RESET}")
         return 0

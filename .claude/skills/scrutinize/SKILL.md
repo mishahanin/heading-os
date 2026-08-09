@@ -140,7 +140,7 @@ Inserted in v2.0. Full protocol in `references/refutation-protocol.md`. Bias mit
 
 Announce the skip explicitly in the approval block header.
 
-Run the two sub-passes — **2.5a** single-pass refutation (BLOCKER + HIGH + MEDIUM) then **2.5b** two-agent debate (BLOCKER + HIGH survivors only) — per the full briefs, dispatch commands, outcome rules (REFUTED/REFUTE_PARTIAL/REFUTATION_FAILED; CORRECT/INCORRECT/AMBIGUOUS), and confidence-adjustment tables in `references/refutation-protocol.md` (judge-family rotation in `bias-mitigation.md`).
+Run the two sub-passes — **2.5a** single-pass refutation (BLOCKER + HIGH + MEDIUM) then **2.5b** two-agent debate (BLOCKER + HIGH survivors only) — per the full briefs, dispatch commands, outcome rules (REFUTED/REFUTE_PARTIAL/REFUTATION_FAILED; CORRECT[_DOWNGRADE]/INCORRECT/AMBIGUOUS), and confidence-adjustment tables in `references/refutation-protocol.md` (judge-family rotation in `bias-mitigation.md`).
 
 **Logging (mandatory):** every Phase 2.5 pass appends a `## Judge layer` section to the
 saved Phase 5 report — family per call, swap bit, Meta-Judge verdicts — for the

@@ -28,10 +28,18 @@ Smoke test (no API call unless a key is present): ``python scripts/utils/draft_c
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
-from scripts.utils import claude_models
-from scripts.utils import tracing
+# The smoke test above is a documented invocation, and it only worked where the
+# repo root happened to be on the path already: on the service VM's plain venv
+# it exited `No module named 'scripts'`. Thirty sibling modules in this package
+# bootstrap the root; this one did not.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from scripts.utils import claude_models  # noqa: E402
+from scripts.utils import tracing  # noqa: E402
 from scripts.utils.observability import observe
 
 # Cheap family by default. A family, never a version: the critic that reads an

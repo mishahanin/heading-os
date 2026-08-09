@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-08-09T17:47:51",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 13,
+    "check_total": 13,
+    "cases": [
+      {
+        "id": "case-1-subcommands",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1667,
+          "output_tokens": 792,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 7.05
+      },
+      {
+        "id": "case-2-outputs",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1659,
+          "output_tokens": 348,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.04
+      },
+      {
+        "id": "case-3-routing-boundary",
+        "passed": 3,
+        "total": 3,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1672,
+          "output_tokens": 176,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.99
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-08-09T17:47:51",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 13,
+    "check_total": 13,
+    "cases": [
+      {
+        "id": "case-1-subcommands",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1667,
+          "output_tokens": 792,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 7.05
+      },
+      {
+        "id": "case-2-outputs",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1659,
+          "output_tokens": 348,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.04
+      },
+      {
+        "id": "case-3-routing-boundary",
+        "passed": 3,
+        "total": 3,
+        "failures": [],
+        "usage": {
+          "input_tokens": 1672,
+          "output_tokens": 176,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.99
+      }
+    ]
+  }
+}

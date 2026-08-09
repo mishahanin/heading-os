@@ -3,7 +3,7 @@ name: radar
 description: Manual-actions + silent-health detector. Runs scripts/ops-radar.py, which surfaces which high-consequence MANUAL actions are objectively overdue (backup, publish-to-fleet, weekly-review, cold-sweep, Odin collect/reflect) and which machine-domain states have degraded (ollama down, memory-index stale), self-healing the latter (Tier A) and nudging only on exception for the former (Tier B), counts-only. Use when the user says "radar", "ops radar", "what's overdue", "what do I need to run", "what am I forgetting", or wants to ack/silence a known item or toggle crunch-mode. Do NOT use for a full morning brief (use /dashboard or /prime), for naming the single next action (use /next), or for function-by-function operational health (use /state-check) - the radar FEEDS those, it does not replace them.
 argument-hint: "[ack <key> | crunch on|off]"
 allowed-tools: "Read, Bash(python3:*)"
-model: sonnet
+model: haiku
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com

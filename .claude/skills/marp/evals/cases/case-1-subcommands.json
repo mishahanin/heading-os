@@ -1,0 +1,15 @@
+{
+  "id": "case-1-subcommands",
+  "description": "The four subcommands; a model that invents a fifth has misread the dispatch table.",
+  "input": "What are the /marp subcommands and what does each one do?",
+  "checks": {
+    "must_mention": [
+      "new",
+      "render",
+      "from",
+      "watch"
+    ],
+    "min_words": 60,
+    "hidden_chars_clean": true
+  }
+}

@@ -6,6 +6,60 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **A turn can no longer end quietly on a broken tree.** `scripts/turn-check.py`
+  runs three bounded lanes over the UNCOMMITTED Python edits, and
+  `.claude/hooks/turn-check.py` blocks the `Stop` event when one fails. Compile
+  every changed file, import every changed library module in one subprocess,
+  then run the test files whose names match the changed stems. The stem match
+  normalises hyphens to underscores, which is what connects
+  `scripts/wizard-verify-key.py` to `tests/test_wizard_verify_key.py`: exactly
+  the pair that broke four tests on 2026-08-09 and went unnoticed until a full
+  suite was run by hand much later. Seconds, not minutes, because a check at the
+  end of every turn only helps if nobody is tempted to skip it. The logic is a
+  plain CLI per `.claude/rules/console-first.md`; the hook is a wrapper that
+  never becomes fatal and bails on `stop_hook_active`.
+
+- **Four reusable agent roles in `.claude/agents/`:** `crm-reader`,
+  `comms-scout`, `datastore-validator`, `draft-writer`. The point is the tool
+  list, not the prose. `draft-writer` has no `Bash`, so it cannot reach
+  `scripts/send-email.py` whatever a dispatch prompt says, which makes the
+  lethal-trifecta control a capability rather than a request; the read-only
+  agents hold no write tool at all. What stays in
+  `.claude/rules/skill-orchestrator.md` is what no agent file can express: the
+  approval gates, the sequential post-approval CRM and pipeline writes, and the
+  rule that two agents never write the same contact file.
+
+### Changed
+
+- **Six skills moved from Sonnet to Haiku, on a measurement rather than a
+  judgement call:** `/brain-audit`, `/memory-hygiene`, `/radar`,
+  `/linkedin-archive`, `/marp`, `/notebooklm`. Eighteen new eval cases were
+  written for them, and both models scored 80 of 80 checks across two full
+  rounds each. Sonnet 5 intro pricing ends 2026-08-31, after which the gap
+  between the tiers is threefold in both directions. Three of the cases had to
+  be rewritten first: they asked about content the harness deliberately strips
+  (`load_skill_system_prompt` removes the frontmatter), and one demanded the
+  literal `Tier A`, which appears nowhere in the body. A check nothing can
+  satisfy measures the case, not the model.
+
+- **A provisioned exec workspace now gets the whole guard set.**
+  `provision-exec.py` wrote exactly one PreToolUse hook, `protect-corporate.py`,
+  on `Write|Edit`. That is one of the seven checks `_dispatch.py` runs: secret
+  detection, the personal-thread guard, the docs guard, the cwd anchor, the rate
+  limit and the tool budget never ran in an exec workspace at all. It now points
+  at `_dispatch.py` on the CEO's three matchers, ships the deny rules, and wires
+  the end-of-turn check. It also stops recreating the four backward-compat shims
+  that `.claude/rules/documentation.md` has been waiting to delete, which is why
+  that removal condition could never previously be reached.
+
+- **Deny rules exist.** The permission config carried 51 allow rules and zero
+  refusals. Ten deny rules now cover the raw secret files the assistant never
+  needs to read (`.env`, `.sessions/`, `*.pem`, `*.key`), force-push, and the
+  flag-first form of `--no-verify`. This is a second layer that does not depend
+  on a hook having run; the push-time content scan remains the actual wall.
+
 ### Security
 
 - **`cryptography` 49.0.0 carried PYSEC-2026-3552; the pin moves to 50.0.0.**

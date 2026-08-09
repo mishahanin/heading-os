@@ -1,0 +1,12 @@
+{
+  "id": "case-3-routing-boundary",
+  "description": "Routing exclusion: editable client decks and carousels go to /pptx-generator.",
+  "input": "I need an editable PPTX deck for a client. Should I use /marp?",
+  "checks": {
+    "must_mention": [
+      "pptx-generator"
+    ],
+    "min_words": 25,
+    "hidden_chars_clean": true
+  }
+}

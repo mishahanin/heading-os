@@ -9,7 +9,7 @@ description: >
   line. No daemon, no persistence, no workspace scan.
 argument-hint: "--sources <paths> [--entity <name>] [--modalities <list>]"
 allowed-tools: "Read, Glob, Grep, Bash(git log:*), Bash(python:*)"
-model: sonnet
+model: haiku
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com

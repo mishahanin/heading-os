@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-08-09T17:47:34",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 14,
+    "check_total": 14,
+    "cases": [
+      {
+        "id": "case-1-what-it-moves",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 841,
+          "output_tokens": 93,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 1.92
+      },
+      {
+        "id": "case-2-confirm-before-disk",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 838,
+          "output_tokens": 103,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 2.31
+      },
+      {
+        "id": "case-3-content-types",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 844,
+          "output_tokens": 203,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.52
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-08-09T17:47:34",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 14,
+    "check_total": 14,
+    "cases": [
+      {
+        "id": "case-1-what-it-moves",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 841,
+          "output_tokens": 93,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 1.92
+      },
+      {
+        "id": "case-2-confirm-before-disk",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 838,
+          "output_tokens": 103,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 2.31
+      },
+      {
+        "id": "case-3-content-types",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 844,
+          "output_tokens": 203,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.52
+      }
+    ]
+  }
+}

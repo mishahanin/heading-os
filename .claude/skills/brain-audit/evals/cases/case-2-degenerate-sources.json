@@ -1,0 +1,13 @@
+{
+  "id": "case-2-degenerate-sources",
+  "description": "Degenerate inputs: what the audit does with one source, with a missing path, and with no entity. Body content, deliberately not the frontmatter description, which the harness strips before the model sees anything.",
+  "input": "What does /brain-audit do when it is given only one source file, and what if a source path does not exist?",
+  "checks": {
+    "must_mention": [
+      "single",
+      "footer"
+    ],
+    "min_words": 45,
+    "hidden_chars_clean": true
+  }
+}

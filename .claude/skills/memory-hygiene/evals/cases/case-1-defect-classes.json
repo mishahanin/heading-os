@@ -1,0 +1,14 @@
+{
+  "id": "case-1-defect-classes",
+  "description": "The three mechanically-verifiable classes it flags, and nothing beyond them.",
+  "input": "What objective defects does /memory-hygiene detect?",
+  "checks": {
+    "must_mention": [
+      "superseded_by",
+      "orphan",
+      "budget"
+    ],
+    "min_words": 50,
+    "hidden_chars_clean": true
+  }
+}

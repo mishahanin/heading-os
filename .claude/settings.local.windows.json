@@ -23,6 +23,18 @@
       "WebFetch(domain:finance.worldmonitor.app)",
       "WebFetch(domain:www.worldmonitor.app)",
       "WebFetch(domain:github.com)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.sessions/**)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(.sessions/**)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git commit --no-verify:*)",
+      "Bash(git commit -n:*)",
+      "Bash(rm -rf /:*)"
     ]
   },
   "hooks": {
@@ -83,6 +95,16 @@
       }
     ],
     "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='turn-check.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 100
+          }
+        ]
+      },
       {
         "matcher": ".*",
         "hooks": [

@@ -143,6 +143,11 @@ separation is enforced mechanically, not by discipline: see the
 <td><a href="SECURITY-MODEL.html">Security model</a></td>
 </tr>
 <tr>
+<td><strong>Agents</strong></td>
+<td>Reusable subagent roles in <code>.claude/agents/</code>. Each carries its own model and, more to the point, its own tool list: <code>draft-writer</code> has no <code>Bash</code>, so it cannot reach the send path whatever a dispatch asks</td>
+<td><a href="EXTENDING.html">Extending the engine</a></td>
+</tr>
+<tr>
 <td><strong>Scripts &amp; daemons</strong></td>
 <td>CLI tools and optional always-on services (dashboard, mail sync, monitors)</td>
 <td><a href="daemons.html">Daemons</a></td>

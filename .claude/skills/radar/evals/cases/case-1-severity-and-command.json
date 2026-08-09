@@ -1,0 +1,13 @@
+{
+  "id": "case-1-severity-and-command",
+  "description": "The radar's output contract: group by severity, and for each due Tier-B item name the one command that clears it. Uses what the BODY says; 'Tier A' appears only in the frontmatter, which the harness strips before the model sees anything.",
+  "input": "How does /radar present its result, and what must it give for each item that is due?",
+  "checks": {
+    "must_mention": [
+      "severity",
+      "command"
+    ],
+    "min_words": 45,
+    "hidden_chars_clean": true
+  }
+}

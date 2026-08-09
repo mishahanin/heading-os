@@ -503,6 +503,53 @@ def generate_personal_info(state: dict, args, workspace_dir: Path) -> bool:
     return True
 
 
+# Deny rules every provisioned workspace starts with. Mirrors the CEO's own
+# `.claude/settings.local.*.json`, and exists as a second layer that does not
+# depend on a hook having run: the hooks are code and they work, but a rule the
+# harness enforces before the tool call is a different failure domain.
+PERMISSIONS_DENY = [
+    "Read(.env)",
+    "Read(.sessions/**)",
+    "Read(**/*.pem)",
+    "Read(**/*.key)",
+    "Edit(.sessions/**)",
+    "Bash(git push --force:*)",
+    "Bash(git push -f:*)",
+    "Bash(git commit --no-verify:*)",
+    "Bash(git commit -n:*)",
+    "Bash(rm -rf /:*)",
+]
+
+
+def _hook_command(name: str) -> str:
+    """A hook invocation that resolves its own script from any working directory.
+
+    The plain `python3 .claude/hooks/<name>.py` form this replaced only worked
+    while the process happened to sit at the workspace root.
+    """
+    return (
+        "python3 -c \"import runpy;from pathlib import Path;"
+        f"p=next((str(d/'.claude'/'hooks'/'{name}') "
+        "for d in [Path.cwd(),*Path.cwd().parents] "
+        f"if (d/'.claude'/'hooks'/'{name}').is_file()),None);"
+        "p and runpy.run_path(p,run_name='__main__')\""
+    )
+
+
+def _dispatch_command() -> str:
+    """The PreToolUse dispatcher, which runs ALL the guards rather than one.
+
+    Provisioned execs used to get `protect-corporate.py` alone, on `Write|Edit`.
+    That is one of seven checks: the secret-detection guard, the personal-thread
+    guard, the docs guard, the cwd anchor, the rate limit and the tool budget
+    never ran in an exec workspace at all. Pointing at `_dispatch.py` with the
+    CEO's three matchers gives every provisioned workspace the same guard set,
+    and it stops recreating the four backward-compat shims that
+    `.claude/rules/documentation.md` is waiting to delete.
+    """
+    return _hook_command("_dispatch.py")
+
+
 def create_settings_local_json(state: dict, args, workspace_dir: Path) -> bool:
     """Generate .claude/settings.local.json for the exec workspace."""
     if step_done(state, "create_settings_local_json"):
@@ -528,6 +575,7 @@ def create_settings_local_json(state: dict, args, workspace_dir: Path) -> bool:
     settings = {
         "permissions": {
             "allow": permissions_allow,
+            "deny": PERMISSIONS_DENY,
         },
         "hooks": {
             "SessionStart": [
@@ -556,12 +604,25 @@ def create_settings_local_json(state: dict, args, workspace_dir: Path) -> bool:
             ],
             "PreToolUse": [
                 {
-                    "matcher": "Write|Edit",
+                    "matcher": matcher,
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "python3 .claude/hooks/protect-corporate.py",
-                            "timeout": 5,
+                            "command": _dispatch_command(),
+                            "timeout": 30,
+                        }
+                    ],
+                }
+                for matcher in ("Write|Edit|MultiEdit|NotebookEdit", "Bash", "Read")
+            ],
+            "Stop": [
+                {
+                    "matcher": ".*",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": _hook_command("turn-check.py"),
+                            "timeout": 100,
                         }
                     ],
                 }

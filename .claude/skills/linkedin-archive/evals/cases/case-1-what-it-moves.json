@@ -1,0 +1,14 @@
+{
+  "id": "case-1-what-it-moves",
+  "description": "Source and destination of the move, plus the attached images.",
+  "input": "What does /linkedin-archive move, and where does it move it?",
+  "checks": {
+    "must_mention": [
+      "outputs/content/linkedin",
+      "datastore",
+      "image"
+    ],
+    "min_words": 40,
+    "hidden_chars_clean": true
+  }
+}

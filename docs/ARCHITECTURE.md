@@ -53,6 +53,7 @@ A turn flows through the engine like this:
 | **Skills** | Slash-command workflows for research, comms, content, CRM, strategy, operations | [Skills, MCP & plugins](skills-mcp-plugins.html) |
 | **Rules** | Always-on or path-scoped behavior the agent follows every turn | [Extending the engine](EXTENDING.html) |
 | **Hooks** | Pre / post / session guards that enforce the rules before a write lands | [Security model](SECURITY-MODEL.html) |
+| **Agents** | Reusable subagent roles in `.claude/agents/`. Each carries its own model and, more to the point, its own tool list: `draft-writer` has no `Bash`, so it cannot reach the send path whatever a dispatch asks | [Extending the engine](EXTENDING.html) |
 | **Scripts & daemons** | CLI tools and optional always-on services (dashboard, mail sync, monitors) | [Daemons](daemons.html) |
 | **Memory** | Auto-memory, semantic recall, the ODIN brain, knowledge, threads | [Memory & ODIN](memory-odin.html) |
 | **Models** | Local embeddings plus the Council voices | [AI models](MODELS-SETUP.html) |

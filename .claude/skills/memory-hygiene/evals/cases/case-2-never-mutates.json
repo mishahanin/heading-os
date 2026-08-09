@@ -1,0 +1,16 @@
+{
+  "id": "case-2-never-mutates",
+  "description": "The read-only contract, and the hand-off to /dream for anything judgement-shaped.",
+  "input": "Does /memory-hygiene ever change or delete a memory file?",
+  "checks": {
+    "must_mention": [
+      "never",
+      "dream"
+    ],
+    "must_not_mention": [
+      "deletes the file"
+    ],
+    "min_words": 30,
+    "hidden_chars_clean": true
+  }
+}

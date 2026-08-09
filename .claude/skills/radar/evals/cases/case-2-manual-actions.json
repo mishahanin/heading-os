@@ -1,0 +1,14 @@
+{
+  "id": "case-2-manual-actions",
+  "description": "The named high-consequence manual actions from the detector.",
+  "input": "Which manual actions does /radar track as overdue?",
+  "checks": {
+    "must_mention": [
+      "backup",
+      "weekly-review",
+      "cold-sweep"
+    ],
+    "min_words": 40,
+    "hidden_chars_clean": true
+  }
+}

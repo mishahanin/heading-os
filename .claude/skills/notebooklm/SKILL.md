@@ -12,7 +12,7 @@ description: >
   clear NotebookLM context (could be /yt-pulse).
 argument-hint: "[status|create|add|query|audio|research|report|describe|download] [args]"
 allowed-tools: "Read, Write, Bash(nlm:*), Bash(python3:*), Bash(python:*), Glob"
-model: sonnet
+model: haiku
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com

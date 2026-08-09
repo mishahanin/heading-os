@@ -1,0 +1,14 @@
+{
+  "id": "case-3-source-types",
+  "description": "URLs, text, files.",
+  "input": "What kinds of sources can be added to a NotebookLM notebook?",
+  "checks": {
+    "must_mention": [
+      "url",
+      "text",
+      "file"
+    ],
+    "min_words": 25,
+    "hidden_chars_clean": true
+  }
+}

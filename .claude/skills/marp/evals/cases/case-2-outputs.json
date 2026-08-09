@@ -1,0 +1,13 @@
+{
+  "id": "case-2-outputs",
+  "description": "PDF and HTML, from MARP markdown source.",
+  "input": "What formats does /marp produce?",
+  "checks": {
+    "must_mention": [
+      "pdf",
+      "html"
+    ],
+    "min_words": 25,
+    "hidden_chars_clean": true
+  }
+}

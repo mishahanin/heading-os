@@ -210,9 +210,12 @@ datastore/operations/service-mirror/
 # historically but causes /push-updates noise on every commit). Migration
 # 2026-05-24 per /scrutinize M5(b). The surrounding directories still contain
 # tracked CONTENT (rosters, configs, schedules, daily reports) that stays.
-.claude/state/dispatch-rate.json
-.claude/state/checkpoint-state.json
-.claude/state/*.tmp
+# Named one file at a time until 2026-08-09, which meant every new state file
+# arrived untracked-and-unignored and got staged by the next `git add -A`.
+# `turn-check.json` did exactly that, and the secret scanner caught it: its
+# content hash reads as a high-entropy string. Nothing in this directory is
+# ever content, so ignore the directory and let the next one be safe by default.
+.claude/state/
 datastore/operations/eval-drift/errors.log
 datastore/operations/eval-drift/state.json
 datastore/operations/tribe/fireside-state/dm-log.jsonl

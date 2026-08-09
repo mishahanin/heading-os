@@ -14,9 +14,18 @@ Detects compound workflows and dispatches parallel agents for research phases wh
 
 ## Parallelization Safety Model
 
-Before dispatching any parallel pattern, read the SKILL.md frontmatter of each skill you plan to dispatch. Orchestration metadata lives under the namespaced `x-heading-orchestration:` block. Decide parallelization based on `x-heading-orchestration.parallel_safe` and `x-heading-orchestration.shared_state`.
+### Roles are files; guarantees are this rule
 
-The `x-` prefix marks this as a workspace extension, not part of Anthropic's standard SKILL.md spec. See `.claude/rules/development-standards.md` for the full frontmatter contract and an example shape. As of v0.5.0 the parsers accept only `x-heading-*`; the legacy 31C-prefixed namespace was removed.
+Four recurring roles are agent definitions in `.claude/agents/`, not prose here:
+`crm-reader`, `comms-scout`, `datastore-validator`, `draft-writer`. Each carries
+its own model and its own tool list, and the tool list is the enforcement:
+`draft-writer` has no `Bash`, so it cannot reach `scripts/send-email.py` whatever
+a dispatch prompt says. Prose is interpreted and its breach is found afterwards.
+
+What stays here is what no single agent file can express: the approval gates, the
+rule that CRM and pipeline writes are sequential and post-approval, and the rule
+that two agents never write the same contact file. A step with no agent file
+named still lists its model inline.
 
 ### Parallel Safety Levels
 
@@ -63,12 +72,12 @@ in doubt.
 
 **Dispatches:** `/osint`, `/voss` tactical prep, CRM history reader, and counterpart comms scout in parallel as 4 background agents.
 
-**Models per agent:**
+**Roles and models:**
 
 - `/osint` scout — Opus (per CEO decision: /osint stays Opus)
 - `/voss` prep — Opus (voice-grade)
-- CRM history reader — Haiku
-- Counterpart comms scout (Exchange + Telegram, last 30 days) — Haiku
+- CRM history reader — the `crm-reader` agent
+- Counterpart comms scout (Exchange + Telegram, last 30 days) — the `comms-scout` agent
 
 **Safety floor (each agent):**
 
@@ -90,12 +99,12 @@ in doubt.
 
 **Dispatches:** `/email-intel` fetch, `/viraid` fetch, calendar scout, and Sentinel-queue scout in parallel as 4 background agents.
 
-**Models per agent:**
+**Roles and models:**
 
 - `/email-intel` fetch — Sonnet
 - `/viraid` fetch — Sonnet
-- Calendar scout (today + next 3 days from Exchange) — Haiku
-- Sentinel-queue scout (unprocessed urgent items) — Haiku
+- Calendar scout (today + next 3 days from Exchange) — the `comms-scout` agent, channel `calendar`
+- Sentinel-queue scout (unprocessed urgent items) — the `comms-scout` agent, channel `sentinel-queue`
 
 **Safety floor (each agent):**
 
@@ -120,9 +129,9 @@ in doubt.
 
 **Dispatches:** one draft agent per contact in parallel (up to 5 concurrent), with optional per-post image-prompt agents.
 
-**Models per agent:**
+**Roles and models:**
 
-- Drafter agents (one per contact) — Sonnet
+- Drafter agents (one per contact) — the `draft-writer` agent
 - Image-prompt agents (one per post, when imagery requested) — Haiku
 
 **Safety floor (each agent):**
@@ -144,10 +153,10 @@ in doubt.
 
 **Dispatches:** `/linkedin-series` planning phase first (sequential), then up to 6 agents in parallel — 3 post drafters + 3 image-prompt generators.
 
-**Models per agent:**
+**Roles and models:**
 
 - Planning phase (`/linkedin-series`) — Opus (content strategy is voice-grade)
-- Post drafters (one per post) — Sonnet
+- Post drafters (one per post) — the `draft-writer` agent
 - Image-prompt generators (one per post) — Haiku
 
 **Safety floor (each agent):**
@@ -170,13 +179,13 @@ in doubt.
 
 **Dispatches:** `/osint`, `/competitor-intel`, `/deep-think`, deal-context reader, and datastore price/proof validator as 5 parallel research agents, then synthesis via `/deal-strategy`.
 
-**Models per agent:**
+**Roles and models:**
 
 - `/osint` — Opus (per CEO decision: /osint stays Opus)
 - `/competitor-intel` — Sonnet (per Phase 1.1)
 - `/deep-think` — Opus
-- Deal-context reader (CRM contact files + pipeline.md entry) — Haiku
-- Datastore price/proof validator (cross-references claims against `datastore/`) — Sonnet
+- Deal-context reader (CRM contact files + pipeline.md entry) — the `crm-reader` agent
+- Datastore price/proof validator — the `datastore-validator` agent
 
 **Safety floor (each agent):**
 
@@ -234,7 +243,7 @@ Pattern 6 does **not** dispatch subagents. Unlike Patterns 1–5 and 7, `/prime`
 
 **Dispatches:** sequential corporate publish phase first; then 2 parallel tail agents — ceo-main git push and CRM aggregate.
 
-**Models per agent:**
+**Roles and models:**
 
 - Corporate publish (sequential) — Sonnet
 - ceo-main git push tail — Haiku

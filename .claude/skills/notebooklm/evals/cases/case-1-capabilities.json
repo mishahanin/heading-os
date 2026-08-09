@@ -1,0 +1,14 @@
+{
+  "id": "case-1-capabilities",
+  "description": "Notebook creation, sources, grounded queries, audio overview, artifacts.",
+  "input": "What can /notebooklm do?",
+  "checks": {
+    "must_mention": [
+      "notebook",
+      "source",
+      "audio overview"
+    ],
+    "min_words": 50,
+    "hidden_chars_clean": true
+  }
+}

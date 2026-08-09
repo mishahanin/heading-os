@@ -1,0 +1,15 @@
+{
+  "id": "case-1-three-checks",
+  "description": "What the audit actually computes: source dates, modality coverage, source disagreements.",
+  "input": "Which checks does /brain-audit run, and what does its footer report?",
+  "checks": {
+    "must_mention": [
+      "source date",
+      "modalit",
+      "disagreement",
+      "footer"
+    ],
+    "min_words": 60,
+    "hidden_chars_clean": true
+  }
+}

@@ -3,7 +3,7 @@ name: memory-hygiene
 description: Objective-defect detector for the memory ecosystem (auto-memory + Odin brain). Runs scripts/memory-hygiene.py, which flags ONLY mechanically-verifiable rot - dangling/circular superseded_by refs, orphan memory files not linked from MEMORY.md, and an over-budget MEMORY.md - into a dated report, and exits non-zero when any are present. It never mutates memory. Use when the user says "memory hygiene", "check memory health", "memory rot", "scan memory for defects", or wants to know whether the memory store has accumulated objective defects. Do NOT use to consolidate/merge/delete/reword memory (that is judgement - use /dream); to recall a past fact (use /recall); or for operational function health (use /state-check).
 argument-hint: ""
 allowed-tools: "Read, Bash(python3:*)"
-model: sonnet
+model: haiku
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com

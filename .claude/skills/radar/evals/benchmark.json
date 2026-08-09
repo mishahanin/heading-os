@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-08-09T17:47:25",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 13,
+    "check_total": 13,
+    "cases": [
+      {
+        "id": "case-1-severity-and-command",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 794,
+          "output_tokens": 428,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.68
+      },
+      {
+        "id": "case-2-manual-actions",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 785,
+          "output_tokens": 250,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.65
+      },
+      {
+        "id": "case-3-crunch-floor",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 792,
+          "output_tokens": 256,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.59
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-08-09T17:47:25",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 13,
+    "check_total": 13,
+    "cases": [
+      {
+        "id": "case-1-severity-and-command",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 794,
+          "output_tokens": 428,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 5.68
+      },
+      {
+        "id": "case-2-manual-actions",
+        "passed": 5,
+        "total": 5,
+        "failures": [],
+        "usage": {
+          "input_tokens": 785,
+          "output_tokens": 250,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.65
+      },
+      {
+        "id": "case-3-crunch-floor",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 792,
+          "output_tokens": 256,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.59
+      }
+    ]
+  }
+}

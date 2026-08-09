@@ -55,6 +55,7 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 
 | Hook | Event | Purpose |
 |------|-------|---------|
+| `turn-check.py` | `Stop` | Runs `scripts/turn-check.py` over the uncommitted Python edits and blocks the end of the turn if a lane fails. Compile, then import, then the test files that name the changed modules; seconds, not the full suite. Silent when clean. |
 | `checkpoint-offer.py` | `Stop` | Offers to save a checkpoint at rising context-usage thresholds. |
 | `checkpoint-save.py` | `PostCompact` | Saves a session handoff to the archive after a compaction, so the next window resumes cleanly. |
 | `checkpoint-statusline.py` | `statusLine` | Renders the status line, including context-usage and checkpoint state. |

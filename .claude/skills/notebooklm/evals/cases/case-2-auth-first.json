@@ -1,0 +1,12 @@
+{
+  "id": "case-2-auth-first",
+  "description": "Auth validation is Phase 0; a model that skips it will fail the first real call.",
+  "input": "What does /notebooklm check before it does anything else?",
+  "checks": {
+    "must_mention": [
+      "auth"
+    ],
+    "min_words": 25,
+    "hidden_chars_clean": true
+  }
+}

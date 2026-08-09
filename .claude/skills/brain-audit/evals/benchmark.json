@@ -1,0 +1,96 @@
+{
+  "last_run": {
+    "timestamp": "2026-08-09T17:47:00",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 14,
+    "check_total": 14,
+    "cases": [
+      {
+        "id": "case-1-three-checks",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 2231,
+          "output_tokens": 515,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 6.68
+      },
+      {
+        "id": "case-2-degenerate-sources",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 2241,
+          "output_tokens": 441,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 6.79
+      },
+      {
+        "id": "case-3-boundaries",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 2232,
+          "output_tokens": 188,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.55
+      }
+    ]
+  },
+  "baseline": {
+    "timestamp": "2026-08-09T17:47:00",
+    "model": "claude-haiku-4-5-20251001",
+    "passed_total": 14,
+    "check_total": 14,
+    "cases": [
+      {
+        "id": "case-1-three-checks",
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "usage": {
+          "input_tokens": 2231,
+          "output_tokens": 515,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 6.68
+      },
+      {
+        "id": "case-2-degenerate-sources",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 2241,
+          "output_tokens": 441,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 6.79
+      },
+      {
+        "id": "case-3-boundaries",
+        "passed": 4,
+        "total": 4,
+        "failures": [],
+        "usage": {
+          "input_tokens": 2232,
+          "output_tokens": 188,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        },
+        "elapsed_seconds": 3.55
+      }
+    ]
+  }
+}

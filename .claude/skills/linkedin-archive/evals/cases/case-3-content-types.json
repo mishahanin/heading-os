@@ -1,0 +1,14 @@
+{
+  "id": "case-3-content-types",
+  "description": "The three types and the ask-when-unsure behaviour.",
+  "input": "Which content types can /linkedin-archive file, and what if the type is unclear?",
+  "checks": {
+    "must_mention": [
+      "article",
+      "post",
+      "comment"
+    ],
+    "min_words": 30,
+    "hidden_chars_clean": true
+  }
+}

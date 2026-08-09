@@ -4,7 +4,7 @@ description: "Markdown-driven presentation pipeline producing PDF and HTML from 
 argument-hint: "[new <topic> | render <path> | from <path> | watch <path>]"
 allowed-tools: "Read, Write, Edit, Bash(python3:*), Bash(marp:*), Glob, Grep"
 context: fork
-model: sonnet
+model: haiku
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com

@@ -3,7 +3,7 @@ name: linkedin-archive
 description: Move the latest published LinkedIn content (article/post/comment) plus any attached images from outputs/content/linkedin into the typed datastore archive. Auto-fires on English or Russian "I published it on LinkedIn" phrasing. Asks for the content type if it cannot be inferred. Confirms before mutating disk.
 argument-hint: "[slug]"
 allowed-tools: "Read, Bash(python3:*), AskUserQuestion"
-model: sonnet
+model: haiku
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com

@@ -1,0 +1,13 @@
+{
+  "id": "case-3-crunch-floor",
+  "description": "Crunch-mode is the discriminating question: a model that reads it as 'suppress everything' has missed the critical floor that always pierces.",
+  "input": "What does `crunch on` suppress in /radar, and what still gets through?",
+  "checks": {
+    "must_mention": [
+      "tier-b",
+      "backup"
+    ],
+    "min_words": 40,
+    "hidden_chars_clean": true
+  }
+}

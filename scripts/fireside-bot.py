@@ -3428,8 +3428,13 @@ def cmd_email_backup(args) -> None:
         )
         body_html = "<p>" + body_text.replace("\n\n", "</p><p>").replace("\n", "<br/>") + "</p>"
 
+        # sys.executable, never a bare "python": the service host has no
+        # `python` on PATH (only python3 + the venv), so every backup email
+        # raised FileNotFoundError and this job reported sent=0 while its
+        # healthcheck stayed green. sys.executable is the interpreter already
+        # running the daemon, so it carries the pinned dependencies.
         cmd = [
-            "python", "scripts/send-email.py",
+            sys.executable, "scripts/send-email.py",
             "--to", email,
             "--subject", subject,
             "--body", body_html,

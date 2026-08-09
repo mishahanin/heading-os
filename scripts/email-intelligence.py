@@ -98,7 +98,7 @@ DEFAULT_IGNORE_PATTERNS = [
 ]
 
 
-# HTML stripping: see scripts/utils/html.py (imported above as strip_html)
+# HTML stripping: see scripts/utils/html_text.py (imported above as strip_html)
 
 
 # ============================================================

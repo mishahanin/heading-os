@@ -103,7 +103,7 @@ if ENV_FILE.exists():
     load_env(WORKSPACE_ROOT)
 
 
-# HTML stripping: see scripts/utils/html.py (imported above as strip_html)
+# HTML stripping: see scripts/utils/html_text.py (imported above as strip_html)
 
 
 # ============================================================

@@ -33,7 +33,7 @@ _SENTINEL = "HEADING_OS_VENV_RELAUNCHED"
 
 def venv_python() -> Path:
     """Path to the project venv interpreter (may not exist on this machine)."""
-    # scripts/utils/venv.py -> repo root is parents[2].
+    # scripts/utils/venv_guard.py -> repo root is parents[2].
     return Path(__file__).resolve().parents[2] / ".venv" / "bin" / "python"
 
 

@@ -52,6 +52,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `tests/test_no_stdlib_shadowing.py` now fails on any future file in
   `scripts/` or `.claude/hooks/` that takes a standard-library name.
 
+  A test written to demonstrate this exact hazard had been asserting nothing
+  since the day it was written. `test_running_the_file_directly_is_the_shape_that_broke`
+  put `scripts/utils/` first on the path and imported `operator`, expecting the
+  workspace file to answer, and accepted `shadowed or cached`. But `operator`
+  is already in `sys.modules` before a `python -c` body runs, so the import
+  always returned the cached standard-library module and always took the
+  `cached` branch. The half that mattered was unreachable, which is why the
+  renamed-away subject of the demonstration did not make it fail. The probe now
+  drops the module from `sys.modules` first, so it fails if a stdlib-named
+  module reappears in that directory.
+
 - **`Maximum` appeared as `Jordanum` in 16 files, and had been shipping that way
   since the repository was first published.** `git log -S` dates it to
   `c1aedf0`, the squashed initial import of 2026-06-29: a find-and-replace during

@@ -50,28 +50,40 @@ def test_the_resolver_answers_when_run_as_a_module(tmp_path):
     assert proc.stdout.strip() == "Etc/GMT-14"
 
 
-def test_running_the_file_directly_is_the_shape_that_broke():
-    """Not a demand that direct invocation work -- a demonstration of WHY the
-    installers may not use it, kept executable so the reason cannot rot into
-    folklore.
+def test_the_shape_that_broke_no_longer_resolves_to_a_workspace_file():
+    """The hazard this file was written around is gone, and this is the proof.
 
-    `scripts/utils/` is placed first on the path exactly as a direct file run
-    would place it, and the stdlib name is imported in a child that has not
-    cached it. If this ever stops resolving to the workspace file, the hazard is
-    gone and this test says so by failing -- at which point delete it.
+    The original probe put `scripts/utils/` first on the path and imported
+    `operator`, expecting the workspace file to answer. It never could:
+    `operator` is already in `sys.modules` before a `-c` body runs, so the
+    import returned the cached stdlib module every time and the assertion
+    passed through its `or cached` branch. The `shadowed` half was unreachable
+    from the day it was written, and it stayed unreachable through 2026-08-09,
+    when `scripts/utils/operator.py` was renamed to `operator_identity.py`
+    (with `html`, `trace` and `venv` beside it) and the subject of the
+    demonstration ceased to exist without the test noticing.
+
+    Dropping the cache first makes the probe real. With `sys.modules` cleared,
+    a file in `scripts/utils/` genuinely does answer the standard library's
+    name, which is the whole reason the installers below may not invoke a
+    utils file by path. So this now fails if anyone puts a stdlib-named module
+    back in that directory, rather than passing whatever happens.
+    `tests/test_no_stdlib_shadowing.py` is the broad guard; this is the
+    executable statement of the specific shape this module exists to prevent.
     """
     probe = (
-        "import sys; sys.path.insert(0, r'%s');"
-        "import importlib; m = importlib.import_module('operator');"
-        "print(m.__file__)" % (_ROOT / "scripts" / "utils")
+        "import sys; sys.modules.pop('operator', None);"
+        "sys.path.insert(0, r'%s');"
+        "import importlib; print(importlib.import_module('operator').__file__)"
+        % (_ROOT / "scripts" / "utils")
     )
     proc = subprocess.run([sys.executable, "-c", probe],
                           capture_output=True, text=True)
-    assert proc.returncode == 0
-    shadowed = proc.stdout.strip().endswith("scripts/utils/operator.py")
-    cached = "python3" in proc.stdout or "lib/python" in proc.stdout
-    assert shadowed or cached, (
-        f"neither shadowed nor stdlib-cached: {proc.stdout.strip()}"
+    assert proc.returncode == 0, f"probe failed: {proc.stderr[-300:]}"
+    resolved = proc.stdout.strip()
+    assert "scripts/utils/" not in resolved, (
+        f"a workspace file answered `import operator`: {resolved}. "
+        f"Rename it; see tests/test_no_stdlib_shadowing.py for why."
     )
 
 

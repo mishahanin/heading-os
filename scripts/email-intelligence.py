@@ -12,7 +12,8 @@ Usage:
     python scripts/email-intelligence.py --inbox-only  # Incoming only
     python scripts/email-intelligence.py --sent-only   # Outgoing only
     python scripts/email-intelligence.py --dry-run     # No state update
-    python scripts/email-intelligence.py --json        # JSON output for skill
+    python scripts/email-intelligence.py --json        # JSON output for skill (state NOT committed)
+    python scripts/email-intelligence.py --commit-state run.json  # Commit a deferred --json run
     python scripts/email-intelligence.py --verbose     # Detailed terminal output
     python scripts/email-intelligence.py --unread      # Analyze the Inbox unread set (bridge feed)
     python scripts/email-intelligence.py --mark-read ID    # Mark a conversation read in Exchange
@@ -150,6 +151,57 @@ class StateManager:
             sorted_keys = sorted(convs, key=lambda k: convs[k].get("last_seen", ""))
             for k in sorted_keys[: len(convs) - 200]:
                 del convs[k]
+
+
+def commit_state(state: "StateManager", payload: dict) -> None:
+    """Record a completed run: mark its messages processed and stamp the run.
+
+    Separated from the fetch on purpose. In --json mode the fetch only
+    PROPOSES; the /email-intel skill approves and executes afterwards, so
+    committing at fetch time burned message ids the CEO never decided on --
+    a skipped digest still left them filtered out of every later run. The
+    caller decides when a run is genuinely done and calls this then.
+
+    Does not save; the caller owns the write.
+    """
+    for message_id in payload.get("message_ids", []):
+        state.mark_processed(message_id)
+    for conv in payload.get("conversations", []):
+        state.mark_conversation(conv["id"], conv.get("topic", ""))
+
+    state.data["last_run"] = datetime.now(timezone.utc).isoformat()
+    state.data["last_run_status"] = "complete"
+    cutoff = payload.get("cutoff")
+    if payload.get("inbox_count"):
+        state.data["last_inbox_datetime"] = cutoff
+    if payload.get("sent_count"):
+        state.data["last_sent_datetime"] = cutoff
+
+    stats = state.data["stats"]
+    stats["total_runs"] = stats.get("total_runs", 0) + 1
+    stats["total_conversations"] = stats.get("total_conversations", 0) + len(payload.get("conversations", []))
+    stats["total_filtered"] = stats.get("total_filtered", 0) + payload.get("noise_filtered", 0)
+
+
+def commit_state_from_file(path: Path, state: "StateManager | None" = None) -> dict:
+    """Replay the `state_commit` block of a saved --json run into state.json.
+
+    This is the deferred half of the split above: /email-intel Phase 5 calls
+    it once the approved actions have been written. Raises ValueError on an
+    output produced without the block rather than committing a partial run.
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = data.get("state_commit")
+    if not payload:
+        raise ValueError(
+            f"{path} carries no state_commit block - it was not produced by "
+            "a --json run of this script, or predates the deferred-commit split."
+        )
+
+    state = state or StateManager()
+    commit_state(state, payload)
+    state.save()
+    return payload
 
 
 # ============================================================
@@ -721,8 +773,16 @@ def _fallback_analysis(conv: dict) -> dict:
 # Output Formatting
 # ============================================================
 
-def build_output(conversations: list[dict], analyses: list[dict], run_info: dict) -> dict:
-    """Assemble final JSON output."""
+def build_output(conversations: list[dict], analyses: list[dict], run_info: dict,
+                 state_commit: dict | None = None) -> dict:
+    """Assemble final JSON output.
+
+    `state_commit`, when present, is everything `commit_state()` needs to
+    record the run later. It carries the FULL set of message ids the fetch
+    consumed -- internal-only and noise-filtered threads never reach
+    `conversations`, so committing from `conversations` alone would leave
+    them unprocessed and resurface them on every subsequent run.
+    """
     output_convs = []
     for conv, analysis in zip(conversations, analyses):
         # Strip full body from raw_emails for output (keep preview only)
@@ -759,7 +819,10 @@ def build_output(conversations: list[dict], analyses: list[dict], run_info: dict
     priority_order = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
     output_convs.sort(key=lambda c: priority_order.get(c["priority"], 9))
 
-    return {"run_info": run_info, "conversations": output_convs}
+    output = {"run_info": run_info, "conversations": output_convs}
+    if state_commit is not None:
+        output["state_commit"] = state_commit
+    return output
 
 
 # ============================================================
@@ -948,7 +1011,11 @@ def main():
     parser.add_argument("--inbox-only", action="store_true", help="Scan inbox only")
     parser.add_argument("--sent-only", action="store_true", help="Scan sent items only")
     parser.add_argument("--dry-run", action="store_true", help="Skip state update")
-    parser.add_argument("--json", action="store_true", help="JSON output for skill consumption")
+    parser.add_argument("--json", action="store_true",
+                        help="JSON output for skill consumption (state is NOT committed - "
+                             "the skill commits with --commit-state after approval)")
+    parser.add_argument("--commit-state", metavar="FILE",
+                        help="Commit the state_commit block of a saved --json run and exit")
     parser.add_argument("--verbose", action="store_true", help="Detailed terminal output")
     parser.add_argument("--unread", action="store_true",
                         help="Analyze the current Inbox unread set (bridge dashboard feed)")
@@ -967,6 +1034,21 @@ def main():
         return
     if args.unread:
         run_unread_mode(verbose=args.verbose)
+        return
+
+    # Deferred-commit mode: no Exchange connection, just replay a saved run.
+    if args.commit_state:
+        if args.dry_run:
+            print(f"{YELLOW}--dry-run: state not committed{RESET}", file=sys.stderr)
+            return
+        try:
+            payload = commit_state_from_file(Path(args.commit_state))
+        except (ValueError, OSError, json.JSONDecodeError) as e:
+            print(f"{RED}Commit failed: {e}{RESET}", file=sys.stderr)
+            sys.exit(1)
+        n_ids = len(payload.get("message_ids", []))
+        n_convs = len(payload.get("conversations", []))
+        print(f"{GREEN}State committed: {n_ids} message(s), {n_convs} conversation(s){RESET}")
         return
 
     state = StateManager()
@@ -1063,23 +1145,26 @@ def main():
         "conversations_processed": len(convs_list),
     }
 
-    output = build_output(convs_list, analyses, run_info)
+    commit_payload = {
+        "message_ids": [msg["message_id"] for msg in clean],
+        "conversations": [{"id": c["id"], "topic": c["topic"]} for c in convs_list],
+        "inbox_count": inbox_count,
+        "sent_count": sent_count,
+        "noise_filtered": noise_filtered,
+        "cutoff": cutoff.isoformat(),
+    }
 
-    # --- Update state ---
-    if not args.dry_run:
-        for msg in clean:
-            state.mark_processed(msg["message_id"])
-        for conv in convs_list:
-            state.mark_conversation(conv["id"], conv["topic"])
-        state.data["last_run"] = datetime.now(timezone.utc).isoformat()
-        state.data["last_run_status"] = "complete"
-        if inbox_count:
-            state.data["last_inbox_datetime"] = cutoff.isoformat()
-        if sent_count:
-            state.data["last_sent_datetime"] = cutoff.isoformat()
-        state.data["stats"]["total_runs"] = state.data["stats"].get("total_runs", 0) + 1
-        state.data["stats"]["total_conversations"] = state.data["stats"].get("total_conversations", 0) + len(convs_list)
-        state.data["stats"]["total_filtered"] = state.data["stats"].get("total_filtered", 0) + noise_filtered
+    # --- Commit state ---
+    # --json means a skill is consuming this and will approve actions AFTER
+    # the fetch, so the commit is deferred to its Phase 5 (--commit-state).
+    # Committing here would burn message ids the CEO never decided on.
+    # Terminal mode has no approval phase - the reader IS the review - so it
+    # commits inline as before.
+    output = build_output(convs_list, analyses, run_info,
+                          state_commit=commit_payload if args.json else None)
+
+    if not args.dry_run and not args.json:
+        commit_state(state, commit_payload)
         state.save()
         if args.verbose:
             print(f"{GREEN}  State saved to {STATE_FILE}{RESET}")

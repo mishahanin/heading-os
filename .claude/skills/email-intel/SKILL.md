@@ -128,8 +128,16 @@ Every conversation gets a priority tag:
 
 ### Phase 1 -- Fetch & Process
 
-1. Run: `python scripts/email-intelligence.py --json --hours [N]`
-   - Add `--inbox-only` or `--sent-only` flags if specified
+1. Fetch, saving the output to a file (`$OUTPUTS_DIR` resolves the DATA root -- a bare `outputs/...` in Bash misroutes into the engine clone):
+
+   ```bash
+   OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
+   RUN="$OUTPUTS_DIR/operations/email-intelligence/run-$(date -u +%F).json"
+   python scripts/email-intelligence.py --json --hours [N] > "$RUN"
+   ```
+
+   - Add `--inbox-only` or `--sent-only` if specified
+   - `--json` does NOT commit state (the fetch only proposes; approval is Phase 3); Phase 5 commits by replaying this file's `state_commit` block. Losing the file just means the messages resurface next run -- safe, but the fetch is wasted.
 2. Parse JSON output.
 3. Filter out message IDs already in `processed_message_ids`.
 4. Filter out senders in `learned_ignore_senders` (auto-skip, count as noise).
@@ -187,14 +195,15 @@ Undo semantics (honest): `undo_card` restores the card's `prev_value` record and
 
 ### Phase 5 -- Save State & Report
 
-1. Update `outputs/operations/email-intelligence/state.json`:
-   - Append all processed message_ids to `processed_message_ids` (cap at 500 -- trim oldest)
-   - Update `conversations` dict with thread keys (cap at 200 -- trim oldest)
-   - Increment `stats` counters based on actions taken
-   - Set `last_run` to current ISO timestamp
-   - Set `last_inbox_datetime` / `last_sent_datetime` to latest email timestamps
-   - Set `last_run_status` to `"complete"`
-   - If user ignored a sender: add to `learned_ignore_senders`
+1. Commit the run's state -- ONE command, replaying the Phase 1 file:
+
+   ```bash
+   python scripts/email-intelligence.py --commit-state "$RUN"
+   ```
+
+   This appends the processed message_ids (cap 500, oldest trimmed), records the conversation keys (cap 200), stamps `last_run` / `last_run_status` / `last_inbox_datetime` / `last_sent_datetime`, and bumps the run counters. **Run it only after Phase 4 has finished** -- committing earlier marks messages handled that the CEO has not decided on, and Phase 1's filter then hides them forever. That was a live defect until 2026-08-09, when the fetch itself did the commit; `tests/test_email_intel_state_commit.py` now holds the split.
+
+   If the CEO asked to ignore a sender, add it to `learned_ignore_senders` in `state.json` by hand -- that is a preference, not run state, and the commit path does not touch it.
 
 2. Save daily digest: `outputs/operations/email-intelligence/digest-YYYY-MM-DD.md`
    - Full record of conversations processed, actions proposed, decisions made, actions executed

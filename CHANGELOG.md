@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **`/email-intel` no longer burns email it never got a decision on.**
+  `scripts/email-intelligence.py` marked every fetched message processed and
+  stamped `last_run` at the end of the FETCH — inside the run that only
+  proposes actions, before the skill's Phase 3 approval gate. A digest the CEO
+  skipped entirely, or a session that died between the fetch and the digest,
+  still left those messages recorded as handled, and Phase 1's dedupe filter
+  then dropped them from every later run. Silent, and unrecoverable without
+  hand-editing `state.json`. Found on 2026-08-09 by noticing the state file's
+  mtime matched a fetch that had written nothing else. Fetch and commit are now
+  two acts: `--json` emits a `state_commit` block and writes nothing, and
+  `--commit-state FILE` replays that block after the approved actions have run.
+  The block carries the full filtered id set, not just the ids that survived
+  into a conversation — committing from `conversations` alone would resurface
+  every internal and noise-filtered thread on the next run. Terminal mode has
+  no approval phase and commits inline as before.
+  `tests/test_email_intel_state_commit.py` holds the split at the seam and at
+  the `main()` wiring, which is where it actually broke.
+
 ### Added
 
 - **A turn can no longer end quietly on a broken tree.** `scripts/turn-check.py`

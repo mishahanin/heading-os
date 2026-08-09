@@ -1,0 +1,249 @@
+"""Contract for the /scrutinize judge dispatcher.
+
+Written RED, before `scripts/scrutinize-dispatch.py` exists, per Step 1 of
+`plans/2026-08-09-scrutinize-record-roles-currency.md`.
+
+Three properties this file exists to hold. Family assignment belongs to the
+dispatcher, not to the reviewing model, so the never-same-family rule survives a
+model that would rather not comply. The sensitivity gate consults
+`sensitivity_is_declared()` and never `is_sensitive()`, whose unset fail-closed
+default would refuse every proxy call on an ordinary machine and kill the k3 side
+of the two-family roster permanently. And a role lens fires from a path match
+rather than from discretion.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+
+def _load():
+    """Import the kebab-case scripts/scrutinize-dispatch.py as a module."""
+    path = Path(__file__).resolve().parent.parent / "scripts" / "scrutinize-dispatch.py"
+    spec = importlib.util.spec_from_file_location("scrutinize_dispatch", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+disp = _load()
+
+
+@pytest.fixture
+def runs(tmp_path, monkeypatch):
+    from scripts.utils import scrutinize_record as rec
+    path = tmp_path / "runs.jsonl"
+    monkeypatch.setattr(rec, "record_path", lambda: path)
+    return path
+
+
+def _rows(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+# ============================================================
+# Family assignment - the never-same-family rule
+# ============================================================
+def test_skeptic_and_meta_judge_are_never_the_same_family():
+    for swap in (False, True):
+        assign = disp.assign_families(swap=swap)
+        assert assign["skeptic"] != assign["meta"]
+
+
+def test_both_swap_states_use_both_families():
+    a = disp.assign_families(swap=False)
+    b = disp.assign_families(swap=True)
+    assert {a["skeptic"], a["meta"]} == {"claude", "kimi"}
+    assert a["skeptic"] == b["meta"] and a["meta"] == b["skeptic"]
+
+
+def test_swap_bit_is_derived_from_the_run_not_from_the_model():
+    """Same run id yields the same side assignment; a different one may differ."""
+    assert disp.swap_for_run("r1") == disp.swap_for_run("r1")
+    assert isinstance(disp.swap_for_run("r1"), bool)
+
+
+# ============================================================
+# The sensitivity gate - declaration, never the fail-closed default
+# ============================================================
+def test_no_proxy_call_when_sensitivity_is_declared(runs, monkeypatch):
+    monkeypatch.setenv("SENSITIVE_MODE", "on")
+    called = []
+    monkeypatch.setattr(disp, "call_model", lambda *a, **k: called.append(a))
+    rc = disp.judge(run_id="r1", target="file:x", finding_id="H1", pass_="2.5a",
+                    brief="does this hold?", family="kimi")
+    assert called == []
+    assert rc != 0
+    rows = [r for r in _rows(runs) if r["kind"] == "degraded"]
+    assert rows and "SENSITIVE_MODE" in rows[0]["degraded"]
+
+
+def test_a_proxy_call_is_attempted_when_sensitive_mode_is_unset(runs, monkeypatch):
+    """The machine default must not disable the roster.
+
+    `is_sensitive()` is fail-closed and resolves True when unset, so a dispatcher
+    consulting it would refuse here. This asserts the successor is consulted.
+    """
+    monkeypatch.delenv("SENSITIVE_MODE", raising=False)
+    called = []
+
+    def _fake(model, prompt, **kw):
+        called.append(model)
+        return "REFUTATION_FAILED - the finding stands"
+
+    monkeypatch.setattr(disp, "call_model", _fake)
+    rc = disp.judge(run_id="r1", target="file:x", finding_id="H1", pass_="2.5a",
+                    brief="does this hold?", family="kimi")
+    assert called, "the unset default must not gate the proxy call"
+    assert rc == 0
+
+
+def test_cleared_sensitive_mode_also_permits_the_call(runs, monkeypatch):
+    monkeypatch.setenv("SENSITIVE_MODE", "off")
+    called = []
+    monkeypatch.setattr(disp, "call_model", lambda m, p, **k: called.append(m) or "CORRECT")
+    disp.judge(run_id="r1", target="file:x", finding_id="H1", pass_="2.5a",
+               brief="b", family="kimi")
+    assert called
+
+
+def test_an_unreachable_proxy_writes_its_own_degraded_cause(runs, monkeypatch):
+    monkeypatch.delenv("SENSITIVE_MODE", raising=False)
+
+    def _boom(model, prompt, **kw):
+        raise RuntimeError("proxy refused connection")
+
+    monkeypatch.setattr(disp, "call_model", _boom)
+    rc = disp.judge(run_id="r1", target="file:x", finding_id="H1", pass_="2.5a",
+                    brief="b", family="kimi")
+    assert rc != 0
+    rows = [r for r in _rows(runs) if r["kind"] == "degraded"]
+    assert rows and "proxy" in rows[0]["degraded"].lower()
+    assert "SENSITIVE_MODE" not in rows[0]["degraded"]
+
+
+def test_a_claude_side_judge_never_calls_the_proxy(runs, monkeypatch):
+    monkeypatch.delenv("SENSITIVE_MODE", raising=False)
+    called = []
+    monkeypatch.setattr(disp, "call_model", lambda *a, **k: called.append(a))
+    disp.judge(run_id="r1", target="file:x", finding_id="H1", pass_="2.5a",
+               brief="b", family="claude", verdict="CORRECT")
+    assert called == []
+    verdicts = [r for r in _rows(runs) if r["kind"] == "verdict"]
+    assert verdicts and verdicts[0]["judge_family"] == "claude"
+
+
+# ============================================================
+# Role lenses - a path match, not a judgement call
+# ============================================================
+@pytest.mark.parametrize("path,lens", [
+    ("scripts/templates/systemd/reminders.timer", "ops"),
+    ("scripts/templates/systemd/chronicle.service", "ops"),
+    ("scripts/install-router-accuracy-timer.sh", "ops"),
+    ("config/routing-map.yaml", "boundary"),
+    (".claude/hooks/_dispatch.py", "boundary"),
+    ("config/tool-risk.json", "boundary"),
+])
+def test_trigger_table_resolves_a_path_to_its_lens(path, lens):
+    assert lens in disp.lenses_for([path])
+
+
+def test_a_non_matching_path_fires_no_lens():
+    assert disp.lenses_for(["docs/QUICKSTART.md"]) == []
+
+
+def test_scheduler_lens_fires_on_an_apscheduler_import(tmp_path):
+    f = tmp_path / "daemon.py"
+    f.write_text("from apscheduler.schedulers.asyncio import AsyncIOScheduler\n")
+    assert "scheduler" in disp.lenses_for([str(f)])
+
+
+def test_role_scan_writes_one_row_per_firing_lens(runs):
+    disp.role_scan(run_id="r1", target="dir:scripts",
+                   paths=["scripts/templates/systemd/reminders.timer",
+                          "config/routing-map.yaml"])
+    fired = {r["role"] for r in _rows(runs) if r["kind"] == "role"}
+    assert fired == {"ops", "boundary"}
+
+
+# ============================================================
+# Currency - version currency, and never fatal
+# ============================================================
+def test_currency_maps_an_import_to_its_distribution():
+    assert disp.distribution_for("apscheduler") == "APScheduler"
+    assert disp.distribution_for("yaml") == "PyYAML"
+
+
+def test_currency_writes_ok_when_the_pin_matches_latest(runs, monkeypatch):
+    monkeypatch.setattr(disp, "pinned_version", lambda dist: "3.11.0")
+    monkeypatch.setattr(disp, "latest_version", lambda dist: "3.11.0")
+    disp.currency(run_id="r1", target="file:x", imports=["apscheduler"])
+    row = [r for r in _rows(runs) if r["kind"] == "currency"][0]
+    assert row["currency"]["result"] == "ok"
+    assert row["currency"]["distribution"] == "APScheduler"
+
+
+def test_currency_writes_mismatch_when_the_pin_is_behind(runs, monkeypatch):
+    monkeypatch.setattr(disp, "pinned_version", lambda dist: "3.10.0")
+    monkeypatch.setattr(disp, "latest_version", lambda dist: "3.11.0")
+    disp.currency(run_id="r1", target="file:x", imports=["apscheduler"])
+    row = [r for r in _rows(runs) if r["kind"] == "currency"][0]
+    assert row["currency"]["result"] == "mismatch"
+
+
+def test_currency_degrades_to_inconclusive_and_exits_zero(runs, monkeypatch):
+    def _boom(dist):
+        raise RuntimeError("context7 unreachable")
+
+    monkeypatch.setattr(disp, "pinned_version", lambda dist: "3.10.0")
+    monkeypatch.setattr(disp, "latest_version", _boom)
+    rc = disp.currency(run_id="r1", target="file:x", imports=["apscheduler"])
+    assert rc == 0
+    row = [r for r in _rows(runs) if r["kind"] == "currency"][0]
+    assert row["currency"]["result"] == "inconclusive"
+
+
+def test_currency_skips_stdlib_imports(runs):
+    disp.currency(run_id="r1", target="file:x", imports=["pathlib", "json", "argparse"])
+    assert [r for r in _rows(runs) if r["kind"] == "currency"] == []
+
+
+# ============================================================
+# Reproduction - the harness runs the command, never the model
+# ============================================================
+def test_reproduce_runs_the_command_and_records_the_exit(runs):
+    rc = disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                        cmd=["python3", "-c", "import sys; sys.exit(3)"])
+    assert rc == 0
+    row = [r for r in _rows(runs) if r["kind"] == "reproduction"][0]
+    assert row["verdict"] == "REPRODUCED"
+    assert row["reproduction"]["exit_before"] == 3
+
+
+def test_reproduce_refuses_a_command_that_already_passes(runs):
+    """A command that exits 0 before the fix reproduces nothing."""
+    rc = disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                        cmd=["python3", "-c", "pass"])
+    assert rc != 0
+    assert [r for r in _rows(runs) if r["kind"] == "reproduction"] == []
+
+
+def test_promote_joins_the_stored_exit_before(runs):
+    disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                   cmd=["python3", "-c", "import sys; sys.exit(3)"])
+    rc = disp.promote(run_id="r1", target="file:x", finding_id="H1",
+                      cmd=["python3", "-c", "pass"])
+    assert rc == 0
+    rows = [r for r in _rows(runs) if r["verdict"] == "FALSIFIED"]
+    assert rows and rows[0]["reproduction"] == {"cmd": "python3 -c pass",
+                                                "exit_before": 3, "exit_after": 0}
+
+
+def test_promote_without_a_prior_reproduction_is_refused(runs):
+    rc = disp.promote(run_id="r1", target="file:x", finding_id="H9",
+                      cmd=["python3", "-c", "pass"])
+    assert rc != 0
+    assert [r for r in _rows(runs) if r["verdict"] == "FALSIFIED"] == []

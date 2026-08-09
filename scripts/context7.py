@@ -226,6 +226,12 @@ def main():
 
     # If --list, just show matches and exit
     if args.list:
+        if args.json:
+            # --list used to ignore --json and print prose, so any machine caller
+            # got an unparseable page. The versions array is the field callers
+            # actually want; emitting it is what makes a currency check possible.
+            print(json.dumps({"results": results}, indent=2))
+            return
         print(f"Found {len(results)} matching libraries:\n")
         for r in results:
             trust = r.get("trustScore", "?")

@@ -4,13 +4,20 @@
 Closes R11 from the 2026-05-27 meta-review of /scrutinize. Samples saved
 scrutiny reports + cross-references the FP log to produce a Markdown
 scoring sheet the CEO fills in. The filled sheet feeds Cohen's kappa
-computation (CEO vs scrutinize, CEO vs Gemini-as-judge, CEO vs Grok-as-judge)
+computation (CEO vs scrutinize, CEO vs the external judge)
 to establish a measured agreement baseline.
 
-This script does NOT call Gemini or Grok. It only prepares the sample.
-Cross-family scoring is done by feeding the same findings through
-gemini-consult.py and grok-consult.py separately, then merging into the
-scoring sheet via --import-rater-output.
+Sampling reads `outputs/operations/scrutiny/runs.jsonl` when a run has rows
+there, and falls back to scraping the saved report otherwise. The record is the
+reason this harness can now run at all: before 2026-08-09 it scraped prose, and
+across 75 reports the mandated `Refutation:` header appeared in 8 of them, so a
+scrape produced a sample of nothing.
+
+This script calls no model. It only prepares the sample. Cross-family scoring is
+done by feeding the same findings through the judge dispatcher separately, then
+merging into the scoring sheet via --import-rater-output. The roster is Claude
+(the running session, never version-pinned) and the Kimi reasoning pin; the
+families this docstring used to name were retired on 2026-07-18 and 2026-07-25.
 
 Usage:
   # Generate a quarterly scoring sheet from the last 90 days
@@ -48,6 +55,7 @@ from typing import Iterable
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
+from scripts.utils.scrutinize_record import rows_for  # noqa: E402
 from scripts.utils.colors import CYAN, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import get_default_tz, get_outputs_dir  # noqa: E402
 
@@ -120,9 +128,39 @@ def load_fp_set() -> set[tuple[str, str]]:
     return out
 
 
+def findings_from_record(sid: str, fp_set: set[tuple[str, str]]) -> list[FindingSample]:
+    """Samples built from the structured run record, when the run left rows.
+
+    Preferred over the prose scrape below because it cannot miss a finding the
+    report simply did not narrate. Returns an empty list for a run with no rows,
+    which is every run before 2026-08-09 - hence the fallback, not a replacement.
+    """
+    samples: list[FindingSample] = []
+    for row in rows_for(sid):
+        if row.get("kind") != "verdict" or not row.get("finding_id"):
+            continue
+        fid = row["finding_id"]
+        samples.append(FindingSample(
+            scrutiny_id=sid,
+            finding_id=fid,
+            severity=SEVERITY_PREFIX.get(fid[0], "UNKNOWN"),
+            confidence=row.get("confidence_after") or row.get("confidence_before"),
+            statement=f"[{row.get('verdict') or 'no verdict'}] judged by "
+                      f"{row.get('judge_family') or 'unknown'} in {row.get('pass') or '?'}",
+            location="",
+            evidence="",
+            was_flagged_fp=(sid, fid) in fp_set,
+        ))
+    return samples
+
+
 def extract_findings(report_path: Path, fp_set: set[tuple[str, str]]) -> list[FindingSample]:
-    text = report_path.read_text(encoding="utf-8")
+    """Record first, prose scrape as the fallback for pre-record runs."""
     sid = report_path.stem
+    from_record = findings_from_record(sid, fp_set)
+    if from_record:
+        return from_record
+    text = report_path.read_text(encoding="utf-8")
     samples: list[FindingSample] = []
     for match in _FINDING_RE.finditer(text):
         fid = match.group(1)

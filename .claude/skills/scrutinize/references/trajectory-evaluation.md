@@ -103,7 +103,7 @@ Trajectory findings inherit the standard severity grid (`severity-grid.md`) with
 
 This lens ships ahead of the R3 (FP rate aggregate) and R11 (Cohen's kappa human-agreement baseline) calibration gates from the 2026-05-27 meta-review. CEO chose to ship and accept the debt explicitly.
 
-**The debt:** confidence scores emitted on trajectory findings are not yet calibrated against actual FP rates or human-agreement data. The expected-rate column in `_fp_aggregate.md` (e.g. "75-100 band: ~15% actual FP rate") was derived for file/dir/workspace targets; whether it holds for trajectory findings is unknown until data accumulates.
+**The debt:** confidence scores emitted on trajectory findings are not yet calibrated against actual FP rates or human-agreement data. The expected-rate table was derived for file/dir/workspace targets and never received a single datum in 75 runs, which is why the calibration now rides on `runs.jsonl` rather than on a renderer of its own; whether the bands hold for trajectory findings stays unknown until rows accumulate.
 
 **Re-evaluation trigger:** revisit calibration once BOTH conditions hold:
 

@@ -22,7 +22,7 @@ Both council members (Gemini and Grok) converged on the same first-move recommen
 
 For each finding at severity BLOCKER, HIGH, or MEDIUM produced in Phase 2:
 
-1. Dispatch one refutation agent. Model family is rotated per `references/bias-mitigation.md` (default rotation since 2026-07-25: the running session's Claude, alternating with Kimi k3 over the local proxy; Gemini and Grok are opt-in via `--judge-family`). The agent does NOT see prior reasoning from the finding-emitter - it gets only the finding statement, location, evidence, and read access to the workspace.
+1. Dispatch one refutation agent. Family is assigned by `scripts/scrutinize-dispatch.py` per `references/bias-mitigation.md` - the running session's Claude alternating with the Kimi reasoning pin over the local proxy. Those two are the whole roster; the judge layer reaches nothing else. The agent does NOT see prior reasoning from the finding-emitter - it gets only the finding statement, location, evidence, and read access to the workspace.
 
 2. Agent brief (template):
 
@@ -57,7 +57,7 @@ For each finding at severity BLOCKER, HIGH, or MEDIUM produced in Phase 2:
    - `REFUTED` -> finding is DROPPED from the approval block. Logged in a "Refuted" section of the saved report so the CEO can audit dropped findings if curious.
    - `REFUTE_PARTIAL` -> finding proceeds with confidence adjusted downward AND severity downgraded one tier (BLOCKER -> HIGH, HIGH -> MEDIUM, MEDIUM -> LOW).
 
-4. Cost discipline: Phase 2.5a runs in parallel with any remaining Phase 2 finalization work via the Agent tool. Default agent model class is the "judge tier" defined in `references/bias-mitigation.md` (typically Sonnet-class or rotation thereof).
+4. Cost discipline: Phase 2.5a runs in parallel with any remaining Phase 2 finalization work via the Agent tool. The Claude side judges on the running session's model, which is the latest Opus by construction and is never pinned to a tier or a release here; the external side resolves through `get_model("kimi_reasoning")`. Naming either as a fixed class is how a judge layer quietly ends up a year behind.
 
 ## Phase 2.5b - Two-agent debate (BLOCKER + HIGH only, after Phase 2.5a)
 
@@ -77,7 +77,44 @@ For findings that survived Phase 2.5a at severity BLOCKER or HIGH, run a Khan-st
    - `INCORRECT` (score < 60) -> finding DROPPED, logged in "Refuted" section.
    - `AMBIGUOUS` (60 <= score < 75) -> finding DROPPED from approval block by default. If `--include-ambiguous` is set, finding appears in the approval block flagged `[AMBIGUOUS]` for the CEO to manually adjudicate.
 
-6. Family rotation enforces self-preference mitigation. With the two-family roster the binding rule is narrower and stricter than "all three differ": the **Skeptic and the Meta-Judge must never be the same family**, because a Meta-Judge ruling on its own family's refusal to refute is the exact bias being mitigated. Default assignment is Skeptic on Kimi k3, Meta-Judge on Claude; swap per pass-start. If only Claude is reachable (proxy down, `k3` absent from `cliproxy models`, or `SENSITIVE_MODE` active), fall back to Phase 2.5a single-pass refutation only, and surface the degradation WITH ITS CAUSE in the approval block and in the `## Judge layer` section. Dropping a debate role and recording nothing but "not exercised" is a skipped mitigation dressed as a note.
+6. The adversarial split enforces self-preference mitigation. With the two-family roster the binding rule is narrower and stricter than "all three differ": the **Skeptic and the Meta-Judge must never be the same family**, because a Meta-Judge ruling on its own family's refusal to refute is the exact bias being mitigated. `scripts/scrutinize-dispatch.assign_families()` makes the assignment and the side swap is derived from the run id, so neither is a choice the reviewing model gets to make. If only Claude is reachable (proxy down, the pin absent from `cliproxy models`, or the session DECLARED sensitive), fall back to Phase 2.5a single-pass refutation only, and surface the degradation WITH ITS CAUSE in the approval block and in the `## Judge layer` section; the dispatcher also writes a `degraded` row, and `--validate` fails a report that claims a skip without one. Dropping a debate role and recording nothing but "not exercised" is a skipped mitigation dressed as a note.
+
+## Reproduction outranks the jury
+
+A finding reproduced by a command needs no debate. Since 2026-08-09 that is a
+first-class outcome rather than a recorded degradation - four earlier passes had
+already invented it, substituting deterministic falsification for the debate and
+honestly logging it as a protocol deviation, when it was arguably the stronger
+refutation all along.
+
+| Outcome | When | Rank |
+|---|---|---|
+| `REPRODUCED` | Phase 2.5. The harness ran the command and observed a non-zero exit. | Outranks a 2.5b debate; the finding proceeds without one. |
+| `FALSIFIED` | Phase 4. The harness re-ran the same command after the fix and observed zero. | Terminal. The finding is closed by evidence, not by opinion. |
+
+**The harness runs the command, never the model.** The model proposes it;
+`scripts/scrutinize-dispatch.py --reproduce` executes it and records the exit
+code; `--promote` re-runs it after the fix and joins the two observations. This
+is the whole excuse-prevention: a narrated reproduction is not one. Three refusals
+enforce it - a command that already exits 0 reproduces nothing, a promotion with
+no stored `exit_before` has nothing to join, and the record itself refuses a
+`FALSIFIED` row whose exit codes do not show the fail-to-pass transition.
+
+A finding whose fix is rejected or deferred stops at `REPRODUCED`. It is never
+promoted, and that is the correct terminal state for it.
+
+## Every verdict leaves a row
+
+A verdict that exists only in prose did not happen, as far as anything downstream
+can tell. Measured 2026-08-09 across 75 saved reports: the mandated `Refutation:`
+header appears in 8, the mandated `## Judge layer` heading in 12. So every judge
+call now writes a row through `scripts/utils/scrutinize_record.py`, and
+`scripts/scrutinize-record.py --validate` reconciles the saved report against
+those rows.
+
+It cannot make omission impossible - the Claude judge IS the running session, so
+that verdict is still supplied rather than captured. It makes omission visible,
+which is a weaker claim and the true one. Do not write the stronger one.
 
 ## Why two phases not one
 
@@ -115,7 +152,7 @@ For a typical execution-target run with 5 findings (1 BLOCKER, 2 HIGH, 2 MEDIUM)
 
 ## Calibration
 
-The FP aggregator (`scripts/scrutinize-fp-aggregate.py`) reads the `_fp_log.jsonl` and reports actual FP rates per confidence band. Expected after Phase 2.5 ships:
+Actual FP rates per confidence band are computed from the `fp_flag` rows in `runs.jsonl`, beside the verdicts they disagree with. The 327-line aggregator that used to render this was deleted on 2026-08-09 after 75 runs produced zero flags: a calibration pipeline with no data is decoration, and the table it drew was mistaken for a working loop. Expected once rows accumulate:
 
 - conf 0-24: ~80% actual FP rate (these are speculative findings)
 - conf 25-49: ~55% actual FP rate

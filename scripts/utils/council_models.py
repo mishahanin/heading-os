@@ -35,7 +35,27 @@ FALLBACKS = {
     "gemini": "gemini-3-flash",
     "grok": "grok-4.5",
     "kimi": "kimi-for-coding",
+    # The /scrutinize judge voice, deliberately NOT the same pin as "kimi".
+    # `kimi-for-coding` is the fast coding pin; the judge layer needs the
+    # reasoning model, and a fast pin standing in for it produces a judge that
+    # looks external and reasons shallowly. Registered here so a new Kimi
+    # flagship is `--set kimi_reasoning=<new>` rather than a code edit.
+    "kimi_reasoning": "k3",
 }
+
+# Claude is deliberately absent from this table, and that absence is the design.
+# The Claude judge IS the running session, so pinning a version here would freeze
+# /scrutinize on whatever was current the day someone typed it, and a newer Opus
+# would need a code or config edit to reach the judge layer. There is nothing to
+# bump: the session's model is authoritative, always. `tests/test_scrutinize_no_model_pins.py`
+# fails if a Claude version literal ever appears in the skill.
+
+# The three voices /council dispatches. NOT the same set as PROVIDERS: the table
+# also carries pins used by one caller at one reasoning tier (kimi_reasoning, the
+# /scrutinize judge), which is a second pin for an existing voice rather than a
+# fourth voice. Keeping the two names apart is what lets a new non-council pin
+# land without loosening the assertion that the council roster is these three.
+COUNCIL_PROVIDERS = ("gemini", "grok", "kimi")
 
 PROVIDERS = tuple(FALLBACKS.keys())
 

@@ -41,6 +41,10 @@ def runs(tmp_path, monkeypatch):
 
 
 def _rows(path):
+    """Rows written so far. A missing file means none were, which is a real
+    outcome here: the refusal paths are asserted by the ABSENCE of a row."""
+    if not path.exists():
+        return []
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 

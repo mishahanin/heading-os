@@ -92,8 +92,12 @@ def test_load_all_covers_every_provider(tmp_config):
 
 
 def test_providers_are_the_three_proxy_voices():
-    from scripts.utils.council_models import PROVIDERS
-    assert set(PROVIDERS) == {"gemini", "grok", "kimi"}
+    """The council roster is three voices, and stays three when a caller-specific
+    pin joins the table. `kimi_reasoning` (the /scrutinize judge tier, added
+    2026-08-09) is a second pin for an existing voice, not a fourth voice."""
+    from scripts.utils.council_models import COUNCIL_PROVIDERS, PROVIDERS
+    assert set(COUNCIL_PROVIDERS) == {"gemini", "grok", "kimi"}
+    assert set(COUNCIL_PROVIDERS) <= set(PROVIDERS)
 
 
 def test_glm_and_kimi_code_are_unknown_providers():

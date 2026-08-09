@@ -5,6 +5,18 @@
 
 For `target = workspace`, `/scrutinize` dispatches exactly 5 parallel specialist agents (respecting the concurrency cap in `.claude/rules/skill-orchestrator.md`). Each agent does a full VIIA pass on its slice. A synthesis phase then runs a cross-area check.
 
+## Two axes, composed
+
+Path decides SCOPE; lens decides DISCIPLINE. The five areas below are the scope
+split and are unchanged. The three discipline lenses in `role-lenses.md` are a
+second, independent axis that fires on a path trigger and can apply inside any
+area - or to a `file:`/`dir:` target that never dispatches an area agent at all.
+
+They are not alternatives. Replacing the areas with lenses would lose scope
+control on the workspace target; replacing lenses with areas leaves every target
+but `workspace` reviewed by one generic reader with no discipline checklist,
+which is what happened before 2026-08-09.
+
 ## The 5 Areas
 
 | # | Area | Paths (review scope) | Lens |

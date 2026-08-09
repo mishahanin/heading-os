@@ -19,7 +19,7 @@ Every /scrutinize pass emits one Langfuse trace per phase invocation. Phase 0 op
 | `judge_family_rotation` | `rotate` / `fixed-claude` / etc | resolved per `bias-mitigation.md` |
 | `kimi_model` | model id (default `k3`) | env var or default; the reasoning pin, never `kimi-for-coding` |
 | `claude_model` | model id | session model |
-| `gemini_model` / `grok_model` | model id | only when opted in via `--judge-family` |
+| `kimi_model` | model id | the resolved judge pin, when the k3 side ran |
 
 ## Per-phase span metadata
 
@@ -112,7 +112,7 @@ When observability is disabled (vault, env var, or langfuse package missing), th
 
 The skill does NOT call Langfuse directly. The pattern follows the workspace standard:
 
-1. Each agent dispatch (Phase 2.5 refutation, Phase 2.5b debate) uses the wrapped client from `scripts/utils/api.py` or the cross-family helpers (`scripts/gemini-consult.py`, `scripts/grok-consult.py`). Those helpers already emit traces.
+1. Each agent dispatch (Phase 2.5 refutation, Phase 2.5b debate) uses the wrapped client from `scripts/utils/api.py`, or `scripts/scrutinize-dispatch.py` for the external side, which calls the shared proxy transport and emits its own trace.
 2. Phase boundaries are marked with explicit `@observe(name="scrutinize-phase-N")` decorators on any helper Python invoked from within the skill.
 3. The skill itself (markdown-driven) cannot emit Langfuse spans directly. It relies on the wrapped Python tooling to do so. Spans not covered by Python tooling are reported as structured fields in the saved Phase 5 report, where the dashboard's report-parser picks them up.
 
@@ -130,7 +130,7 @@ This protects the air-gap discipline required for vault sessions while keeping t
 The Bridge dashboard Pulse page reads the last N scrutiny runs from `outputs/operations/scrutiny/*.md` and renders a card showing:
 
 - Findings per pass (severity stacked bar)
-- FP rate trend (from `_fp_aggregate.md`)
+- FP rate trend (from the `fp_flag` rows in `runs.jsonl`)
 - Cost per pass (from Langfuse trace metadata when available, else `_disabled_`)
 - Average wall-clock per phase
 

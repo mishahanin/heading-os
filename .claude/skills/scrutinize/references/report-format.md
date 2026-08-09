@@ -43,3 +43,39 @@ One consolidated report at the target's standard path with:
 - **Cumulative applied-fix log.**
 - **Remaining open findings** — only if terminated on `hard-cap`, `check-failure`, or
   `oscillation`.
+
+---
+
+## The structured run record
+
+Every judged finding also leaves a row in `outputs/operations/scrutiny/runs.jsonl`,
+written by `scripts/utils/scrutinize_record.py` rather than by the model. The
+report stays the human artifact; the record is what anything downstream can count.
+
+```
+{"run_id", "ts", "target",
+ "kind": "pass_start|verdict|reproduction|role|currency|fp_flag|degraded",
+ "finding_id", "pass": "2.5a|2.5b|null", "judge_family": "claude|kimi|null",
+ "verdict": "REFUTED|REFUTE_PARTIAL|REFUTATION_FAILED|CORRECT|CORRECT_DOWNGRADE|
+             INCORRECT|AMBIGUOUS|REPRODUCED|FALSIFIED|null",
+ "confidence_before", "confidence_after",
+ "reproduction": null | {"cmd", "exit_before", "exit_after"},
+ "role": "ops|scheduler|boundary|null",
+ "currency": null | {"import", "distribution", "pinned", "latest",
+                     "result": "ok|mismatch|inconclusive"},
+ "degraded": null | "<cause>", "writer": "dispatch|flag-fp"}
+```
+
+**Do not assemble this report from the rows and then validate it against them.**
+That tests generation, not compliance: a report generated from rows agrees with
+them by construction. The non-circular signal is the `Refutation:` header the
+approval block already mandates, written for a human, reconciled against the row
+count by `scripts/scrutinize-record.py --validate`. Three things fail it: a run
+with no `pass_start` row, a header claiming a pass over more judged findings than
+there are verdict rows, and a header declaring a skip with no `degraded` row
+naming its cause.
+
+Why the header and not the prose: measured 2026-08-09 across 75 saved reports,
+the mandated `Refutation:` line appears in 8 of them and the mandated
+`## Judge layer` heading in 12. Prose mandates did not survive contact with 75
+runs, which is the entire reason the record exists.

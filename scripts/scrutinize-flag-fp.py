@@ -6,7 +6,7 @@ Invoked by /scrutinize Phase 3 when the CEO replies with
 in outputs/operations/scrutiny/_fp_log.jsonl.
 
 The CEO never opens the JSONL - this is the only writing path.
-scrutinize-fp-aggregate.py reads the JSONL and renders the calibration
+The record (outputs/operations/scrutiny/runs.jsonl) carries the calibration
 table.
 
 Usage:
@@ -39,6 +39,7 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
+from scripts.utils.scrutinize_record import append_row  # noqa: E402
 from scripts.utils.colors import GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 
@@ -111,11 +112,33 @@ def parse_target_type(scrutiny_id: str) -> str:
 
 
 def append_records(records: list[dict]) -> None:
-    """Append the records to _fp_log.jsonl."""
+    """Append to _fp_log.jsonl AND to the shared run record.
+
+    Two writes, one of which is transitional. `_fp_log.jsonl` keeps the legacy
+    shape that the tally below reads. The second write is the point: since
+    2026-08-09 every judged event in a scrutiny pass lands in one channel,
+    `runs.jsonl`, so a CEO disagreement is countable beside the verdicts it
+    disagrees with rather than in a file of its own that nothing else joins.
+
+    The disagreement is the only ground truth this system will ever get, which is
+    why the human channel survived while its 327-line aggregator did not: that
+    aggregator rendered a calibration table over a log which, after 75 runs, had
+    never received a single record.
+    """
     SCRUTINY_DIR.mkdir(parents=True, exist_ok=True)
     with FP_LOG_PATH.open("a", encoding="utf-8") as f:
         for rec in records:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    for rec in records:
+        append_row(
+            run_id=rec["scrutiny_id"],
+            kind="fp_flag",
+            target=rec.get("target_type") or "",
+            finding_id=rec["finding_id"],
+            confidence_before=rec.get("confidence"),
+            degraded=None,
+            writer="flag-fp",
+        )
 
 
 def print_running_tally() -> None:

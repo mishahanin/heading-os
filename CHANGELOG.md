@@ -6,6 +6,54 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Maximum` appeared as `Jordanum` in 16 files, and had been shipping that way
+  since the repository was first published.** `git log -S` dates it to
+  `c1aedf0`, the squashed initial import of 2026-06-29: a find-and-replace during
+  the pre-publication scrub caught a word it had no business touching. The
+  corruption was in content clones carry, not in an internal note. The
+  always-on `.claude/rules/skill-orchestrator.md` capped parallel agents at
+  "Jordanum 5"; `implement`, `osint`, `design` and the pptx brand system carried
+  it in their SKILL text; two `skill-creator` validators printed it in the error
+  a user sees when a name is too long; and the vendored `docs/assets/mermaid.min.js`
+  had it inside mermaid's own diagram-limit messages. Corrected in every live
+  file. Records that quote it, the changelog history and saved reports, keep it
+  verbatim. **A clone or fork taken before 2026-08-09 still carries it**; a pull
+  is the fix, and `grep -rn Jordanum` says whether yours does.
+
+- **The `flag-as-fp` channel wrote to two destinations, one of them the log whose
+  emptiness had just been the argument for deleting its own aggregator.** The
+  second write went to `_fp_log.jsonl`, which had received zero records in 75
+  runs, which is why the 327-line aggregator reading it was removed in v0.8.0.
+  Keeping the log alive as a destination preserved exactly the split that removal
+  existed to close. The write is gone: a CEO's disagreement with a finding now
+  lands as an `fp_flag` row in the same record as the verdict it disagrees with,
+  and both the running tally and the human-agreement harness read it there.
+
+- **The `/scrutinize` scheduler role lens matched bare substrings, so its first
+  live run flagged its own marker table.** It searched for `apscheduler` and
+  `add_job` anywhere in a file's text, which fires on a docstring about
+  scheduling, a test fixture, or the lens definition itself. It now reads the
+  syntax: an `apscheduler` import or an `add_job` call parsed from the AST. A
+  lens whose whole value is precision cannot open its life by flagging itself.
+
+### Added
+
+- **`implement-trajectory-log.py --verify` reconciles a run against its own plan
+  file.** Three advisories, each one a defect a human auditor had to catch by
+  reading: a file listed under a plan step's "Files affected" that appears in no
+  step's `files_affected`; a plan whose Implementation Notes declare more
+  deviations than the trajectory carries as `deviation` events; a `deviation`
+  emitted before its own step's `step_start`. All three go silent when the plan
+  cannot be located, because a missing plan is not a trajectory defect.
+
+- **`implement-trajectory-log.py --list-files --run-id <id>`** prints the deduped
+  union of every step's `files_affected`, so the hidden-character scan reads its
+  file list off the record instead of having it assembled by hand. The run that
+  prompted this scanned 11 files for a run that had touched 22. Nothing had
+  escaped, but the evidence covered half the surface it claimed to.
+
 ## [0.8.0] - 2026-08-09
 
 The release the engine grew a memory, a method, and ears. Recall stopped being a list somebody had to remember to read and became relevance computed against what was just typed, with "I do not know" as a first-class answer and no path that turns a quiet memory into a deletion. Canopus, the build standard every non-trivial change now passes through, shrank from thirteen enforced moments to seven and moved its enforcement onto tools that already existed, after measurement found 93% of the hand-built prevention surface defeatable by one shell command. Local speech-to-text and layout-aware document reading landed, so a recorded call becomes the thread log, the CRM entries, and the drafted follow-ups it should have produced, on the operator's own machine. And four failures that had been invisible precisely because every health surface reported green were found and fixed.

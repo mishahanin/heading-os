@@ -74,3 +74,44 @@ def test_claude_is_absent_from_the_council_pin_table():
     from scripts.utils.council_models import FALLBACKS
 
     assert not any("claude" in k.lower() for k in FALLBACKS)
+
+
+# A model version this skill's judge layer does not have: the two retired council
+# families are as stale as an old Opus when a live sentence still names them with
+# a release attached.
+_VERSIONED_MODEL = re.compile(
+    r"\b(claude|opus|sonnet|haiku|gemini|grok)[- ]?\d", re.IGNORECASE)
+
+
+def test_the_operator_overview_pins_no_model_where_it_describes_scrutinize():
+    """The gap this guard had, found by /scrutinize on the run that built it.
+
+    Everything above scans `.claude/skills/scrutinize/` and the dispatcher. The
+    operator's tool index lives outside both, in the DATA overlay, and it
+    describes the same judge layer in prose. So it carried
+    `Claude Opus 4.7 / Gemini 3.5 Flash / Grok 4.3` through the very change whose
+    subject was removing that literal, four lines below the entry recording the
+    removal.
+
+    Scoped to lines that mention scrutinize, because the same file legitimately
+    names model versions when describing other tools. Skipped, never failed, when
+    the overlay is absent: a public clone has no operator overview, and a guard
+    that fails on its absence teaches people to delete it.
+    """
+    from scripts.utils.workspace import get_data_root
+
+    overview = get_data_root() / "reference" / "workspace-overview.md"
+    if not overview.is_file():
+        pytest.skip("no operator overview (data overlay absent, e.g. a public clone)")
+
+    hits = []
+    for lineno, line in enumerate(overview.read_text(encoding="utf-8").splitlines(), 1):
+        if "scrutinize" not in line.lower():
+            continue
+        match = _VERSIONED_MODEL.search(line)
+        if match:
+            hits.append(f"workspace-overview.md:{lineno}: {match.group(0)!r}")
+    assert not hits, (
+        "the operator overview pins a model version while describing /scrutinize. "
+        "The judge roster is the running session's Claude, never pinned, and the "
+        "Kimi pin resolved through council-models.json.\n" + "\n".join(hits))

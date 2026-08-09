@@ -6,7 +6,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Security
+
+- **`cryptography` 49.0.0 carried PYSEC-2026-3552; the pin moves to 50.0.0.**
+  It reaches the engine transitively through `requests_ntlm` and `pyspnego`
+  (the Exchange NTLM path), `google-auth`, and `pdfminer.six`, so it ships in
+  every clone's `requirements.txt` without appearing in `pyproject.toml`. The
+  pre-commit `pip-audit` gate fires only when `requirements.txt` is itself
+  staged, which is why a vulnerability in a transitive pin can sit through
+  commits that never touch dependencies. Bumped with
+  `uv lock --upgrade-package cryptography` and re-exported; the lock delta is
+  that one package and nothing else.
+
 ### Fixed
+
+- **Two ordering tests trusted the wall clock to separate two writes, and WSL2
+  does not always oblige.** `test_sorted_by_mtime_desc` slept 50 ms between two
+  draft files and asserted the newer one sorted first;
+  `test_dismiss_log_recent_orders_ts_desc` slept 10 ms between two log entries
+  stamped from `datetime.now`. Both pass in isolation and fail occasionally in
+  a full parallel run, because a host clock resync can step the guest clock
+  backwards far enough to invert the pair. Sleeping longer only lowers the
+  odds. Both now state the two instants outright, one via `os.utime` and one
+  via a held clock, so the assertion tests the ordering rule rather than the
+  hypervisor. Verified over eight consecutive 8-way runs of the bridge suite.
 
 - **Six modules in the script tree carried standard-library names, and two of
   them were already breaking on the service VM.** Python puts an executed

@@ -379,11 +379,32 @@ def test_dismiss_log_recent_excludes_tombstones(tmp_path):
     assert all(r["conv_id"] != "conv-x" for r in rows)
 
 
-def test_dismiss_log_recent_orders_ts_desc(tmp_path):
-    import time
+def test_dismiss_log_recent_orders_ts_desc(tmp_path, monkeypatch):
+    """Newest dismissal first.
+
+    The clock is driven, not slept through. `mark_dismissed` stamps `ts` from
+    `datetime.now`, and a 10 ms sleep only separates the two entries while the
+    wall clock moves forward; a WSL2 host resync can step it backwards and
+    invert them. Sibling flake to `test_sorted_by_mtime_desc`, same cause,
+    same cure: state the two instants instead of hoping for them.
+    """
+    from scripts.bridge_daemon.sources import inbox as inbox_mod
     from scripts.bridge_daemon.sources.inbox import dismiss_log_recent
+
+    # A holder, not an iterator: `mark_dismissed` reads the clock twice per
+    # call (UTC for `ts`, local for `date`), so a per-call sequence would
+    # desynchronise the moment a field is added or removed.
+    moment = [datetime(2026, 8, 9, 12, 0, 0, tzinfo=timezone.utc)]
+
+    class _HeldClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment[0] if tz in (None, timezone.utc) else moment[0].astimezone(tz)
+
+    monkeypatch.setattr(inbox_mod, "datetime", _HeldClock)
+
     mark_dismissed(tmp_path, "first")
-    time.sleep(0.01)
+    moment[0] += timedelta(seconds=1)
     mark_dismissed(tmp_path, "second")
     rows = dismiss_log_recent(tmp_path)
     assert rows[0]["conv_id"] == "second"

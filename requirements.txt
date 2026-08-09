@@ -61,7 +61,7 @@ colorama==0.4.6
     #   tqdm
 coloredlogs==15.0.1
     # via onnxruntime
-cryptography==49.0.0
+cryptography==50.0.0
     # via
     #   google-auth
     #   pdfminer-six

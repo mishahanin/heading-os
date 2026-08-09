@@ -57,11 +57,20 @@ def test_title_falls_back_to_filename(tmp_path):
 
 
 def test_sorted_by_mtime_desc(tmp_path):
-    """Newest draft first."""
-    import time
+    """Newest draft first.
+
+    The mtimes are SET, not slept for. Writing two files a few milliseconds
+    apart and trusting the wall clock to separate them fails whenever the clock
+    steps backwards between the writes, which WSL2 does on a host resync: the
+    test failed exactly once in a full parallel suite run on 2026-08-09, with
+    `old.md` sorting first. `os.utime` states the ordering the assertion is
+    about, and takes the clock out of it.
+    """
+    import os
     p1 = _write_draft(tmp_path, "old.md", {"To": "a@x.com", "Subject": "old"}, "x")
-    time.sleep(0.05)
     p2 = _write_draft(tmp_path, "new.md", {"To": "b@x.com", "Subject": "new"}, "x")
+    os.utime(p1, (1_000_000, 1_000_000))
+    os.utime(p2, (1_000_060, 1_000_060))
     r = list_approvals(tmp_path)
     assert r["items"][0]["filename"] == "new.md"
     assert r["items"][1]["filename"] == "old.md"

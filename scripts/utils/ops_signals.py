@@ -632,7 +632,7 @@ def classify_router_accuracy(latest: dict | None, baseline: dict | None) -> dict
     elif latest is None:
         summary = "router-accuracy: no trend data"
     elif baseline is None:
-        summary = "router-accuracy: baseline forming (< 2 records)"
+        summary = "router-accuracy: baseline forming (no comparable prior run)"
     else:
         summary = "router-accuracy: stable"
 
@@ -671,8 +671,9 @@ def _read_trend_records(trend_path: Path, limit: int) -> list[dict]:
 
 def router_accuracy_state(data_root: Path) -> dict:
     """Read the router-accuracy trend under the DATA root, build a rolling baseline
-    (per-skill mean of the prior up-to-N records), and classify. Degrades to not-due
-    when the trend is absent or has < 2 records. The trend lives under the datastore
+    (per-skill mean of the prior up-to-N records MEASURED BY THE SAME JUDGE MODEL),
+    and classify. Degrades to not-due when the trend is absent, has < 2 records, or
+    carries no prior run on the current judge. The trend lives under the datastore
     (get_datastore_dir() == data_root/datastore), written by router-accuracy-nightly.py."""
     trend_path = data_root / "datastore" / "operations" / "router-accuracy" / "trend.jsonl"
     records = _read_trend_records(trend_path, ROUTER_ACCURACY_BASELINE_N + 1)
@@ -684,7 +685,16 @@ def router_accuracy_state(data_root: Path) -> dict:
     if len(records) < 2:
         return classify_router_accuracy(records[-1] if records else None, None)
     latest = records[-1]
-    prior = records[:-1]
+    # Compare like with like: the judge is the measuring instrument, and the harness
+    # resolves a model FAMILY, so the instrument replaces itself without anyone
+    # touching the router. Measured 2026-08-10, the night the Sonnet family advanced
+    # a release: 32 of 69 skills "dropped", almost all by exactly one case, and the
+    # Tier-B alert named /voss at -38pt while no commit had touched .claude/skills or
+    # .claude/rules for two days. A baseline built across a model change measures the
+    # models, not the routing.
+    prior = [r for r in records[:-1] if r.get("model") == latest.get("model")]
+    if not prior:
+        return classify_router_accuracy(latest, None)
     sums: dict[str, float] = {}
     counts: dict[str, int] = {}
     overall_sum = 0.0

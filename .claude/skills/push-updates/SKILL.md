@@ -71,7 +71,7 @@ x-heading-routing:
    ```
    This LLM-judge tests only the skills whose `SKILL.md`/`triggers.json` changed since `origin/main` (a `skill-router.md` change widens to all). Handle the exit code:
    - **0** - proceed (no routing change, or all changed skills route correctly).
-   - **1** - below threshold. Surface the printed MISS cases to the CEO and ask for an explicit "proceed anyway" before continuing. Do NOT auto-block - this is a soft gate.
+   - **1** - below threshold, OR a changed skill the judge never returned a verdict for. Read which: `MISS` lines are routing regressions; `NO VERDICT` / `Unmeasured` lines mean the judge failed, not the router, and are a reason to re-run rather than to redraw a trigger. Surface either to the CEO and ask for an explicit "proceed anyway" before continuing. Do NOT auto-block - this is a soft gate.
    - **3** - no `ANTHROPIC_API_KEY`. Print a one-line warning that the routing check was skipped and proceed (never block publish on a missing key).
    - **2** - setup error. Surface it and pause.
 

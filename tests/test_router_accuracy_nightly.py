@@ -255,6 +255,56 @@ def test_state_single_record_not_due(tmp_path):
     assert sig["due"] is False
 
 
+def test_state_ignores_a_baseline_measured_by_a_different_judge(tmp_path):
+    """A judge-model change must not read as a routing regression.
+
+    This is the 2026-08-10 alert, reproduced. The harness resolves a model FAMILY,
+    so the instrument replaced itself overnight (claude-sonnet-4-6 -> claude-sonnet-5)
+    while no commit had touched `.claude/skills/` or `.claude/rules/` for two days.
+    32 of 69 skills "dropped", almost all by exactly one case, and the Tier-B alert
+    named /voss at -38pt. Comparing across the change measures the models.
+    """
+    prior = [{"date": f"2026-08-{i:02d}", "model": "claude-sonnet-4-6",
+              "overall_rate": 0.99, "per_skill": {"voss": 1.0}} for i in range(1, 8)]
+    latest = {"date": "2026-08-10", "model": "claude-sonnet-5",
+              "overall_rate": 0.93, "per_skill": {"voss": 0.625}}
+    _write_trend(tmp_path, prior + [latest])
+
+    sig = router_accuracy_state(tmp_path)
+
+    assert sig["due"] is False, "a judge swap is not a routing regression"
+    assert sig["value"]["worst_skill"] is None
+    assert sig["tier"] == "B"
+
+
+def test_state_still_flags_a_real_drop_under_one_judge(tmp_path):
+    """The boundary of the test above: same judge throughout, the flag must fire.
+
+    Written alongside it deliberately. A model-aware baseline that silenced every
+    drop would be indistinguishable from the fix and strictly worse than the bug.
+    """
+    prior = [{"date": f"2026-08-{i:02d}", "model": "claude-sonnet-5",
+              "overall_rate": 0.99, "per_skill": {"voss": 1.0}} for i in range(1, 8)]
+    latest = {"date": "2026-08-10", "model": "claude-sonnet-5",
+              "overall_rate": 0.93, "per_skill": {"voss": 0.625}}
+    _write_trend(tmp_path, prior + [latest])
+
+    sig = router_accuracy_state(tmp_path)
+
+    assert sig["due"] is True
+    assert sig["value"]["worst_skill"] == "voss"
+
+
+def test_the_trend_record_carries_the_judge_model(wired_runner):
+    """Without the model on the record, the consumer above cannot compare like with like."""
+    out = wired_runner
+    assert runner.run("sonnet") == 0
+
+    rec = json.loads((out / "trend.jsonl").read_text().splitlines()[0])
+    assert rec["model"] == HARNESS_JSON["model"]
+    assert rec["errored"] == 0
+
+
 def test_state_absent_trend_is_due(tmp_path):
     """Inverted by the egress-proof slice, deliberately and with evidence.
 

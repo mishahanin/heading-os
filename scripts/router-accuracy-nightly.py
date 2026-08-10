@@ -73,9 +73,17 @@ def compact_record(date_str: str, payload: dict) -> dict:
         # Explicit, because refusals now share this file. A reader must never have
         # to infer "this one is a measurement" from which keys happen to be present.
         "status": "ok",
+        # The judge model is part of the measurement, not context about it. The
+        # harness resolves a FAMILY, so the instrument changes under the trend on
+        # its own: on 2026-08-10 the Sonnet family advanced a release overnight and
+        # the comparison read a 5-point fleet-wide regression that no commit could
+        # explain. Without this field the consumer cannot tell the two apart. The
+        # exact ids stay in the dated artifacts beside this file, never pinned here.
+        "model": payload.get("model"),
         "overall_rate": payload.get("overall_rate"),
         "total_passed": payload.get("total_passed"),
         "total_cases": payload.get("total_cases"),
+        "errored": payload.get("total_errored", 0),
         "per_skill": per_skill,
     }
 

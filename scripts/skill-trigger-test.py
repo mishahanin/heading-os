@@ -28,8 +28,12 @@ Usage:
   python scripts/skill-trigger-test.py --all --strict --threshold 0.9
   python scripts/skill-trigger-test.py --skill osint --model haiku
 
-Exit codes: 0 completed (advisory, or strict-pass), 1 strict-threshold breached,
-2 setup error, 3 API/key error.
+A case the judge never returns a usable verdict for is UNMEASURED, not a routing miss:
+it is retried once, then counted in `errored` and excluded from the pass rate, so an
+API hiccup or a more verbose judge cannot masquerade as a router regression.
+
+Exit codes: 0 completed (advisory, or strict-pass), 1 strict-threshold breached or a
+skill left unmeasured, 2 setup error, 3 API/key error.
 """
 from __future__ import annotations
 
@@ -159,16 +163,23 @@ def build_user(query: str, target: str) -> str:
     return user_text(query, target)
 
 
-def judge_query(client, model: str, system: str, query: str, target: str) -> dict:
-    """Ask the judge whether `query` routes to `target`. Returns the parsed verdict dict."""
-    user = build_user(query, target)
-    response = client.messages.create(
-        model=model,
-        max_tokens=300,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user}],
-    )
-    text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text").strip()
+# Measured 2026-08-10, the first night the judge family resolved to Sonnet 5: the
+# previous 300-token ceiling truncated the verdict JSON mid-`reason` string, and two
+# replies came back empty. 47 cases across 32 skills scored as routing misses when the
+# router had not changed at all - no commit had touched .claude/skills or .claude/rules
+# since 2026-08-08. The ceiling is a property of the judge's verbosity, which moves
+# whenever the family resolves to a newer model, so it is set well clear of the
+# ~120-token verdict rather than trimmed to it.
+JUDGE_MAX_TOKENS = 1000
+
+# One retry, because an empty reply is transient weather and a second call is cheap
+# next to mislabelling a case. A verdict that is still absent after the retry is
+# reported as unmeasured, never as a routing miss.
+JUDGE_ATTEMPTS = 2
+
+
+def _parse_verdict(text: str) -> dict:
+    """Parse one judge reply. `routes_to_target: None` means the judge did not answer."""
     # Tolerate a fenced or chatty reply: extract the first {...} block.
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end == -1:
@@ -179,27 +190,67 @@ def judge_query(client, model: str, system: str, query: str, target: str) -> dic
         return {"routes_to_target": None, "skill": "?", "reason": f"bad json: {text[:80]}"}
 
 
+def judge_query(client, model: str, system: str, query: str, target: str) -> dict:
+    """Ask the judge whether `query` routes to `target`. Returns the parsed verdict dict.
+
+    Retries once when the reply does not carry a usable verdict. The caller reads a
+    non-boolean `routes_to_target` as "not measured", so this function never has to
+    invent one.
+    """
+    user = build_user(query, target)
+    verdict: dict = {}
+    for _ in range(JUDGE_ATTEMPTS):
+        response = client.messages.create(
+            model=model,
+            max_tokens=JUDGE_MAX_TOKENS,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user}],
+        )
+        text = "".join(
+            b.text for b in response.content if getattr(b, "type", None) == "text"
+        ).strip()
+        verdict = _parse_verdict(text)
+        if isinstance(verdict.get("routes_to_target"), bool):
+            return verdict
+    return verdict
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
 def run_skill(client, model: str, router_rules: str, skill_name: str) -> dict:
-    """Run all trigger cases for one skill. Returns a result dict."""
+    """Run all trigger cases for one skill. Returns a result dict.
+
+    `cases` counts the cases the judge actually answered, so the rate measures the
+    ROUTER. A case the judge never returned a verdict for is counted in `errored`
+    and kept out of both numerator and denominator: it is no evidence either way,
+    and scoring it as a miss is what turned a judge-model upgrade into a phantom
+    38-point drop on /voss on 2026-08-10.
+    """
     skill_dir = SKILLS_DIR / skill_name
     cases = load_triggers(skill_dir)
     if not cases:
-        return {"skill": skill_name, "cases": 0, "passed": 0, "results": [], "skipped": True}
+        return {"skill": skill_name, "cases": 0, "passed": 0, "errored": 0,
+                "results": [], "skipped": True}
 
     system = build_system(router_rules, skill_name, load_skill_description(skill_dir))
     results = []
     passed = 0
+    judged = 0
+    errored = 0
     for case in cases:
         query = case["query"]
         expected = bool(case["should_trigger"])
         verdict = judge_query(client, model, system, query, skill_name)
         got = verdict.get("routes_to_target")
-        ok = (got is expected) if isinstance(got, bool) else False
-        passed += ok
+        if isinstance(got, bool):
+            judged += 1
+            ok = got is expected
+            passed += ok
+        else:
+            errored += 1
+            ok = None  # unmeasured, distinct from False
         results.append({
             "query": query,
             "expected": expected,
@@ -208,7 +259,8 @@ def run_skill(client, model: str, router_rules: str, skill_name: str) -> dict:
             "judged_skill": verdict.get("skill", "?"),
             "reason": verdict.get("reason", ""),
         })
-    return {"skill": skill_name, "cases": len(cases), "passed": passed, "results": results, "skipped": False}
+    return {"skill": skill_name, "cases": judged, "passed": passed, "errored": errored,
+            "results": results, "skipped": False}
 
 
 def print_skill_report(r: dict, threshold: float) -> None:
@@ -216,10 +268,18 @@ def print_skill_report(r: dict, threshold: float) -> None:
         print(f"{YELLOW}skip{RESET}: {r['skill']} - no triggers.json")
         return
     rate = r["passed"] / r["cases"] if r["cases"] else 0.0
-    color = GREEN if rate >= threshold else RED
-    print(f"\n{BOLD}{CYAN}{r['skill']}{RESET}  {color}{r['passed']}/{r['cases']}{RESET} ({rate:.0%})")
+    errored = r.get("errored", 0)
+    if r["cases"]:
+        color = GREEN if rate >= threshold else RED
+        head = f"{color}{r['passed']}/{r['cases']}{RESET} ({rate:.0%})"
+    else:
+        head = f"{YELLOW}unmeasured{RESET}"
+    tail = f"  {YELLOW}{errored} unmeasured{RESET}" if errored and r["cases"] else ""
+    print(f"\n{BOLD}{CYAN}{r['skill']}{RESET}  {head}{tail}")
     for res in r["results"]:
-        if not res["ok"]:
+        if res["ok"] is None:
+            print(f"  {YELLOW}NO VERDICT{RESET} {res['query']!r}  ({res['reason']})")
+        elif not res["ok"]:
             exp = "trigger" if res["expected"] else "NOT trigger"
             print(f"  {RED}MISS{RESET} {res['query']!r}")
             print(f"       expected {exp}; judge said skill={res['judged_skill']!r} ({res['reason']})")
@@ -282,8 +342,13 @@ def main(argv: list[str] | None = None) -> int:
     active = [r for r in reports if not r["skipped"]]
     total_cases = sum(r["cases"] for r in active)
     total_passed = sum(r["passed"] for r in active)
+    total_errored = sum(r.get("errored", 0) for r in active)
     overall = total_passed / total_cases if total_cases else 0.0
-    breached = [r for r in active if (r["passed"] / r["cases"] if r["cases"] else 0) < args.threshold]
+    # A skill with no answered case is UNMEASURED, not failing. Folding it into
+    # `breached` would report a dead judge as a routing regression, which is the
+    # confusion this whole split exists to end.
+    breached = [r for r in active if r["cases"] and (r["passed"] / r["cases"]) < args.threshold]
+    unmeasured = [r for r in active if not r["cases"]]
 
     if args.json:
         print(json.dumps({
@@ -292,9 +357,11 @@ def main(argv: list[str] | None = None) -> int:
             "overall_rate": round(overall, 4),
             "total_passed": total_passed,
             "total_cases": total_cases,
+            "total_errored": total_errored,
             "threshold": args.threshold,
             "strict": args.strict,
             "below_threshold": [r["skill"] for r in breached],
+            "unmeasured": [r["skill"] for r in unmeasured],
             "skills": reports,
         }, indent=2))
     else:
@@ -302,12 +369,20 @@ def main(argv: list[str] | None = None) -> int:
             print_skill_report(r, args.threshold)
         print(f"\n{BOLD}Overall: {total_passed}/{total_cases} ({overall:.0%})  "
               f"{GRAY}model={model} {elapsed:.1f}s{RESET}")
+        if total_errored:
+            print(f"{YELLOW}{total_errored} case(s) had no judge verdict and are "
+                  f"excluded from the rate{RESET}")
         if breached:
             print(f"{YELLOW}Below {args.threshold:.0%}: {', '.join(r['skill'] for r in breached)}{RESET}")
+        if unmeasured:
+            print(f"{YELLOW}Unmeasured (judge never answered): "
+                  f"{', '.join(r['skill'] for r in unmeasured)}{RESET}")
         if not args.strict:
             print(f"{GRAY}advisory run (pass --strict to gate on the threshold){RESET}")
 
-    if args.strict and breached:
+    # Strict means "gate on a clean measurement". A skill nobody could measure is
+    # not a clean measurement, so it fails the gate too - loudly and by its own name.
+    if args.strict and (breached or unmeasured):
         return 1
     return 0
 

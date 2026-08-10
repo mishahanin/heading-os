@@ -8,6 +8,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **A judge that could not answer was scored as a router that answered wrong.**
+  On 2026-08-10 the nightly router-accuracy run reported a 5-point fleet-wide drop
+  and the ops-radar Tier-B alert named `/voss` at -38 points, with no commit having
+  touched `.claude/skills/` or `.claude/rules/` for two days. Two independent causes,
+  both in the measurement. First, the judge family had advanced a release overnight
+  and the newer model's verdict JSON no longer fitted `skill-trigger-test.py`'s
+  300-token ceiling: of the 47 failing cases, 40 carried no verdict at all — 31 empty
+  replies and 9 truncated mid-string, across 33 skills — and every one was counted as
+  a routing miss. The 7 that remain are genuine, two FEWER than the 9 the previous
+  judge logged, so routing had if anything improved. The ceiling is raised
+  well clear of a verdict, a reply with no usable verdict is retried once, and a case
+  the judge still never answers is now reported as UNMEASURED — excluded from the pass
+  rate, counted in `errored`, printed as `NO VERDICT` rather than `MISS`. Second, the
+  trend compared across the model change at all; the record now carries the judge
+  `model` and `router_accuracy_state` builds its rolling baseline only from prior runs
+  measured by the same judge, so an instrument swap reads as a baseline forming rather
+  than as a regression. Re-run live after the fix, `/voss` scores 8/8 with zero
+  unanswered cases — the router had never changed. The seven existing trend records
+  were backfilled with the judge that produced them.
+
 - **The rule-split inventory guard could only tell you it was unhappy by email.**
   `scripts/rule_split_check.py --check` ran in CI's `sovereignty guards` job and
   nowhere else, so an edit to a snapshotted rule file failed only AFTER the push,

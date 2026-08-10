@@ -101,3 +101,19 @@ def test_check_inventories_guards_against_drop(tmp_path):
     (rules / "widget-detail.md").write_text("some unrelated prose.\n", encoding="utf-8")
     bad = check_inventories(inventory_dir=inv, rules_dir=str(rules))
     assert bad == [("widget.md", "NEVER skip the gate.")]
+
+
+def test_committed_inventories_match_the_live_rules():
+    # The same assertion CI's `sovereignty guards` job makes, run here so the drift is
+    # caught by the pre-push suite instead of by a red CI email after the push. It was
+    # CI-only until 2026-08-10, and an edit to documentation.md's migration-cruft table
+    # sat red on main until someone read the notification.
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    bad = check_inventories(inventory_dir=repo / "config/rule-split-inventory",
+                            rules_dir=str(repo / ".claude/rules"))
+    assert bad == [], (
+        "rule-split inventory drift: a snapshotted directive is no longer a sentence of "
+        "its rule file. Review the edit; if no directive was actually lost, re-freeze "
+        "with `python scripts/rule_split_check.py --snapshot .claude/rules/<file>.md`. "
+        f"Dropped: {bad}"
+    )

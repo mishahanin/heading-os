@@ -8,6 +8,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **The rule-split inventory guard could only tell you it was unhappy by email.**
+  `scripts/rule_split_check.py --check` ran in CI's `sovereignty guards` job and
+  nowhere else, so an edit to a snapshotted rule file failed only AFTER the push,
+  as a red notification, with main already red. The `.claude/rules/documentation.md`
+  migration-cruft table was rewritten in `cbd4ef7`; its frozen 2026-07-20 snapshot
+  still carried the old table row, which the extractor had picked up as a directive
+  because the cell contained the word "never". No directive was actually lost — the
+  row is a tracking-table entry, and the section's one real imperative ("When an item
+  clears, delete its row…") survives untouched. The snapshot is re-frozen against the
+  current file, and `tests/test_rule_split_check.py` now asserts the committed
+  inventories match the live rules, so the pre-push suite refuses the push instead of
+  GitHub reporting it afterwards.
+
 - **`/email-intel` no longer burns email it never got a decision on.**
   `scripts/email-intelligence.py` marked every fetched message processed and
   stamped `last_run` at the end of the FETCH — inside the run that only

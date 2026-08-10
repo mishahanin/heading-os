@@ -7,6 +7,8 @@ degrades at runtime. This test fails fast at the repo level.
 import pytest
 from pathlib import Path
 
+from scripts.utils.paths import data_overlay_present, get_data_root
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # Each tuple: (skill_slug, relative_path_from_engine_root, why_it_matters)
@@ -67,12 +69,9 @@ def test_no_bare_superpowers_spec_references():
 
 def test_annotated_spec_paths_exist_in_data_overlay():
     """Each data-overlay annotation must point to a file that exists in the data sibling."""
-    data_root = next(
-        (d for d in (ROOT.parent / ".heading-os-data", ROOT.parent / "heading-os-data") if d.exists()),
-        None,
-    )
-    if data_root is None:
+    if not data_overlay_present():
         pytest.skip("Data root not present on this machine — skipping data-path existence check")
+    data_root = get_data_root()
     missing = []
     for skill_md in _skill_md_files():
         for m in _OVERLAY_REF.finditer(skill_md.read_text(encoding="utf-8")):

@@ -622,7 +622,7 @@ def cmd_apply() -> int:
 
     # Validate every staged file against the new schemas
     val = subprocess.run(
-        ["python3", "scripts/validate-crm-schema.py", "--dir", str(staging)],
+        [sys.executable, "scripts/validate-crm-schema.py", "--dir", str(staging)],
         capture_output=True, text=True, cwd=str(ws),
     )
     if val.returncode != 0:
@@ -634,7 +634,7 @@ def cmd_apply() -> int:
     # Hidden-char scan on staging
     for staged in staging.rglob("*.md"):
         scan = subprocess.run(
-            ["python3", "scripts/sanitize-text.py", str(staged), "--scan"],
+            [sys.executable, "scripts/sanitize-text.py", str(staged), "--scan"],
             capture_output=True, text=True, cwd=str(ws),
         )
         if scan.returncode != 0:

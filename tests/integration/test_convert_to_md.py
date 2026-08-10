@@ -4,8 +4,40 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 SCRIPT = WORKSPACE / "scripts" / "convert-to-md.py"
+
+FIXTURES = WORKSPACE / "tests" / "integration" / "fixtures"
+FIXTURE_DOCX = FIXTURES / "sample.docx"
+FIXTURE_CORRUPT = FIXTURES / "corrupt.docx"
+FIXTURE_UNSUPPORTED = FIXTURES / "unsupported.bin"
+
+# `.gitattributes` routes *.docx through Git LFS. A clone made without git-lfs
+# installed gets the 128-byte POINTER instead of the document, and every test
+# below then failed with markitdown's "File is not a zip file" -- a message that
+# says nothing about the actual cause and cost an external contributor a bug
+# report to work out. Skip with the fix in the reason instead.
+_LFS_POINTER_MAGIC = b"version https://git-lfs.github.com/spec/v1"
+
+
+def _is_lfs_pointer(path: Path) -> bool:
+    """True when the file on disk is an unresolved Git LFS pointer, not the blob."""
+    try:
+        with path.open("rb") as fh:
+            return fh.read(len(_LFS_POINTER_MAGIC)) == _LFS_POINTER_MAGIC
+    except OSError:
+        return False
+
+
+requires_lfs_fixtures = pytest.mark.skipif(
+    _is_lfs_pointer(FIXTURE_DOCX) or _is_lfs_pointer(FIXTURE_CORRUPT),
+    reason=(
+        "the .docx fixtures are unresolved Git LFS pointers on this clone. "
+        "Install git-lfs and run `git lfs install && git lfs pull` in the repo root."
+    ),
+)
 
 
 def run_script(*args, input_bytes=None, expect_exit=None):
@@ -38,9 +70,7 @@ def test_no_args_errors():
     assert "input" in stderr.lower() or "required" in stderr.lower()
 
 
-FIXTURE_DOCX = WORKSPACE / "tests" / "integration" / "fixtures" / "sample.docx"
-
-
+@requires_lfs_fixtures
 def test_convert_docx_to_stdout():
     stdout, stderr, rc = run_script(str(FIXTURE_DOCX), expect_exit=0)
     assert "Test Heading" in stdout
@@ -48,6 +78,7 @@ def test_convert_docx_to_stdout():
     assert "Second paragraph" in stdout
 
 
+@requires_lfs_fixtures
 def test_convert_docx_to_file(tmp_path):
     output_file = tmp_path / "out.md"
     stdout, stderr, rc = run_script(
@@ -61,15 +92,12 @@ def test_convert_docx_to_file(tmp_path):
     assert "Wrote" in stderr or "wrote" in stderr
 
 
-FIXTURE_CORRUPT = WORKSPACE / "tests" / "integration" / "fixtures" / "corrupt.docx"
-FIXTURE_UNSUPPORTED = WORKSPACE / "tests" / "integration" / "fixtures" / "unsupported.bin"
-
-
 def test_missing_input_file():
     _, stderr, rc = run_script("/nonexistent/path/to/file.docx", expect_exit=1)
     assert "File not found" in stderr
 
 
+@requires_lfs_fixtures
 def test_corrupt_input_raises_clean_error():
     """Corrupted DOCX should surface as a markitdown exception, not a Python traceback."""
     _, stderr, rc = run_script(str(FIXTURE_CORRUPT), expect_exit=1)
@@ -101,6 +129,7 @@ def test_unsupported_extension_raises_clean_error():
     )
 
 
+@requires_lfs_fixtures
 def test_output_is_hidden_char_clean():
     """Default conversion output must pass sanitize-text.py --scan."""
     stdout, _, rc = run_script(str(FIXTURE_DOCX), expect_exit=0)
@@ -116,6 +145,7 @@ def test_output_is_hidden_char_clean():
     assert scan.returncode == 0, f"output had hidden chars: {scan.stdout.decode()}"
 
 
+@requires_lfs_fixtures
 def test_no_sanitize_skips_sanitization(tmp_path):
     """--no-sanitize must bypass the sanitizer entirely.
 
@@ -143,6 +173,7 @@ def test_no_sanitize_skips_sanitization(tmp_path):
     assert output_file.exists()
 
 
+@requires_lfs_fixtures
 def test_sanitizer_missing_on_disk(tmp_path):
     """If sanitize-text.py is missing AND --no-sanitize is not set, exit 1 with clear error.
 

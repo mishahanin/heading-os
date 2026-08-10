@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from scripts.utils.paths import data_root_is_demo, get_data_root  # noqa: E402
+from scripts.utils.paths import data_overlay_present, get_data_root  # noqa: E402
 
 # Our engine-hardening program tracker. NOT docs/security/findings-registry.md —
 # that path is the pre-existing canonical SEC-* assessment registry (tracked,
@@ -27,7 +27,7 @@ def _rows():
     return rows
 
 
-@pytest.mark.skipif(data_root_is_demo(), reason="no data root (demo clone): registry gate is a CEO/exec concern")
+@pytest.mark.skipif(not data_overlay_present(), reason="no private data overlay: the registry gate is a CEO/exec concern")
 def test_registry_well_formed():
     assert REGISTRY.is_file(), f"registry missing at {REGISTRY}"
     rows = _rows()
@@ -38,7 +38,7 @@ def test_registry_well_formed():
 
 
 @pytest.mark.acceptance
-@pytest.mark.skipif(data_root_is_demo(), reason="no data root (demo clone): registry gate is a CEO/exec concern")
+@pytest.mark.skipif(not data_overlay_present(), reason="no private data overlay: the registry gate is a CEO/exec concern")
 def test_registry_zero_open():
     """A+ sign-off gate: every finding must be resolved. Excluded from the per-push run."""
     open_ids = [r["id"] for r in _rows() if r["status"] == "open"]

@@ -7,6 +7,11 @@ cannot see the sibling data repo. The constitution DOES exist at
 by the global CLAUDE.md). This test pins that fact so the document cannot be
 silently deleted or gutted. It reads via the data-root seam and skips on a
 data-less (demo) engine clone, exactly like test_findings_registry.
+
+Gated on `data_overlay_present()` rather than `not data_root_is_demo()` since
+2026-08-10: a stray `knowledge/` directory inside an engine clone makes
+`get_data_root()` return the clone itself, which is not demo and not an overlay
+either, and this guard then asserted a CEO document against a public checkout.
 """
 import sys
 from pathlib import Path
@@ -14,7 +19,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from scripts.utils.paths import data_root_is_demo, get_data_root  # noqa: E402
+from scripts.utils.paths import data_overlay_present, get_data_root  # noqa: E402
 
 CONSTITUTION = get_data_root() / "docs" / "security" / "SECURITY-CONSTITUTION.md"
 
@@ -27,7 +32,7 @@ _REQUIRED_ANCHORS = [
 ]
 
 
-@pytest.mark.skipif(data_root_is_demo(), reason="no data root (demo clone): constitution is a CEO/exec concern")
+@pytest.mark.skipif(not data_overlay_present(), reason="no private data overlay: the constitution is a CEO/exec concern")
 def test_security_constitution_exists():
     assert CONSTITUTION.is_file(), f"Security Constitution missing at {CONSTITUTION}"
     text = CONSTITUTION.read_text(encoding="utf-8")

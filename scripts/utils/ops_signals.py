@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -272,7 +273,7 @@ def cold_sweep_state(engine_root: Path) -> dict:
     if script.exists():
         try:
             proc = subprocess.run(
-                ["python3", str(script), "--json"],
+                [sys.executable, str(script), "--json"],
                 cwd=str(engine_root),
                 capture_output=True,
                 text=True,
@@ -317,7 +318,7 @@ def publish_state(engine_root: Path) -> dict:
     if script.exists():
         try:
             proc = subprocess.run(
-                ["python3", str(script), "--dry-run", "--json"],
+                [sys.executable, str(script), "--dry-run", "--json"],
                 cwd=str(engine_root),
                 capture_output=True,
                 text=True,
@@ -411,7 +412,7 @@ def odin_cadence_state(engine_root: Path) -> dict:
     if script.exists():
         try:
             proc = subprocess.run(
-                ["python3", str(script), "--json"],
+                [sys.executable, str(script), "--json"],
                 cwd=str(engine_root),
                 capture_output=True,
                 text=True,

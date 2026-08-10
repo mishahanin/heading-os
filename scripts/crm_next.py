@@ -131,7 +131,7 @@ def generate_queue(today=None) -> Path:
     """Run crm-health.py --json, rank, generate drafts, save queue file."""
     ws = get_workspace_root()
     health_json = subprocess.run(
-        ["python3", "scripts/crm-health.py", "--json"],
+        [sys.executable, "scripts/crm-health.py", "--json"],
         capture_output=True, text=True, cwd=str(ws),
     )
     if health_json.returncode != 0:

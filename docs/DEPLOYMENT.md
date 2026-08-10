@@ -418,6 +418,7 @@ the engine, stop — see the troubleshooting table.
 | `wsl --install` → "distribution already exists" | WSL is already installed. Skip it; just `wsl -d Ubuntu`. |
 | `cd~: command not found` | `cd` needs a space: `cd ~`. |
 | `python: command not found` | Ubuntu ships only `python3`, no pip. Use `uv run python …` and `uv sync`. Never system pip. |
+| Tests fail with `File is not a zip file`, or a logo renders as a text file | The clone was made without git-lfs, so LFS-tracked binaries are pointer files. `sudo apt install git-lfs && git lfs install && git lfs pull` in the engine clone. |
 | `uv: command not found` | The installer put `uv` in `~/.local/bin`, not on this shell's PATH. Run `source $HOME/.local/bin/env` (or reopen the shell); confirm with `which uv`. |
 | `uv sync` picks the wrong Python, or `Python 3.11 not found` | Pin the interpreter: `uv python install 3.11`, then `uv sync`. Verify with `uv run python --version`. |
 | The commit secret gate never fires (a bad commit goes through) | The `pre-commit install` step in §7 was skipped. Run `uv run pre-commit install` in the engine clone; verify with `uv run python scripts/install-hooks.py --check`. |

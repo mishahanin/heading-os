@@ -155,6 +155,29 @@ def data_root_is_demo() -> bool:
     return get_data_root() == (get_workspace_root() / "examples").resolve()
 
 
+def data_overlay_present() -> bool:
+    """True when a SEPARATE private data overlay backs this workspace.
+
+    Narrower than ``not data_root_is_demo()``, and the difference is the point.
+    Step 2 of ``get_data_root()`` returns the engine clone ITSELF as the data root
+    the moment a ``knowledge/`` or ``crm/contacts/`` directory appears inside it,
+    which is a transitional-ceo-main allowance. On a plain engine clone that
+    heuristic can fire by accident -- one stray directory is enough -- and every
+    guard gated on demo-ness then stops skipping and starts asserting against a
+    root that was never a data overlay. An external contributor reported exactly
+    that shape against v0.8.0.
+
+    So a guard that needs the operator's private records should ask this, not
+    ``data_root_is_demo()``: it answers False for a demo clone AND for an engine
+    clone wearing a data root, and True only where the overlay is a real sibling
+    (or an explicit ``HEADING_OS_DATA``). The cost is that a legacy single-tree
+    workspace reads as "no overlay" and its overlay-dependent guards skip. That is
+    the safe direction, and the in-tree layout is already documented as
+    transitional in ``get_data_root()``.
+    """
+    return not data_root_is_demo() and get_data_root() != get_workspace_root()
+
+
 def read_data_schema_version() -> int:
     """Read the data root's .schema-version. Missing/unreadable -> assume current
     (legacy in-tree and demo roots carry no marker and must not be blocked)."""

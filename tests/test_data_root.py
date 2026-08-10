@@ -60,6 +60,44 @@ def test_demo_fallback_and_flag(tmp_path, monkeypatch):
     assert paths.data_root_is_demo() is True
 
 
+# ---------- data_overlay_present: the narrower question ----------
+
+
+def test_overlay_present_on_a_real_sibling(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEADING_OS_DATA", raising=False)
+    ws = tmp_path / ".heading-os"
+    ws.mkdir()
+    (tmp_path / ".heading-os-data").mkdir()
+    monkeypatch.setenv("WORKSPACE_ROOT", str(ws))
+    assert paths.data_overlay_present() is True
+
+
+def test_overlay_absent_on_a_demo_clone(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEADING_OS_DATA", raising=False)
+    ws = tmp_path / "engine"
+    ws.mkdir()
+    monkeypatch.setenv("WORKSPACE_ROOT", str(ws))
+    assert paths.data_overlay_present() is False
+
+
+def test_overlay_absent_when_the_engine_clone_wears_the_data_root(tmp_path, monkeypatch):
+    """The case an external contributor hit against v0.8.0.
+
+    One stray `knowledge/` inside an engine clone flips the in-tree heuristic, so
+    `data_root_is_demo()` answers False and every guard gated on it starts
+    asserting CEO documents against a public checkout. The overlay question must
+    answer False here even though the demo question does not.
+    """
+    monkeypatch.delenv("HEADING_OS_DATA", raising=False)
+    ws = tmp_path / ".heading-os"
+    (ws / "knowledge").mkdir(parents=True)
+    monkeypatch.setenv("WORKSPACE_ROOT", str(ws))
+
+    assert paths.get_data_root() == ws.resolve()
+    assert paths.data_root_is_demo() is False   # the old, too-wide gate
+    assert paths.data_overlay_present() is False  # the one the guards now ask
+
+
 # ---------- Task 2: schema-version handshake ----------
 
 def test_schema_missing_marker_is_compatible(tmp_path, monkeypatch):

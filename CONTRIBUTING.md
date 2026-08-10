@@ -45,10 +45,15 @@ Non-trivial work in this repository runs on **[Canopus](docs/CANOPUS.md)**, the 
 The full environment setup is in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The short version:
 
 ```bash
+git lfs install && git lfs pull    # brand assets and the binary test fixtures live in Git LFS
 uv sync --all-extras --group dev   # core + all integration extras + dev tools (pytest, ruff, pre-commit)
 pre-commit install                 # arm the commit-time gates
 python scripts/run-tests.py
 ```
+
+Without git-lfs the `.docx` fixtures check out as pointer files and the
+`tests/integration/test_convert_to_md.py` cases that read them skip, naming the
+fix in the skip reason.
 
 ## Code of Conduct
 

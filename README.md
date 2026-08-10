@@ -97,7 +97,8 @@ Three focused setup guides cover everything beyond the core install:
 The short version, once the prerequisites are in place:
 
 ```bash
-# 1. Clone the engine
+# 1. Clone the engine (git-lfs carries the brand assets and binary test fixtures)
+git lfs install
 git clone https://github.com/mishahanin/heading-os.git .heading-os
 cd .heading-os
 

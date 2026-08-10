@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -493,7 +494,7 @@ def test_main_pipeline_with_mock_apify(tmp_path):
     import subprocess
     out_dir = tmp_path / "x-pulse-test"
     result = subprocess.run([
-        "python", str(PULSE_PATH),
+        sys.executable, str(PULSE_PATH),
         "--window", "30d",
         "--accounts-yaml", str(FIXTURES / "sample-accounts.yaml"),
         "--output-dir", str(out_dir),
@@ -513,7 +514,7 @@ def test_main_pipeline_with_bucket_filter(tmp_path):
     import subprocess
     out_dir = tmp_path / "x-pulse-bucket"
     result = subprocess.run([
-        "python", str(PULSE_PATH),
+        sys.executable, str(PULSE_PATH),
         "--window", "30d",
         "--bucket", "dpi_competitors",
         "--accounts-yaml", str(FIXTURES / "sample-accounts.yaml"),
@@ -532,7 +533,7 @@ def test_main_pipeline_with_unknown_bucket_fails(tmp_path):
     import subprocess
     out_dir = tmp_path / "x-pulse-bad-bucket"
     result = subprocess.run([
-        "python", str(PULSE_PATH),
+        sys.executable, str(PULSE_PATH),
         "--window", "72h",
         "--bucket", "no_such_bucket",
         "--accounts-yaml", str(FIXTURES / "sample-accounts.yaml"),
@@ -548,7 +549,7 @@ def test_main_pipeline_dry_run(tmp_path):
     import subprocess
     out_dir = tmp_path / "x-pulse-dryrun"
     result = subprocess.run([
-        "python", str(PULSE_PATH),
+        sys.executable, str(PULSE_PATH),
         "--window", "72h",
         "--dry-run",
         "--accounts-yaml", str(FIXTURES / "sample-accounts.yaml"),

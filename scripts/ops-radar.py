@@ -355,7 +355,7 @@ def rebuild_index(engine_root: Path) -> tuple[bool, str]:
         return False, "memory-index.py absent"
     try:
         proc = subprocess.run(
-            ["python3", str(script), "build"],
+            [sys.executable, str(script), "build"],
             cwd=str(engine_root), capture_output=True, text=True, timeout=1800,
         )
     except (OSError, subprocess.SubprocessError) as exc:

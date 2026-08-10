@@ -514,6 +514,10 @@ the engine, stop — see the troubleshooting table.</p>
 <td>Ubuntu ships only <code>python3</code>, no pip. Use <code>uv run python …</code> and <code>uv sync</code>. Never system pip.</td>
 </tr>
 <tr>
+<td>Tests fail with <code>File is not a zip file</code>, or a logo renders as a text file</td>
+<td>The clone was made without git-lfs, so LFS-tracked binaries are pointer files. <code>sudo apt install git-lfs &amp;&amp; git lfs install &amp;&amp; git lfs pull</code> in the engine clone.</td>
+</tr>
+<tr>
 <td><code>uv: command not found</code></td>
 <td>The installer put <code>uv</code> in <code>~/.local/bin</code>, not on this shell&rsquo;s PATH. Run <code>source $HOME/.local/bin/env</code> (or reopen the shell); confirm with <code>which uv</code>.</td>
 </tr>

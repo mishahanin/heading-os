@@ -38,10 +38,12 @@ clone that overlay is simply absent and the engine runs on its defaults and
 Canonical toolchain is `uv`; `pyproject.toml` is the source of truth and `uv.lock`
 pins the resolved set.
 
-1. `uv sync --all-extras --group dev`
-2. `cp .env.example .env`, then fill in your own credentials — never commit `.env`
-3. `pre-commit install` — once per fresh clone, or the commit gates are not armed
-4. `.venv/bin/python -m pytest tests/ -q` to verify the suite passes
+1. `git lfs install && git lfs pull` — brand assets and the binary test fixtures
+   are Git LFS objects; without this they check out as pointer files
+2. `uv sync --all-extras --group dev`
+3. `cp .env.example .env`, then fill in your own credentials — never commit `.env`
+4. `pre-commit install` — once per fresh clone, or the commit gates are not armed
+5. `.venv/bin/python -m pytest tests/ -q` to verify the suite passes
 
 The `venv` + `pip` path still works for tooling that cannot run `uv`
 (`python -m venv .venv`, then `pip install -r requirements.txt`, dev tooling in

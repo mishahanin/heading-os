@@ -222,6 +222,32 @@ jobs:
           -m "not integration and not acceptance"
           --cov=scripts/utils --cov-report=term
 
+  integration-tests:
+    # The `integration` marker is excluded from every other job, so until now
+    # tests/integration/ ran nowhere in CI. That blind spot is how the LFS
+    # fixture defect reached a release: the six convert-to-md cases that read a
+    # `.docx` were only ever exercised on an operator's machine, where the
+    # fixtures happen to be resolved. 35 tests, ~18s -- cheap to hold honestly.
+    name: integration tests (mocked services)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The ONLY job that needs the LFS blobs: the .docx fixtures are LFS
+          # objects, and without them these tests skip rather than measure.
+          lfs: true
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          prune-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --dev --all-extras --frozen --python 3.11
+      - name: LFS fixtures resolved (a skipped fixture test proves nothing)
+        run: uv run python scripts/dev/check-lfs-fixtures.py
+      - name: integration tests
+        run: uv run pytest tests/ -q -p no:cacheprovider -m integration
+
   sbom:
     name: SBOM (CycloneDX)
     runs-on: ubuntu-latest

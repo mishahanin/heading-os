@@ -160,7 +160,7 @@ def content_scan(repo: Path) -> None:
     # tell apart, which is the ambiguity the context field exists to remove.
     env = dict(os.environ, **{CONTEXT_ENV: f"push:{repo.name}"})
     proc = subprocess.run(
-        ["python3", str(SCANNER), "--stdin"],
+        [sys.executable, str(SCANNER), "--stdin"],
         cwd=str(repo), input="\n".join(sorted(files)),
         capture_output=True, text=True, env=env,
     )

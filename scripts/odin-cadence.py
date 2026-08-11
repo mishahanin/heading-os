@@ -18,10 +18,12 @@ Three signals (all read-only, counts only):
   (b) unharvested_total   -- dated entries newer than the marker across collect's
                              EXACT allowlist, using the SAME air-gap + VIRAID gate.
   (c) reflect_clusters    -- connected components (size >= 2) of raw-status episodes
-                             sharing >= 1 entity OR >= 1 keyword. A cluster un-fed
-                             for >= STALE_CLUSTER_DAYS escalates as "stale" (its
-                             newest episode is that old) so a long-sitting cluster
-                             surfaces distinctly from a freshly-formed one.
+                             sharing >= CLUSTER_MIN_SHARED tags, counted only where
+                             they hold an episode logged after `.last-reflect`. A
+                             cluster whose oldest unreviewed episode has waited
+                             >= STALE_CLUSTER_DAYS escalates as "stale", so material
+                             you keep passing over surfaces distinctly from material
+                             that arrived yesterday.
 
 The counted source set MUST equal /odin collect's allowlist (mode-catalog.md):
 threads/business/*.md, crm/contacts/*.md (excluding .migration-backup/ + aggregated/),
@@ -62,8 +64,33 @@ from scripts.utils import viraid_counterpart  # noqa: E402
 
 DAYS_THRESHOLD = 7          # nudge if collect last ran >= this many days ago
 DEFAULT_MIN_ENTRIES = 5     # nudge if un-harvested entries reach this count
-STALE_CLUSTER_DAYS = 14     # a reflect-ready cluster un-fed this long escalates as "stale"
+STALE_CLUSTER_DAYS = 14     # unreviewed cluster material waiting this long escalates as "stale"
+
+# Shared tags required to join two raw episodes into one reflect cluster.
+#
+# It was 1 until 2026-08-11, and 1 does not survive contact with a real brain: a
+# single shared tag is a topic coincidence, and with union-find the coincidences
+# chain. Measured over the 15 raw episodes standing that day, a threshold of 1
+# produced ONE component of 12 — a set of deal episodes welded to a set of
+# internal-tooling episodes through the workspace's own organisation tag, carried
+# by 6 of the 15, and then through generic domain labels such as `go-to-market`,
+# `ownership` and `governance`. Those two themes have nothing to do with each
+# other, so "1 cluster" told the reflect pass nothing it could act on.
+#
+# The alternatives were measured on the same set. Dropping high-frequency tags
+# instead is worse: the cutoff that breaks the weld also discards the slug of a
+# recurring counterpart, and a counterpart who keeps reappearing is the most
+# meaningful clustering signal there is. A threshold of 2 still merged the two
+# themes (via `go-to-market`+`positioning` and `governance`+`tooling`). Three
+# independently agreeing tags is the point where the components matched what a
+# human would call a theme: two clusters of three, one per theme.
+#
+# The failure direction is deliberate. Under-clustering delays a reflect pass;
+# over-clustering produces a nudge that is always on, which costs the signal.
+CLUSTER_MIN_SHARED = 3
+
 MARKER = "knowledge/odin-brain/.last-collect"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+REFLECT_MARKER = "knowledge/odin-brain/.last-reflect"  # leak-guard: ok (relative suffix rooted by caller)
 VIRAID_STATE = "outputs/operations/viraid/state.json"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
 EPISODES_DIR = "knowledge/odin-brain/episodes"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
 
@@ -92,6 +119,26 @@ CRM_EXCLUDE = ("/.migration-backup/", "/aggregated/")
 # ============================================================
 # Marker
 # ============================================================
+
+def read_reflect_marker(root: Path):
+    """Return the ISO date of the last CEO-confirmed reflect pass, or None.
+
+    `.last-reflect` is written by `/odin reflect` on a maturation pass, exactly as
+    `.last-collect` is written by `/odin collect`. Until 2026-08-11 nothing read
+    it, so the cluster signal below could not tell reviewed material from new.
+    """
+    p = root / REFLECT_MARKER
+    if not p.exists():
+        return None
+    raw = p.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw:
+        return None
+    try:
+        date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+    return raw[:10]
+
 
 def read_marker(root: Path):
     """Return (marker_str|None, days_since|None). Absent marker -> (None, None)."""
@@ -234,23 +281,53 @@ def _episode_age_days(block: str, today: date):
     return None
 
 
+def _is_unreviewed(block: str, last_reflect: str | None) -> bool:
+    """True when this episode was logged after the last CEO-confirmed reflect pass.
+
+    No marker means nothing has ever been reviewed, so every episode counts. An
+    episode whose date fields do not parse also counts: an undatable episode that
+    went silent would be material lost from the signal, and the safe direction for
+    a nudge is to surface it.
+    """
+    if not last_reflect:
+        return True
+    for key in ("created", "date"):
+        raw = _fm_scalar(block, key)
+        if raw:
+            return raw[:10] > last_reflect
+    return True
+
+
 def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str, Any]:
-    """Connected components (size >= 2) of raw-status episodes sharing >= 1 entity
-    OR >= 1 keyword (transitive A-B-C membership intended). Returns count plus a
-    staleness read:
+    """Connected components (size >= 2) of raw-status episodes sharing at least
+    CLUSTER_MIN_SHARED tags, counted only where they hold material the CEO has not
+    reviewed. Transitive A-B-C membership is intended. Returns:
 
-      count            -- number of reflect-ready clusters
-      stale_count      -- clusters un-fed for >= STALE_CLUSTER_DAYS
-      oldest_age_days  -- age of the most-stale cluster (None when none datable)
-      ages             -- per-cluster age in days (None where undatable)
-      clusters         -- Gap #5 enrichment: per-cluster {episodes, shared_tags,
-                          age_days} detail (episode filenames + the union of
-                          their tags), same order as `ages`
+      count            -- clusters carrying at least one UNREVIEWED episode
+      stale_count      -- of those, the ones whose oldest unreviewed episode has
+                          waited >= STALE_CLUSTER_DAYS
+      oldest_age_days  -- longest such wait (None when none datable)
+      ages             -- per-counted-cluster wait in days (None where undatable)
+      clusters         -- per-counted-cluster {episodes, shared_tags, age_days}
+                          detail, same order as `ages`
 
-    A cluster's age = days since its NEWEST episode was logged (the smallest node
-    age in the component). A cluster whose even-newest episode is old has been
-    sitting un-graduated that long; one fed yesterday is fresh regardless of how
-    old its other member is."""
+    **Unreviewed** means logged strictly after `.last-reflect`, the marker
+    `/odin reflect` writes on a CEO-confirmed maturation pass. This is what makes
+    the signal clearable: before 2026-08-11 the count was every cluster that
+    existed, so a reflect pass could graduate ten episodes and the nudge stayed on
+    exactly as before, which is a nudge that doing the work cannot answer. A
+    cluster the CEO looked at and deliberately did not graduate now goes quiet
+    until it is fed again.
+
+    An episode logged the same day as the pass waits until tomorrow, because the
+    marker carries a date and not a time. That is a one-day latency on a
+    weekly-cadence signal, and the alternative (>=) restores the un-clearable
+    behaviour for the whole day of the pass.
+
+    A cluster's age is the wait of its OLDEST unreviewed episode: how long the
+    thing you have not looked at has been sitting. The pre-2026-08-11 reading was
+    days since the cluster's NEWEST episode, which measured the opposite thing and
+    reset every time the cluster grew."""
     if today is None:
         today = datetime.now(get_default_tz()).date()
     base = root / EPISODES_DIR
@@ -258,13 +335,16 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
     if not base.is_dir():
         return empty
 
-    nodes = []  # list of (set_of_tags, age_days|None, filename)
+    last_reflect = read_reflect_marker(root)
+
+    nodes = []  # list of (set_of_tags, age_days|None, filename, unreviewed)
     for p in sorted(base.glob("*.md")):
         block = _frontmatter_block(p.read_text(encoding="utf-8", errors="replace"))
         if _fm_scalar(block, "status") != "raw":
             continue
         tags = set(_fm_list(block, "entities")) | set(_fm_list(block, "keywords"))
-        nodes.append((tags, _episode_age_days(block, today), p.name))
+        nodes.append((tags, _episode_age_days(block, today), p.name,
+                      _is_unreviewed(block, last_reflect)))
 
     n = len(nodes)
     parent = list(range(n))
@@ -282,7 +362,7 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
 
     for i in range(n):
         for j in range(i + 1, n):
-            if nodes[i][0] & nodes[j][0]:
+            if len(nodes[i][0] & nodes[j][0]) >= CLUSTER_MIN_SHARED:
                 union(i, j)
 
     members: dict[int, list[int]] = {}
@@ -294,8 +374,11 @@ def analyze_reflect_clusters(root: Path, today: date | None = None) -> dict[str,
     for idxs in members.values():
         if len(idxs) < 2:
             continue
-        node_ages = [nodes[i][1] for i in idxs if nodes[i][1] is not None]
-        age = min(node_ages) if node_ages else None  # newest = smallest age
+        unreviewed = [i for i in idxs if nodes[i][3]]
+        if not unreviewed:
+            continue  # the CEO has already seen every member; not a nudge
+        waits = [nodes[i][1] for i in unreviewed if nodes[i][1] is not None]
+        age = max(waits) if waits else None  # the oldest thing not yet looked at
         ages.append(age)
         shared_tags = sorted(set().union(*(nodes[i][0] for i in idxs)))
         clusters.append({
@@ -348,6 +431,7 @@ def compute(root: Path, min_entries: int) -> dict[str, Any]:
 
     return {
         "last_collect": marker,
+        "last_reflect": read_reflect_marker(root),
         "days_since": days_since,
         "unharvested_total": total,
         "by_source": {"thread": thread_n, "crm": crm_n, "viraid": viraid_n},

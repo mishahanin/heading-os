@@ -43,6 +43,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **An Odin nudge that doing the work could not clear, and the test file that
+  would have caught it never ran.** `scripts/odin-cadence.py` raised a Tier-B
+  radar signal whenever any two raw episodes formed a cluster, and never read
+  `knowledge/odin-brain/.last-reflect` at all. A reflect pass on 2026-08-11
+  graduated ten episodes, wrote the marker, and the nudge stayed on exactly as
+  before. Two causes. First, the count was every cluster that existed rather than
+  every cluster carrying material the CEO had not reviewed; it now counts only
+  clusters holding an episode logged strictly after the marker, and cluster age is
+  the wait of the OLDEST unreviewed episode rather than the age of the newest
+  member, which measured the opposite thing and reset each time a cluster grew.
+  Second, the join threshold was one shared tag, which does not survive contact
+  with a real brain: over the 15 raw episodes standing that day it produced ONE
+  component of 12, welding two unrelated themes together through the workspace's
+  own organisation tag (6 of 15 episodes carried it) plus generic domain labels
+  such as `go-to-market` and `ownership`. Dropping high-frequency tags instead was
+  measured and rejected, because the cutoff that breaks the weld also discards the
+  slug of a recurring counterpart, and a counterpart who keeps reappearing is the
+  best clustering signal there is. `CLUSTER_MIN_SHARED = 3` produced the two
+  components a human would name. `/weekly-review` Phase 3.5 stopped re-checking
+  the marker by hand, since that is now a weaker duplicate of the detector's rule.
+  Separately: `tests/test_odin_cadence.py` carried a `main()` and no `test_`
+  function, so pytest had never collected it and none of its cases had ever run in
+  the suite. It has a wrapper now, and its cluster cases assert the new contract
+  including that a single shared tag does NOT cluster.
+
 - **A public docs page had been frozen for six weeks, and nothing said so.**
   `docs/EMERGENCY-PROCEDURES.md` is served on the public docs site and is generated
   from a template that lives in the private data overlay. The `sync-docs.py` hook

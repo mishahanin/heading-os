@@ -257,7 +257,7 @@ Existence guard FIRST: run the Bash test `test -d knowledge/odin-brain && test -
 If the guard passes:
 
 1. Run `python3 scripts/odin-cadence.py --json`. Treat any non-zero exit, empty output, or unparseable JSON as "no clusters - skip silently".
-2. Parse `reflect_clusters` from the JSON. If `reflect_clusters >= 1` AND `knowledge/odin-brain/.last-reflect` is absent or its date is older than the current week, surface to the CEO: "N episode cluster(s) ready to mature - run `/odin reflect`?"
+2. Parse `reflect_clusters` from the JSON. If `reflect_clusters >= 1`, surface to the CEO: "N episode cluster(s) ready to mature - run `/odin reflect`?" Do NOT re-check `.last-reflect` here: since 2026-08-11 the detector reads that marker itself and counts only clusters holding an episode logged after the last confirmed pass, so a second check in this skill is a weaker duplicate of the same rule that can disagree with it. The JSON carries `last_reflect` if you want to show the date.
 3. ONLY on an explicit CEO go-ahead, invoke `/odin reflect` via the Skill tool. Reflect's own per-graduation CEO gate then applies - nothing enters the brain without per-candidate approval, and reflect advances `.last-reflect` on a confirmed pass.
 
 NEVER auto-invoke `/odin reflect` without an explicit CEO go-ahead. NEVER run this phase on a workspace that lacks the brain.

@@ -7,8 +7,16 @@ the invariants the cadence nudge must never break:
   - air-gap (personal / _secure never counted; business is)
   - allowlist scope bound to collect's allowlist
   - counts, never content (no fixture body text in any output)
-  - reflect clustering = connected components (entity OR keyword, transitive)
+  - reflect clustering = connected components over >= CLUSTER_MIN_SHARED tags
+  - a cluster counts only while it holds material logged after `.last-reflect`
   - threshold boundaries flip the nudge at exactly the right point
+
+This file was written to be standalone-runnable and, until 2026-08-11, was ONLY
+that: it carried a `main()` and no `test_` function, so pytest collected nothing
+from it and the suite had never once run these cases. The `test_odin_cadence`
+wrapper at the bottom is what puts them in the suite; keep it there. A test file
+the runner skips is worse than no test file, because the directory listing says
+the behaviour is covered.
 """
 
 import json
@@ -162,11 +170,11 @@ def main():
               "action_summary": "no counterpart"},
     }}))
 
-    # episodes: a 2-node raw cluster sharing an entity (+ keyword)
+    # episodes: a 2-node raw cluster sharing three tags (acme, bob, mnda)
     _write(root, "knowledge/odin-brain/episodes/e1.md",
            _episode("e1", "raw", ["acme", "bob"], ["mnda"]))
     _write(root, "knowledge/odin-brain/episodes/e2.md",
-           _episode("e2", "raw", ["acme", "carol"], ["demo"]))
+           _episode("e2", "raw", ["acme", "bob"], ["mnda", "demo"]))
 
     before = _snapshot(root)
     r = oc.compute(root, min_entries=5)
@@ -241,24 +249,65 @@ def main():
 
     ok &= _check("1 raw -> 0 clusters",
                  oc.count_reflect_clusters(cluster_root([("raw", ["a"], ["k"])])) == 0)
-    ok &= _check("2 raw share entity -> 1 cluster",
+    ok &= _check(f"2 raw share {oc.CLUSTER_MIN_SHARED} tags -> 1 cluster",
                  oc.count_reflect_clusters(cluster_root([
-                     ("raw", ["a", "x"], ["k1"]), ("raw", ["a", "y"], ["k2"])])) == 1)
-    ok &= _check("2 raw share keyword only -> 1 cluster",
+                     ("raw", ["a", "x"], ["k1", "z1"]),
+                     ("raw", ["a", "x"], ["k1", "z2"])])) == 1)
+    # The threshold is the whole point: one shared tag is a topic coincidence, and
+    # with union-find the coincidences chain until every episode is one component.
+    ok &= _check("2 raw share ONE keyword -> 0 clusters",
                  oc.count_reflect_clusters(cluster_root([
-                     ("raw", ["a"], ["shared"]), ("raw", ["b"], ["shared"])])) == 1)
-    # transitive: A~B via entity, B~C via keyword -> single size-3 component
+                     ("raw", ["a"], ["shared"]), ("raw", ["b"], ["shared"])])) == 0)
+    ok &= _check("2 raw share two tags -> 0 clusters (below the threshold)",
+                 oc.count_reflect_clusters(cluster_root([
+                     ("raw", ["a"], ["shared"]), ("raw", ["a"], ["shared"])])) == 0)
+    # transitive: A~B on {a,x,k1}, B~C on {k1,k2,k3}; A and C share only k1, so the
+    # component exists only through B.
     ok &= _check("transitive A-B-C -> 1 cluster",
                  oc.count_reflect_clusters(cluster_root([
-                     ("raw", ["a", "shared_ent"], ["k1"]),
-                     ("raw", ["shared_ent"], ["shared_kw"]),
-                     ("raw", ["c"], ["shared_kw"])])) == 1)
+                     ("raw", ["a", "x"], ["k1", "z9"]),
+                     ("raw", ["a", "x"], ["k1", "k2", "k3"]),
+                     ("raw", ["c"], ["k1", "k2", "k3"])])) == 1)
     ok &= _check("2 graduated -> 0 clusters",
                  oc.count_reflect_clusters(cluster_root([
-                     ("graduated", ["a"], ["k"]), ("graduated", ["a"], ["k"])])) == 0)
+                     ("graduated", ["a", "x"], ["k1"]),
+                     ("graduated", ["a", "x"], ["k1"])])) == 0)
 
     # ============================================================
-    # Stale-cluster escalation (age = days since NEWEST episode logged)
+    # `.last-reflect` gating: doing the work must clear the nudge
+    # ============================================================
+    def cluster_root_reflected(episodes, last_reflect=None):
+        rr = Path(tempfile.mkdtemp(prefix="odin-cad-refl-"))
+        _write(rr, "knowledge/odin-brain/.last-collect", iso(today))
+        if last_reflect:
+            _write(rr, "knowledge/odin-brain/.last-reflect", last_reflect)
+        for i, (status, ents, kws, created) in enumerate(episodes):
+            _write(rr, f"knowledge/odin-brain/episodes/e{i}.md",
+                   _episode(f"e{i}", status, ents, kws, created=created))
+        return rr
+
+    pair = [("raw", ["a", "x"], ["k1"], iso(today - timedelta(days=3))),
+            ("raw", ["a", "x"], ["k1"], iso(today - timedelta(days=3)))]
+
+    ok &= _check("no reflect marker -> cluster counts",
+                 oc.count_reflect_clusters(cluster_root_reflected(pair)) == 0 + 1)
+    ok &= _check("reflect pass after the episodes -> cluster goes quiet",
+                 oc.count_reflect_clusters(
+                     cluster_root_reflected(pair, iso(today - timedelta(days=1)))) == 0)
+    ok &= _check("reflect pass BEFORE the episodes -> still counts",
+                 oc.count_reflect_clusters(
+                     cluster_root_reflected(pair, iso(today - timedelta(days=10)))) == 1)
+    # A cluster reviewed and deliberately not graduated, then fed one new episode,
+    # is material again -- and the whole cluster is what the CEO must look at.
+    fed = pair + [("raw", ["a", "x"], ["k1"], iso(today))]
+    ok &= _check("a reviewed cluster fed a new episode counts again",
+                 oc.count_reflect_clusters(
+                     cluster_root_reflected(fed, iso(today - timedelta(days=1)))) == 1)
+    ok &= _check("an unparseable reflect marker is treated as no marker",
+                 oc.count_reflect_clusters(cluster_root_reflected(pair, "not-a-date")) == 1)
+
+    # ============================================================
+    # Stale-cluster escalation (age = wait of the OLDEST unreviewed episode)
     # ============================================================
     def cluster_root_created(episodes):
         rr = Path(tempfile.mkdtemp(prefix="odin-cad-stale-"))
@@ -270,15 +319,15 @@ def main():
 
     # fresh: both episodes logged today -> cluster, but not stale
     rf = oc.compute(cluster_root_created([
-        ("raw", ["a"], ["k"], iso(today)),
-        ("raw", ["a"], ["k"], iso(today))]), min_entries=5)
+        ("raw", ["a", "x"], ["k"], iso(today)),
+        ("raw", ["a", "x"], ["k"], iso(today))]), min_entries=5)
     ok &= _check("fresh cluster -> 1 cluster, 0 stale",
                  rf["reflect_clusters"] == 1 and rf["stale_clusters"] == 0)
 
-    # stale: both logged 20d ago -> cluster aged 20d, escalates
+    # stale: both logged 20d ago -> the oldest unreviewed has waited 20d
     rs = oc.compute(cluster_root_created([
-        ("raw", ["a"], ["k"], iso(today - timedelta(days=20))),
-        ("raw", ["a"], ["k"], iso(today - timedelta(days=20)))]), min_entries=5)
+        ("raw", ["a", "x"], ["k"], iso(today - timedelta(days=20))),
+        ("raw", ["a", "x"], ["k"], iso(today - timedelta(days=20)))]), min_entries=5)
     ok &= _check("stale cluster -> 1 stale, oldest 20d",
                  rs["reflect_clusters"] == 1 and rs["stale_clusters"] == 1
                  and rs["oldest_cluster_age_days"] == 20)
@@ -287,19 +336,23 @@ def main():
     ok &= _check("stale escalation in suggestion line",
                  "1 stale, oldest 20d" in oc.suggestion_line(rs))
 
-    # mixed: newest logged today, other 40d ago -> uses NEWEST -> not stale
+    # mixed: one logged today, one 40d ago, neither reviewed. The 40d one is the
+    # thing that has been sitting, so the cluster is stale at 40. Reading the
+    # NEWEST episode (the pre-2026-08-11 rule) reported 0 stale here, which let a
+    # cluster hide an ignored member behind every fresh arrival.
     rm = oc.compute(cluster_root_created([
-        ("raw", ["a"], ["k"], iso(today)),
-        ("raw", ["a"], ["k"], iso(today - timedelta(days=40)))]), min_entries=5)
-    ok &= _check("mixed cluster uses newest -> 0 stale",
-                 rm["reflect_clusters"] == 1 and rm["stale_clusters"] == 0)
+        ("raw", ["a", "x"], ["k"], iso(today)),
+        ("raw", ["a", "x"], ["k"], iso(today - timedelta(days=40)))]), min_entries=5)
+    ok &= _check("mixed cluster is stale at the OLDEST unreviewed wait",
+                 rm["reflect_clusters"] == 1 and rm["stale_clusters"] == 1
+                 and rm["oldest_cluster_age_days"] == 40)
 
     # ============================================================
     # Gap #5 enrichment: cluster_detail membership + write_cadence_report
     # ============================================================
     detail_root = cluster_root([
         ("raw", ["acme", "bob"], ["mnda"]),
-        ("raw", ["acme", "carol"], ["demo"]),
+        ("raw", ["acme", "bob"], ["mnda", "demo"]),
     ])
     ca = oc.analyze_reflect_clusters(detail_root, today)
     ok &= _check("cluster_detail has 1 cluster", len(ca["clusters"]) == 1)
@@ -307,7 +360,7 @@ def main():
     ok &= _check("cluster_detail episodes lists both filenames",
                  set(cd["episodes"]) == {"e0.md", "e1.md"})
     ok &= _check("cluster_detail shared_tags is the tag union",
-                 set(cd["shared_tags"]) == {"acme", "bob", "carol", "mnda", "demo"})
+                 set(cd["shared_tags"]) == {"acme", "bob", "mnda", "demo"})
 
     r_detail = oc.compute(detail_root, min_entries=5)
     ok &= _check("compute() r has cluster_detail matching analyze_reflect_clusters",
@@ -343,6 +396,11 @@ def main():
 
     print("\nALL PASS" if ok else "\nSOME FAILED")
     return 0 if ok else 1
+
+
+def test_odin_cadence():
+    """Collect the whole script into the suite. Failures print above as [FAIL]."""
+    assert main() == 0, "see the [FAIL] lines in captured stdout"
 
 
 if __name__ == "__main__":

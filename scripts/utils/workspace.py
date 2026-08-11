@@ -37,10 +37,24 @@ from scripts.utils.paths import (  # noqa: F401
 )
 
 
+_TZ_ENV_LOADED = False
+
+
 def get_default_tz_name() -> str:
     """Per-instance local timezone NAME (IANA). Defaults to UTC; the live
     instance sets HEADING_OS_TZ (e.g. America/New_York) in its gitignored .env.
-    Externalized so the engine ships no operating-location signal."""
+    Externalized so the engine ships no operating-location signal.
+
+    Loads that .env itself, once per process. HEADING_OS_TZ reaches os.environ
+    only through load_env() and nothing exports it into the shell, so reading
+    the environment alone answered UTC for every caller that did not separately
+    call load_env() -- 61 of the 83 files that import this helper. Precedence is
+    load_env's, unchanged: it uses setdefault, so an explicitly exported zone
+    still wins over the file. See tests/test_tz_reaches_python_callers.py."""
+    global _TZ_ENV_LOADED
+    if not _TZ_ENV_LOADED:
+        load_env()
+        _TZ_ENV_LOADED = True
     return os.environ.get("HEADING_OS_TZ", "UTC")
 
 

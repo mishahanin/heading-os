@@ -262,6 +262,11 @@
 <td>Keep documentation in step with the code: which docs to update when a skill, script, rule, or structure changes, and the version-marker convention.</td>
 </tr>
 <tr>
+<td><code>documentation-style.md</code></td>
+<td>Path-scoped</td>
+<td>A subset of ASD-STE100 Simplified Technical English for the procedural pages and skill instruction bodies: imperative steps, active voice, a word limit per sentence, one action per step, and a warning that arrives before the step it guards. Advisory audit by <code>scripts/ste-check.py</code>. Explanatory pages and all outbound prose stay out of scope, where <code>humanization.md</code> governs instead.</td>
+</tr>
+<tr>
 <td><code>trace-id.md</code></td>
 <td>Path-scoped</td>
 <td>One correlation ID per process tree, so a single grep answers &ldquo;what happened in this run?&rdquo; across the daemon logs.</td>

@@ -14,6 +14,7 @@ Subcommands (current implementation status in parentheses):
   dayof-reminders           - DM speakers Zoom link 3h before session (Phase 3)
   helmsman-brief            - Brief next week's Helmsman 7 days ahead (Phase 3)
   helmsman set|list|gaps    - Assign / list / audit Helmsman coverage
+  speaker-gaps              - List members with no slot this cycle; exits 1 if any
   weekly-discrepancy-report - Report Telegram-vs-xlsx mismatches (Phase 3)
   email-backup              - Email reminder for unresponsive Tribe (Phase 3)
   stats                     - Generate stats markdown report (Phase 3)
@@ -2924,12 +2925,16 @@ def cmd_cycle_rollover(args) -> None:
         return
     dates = sorted({e["session_date"] for e in entries})
     unresolved = sorted(set(missing))
+    # The inverse of `unresolved`: members the new cycle forgot entirely.
+    unslotted = speaker_gaps(load_state(TRIBE_ROSTER) or {}, entries)
 
     if getattr(args, "dry_run", False):
         print(f"{CYAN}--- cycle-rollover (DRY RUN) ---{RESET}")
         print(f"would rebuild {len(entries)} entries, {dates[0]} -> {dates[-1]}")
         if unresolved:
             print(f"unresolved speakers: {unresolved}")
+        if unslotted:
+            print(f"members with no slot in the new cycle: {unslotted}")
         return
 
     # Back up the outgoing cycle before overwriting (one backup per rollover day).
@@ -2941,9 +2946,10 @@ def cmd_cycle_rollover(args) -> None:
 
     save_state(SCHEDULE, entries)
     _log_event("cycle_rollover", week1=dates[0], last=dates[-1],
-               entries=len(entries), unresolved=unresolved)
+               entries=len(entries), unresolved=unresolved, unslotted=unslotted)
     print(f"{GREEN}cycle-rollover{RESET}: rebuilt {len(entries)} entries "
-          f"({dates[0]} -> {dates[-1]}), unresolved={len(unresolved)}")
+          f"({dates[0]} -> {dates[-1]}), unresolved={len(unresolved)}, "
+          f"unslotted={len(unslotted)}")
 
     # Heads-up DM to the CEO (best-effort; never fail the job on a send error).
     misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
@@ -2954,6 +2960,9 @@ def cmd_cycle_rollover(args) -> None:
         if unresolved:
             note += ("\nSpeakers with no Telegram match (roster refresh needed): "
                      + ", ".join(unresolved))
+        if unslotted:
+            note += ("\nIn the Tribe but in no week of the new cycle: "
+                     + ", ".join(unslotted))
         try:
             get_bot().send_message(misha_id, note, parse_mode="")
         except TelegramAPIError as e:
@@ -3058,6 +3067,29 @@ def helmsman_gaps(schedule: list, helmsmen: dict,
             continue
         out.append(m)
     return out
+
+
+def speaker_gaps(roster: Optional[dict], schedule: list) -> list:
+    """Active, non-excluded roster members who hold no slot in `schedule`, sorted.
+
+    The inverse of the discrepancy report's "names in the schedule with no roster
+    match". Membership is rebuilt from Telegram + xlsx by bootstrap, but the weeks
+    a cycle runs are hand-authored in the cycle config, and nothing joined the two
+    in this direction: a member who joins mid-cycle is in the roster, absent from
+    every week, and reported nowhere. Returned as "Name (@username)" strings.
+
+    An empty schedule makes everyone a gap - callers check the schedule first.
+    """
+    scheduled = {str(e.get("speaker_name") or "").strip() for e in schedule}
+    out = []
+    for username, rec in (roster or {}).items():
+        if not rec.get("active", True) or rec.get("excluded_from_fireside"):
+            continue
+        name = str(rec.get("name") or "").strip()
+        if not name or name in scheduled:
+            continue
+        out.append(f"{name} (@{username})")
+    return sorted(out)
 
 
 def helmsman_brief_candidates(helmsmen: dict, today: Any,
@@ -3294,6 +3326,32 @@ def cmd_helmsman(args) -> Optional[int]:
 
 
 # ============================================================
+# Subcommand: speaker-gaps (console-first coverage check)
+# ============================================================
+
+def cmd_speaker_gaps(args) -> Optional[int]:
+    """List roster members with no slot in the live schedule. Exits 1 if any.
+
+    Same shape as `helmsman gaps`, so it works as a check in a pipeline before
+    a new cycle config is declared finished.
+    """
+    schedule = load_state(SCHEDULE) or []
+    if not schedule:
+        print(f"{YELLOW}speaker-gaps{RESET}: schedule.json is empty - nothing to check "
+              f"(run bootstrap or cycle-rollover first)")
+        return 1
+
+    gaps = speaker_gaps(load_state(TRIBE_ROSTER) or {}, schedule)
+    if not gaps:
+        print(f"{GREEN}speaker-gaps{RESET}: none - every active member holds a slot")
+        return 0
+    print(f"{YELLOW}speaker-gaps{RESET}: {len(gaps)} active member(s) with no slot this cycle")
+    for g in gaps:
+        print(f"  {g}")
+    return 1
+
+
+# ============================================================
 # Subcommand: weekly-discrepancy-report (Phase 3 task 3.6)
 # ============================================================
 
@@ -3313,12 +3371,17 @@ def cmd_weekly_discrepancy_report(args) -> None:
         print(f"{RED}weekly-discrepancy-report: xlsx load failed: {e}{RESET}", file=sys.stderr)
         return
 
-    _, discrepancy = cross_reference(xlsx_roster, bootstrap_result["telegram_members"])
+    roster, discrepancy = cross_reference(xlsx_roster, bootstrap_result["telegram_members"])
     in_tg = discrepancy["in_telegram_not_in_xlsx"]
     in_xlsx = discrepancy["in_xlsx_not_in_telegram"]
     no_un = discrepancy["no_username_in_telegram"]
+    # Members who are in the Tribe but in no week of the running cycle. Reported
+    # here rather than gating the job: an unslotted member is a CEO to-do for the
+    # next cycle config, not a daemon failure.
+    schedule = load_state(SCHEDULE) or []
+    unslotted = speaker_gaps(roster, schedule) if schedule else []
 
-    if not in_tg and not in_xlsx and not no_un:
+    if not in_tg and not in_xlsx and not no_un and not unslotted:
         print(f"{GREEN}weekly-discrepancy-report: no discrepancies{RESET}")
         return
 
@@ -3337,7 +3400,13 @@ def cmd_weekly_discrepancy_report(args) -> None:
         lines.append(f"In Telegram, no username set ({len(no_un)}):")
         for r in no_un:
             lines.append(f"  - {r['full_name']} (id={r['user_id']})")
-    text = "\n".join(lines)
+        lines.append("")
+    if unslotted:
+        lines.append(f"In the Tribe, no slot in this cycle ({len(unslotted)}) "
+                     f"- add to the next cycle config:")
+        for g in unslotted:
+            lines.append(f"  - {g}")
+    text = "\n".join(lines).rstrip()
 
     misha_id = int(os.environ.get("MISHA_TELEGRAM_USER_ID", "0"))
     if not misha_id:
@@ -3815,6 +3884,7 @@ def main() -> int:
     helmsman_set.add_argument("--note", default="", help="Optional note stored on the record")
     helmsman_sub.add_parser("list", help="Show every scheduled week and its Helmsman")
     helmsman_sub.add_parser("gaps", help="List unassigned weeks; exits 1 if any")
+    sub.add_parser("speaker-gaps", help="List members with no slot this cycle; exits 1 if any")
     sub.add_parser("weekly-discrepancy-report", help="Report Telegram-vs-xlsx mismatches (Phase 3)")
     sub.add_parser("email-backup", help="Email reminder for unresponsive Tribe (Phase 3)")
     stats = sub.add_parser("stats", help="Generate stats markdown report (Phase 3)")
@@ -3858,6 +3928,7 @@ def main() -> int:
         "dayof-reminders": cmd_dayof_reminders,
         "helmsman-brief": cmd_helmsman_brief,
         "helmsman": cmd_helmsman,
+        "speaker-gaps": cmd_speaker_gaps,
         "weekly-discrepancy-report": cmd_weekly_discrepancy_report,
         "email-backup": cmd_email_backup,
         "stats": cmd_stats,

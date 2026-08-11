@@ -108,8 +108,8 @@ deliberately left as templates and defaults.</p>
 <hr />
 <h2 id="2-the-fast-path-setup-wizard">2. The fast path: <code>/setup-wizard</code></h2>
 <p>The wizard is the intended way to personalize a clone. It asks about 22 questions for
-a public HEADING OS clone, enriches your short answers into full voice, personal, and
-business documents, and captures any API keys into <code>.env</code> as it goes. It refuses to
+a public HEADING OS clone. It enriches your short answers into full voice, personal,
+and business documents, and captures any API keys into <code>.env</code> as it goes. It refuses to
 run on the original maintainer&rsquo;s master workspace, so it is safe on any clone.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># in a Claude Code session, from the engine</span>
 /setup-wizard
@@ -171,8 +171,9 @@ example into your private data overlay and fill it in:</p>
 <span class="c1"># then edit name / slug / github_org / voice_reference / email</span>
 </code></pre></div>
 <p><code>operator.yaml</code> is routed private and gitignored. Every identity default in the code
-(bridge user slug, GitHub org, publisher, the email-reply voice clause) reads from it
-through one seam, so you set your identity in exactly one place. You can also override
+reads from it through one seam, so you set your identity in exactly one place. Those
+defaults are the bridge user slug, the GitHub org, the publisher, and the email-reply
+voice clause. You can also override
 any field per-shell with <code>HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}</code>.
 Until you write it, an established instance keeps its historical defaults with a
 one-time deprecation notice; a brand-new clone is generic.</p>
@@ -246,13 +247,13 @@ the engine/data separation, the secret guards). Adapt the brand and voice rules
 freely; leave the security ones in place.</p>
 <h3 id="43-per-skill-overrides-that-survive-updates">4.3 Per-skill overrides that survive updates</h3>
 <p>A few skills read an optional personal override file at
-<code>config/skill-custom/{skill}.user.toml</code>. These <code>*.user.toml</code> files are gitignored, so they
-are the intended way to tune a skill&rsquo;s behavior without editing the tracked skill itself
+<code>config/skill-custom/{skill}.user.toml</code>. These <code>*.user.toml</code> files are gitignored. They
+are the intended way to tune a skill&rsquo;s behavior without editing the tracked skill itself,
 and without a future update overwriting your change. When a skill supports one, its
 SKILL.md says so. Prefer this over hand-editing a tracked skill whenever it is available.</p>
 <h3 id="44-telegram-viraid-and-sentinel">4.4 Telegram, Viraid, and Sentinel</h3>
-<p>These three deserve their own walkthrough: creating your capture and alert channels,
-pointing Viraid at your channel, and tuning what Sentinel watches and where it sends. See
+<p>These three deserve their own walkthrough. It covers your capture and alert channels,
+how to point Viraid at your channel, and what Sentinel watches and where it sends. See
 <a href="TELEGRAM-AND-ALERTS.html">TELEGRAM-AND-ALERTS</a>.</p>
 <hr />
 <h2 id="5-what-stays">5. What stays</h2>
@@ -261,9 +262,9 @@ scrubbed:</p>
 <ul>
 <li><strong>Author attribution.</strong> The engine is a personal project built and maintained by
   Misha Hanin. That authorship is part of the project&rsquo;s identity and stays in the
-  code, the same way any open project keeps its authors. (Misha is Founder &amp; CEO of
-  31 Concept and uses HEADING OS himself, but 31C is not involved in the project and
-  bears no responsibility for it.) Attribution does not leak into your outputs: those
+  code, the same way any open project keeps its authors. Misha is Founder &amp; CEO of
+  31 Concept and uses HEADING OS himself. The company is not involved in the project
+  and bears no responsibility for it. Attribution does not leak into your outputs: those
   use <em>your</em> voice and <em>your</em> facts from your data overlay.</li>
 <li><strong>License and notices.</strong> <code>LICENSE</code> and <code>NOTICE</code> (Apache-2.0) govern your use. Keep
   them.</li>
@@ -309,12 +310,13 @@ machine is invisible to it and stays put.</p>
 <p>The one situation to know about: if the maintainer later ships a skill with the <em>same
 folder name</em> you chose, the two collide. Avoid it by giving your own skills a distinctive
 name (a personal prefix such as <code>acme-</code> works well). A brand-new script, rule, or reference
-file behaves the same way: yours, untouched, unless a future update happens to add a file
-at the identical path.</p>
+file behaves the same way: yours and untouched. The exception is a future update that adds
+a file at the identical path.</p>
 <h3 id="73-editing-a-file-the-engine-also-ships-is-the-case-to-handle-with-care">7.3 Editing a file the engine also ships is the case to handle with care</h3>
-<p>This is the one that can bite. If you <strong>edit a tracked engine file</strong> (a shipped rule like
-<code>terminology.md</code>, or a shipped skill) and the maintainer later changes that same file, the
-update cannot simply fast-forward. HEADING OS pulls with <code>--ff-only</code> on purpose, so instead
+<p>This is the one that can bite. If you <strong>edit a tracked engine file</strong> and the maintainer
+later changes that same file, the update cannot fast-forward. A tracked engine file is a
+shipped rule like <code>terminology.md</code>, or a shipped skill.
+HEADING OS pulls with <code>--ff-only</code> on purpose, so instead
 of silently merging or clobbering your edit, the pull <strong>stops and tells you</strong> the histories
 diverged. Nothing is lost; you are just asked to decide.</p>
 <p>Two clean ways to work so this never hurts:</p>
@@ -326,12 +328,12 @@ diverged. Nothing is lost; you are just asked to decide.</p>
 <li><strong>When you must edit a tracked file, keep the edit as a small local commit</strong> and expect
    to re-apply it occasionally. The three brand rules (<code>terminology.md</code>, <code>voice.md</code>,
    <code>humanization.md</code>) are meant to be personalized this way. If a <code>git pull</code> reports a
-   conflict on one of them, it means the maintainer touched the same file; reconcile the
-   two versions by hand, keeping your brand language and their improvement.</li>
+   conflict on one of them, the maintainer touched the same file. Reconcile the two
+   versions by hand, keeping your brand language and their improvement.</li>
 </ol>
-<p>Rule of thumb: <strong>substance in the overlay, behavior through overrides, and only reach into
-tracked engine files when there is no seam, keeping those edits small and committed.</strong> Do
-that and updates stay boring, which is what you want.</p>
+<p>Rule of thumb: <strong>substance in the overlay, behavior through overrides.</strong> Reach into a
+tracked engine file only when there is no seam. Keep those edits small and committed.
+Do that and updates stay boring, which is what you want.</p>
 <h3 id="74-what-an-update-actually-pulls">7.4 What an update actually pulls</h3>
 <p>For completeness, <code>git pull</code> (and <code>/sync</code>) refresh the shared engine: skills, rules,
 scripts, hooks, docs, config templates. On a managed multi-person deployment, <code>/sync</code> also

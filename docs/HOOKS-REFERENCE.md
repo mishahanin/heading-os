@@ -21,9 +21,7 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 | Hook | Purpose |
 |------|---------|
 | `data-path-redirect.py` | Redirects data-relative tool paths to the resolved data root, so a `Read`/`Write`/`Edit`/`Grep`/`Glob` aimed at a data path lands in the private overlay, not the engine tree. The one hook wired in the portable `settings.json`. |
-| `_dispatch.py` | The consolidated PreToolUse guard on `Write`/`Edit`. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, and the personal-threads protection. |
-
-`prevent-secrets.py`, `protect-corporate.py`, `protect-docs.py`, and `protect-personal-threads.py` are thin compatibility shims that delegate to `_dispatch.py`. They exist so older settings files that reference the individual script names keep working.
+| `_dispatch.py` | The consolidated PreToolUse guard, registered on three matchers: the write tools, `Bash`, and `Read`. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, and the personal-threads protection. |
 
 ## PostToolUse (observe and correct)
 
@@ -49,7 +47,7 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 |------|---------|
 | `recall-inject.py` | Surfaces pointers (title, layer, path) to memory relevant to what the CEO just typed, ranked by the [recall](CONFIGURATION.html) index rather than by date. It does NOT block the prompt, does NOT read file content, and on any error, timeout, or missing index it stays silent and exits 0. Its internal 3.5-second timeout sits under the harness's own 8-second timeout for the hook, so it gives up on a cold model load rather than stall the prompt. Toggled off entirely via `recall_inject.enabled` in `config/memory-index.yaml`; a config it cannot read is treated as an unconfirmed switch, so it stays silent then too. Short conversational prompts (under `recall_inject.min_prompt_chars`, 25 by default) skip the backend entirely, and a below-threshold result is capped at three pointers. Supersedes the date-ordered `inject` snapshot (`memory-inject.py`, `SessionStart`), which stays in the codebase behind its own flag but defaults off. |
 
-**After an update that adds a hook, wire it in your own settings file.** `.claude/settings.local.json` is gitignored, so a `git pull` updates the per-OS templates and leaves your live file untouched. A hook event that exists only in the template does not run. Copy the `UserPromptSubmit` block from `.claude/settings.local.{linux,macos,windows}.json` into the `hooks` object of your `.claude/settings.local.json`, merging the one new key rather than replacing the file, which carries your local edits. Confirm with `python3 -c "import json;print(list(json.load(open('.claude/settings.local.json'))['hooks']))"`.
+**After an update that adds a hook, wire it in your own settings file.** Your `.claude/settings.local.json` is gitignored. A `git pull` updates the per-OS templates and leaves your live file untouched. A hook event that exists only in the template does not run. Copy the `UserPromptSubmit` block from `.claude/settings.local.{linux,macos,windows}.json` into the `hooks` object of your `.claude/settings.local.json`, merging the one new key rather than replacing the file, which carries your local edits. Confirm with `python3 -c "import json;print(list(json.load(open('.claude/settings.local.json'))['hooks']))"`.
 
 ## Session lifecycle
 
@@ -64,8 +62,8 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 ## Adding or changing a hook
 
 1. Write the script in `.claude/hooks/`. A hook reads the harness event JSON on stdin and, for a blocking `PreToolUse` hook, writes a decision to stdout.
-2. Wire it in the settings file for its event: `settings.json` for a portable, self-locating hook, or the per-OS `settings.local.{os}.json` templates for the rest.
-3. A `PreToolUse` hook that denies work must fail safe and fail loud: block on the dangerous case, and print a plain reason so the operator knows why.
+2. Wire it in the settings file for its event. Use `settings.json` for a portable, self-locating hook, or the per-OS `settings.local.{os}.json` templates for the rest.
+3. A `PreToolUse` hook that denies work must fail safe and fail loud. Block on the dangerous case, and print a plain reason so the operator knows why.
 4. Keep blocking logic in `PreToolUse`. A `PostToolUse` hook cannot prevent a write that already happened; use it to detect, correct, or record.
 
 ## Related

@@ -71,6 +71,12 @@ jobs:
         run: uv run python -m pytest tests/test_engine_tree_clean.py tests/test_data_root_no_bypass.py -q
       - name: Skill router registry generated + in sync (F-5.1)
         run: uv run python scripts/generate-skill-router.py --check
+      - name: Documentation style (ASD-STE100 subset, errors only)
+        # Errors only, on purpose. The mechanical checks (sentence length, one
+        # action per step, banned padding vocabulary) sit at zero across the
+        # in-scope set; the warnings are heuristics with no part-of-speech tagger
+        # behind them, so --strict would gate on guesses.
+        run: uv run python scripts/ste-check.py --all --quiet
       - name: Canopus record check (reports, does not block a direct push)
         # The name is the honest limit, and it is not modesty. `enforce_admins`
         # is false on the only push path in use, so a required check cannot

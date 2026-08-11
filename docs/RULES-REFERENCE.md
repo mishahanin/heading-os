@@ -71,7 +71,7 @@ Governs development work on the engine itself.
 |------|-------|------------------|
 | `development-standards.md` | Path-scoped | Quality gates for every artifact: research first, restraint (simplicity and surgical changes), a debugging discipline, and the skill / script / reference standards. |
 | `documentation.md` | Always-on | Keep documentation in step with the code: which docs to update when a skill, script, rule, or structure changes, and the version-marker convention. |
-| `documentation-style.md` | Path-scoped | A subset of ASD-STE100 Simplified Technical English for the procedural pages and skill instruction bodies: imperative steps, active voice, a word limit per sentence, one action per step, and a warning that arrives before the step it guards. Advisory audit by `scripts/ste-check.py`. Explanatory pages and all outbound prose stay out of scope, where `humanization.md` governs instead. |
+| `documentation-style.md` | Path-scoped | A subset of ASD-STE100 Simplified Technical English for the procedural pages and skill instruction bodies: imperative steps, active voice, a word limit per sentence, one action per step, and a warning that arrives before the step it guards. Audited by `scripts/ste-check.py`, which gates on errors in pre-commit and CI and leaves its heuristic warnings advisory. Explanatory pages and all outbound prose stay out of scope, where `humanization.md` governs instead. |
 | `trace-id.md` | Path-scoped | One correlation ID per process tree, so a single grep answers "what happened in this run?" across the daemon logs. |
 
 ## Prompt refinement in depth

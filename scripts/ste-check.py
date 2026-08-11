@@ -17,6 +17,7 @@ Usage:
   python scripts/ste-check.py --strict <file>     # Fail on warnings too
   python scripts/ste-check.py --json <file>       # JSON output for CI
   python scripts/ste-check.py --text "string"     # Inline text audit
+  python scripts/ste-check.py --all --quiet       # Gate form: errors only
 
 Checks performed:
   1. sentence_too_long   - >20 words in a numbered step, >25 in prose (rule 3)
@@ -503,6 +504,11 @@ def main():
     parser.add_argument("--text", help="Inline text instead of a file")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings as well as errors")
     parser.add_argument("--json", action="store_true", help="Output JSON instead of a report")
+    parser.add_argument("--quiet", action="store_true",
+                        help="Print only files that carry an error, plus the totals. "
+                             "The gate form: warnings are heuristic and do not fail, "
+                             "so printing all of them on every commit trains the "
+                             "reader to skip the output that does matter.")
     args = parser.parse_args()
 
     if not (args.file or args.text or args.all):
@@ -526,7 +532,7 @@ def main():
         result = audit(text, strict=args.strict)
         results[source] = result
         passed = passed and result["passed"]
-        if not args.json:
+        if not args.json and not (args.quiet and result["summary"]["errors"] == 0):
             print_report(result, source)
 
     if args.json:

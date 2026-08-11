@@ -638,8 +638,11 @@ def test_the_prefilter_matches_at_runtime():
     ("outputs/scratch/secret-scanner.py", False),
     ("knowledge/secret-scanner.py", False),
     ("myscripts/secret-scanner.py", False),             # segment anchor
-    # .claude/hooks/prevent-secrets.py -- the runpy shim.
-    (".claude/hooks/prevent-secrets.py", True),
+    # .claude/hooks/prevent-secrets.py -- the runpy shim, REMOVED 2026-08-11 with
+    # the other three delegators. Its allowance went with it, and the case stays
+    # here inverted rather than deleted: a name that once carried an exemption is
+    # the name someone recreates, and it must not inherit one.
+    (".claude/hooks/prevent-secrets.py", False),
     ("/abs/root/.claude/hooks/prevent-secrets.py", False),
     ("outputs/scratch/.claude/hooks/prevent-secrets.py", False),
     ("knowledge/prevent-secrets.py", False),
@@ -693,7 +696,6 @@ def test_the_narrowed_allowances_still_cover_the_real_files():
     the ordinary course of maintaining the wall."""
     mod = _load_dispatch_module()
     for rel in ("scripts/secret-scanner.py",
-                ".claude/hooks/prevent-secrets.py",
                 ".claude/hooks/_dispatch.py",
                 "scripts/utils/secret_patterns.py"):
         assert (_ROOT / rel).is_file(), f"{rel} does not exist; the case is stale"

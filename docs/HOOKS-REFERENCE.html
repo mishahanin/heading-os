@@ -107,11 +107,10 @@
 </tr>
 <tr>
 <td><code>_dispatch.py</code></td>
-<td>The consolidated PreToolUse guard on <code>Write</code>/<code>Edit</code>. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, and the personal-threads protection.</td>
+<td>The consolidated PreToolUse guard, registered on three matchers: the write tools, <code>Bash</code>, and <code>Read</code>. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, and the personal-threads protection.</td>
 </tr>
 </tbody>
 </table>
-<p><code>prevent-secrets.py</code>, <code>protect-corporate.py</code>, <code>protect-docs.py</code>, and <code>protect-personal-threads.py</code> are thin compatibility shims that delegate to <code>_dispatch.py</code>. They exist so older settings files that reference the individual script names keep working.</p>
 <h2 id="posttooluse-observe-and-correct">PostToolUse (observe and correct)</h2>
 <table>
 <thead>
@@ -181,7 +180,7 @@
 </tr>
 </tbody>
 </table>
-<p><strong>After an update that adds a hook, wire it in your own settings file.</strong> <code>.claude/settings.local.json</code> is gitignored, so a <code>git pull</code> updates the per-OS templates and leaves your live file untouched. A hook event that exists only in the template does not run. Copy the <code>UserPromptSubmit</code> block from <code>.claude/settings.local.{linux,macos,windows}.json</code> into the <code>hooks</code> object of your <code>.claude/settings.local.json</code>, merging the one new key rather than replacing the file, which carries your local edits. Confirm with <code>python3 -c "import json;print(list(json.load(open('.claude/settings.local.json'))['hooks']))"</code>.</p>
+<p><strong>After an update that adds a hook, wire it in your own settings file.</strong> Your <code>.claude/settings.local.json</code> is gitignored. A <code>git pull</code> updates the per-OS templates and leaves your live file untouched. A hook event that exists only in the template does not run. Copy the <code>UserPromptSubmit</code> block from <code>.claude/settings.local.{linux,macos,windows}.json</code> into the <code>hooks</code> object of your <code>.claude/settings.local.json</code>, merging the one new key rather than replacing the file, which carries your local edits. Confirm with <code>python3 -c "import json;print(list(json.load(open('.claude/settings.local.json'))['hooks']))"</code>.</p>
 <h2 id="session-lifecycle">Session lifecycle</h2>
 <table>
 <thead>
@@ -222,8 +221,8 @@
 <h2 id="adding-or-changing-a-hook">Adding or changing a hook</h2>
 <ol>
 <li>Write the script in <code>.claude/hooks/</code>. A hook reads the harness event JSON on stdin and, for a blocking <code>PreToolUse</code> hook, writes a decision to stdout.</li>
-<li>Wire it in the settings file for its event: <code>settings.json</code> for a portable, self-locating hook, or the per-OS <code>settings.local.{os}.json</code> templates for the rest.</li>
-<li>A <code>PreToolUse</code> hook that denies work must fail safe and fail loud: block on the dangerous case, and print a plain reason so the operator knows why.</li>
+<li>Wire it in the settings file for its event. Use <code>settings.json</code> for a portable, self-locating hook, or the per-OS <code>settings.local.{os}.json</code> templates for the rest.</li>
+<li>A <code>PreToolUse</code> hook that denies work must fail safe and fail loud. Block on the dangerous case, and print a plain reason so the operator knows why.</li>
 <li>Keep blocking logic in <code>PreToolUse</code>. A <code>PostToolUse</code> hook cannot prevent a write that already happened; use it to detect, correct, or record.</li>
 </ol>
 <h2 id="related">Related</h2>

@@ -34,8 +34,8 @@ deliberately left as templates and defaults.
 ## 2. The fast path: `/setup-wizard`
 
 The wizard is the intended way to personalize a clone. It asks about 22 questions for
-a public HEADING OS clone, enriches your short answers into full voice, personal, and
-business documents, and captures any API keys into `.env` as it goes. It refuses to
+a public HEADING OS clone. It enriches your short answers into full voice, personal,
+and business documents, and captures any API keys into `.env` as it goes. It refuses to
 run on the original maintainer's master workspace, so it is safe on any clone.
 
 ```bash
@@ -91,8 +91,9 @@ cp scripts/operator.example.yaml <data-root>/config/operator.yaml
 ```
 
 `operator.yaml` is routed private and gitignored. Every identity default in the code
-(bridge user slug, GitHub org, publisher, the email-reply voice clause) reads from it
-through one seam, so you set your identity in exactly one place. You can also override
+reads from it through one seam, so you set your identity in exactly one place. Those
+defaults are the bridge user slug, the GitHub org, the publisher, and the email-reply
+voice clause. You can also override
 any field per-shell with `HEADING_OS_OPERATOR_{NAME,SLUG,GITHUB_ORG,VOICE_REFERENCE,EMAIL}`.
 Until you write it, an established instance keeps its historical defaults with a
 one-time deprecation notice; a brand-new clone is generic.
@@ -163,15 +164,15 @@ freely; leave the security ones in place.
 ### 4.3 Per-skill overrides that survive updates
 
 A few skills read an optional personal override file at
-`config/skill-custom/{skill}.user.toml`. These `*.user.toml` files are gitignored, so they
-are the intended way to tune a skill's behavior without editing the tracked skill itself
+`config/skill-custom/{skill}.user.toml`. These `*.user.toml` files are gitignored. They
+are the intended way to tune a skill's behavior without editing the tracked skill itself,
 and without a future update overwriting your change. When a skill supports one, its
 SKILL.md says so. Prefer this over hand-editing a tracked skill whenever it is available.
 
 ### 4.4 Telegram, Viraid, and Sentinel
 
-These three deserve their own walkthrough: creating your capture and alert channels,
-pointing Viraid at your channel, and tuning what Sentinel watches and where it sends. See
+These three deserve their own walkthrough. It covers your capture and alert channels,
+how to point Viraid at your channel, and what Sentinel watches and where it sends. See
 [TELEGRAM-AND-ALERTS](TELEGRAM-AND-ALERTS.html).
 
 ---
@@ -183,9 +184,9 @@ scrubbed:
 
 - **Author attribution.** The engine is a personal project built and maintained by
   Misha Hanin. That authorship is part of the project's identity and stays in the
-  code, the same way any open project keeps its authors. (Misha is Founder & CEO of
-  31 Concept and uses HEADING OS himself, but 31C is not involved in the project and
-  bears no responsibility for it.) Attribution does not leak into your outputs: those
+  code, the same way any open project keeps its authors. Misha is Founder & CEO of
+  31 Concept and uses HEADING OS himself. The company is not involved in the project
+  and bears no responsibility for it. Attribution does not leak into your outputs: those
   use *your* voice and *your* facts from your data overlay.
 - **License and notices.** `LICENSE` and `NOTICE` (Apache-2.0) govern your use. Keep
   them.
@@ -244,14 +245,15 @@ machine is invisible to it and stays put.
 The one situation to know about: if the maintainer later ships a skill with the *same
 folder name* you chose, the two collide. Avoid it by giving your own skills a distinctive
 name (a personal prefix such as `acme-` works well). A brand-new script, rule, or reference
-file behaves the same way: yours, untouched, unless a future update happens to add a file
-at the identical path.
+file behaves the same way: yours and untouched. The exception is a future update that adds
+a file at the identical path.
 
 ### 7.3 Editing a file the engine also ships is the case to handle with care
 
-This is the one that can bite. If you **edit a tracked engine file** (a shipped rule like
-`terminology.md`, or a shipped skill) and the maintainer later changes that same file, the
-update cannot simply fast-forward. HEADING OS pulls with `--ff-only` on purpose, so instead
+This is the one that can bite. If you **edit a tracked engine file** and the maintainer
+later changes that same file, the update cannot fast-forward. A tracked engine file is a
+shipped rule like `terminology.md`, or a shipped skill.
+HEADING OS pulls with `--ff-only` on purpose, so instead
 of silently merging or clobbering your edit, the pull **stops and tells you** the histories
 diverged. Nothing is lost; you are just asked to decide.
 
@@ -264,12 +266,12 @@ Two clean ways to work so this never hurts:
 2. **When you must edit a tracked file, keep the edit as a small local commit** and expect
    to re-apply it occasionally. The three brand rules (`terminology.md`, `voice.md`,
    `humanization.md`) are meant to be personalized this way. If a `git pull` reports a
-   conflict on one of them, it means the maintainer touched the same file; reconcile the
-   two versions by hand, keeping your brand language and their improvement.
+   conflict on one of them, the maintainer touched the same file. Reconcile the two
+   versions by hand, keeping your brand language and their improvement.
 
-Rule of thumb: **substance in the overlay, behavior through overrides, and only reach into
-tracked engine files when there is no seam, keeping those edits small and committed.** Do
-that and updates stay boring, which is what you want.
+Rule of thumb: **substance in the overlay, behavior through overrides.** Reach into a
+tracked engine file only when there is no seam. Keep those edits small and committed.
+Do that and updates stay boring, which is what you want.
 
 ### 7.4 What an update actually pulls
 

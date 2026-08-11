@@ -42,9 +42,9 @@ same way (`/plugin install <bundle>@heading-os-marketplace`):
   (editorial-review).
 
 Bundles ship only skills that run without your private data, credentials, or
-daemons. Skills that need those stay in the full engine: the `heading-crm`
+daemons. Skills that need those stay in the full engine. The `heading-crm`
 skills (crm, viraid, google-contacts) need a private CRM overlay or Google
-OAuth, and skills like email-intel, telegram, osint, and council need Exchange,
+OAuth. Skills like email-intel, telegram, osint, and council need Exchange,
 a session, or third-party API keys. To run those, clone the engine
 ([DEPLOYMENT.md](DEPLOYMENT.md)).
 
@@ -82,7 +82,7 @@ never adds a path around the human approve click. See
 ## For maintainers: publishing
 
 The marketplace repo is a generated distribution artifact. Never hand-edit it.
-To cut a new release, run the publisher from the engine, which builds the bundles
+To cut a new release, run the publisher from the engine. It builds the bundles
 fresh, syncs them into a checkout of the marketplace repo, refreshes its README
 and license, and pushes:
 
@@ -99,15 +99,15 @@ both are described in [EXTENDING.md](EXTENDING.md).
 
 You do not have to run the publisher by hand. The `publish-marketplace` GitHub
 Action republishes the marketplace whenever a push to `main` touches a bundle
-input (the manifest, the build or publish scripts, or any skill or hook a bundle
-can carry), and on manual `workflow_dispatch`. It is a no-op when nothing
-changed.
+input, and on manual `workflow_dispatch`. A bundle input is the manifest, the
+build or publish scripts, or any skill or hook a bundle can carry. It is a no-op
+when nothing changed.
 
 The Action pushes to a different repository than the one it runs in, so the
 default `GITHUB_TOKEN` cannot authorize it. One-time setup: create a fine-grained
 Personal Access Token scoped write to ONLY `mishahanin/heading-os-marketplace`
-(Contents: read and write), and add it to the engine repo's secrets as
-`MARKETPLACE_PUBLISH_TOKEN` (Settings, then Secrets and variables, then Actions).
+(Contents: read and write). Add it to the engine repo's secrets as
+`MARKETPLACE_PUBLISH_TOKEN`, under Settings, then Secrets and variables, then Actions.
 Until the secret exists the Action fails on its first step with a clear message
 rather than publishing a broken state. The manual publisher above stays available
 regardless.

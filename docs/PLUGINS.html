@@ -110,9 +110,9 @@ same way (<code>/plugin install &lt;bundle&gt;@heading-os-marketplace</code>):</
   (editorial-review).</li>
 </ul>
 <p>Bundles ship only skills that run without your private data, credentials, or
-daemons. Skills that need those stay in the full engine: the <code>heading-crm</code>
+daemons. Skills that need those stay in the full engine. The <code>heading-crm</code>
 skills (crm, viraid, google-contacts) need a private CRM overlay or Google
-OAuth, and skills like email-intel, telegram, osint, and council need Exchange,
+OAuth. Skills like email-intel, telegram, osint, and council need Exchange,
 a session, or third-party API keys. To run those, clone the engine
 (<a href="DEPLOYMENT.md">DEPLOYMENT.md</a>).</p>
 <h2 id="how-updates-work">How updates work</h2>
@@ -142,7 +142,7 @@ never adds a path around the human approve click. See
 <a href="SECURITY-MODEL.md">SECURITY-MODEL.md</a>.</p>
 <h2 id="for-maintainers-publishing">For maintainers: publishing</h2>
 <p>The marketplace repo is a generated distribution artifact. Never hand-edit it.
-To cut a new release, run the publisher from the engine, which builds the bundles
+To cut a new release, run the publisher from the engine. It builds the bundles
 fresh, syncs them into a checkout of the marketplace repo, refreshes its README
 and license, and pushes:</p>
 <div class="highlight"><pre><span></span><code>python scripts/dev/publish-marketplace.py --repo-dir ../heading-os-marketplace
@@ -154,14 +154,14 @@ both are described in <a href="EXTENDING.md">EXTENDING.md</a>.</p>
 <h3 id="automatic-publishing">Automatic publishing</h3>
 <p>You do not have to run the publisher by hand. The <code>publish-marketplace</code> GitHub
 Action republishes the marketplace whenever a push to <code>main</code> touches a bundle
-input (the manifest, the build or publish scripts, or any skill or hook a bundle
-can carry), and on manual <code>workflow_dispatch</code>. It is a no-op when nothing
-changed.</p>
+input, and on manual <code>workflow_dispatch</code>. A bundle input is the manifest, the
+build or publish scripts, or any skill or hook a bundle can carry. It is a no-op
+when nothing changed.</p>
 <p>The Action pushes to a different repository than the one it runs in, so the
 default <code>GITHUB_TOKEN</code> cannot authorize it. One-time setup: create a fine-grained
 Personal Access Token scoped write to ONLY <code>mishahanin/heading-os-marketplace</code>
-(Contents: read and write), and add it to the engine repo&rsquo;s secrets as
-<code>MARKETPLACE_PUBLISH_TOKEN</code> (Settings, then Secrets and variables, then Actions).
+(Contents: read and write). Add it to the engine repo&rsquo;s secrets as
+<code>MARKETPLACE_PUBLISH_TOKEN</code>, under Settings, then Secrets and variables, then Actions.
 Until the secret exists the Action fails on its first step with a clear message
 rather than publishing a broken state. The manual publisher above stays available
 regardless.</p>

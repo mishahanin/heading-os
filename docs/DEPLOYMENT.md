@@ -82,8 +82,8 @@ found" — that is expected, not an error.
 ### 4.0 Fastest path: open in a devcontainer (demo mode)
 
 For a zero-setup, read-only look before you install anything, open the repository in
-a devcontainer: VS Code "Reopen in Container", or a **GitHub Codespace** from the repo
-page. The container defaults to demo mode. It sets `HEADING_OS_DATA` to the bundled
+a devcontainer. Use the VS Code "Reopen in Container" command, or a **GitHub
+Codespace** from the repo page. The container defaults to demo mode. It sets `HEADING_OS_DATA` to the bundled
 `examples/` tree, installs `uv`, runs a core `uv sync`, and prints demo output from
 `scripts/crm-health.py` on first build. No `.env`, no API key, no private data
 repository, and nothing can write (demo mode refuses writes by design).
@@ -105,8 +105,8 @@ If WSL is already present, `wsl --install` reports the distribution exists — t
 fine, skip it. Open Ubuntu with `wsl -d Ubuntu`.
 
 **Keep all repos on the Linux filesystem (`~/…`), not `/mnt/c`.** The Windows mount
-is an order of magnitude slower for git and Python, and has surprised more than one
-operator with permission quirks. macOS and Linux users skip this section.
+is an order of magnitude slower for git and Python. It has also surprised more than
+one operator with permission quirks. Users on macOS and Linux skip this section.
 
 ### 4.2 Toolchain (inside Ubuntu / macOS / Linux)
 
@@ -146,7 +146,7 @@ claude            # pick a theme, then "Claude account with subscription"
 > **WSL has no default browser.** Both logins fail to auto-open one and instead
 > print a URL + a one-time code. Open the URL in your Windows browser manually,
 > paste the code, approve. On the Claude trust prompt, **do not trust a system
-> folder** such as `/mnt/c/WINDOWS/system32` — if a launch landed you there, exit,
+> folder** such as `/mnt/c/WINDOWS/system32`. If a launch landed you there, exit,
 > `cd` to the engine directory, relaunch `claude`, and trust that.
 
 ---
@@ -180,8 +180,9 @@ The engine reads two gitignored files at its root: `.workspace-identity.json` an
 ### Solo deploy
 
 No identity file is required — the engine defaults to a single-user workspace. Create
-`.env` from the template and fill in the keys you have, then set your operator identity
-(one file names who runs the instance; see [MAKE-IT-YOURS](MAKE-IT-YOURS.html) § 3.1):
+`.env` from the template and fill in the keys you have. Then set your operator
+identity, one file that names who runs the instance (see
+[MAKE-IT-YOURS](MAKE-IT-YOURS.html) § 3.1):
 
 ```bash
 cd <engine>
@@ -275,10 +276,10 @@ pre-commit install    # commit-time secret scanner (run once per fresh clone)
 
 ### Two install paths: core vs. all extras (F-7.1)
 
-Heavy integrations (Exchange email, Telegram, browser automation, document and
-deck generation, media/YouTube, the dashboard daemon, the Google/GenAI stack,
-observability, research scraping) live in **optional-dependency extras**, so the
-default `uv sync` stays small.
+Heavy integrations live in **optional-dependency extras**, so the default
+`uv sync` stays small. Those are Exchange email, Telegram, browser automation,
+document and deck generation, media, YouTube, the dashboard daemon, the Google
+and GenAI stack, observability, research scraping.
 
 - **Adopter (recommended start):** `uv sync` installs core only. Arm a capability
   when you first need it: `uv sync --extra email`, `uv sync --extra browser`,
@@ -363,10 +364,10 @@ uv run python scripts/push-all.py --dry-run  # preview; change nothing
 
 `push-all.py` detects your workspace type. On a managed workspace it pushes the data
 overlay only and never touches the read-only engine. On a solo workspace it pushes
-your repo(s) directly, data overlay first. A repository it cannot push right now (say
-it is on a feature branch) is committed locally and reported as skipped rather than
-aborting the run, so a refusal about one repository never costs you the backup of the
-other.
+your repo(s) directly, data overlay first. A repository it cannot push right now, say
+because it is on a feature branch, is committed locally and reported as skipped. The
+run does not abort, so a refusal about one repository never costs you the backup of
+the other.
 
 > **Outbound is always human-gated.** Email and messages are drafted and shown to you
 > first. Nothing sends to the outside world autonomously.
@@ -440,8 +441,8 @@ the engine, stop — see the troubleshooting table.
 | Multi-line paste mangles (`^[[200~`) | Bracketed-paste artifact. Paste commands one physical line at a time, or join with `&&` / `;`. |
 | `/council` says a key is missing, or `/recall` returns nothing | Model integration not set up. See [MODELS-SETUP.md](MODELS-SETUP.html): install Ollama, pull `bge-m3`, add the council keys. |
 
-> **When in doubt, stop.** If a destination, a divergence, or an error touches data
-> location or git history, halt and capture the terminal text before acting. Never
+> **When in doubt, stop.** Halt if a destination, a divergence, or an error touches
+> data location or git history. Capture the terminal text before acting. Never
 > guess past it.
 
 ---

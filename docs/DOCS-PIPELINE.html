@@ -80,7 +80,7 @@
   <p class="page-meta">The source-of-truth map for the HEADING OS documentation site (docs/, served at</p>
   <p>The source-of-truth map for the HEADING OS documentation site (<code>docs/</code>, served at
 <code>https://mishahanin.github.io/heading-os/</code>). Every <code>docs/*.html</code> page is either
-regenerated from a Markdown source or hand-authored HTML; this file says which,
+regenerated from a Markdown source or hand-authored HTML. This file says which,
 how to edit each, and how the drift guard keeps them honest.</p>
 <p>Last Updated: 2026-07-08</p>
 <h2 id="the-one-generator">The one generator</h2>
@@ -131,7 +131,7 @@ hand-edited. Editing the <code>.md</code> without regenerating is caught by the 
 <code>memory-lifecycle</code>.</p>
 <p><code>memory-lifecycle</code> carries a Mermaid diagram. The generator renders a <code>```mermaid</code>
 fence to a <code>&lt;pre class="mermaid"&gt;</code> block and injects the vendored <code>assets/mermaid.min.js</code>
-on that page only (a per-page conditional), so every other page stays byte-identical and
+on that page only, a per-page conditional. Every other page stays byte-identical and
 zero-JS. A brand-new md page has no <code>.html</code> sibling yet, so it is created once with
 single-file <code>python scripts/regenerate-docs-html.py docs/&lt;name&gt;.md</code>; <code>--all</code> maintains it
 thereafter.</p>
@@ -151,10 +151,10 @@ one-time deterministic splitter kept for provenance): <code>skills-intel</code>,
 <code>skills-operations-infra</code>. Each carries the rich per-skill cards verbatim;
 <code>skills-mcp-plugins.html</code> is now the index over them plus the hand-authored MCP
 servers and Plugins sections.</p>
-<p><strong>Why not generated from SKILL.md frontmatter:</strong> the published skill cards
-(What it is / What it does / How to use / example / Customize) are far richer than
-the terse <code>x-heading-capability</code> frontmatter, so generating from frontmatter would
-gut the catalog. The cards are hand-authored HTML; their source of truth is the
+<p><strong>Why not generated from SKILL.md frontmatter:</strong> the published skill cards are far
+richer than the terse <code>x-heading-capability</code> frontmatter. Each card carries What it
+is, What it does, How to use, an example, and Customize. Generating from frontmatter
+would gut the catalog. The cards are hand-authored HTML; their source of truth is the
 <code>.html</code>, exactly like the other hand-authored pages.</p>
 <p><strong>To edit:</strong> change the <code>.html</code> <code>&lt;main class="content"&gt;</code> body directly, then run
 <code>python scripts/regenerate-docs-html.py --nav-sync</code> so the nav, search box, and

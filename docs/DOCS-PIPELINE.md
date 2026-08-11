@@ -2,7 +2,7 @@
 
 The source-of-truth map for the HEADING OS documentation site (`docs/`, served at
 `https://mishahanin.github.io/heading-os/`). Every `docs/*.html` page is either
-regenerated from a Markdown source or hand-authored HTML; this file says which,
+regenerated from a Markdown source or hand-authored HTML. This file says which,
 how to edit each, and how the drift guard keeps them honest.
 
 Last Updated: 2026-07-08
@@ -40,7 +40,7 @@ hand-edited. Editing the `.md` without regenerating is caught by the drift guard
 
 `memory-lifecycle` carries a Mermaid diagram. The generator renders a ```` ```mermaid ````
 fence to a `<pre class="mermaid">` block and injects the vendored `assets/mermaid.min.js`
-on that page only (a per-page conditional), so every other page stays byte-identical and
+on that page only, a per-page conditional. Every other page stays byte-identical and
 zero-JS. A brand-new md page has no `.html` sibling yet, so it is created once with
 single-file `python scripts/regenerate-docs-html.py docs/<name>.md`; `--all` maintains it
 thereafter.
@@ -66,10 +66,10 @@ one-time deterministic splitter kept for provenance): `skills-intel`,
 `skills-mcp-plugins.html` is now the index over them plus the hand-authored MCP
 servers and Plugins sections.
 
-**Why not generated from SKILL.md frontmatter:** the published skill cards
-(What it is / What it does / How to use / example / Customize) are far richer than
-the terse `x-heading-capability` frontmatter, so generating from frontmatter would
-gut the catalog. The cards are hand-authored HTML; their source of truth is the
+**Why not generated from SKILL.md frontmatter:** the published skill cards are far
+richer than the terse `x-heading-capability` frontmatter. Each card carries What it
+is, What it does, How to use, an example, and Customize. Generating from frontmatter
+would gut the catalog. The cards are hand-authored HTML; their source of truth is the
 `.html`, exactly like the other hand-authored pages.
 
 **To edit:** change the `.html` `<main class="content">` body directly, then run

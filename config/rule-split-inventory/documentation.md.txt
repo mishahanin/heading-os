@@ -12,7 +12,6 @@ A plan is active while its work is in progress; `plans/` root should hold only p
 Move it to `plans/archive/{YYYY}/`: `git mv plans/{filename} plans/archive/{year}/`
 Never delete a plan; archive it.
 Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not just ceo-main.
-`provision-exec.py` wrote a fresh `protect-corporate.py` reference into every new workspace until 2026-08-09, so the removal condition could never be reached; it now emits `_dispatch.py` on all three matchers, held by `tests/test_provision_exec_settings.py`.
 When an item clears, delete its row and the corresponding files in the same change so this table never carries stale entries.
 ## Never Deliver Barebones Documentation
 All documentation presented to executives must be:

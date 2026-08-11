@@ -167,8 +167,9 @@ a standalone connector, fully separate from the workspace CRM (`/crm`). It uses
 standard Google OAuth with a desktop client.
 
 > Calendar, Gmail, and Drive in a Claude Code session come through Claude's own
-> managed connectors (configured in your Claude account), not through engine `.env`.
-> This section covers only the scripted People-API integration the engine ships.
+> managed connectors, configured in your Claude account, not through engine
+> `.env`. This section covers only the scripted People-API integration the
+> engine ships.
 
 ### 4.1 Set up OAuth
 

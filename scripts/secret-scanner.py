@@ -47,7 +47,6 @@ SKIP_EXTENSIONS = {
 # Task 1 reviewer with a planted key in a nested file.
 SKIP_PATHS = {
     "scripts/secret-scanner.py",
-    ".claude/hooks/prevent-secrets.py",
     "scripts/utils/secret_patterns.py",
     ".env.example",
 }

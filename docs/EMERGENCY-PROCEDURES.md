@@ -1,4 +1,4 @@
-<!-- version: 1.2.0 | last-updated: 2026-06-26 -->
+<!-- version: 1.2.1 | last-updated: 2026-08-11 -->
 
 # Emergency Procedures
 
@@ -20,7 +20,8 @@
 1. Don't panic. Your workspace remains fully operational on the last pulled state. Only new CEO-pushed updates will be missing.
 2. Stop retrying `/sync` -- it will keep erroring until access is restored. There is no scheduled job to disable; nothing is alarming in the background.
 3. Contact CEO via the non-workspace channel (Telegram, personal phone). Do not assume Slack/email works if CEO infra is implicated.
-4. Wait for CEO confirmation of restoration, then run `/sync` once to catch up.
+4. Wait for CEO confirmation of restoration.
+5. Run `/sync` once to catch up.
 
 **Do NOT:**
 - Try to push your own changes "to help." Only the CEO publishes to the corporate repo.
@@ -153,13 +154,15 @@ Symptoms: dashboard returns 401 on every page, or you suspect another local proc
    python scripts/bridge-daemon.py --rotate-token
    ```
 
-   This rewrites `.daemon-state/token` with a fresh random nonce. **The running daemon still holds the OLD token in memory** - you must restart for the new token to take effect.
+   This rewrites `.daemon-state/token` with a fresh random nonce.
+
+   **The running daemon still holds the OLD token in memory.** Restart it for the new token to take effect.
 
 2. Restart the daemon per Scenario 6 step 2.
 
 3. Reload the dashboard. The browser's `/_bootstrap` call refreshes its in-memory bearer token from the new file.
 
-4. If the leak was via a committed `.env` or git history, treat as Scenario 3 (general credential leak) - rotate every adjacent credential on the same machine.
+4. If the leak was via a committed `.env` or git history, treat it as Scenario 3, a general credential leak. Rotate every adjacent credential on the same machine.
 
 ---
 
@@ -178,7 +181,7 @@ CEO-side recovery:
    git push origin main
    ```
 
-2. Each exec's daemon will pick up the revert on its next 60-second reconciliation tick (Phase B reconciliation tick from spec 3.6). Worst case: until the exec's next manual `git pull` (`/sync`) brings the reverted config down, plus 60s for the daemon tick.
+2. Each exec's daemon picks up the revert on its next 60-second reconciliation tick. The tick is Phase B from spec 3.6. Worst case: until the exec's next manual `git pull` (`/sync`) brings the reverted config down, plus 60s for the daemon tick.
 
 3. For execs that need immediate recovery (before next sync), they can run:
 

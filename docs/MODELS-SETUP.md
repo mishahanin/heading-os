@@ -1,9 +1,9 @@
 <!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 # AI models & integrations
 
-How to connect every AI model HEADING OS uses beyond Claude itself: the local
-Ollama runtime, the `bge-m3` embedding model that powers semantic recall, and the
-three cloud reasoning models (Gemini, Grok, Kimi) behind the `/council` and
+How to connect every AI model HEADING OS uses beyond Claude itself. That means the
+local Ollama runtime, the `bge-m3` embedding model behind semantic recall, and the
+three cloud reasoning models: Gemini, Grok, and Kimi. They serve the `/council` and
 `/deep-research-advance` skills. Follow it once when standing up a clone; return to
 the troubleshooting matrix when a model goes dark.
 
@@ -104,8 +104,8 @@ operator preference and not required by HEADING OS.
 ## 3. Embedding model: `bge-m3` for recall
 
 `/recall` and `scripts/memory-index.py` build a local associative-memory index over
-the workspace (Odin brain, threads, CRM, context, outputs, and more), then answer
-queries by meaning rather than exact words. The embeddings are computed locally by
+the workspace: the Odin brain, threads, CRM, context, outputs, and more. They then
+answer queries by meaning rather than exact words. The embeddings are computed locally by
 `bge-m3` through Ollama. **No API key, no network, no cost.**
 
 ### 3.1 Pull the model
@@ -157,8 +157,8 @@ source of truth: delete it and rebuild any time.
 ### 3.4 When Ollama is down
 
 Recall degrades gracefully. If Ollama is unreachable, a skill notes "index not
-refreshed (ollama down)" and continues on the already-built index; a brain write
-still lands and is reindexed on the next successful build. Nothing fails hard
+refreshed (ollama down)" and continues on the already-built index. A brain write
+still lands, and the next successful build reindexes it. Nothing fails hard
 because the embedder is offline.
 
 ---
@@ -171,8 +171,8 @@ sets their answers side by side with Claude's own view. It has two modes: in
 each stress-tests a draft you supply. The three voices are Gemini, Grok, and Kimi.
 
 Each voice is a separate credential and a separate `scripts/*-consult.py` wrapper.
-`/council` runs whichever voices have a key set and degrades to the others if one is
-missing or fails. To run the full council, set all three.
+The `/council` skill runs whichever voices have a key set, and degrades to the
+others if one is missing or fails. To run the full council, set all three.
 
 ### 4.1 Shared behaviour
 
@@ -229,7 +229,8 @@ Kimi is reached through Ollama's cloud routing rather than a direct vendor API, 
 - **Credential:** `OLLAMA_API_KEY`
 - **Where to get it:** your Ollama account at [ollama.com](https://ollama.com). Sign
   in (`ollama signin` on the CLI, or the web app), then create an API key under your
-  account keys. `kimi-k2.6:cloud` is a hosted model that Ollama proxies for you.
+  account keys. The `kimi-k2.6:cloud` default is a hosted model that Ollama proxies
+  for you.
 - **Default model:** `kimi-k2.6:cloud`
 - **SDK / transport:** the `openai` SDK pointed at the local Ollama endpoint
   `http://localhost:11434/v1`, which forwards to Ollama's cloud. Some local installs
@@ -242,8 +243,8 @@ uv run python scripts/kimi-consult.py --mode independent \
 ```
 
 > **Kimi is a thinking model.** Its chain of thought consumes the same token budget
-> as its answer, so a tiny budget can be spent entirely on reasoning and return an
-> empty answer. The wrapper detects this and retries once at a higher ceiling before
+> as its answer. A tiny budget can therefore be spent entirely on reasoning and
+> return an empty answer. The wrapper detects this and retries once at a higher ceiling before
 > erroring. If you see an empty-answer truncation note, that retry has already run.
 
 ### 5.4 Running a subset
@@ -276,7 +277,7 @@ leave your machine.
 ## 6. Deep web research: `/deep-research-advance`
 
 `/deep-research-advance` runs a token-heavy acquisition pass over the public web with
-**Perplexity**, then a reasoning and verification pass with **Kimi**, before Claude
+**Perplexity**. A reasoning and verification pass with **Kimi** follows. Claude then
 audits the findings into a cited report. It needs:
 
 - `PERPLEXITY_API_KEY` from [perplexity.ai](https://www.perplexity.ai) (API settings).
@@ -341,9 +342,10 @@ uv run python scripts/grok-consult.py   --mode independent --question "Reply wit
 uv run python scripts/kimi-consult.py   --mode independent --question "Reply with the single word OK."
 ```
 
-An exit code of `2` means the key is missing or malformed; `3` means the key is set
-but the call failed (wrong key, no billing, network, or, for Kimi, Ollama not
-running). A printed answer and exit `0` mean the voice is live.
+An exit code of `2` means the key is missing or malformed. An exit code of `3` means
+the key is set but the call failed. The cause is a wrong key, no billing, a network
+problem, or, for Kimi, Ollama not running. A printed answer and exit `0` mean the
+voice is live.
 
 ---
 

@@ -59,6 +59,44 @@ def test_scope_resolves_to_existing_files(ste):
     assert all(p.exists() for p in resolved)
 
 
+def _documentation_style_hook():
+    config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    for repo in config["repos"]:
+        for hook in repo.get("hooks", []):
+            if hook.get("id") == "documentation-style":
+                return hook
+    return None
+
+
+def test_the_gate_is_armed_in_pre_commit_and_ci():
+    """The checker earned a gate on 2026-08-11; assert it is still wired.
+
+    Errors only. A `--strict` gate would fail on the passive-voice heuristic,
+    which has no part-of-speech tagger behind it.
+    """
+    hook = _documentation_style_hook()
+    assert hook, "the documentation-style pre-commit hook is gone"
+    assert "--all" in hook["entry"] and "--strict" not in hook["entry"]
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "scripts/ste-check.py --all" in ci, "the CI step is gone"
+
+
+def test_the_hook_fires_on_exactly_the_files_the_checker_audits(ste):
+    """A `files:` pattern narrower than CHECKED_GLOBS is a silently unguarded page.
+
+    The hook runs `--all` rather than the staged paths, so its pattern decides
+    only WHEN the gate runs. A page missing from the pattern can be edited and
+    committed without the gate firing once.
+    """
+    import re
+
+    pattern = re.compile(_documentation_style_hook()["files"])
+    uncovered = [g for g in ste.CHECKED_GLOBS if not pattern.search(g)]
+    assert not uncovered, (
+        f"these audited pages do not trigger the pre-commit gate: {uncovered}"
+    )
+
+
 def test_explanatory_docs_are_out_of_scope(ste):
     """The narrative pages must stay out - flattening them is the failure mode."""
     for excluded in ("docs/ARCHITECTURE.md", "docs/THREAT-MODEL.md",

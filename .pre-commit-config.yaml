@@ -303,6 +303,23 @@ repos:
         files: '^(docs/.*\.(md|html)|scripts/regenerate-docs-html\.py)$'
         pass_filenames: false
 
+  # Documentation-style gate (.claude/rules/documentation-style.md). ERRORS only:
+  # sentence length, one-action-per-step, and the banned padding vocabulary are
+  # counted mechanically and were driven to zero on 2026-08-11. The warnings are
+  # heuristics with no part-of-speech tagger behind them, so --strict stays out of
+  # the gate and stays advisory, and --quiet keeps 88 advisory lines from training
+  # the reader to skip the output that does fail. Runs --all, not the staged files:
+  # the scope is CHECKED_GLOBS in the checker, and tests/test_ste_check.py holds
+  # this hook's files: pattern to exactly that list.
+  - repo: local
+    hooks:
+      - id: documentation-style
+        name: Documentation style (ASD-STE100 subset, errors only)
+        entry: python3 scripts/ste-check.py --all --quiet
+        language: system
+        files: '^(docs/(QUICKSTART|DEPLOYMENT|INTEGRATIONS-SETUP|MODELS-SETUP|CONFIGURATION|TROUBLESHOOTING|EMERGENCY-PROCEDURES|MAKE-IT-YOURS|PLUGINS|HOOKS-REFERENCE|DOCS-PIPELINE|GLOSSARY)\.md|scripts/ste-check\.py)$'
+        pass_filenames: false
+
   # README numbers guard (F-8.3) -- re-derives the security-test + guard-layer counts
   # and fails if README.md or docs/index.html "By the numbers" disagrees. Runs through
   # `uv run` so the pytest collection of tests/security sees the locked dependency set

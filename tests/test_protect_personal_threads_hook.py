@@ -1,17 +1,23 @@
-"""Tests for .claude/hooks/protect-personal-threads.py.
+"""Tests for the personal-threads guard in .claude/hooks/_dispatch.py.
 
 A personal-threads block is rendered as a PreToolUse permission deny
 (hookSpecificOutput / permissionDecision=deny on stdout, exit 0) so the CLI
 shows an intentional policy block rather than a "hook error". These tests
 assert that deny contract; the block is just as binding as the old
 exit-2 + stderr path it replaced.
+
+They ran against `.claude/hooks/protect-personal-threads.py` until 2026-08-11,
+when that runpy shim was removed with the other three delegators. The guard
+itself never moved: it has lived in `_dispatch.py` since the hooks were
+consolidated, and the shim only ran the same code by another name. Driving the
+dispatcher directly is what the settings templates have always wired.
 """
 import json
 import subprocess
 import sys
 from pathlib import Path
 
-HOOK = Path(".claude/hooks/protect-personal-threads.py").resolve()
+HOOK = Path(".claude/hooks/_dispatch.py").resolve()
 
 
 def _run_hook(payload: dict) -> tuple[int, str, str]:

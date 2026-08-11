@@ -6,7 +6,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- **The documentation-style checker earned its gate, and only half of it.**
+  `scripts/ste-check.py` shipped advisory on 2026-08-11 with the decision explicitly
+  deferred to its first measurement: 53 errors and 88 warnings across the twelve
+  in-scope pages. The errors were 52 over-long sentences and one two-action step,
+  arithmetic on a word count with nothing to be wrong about, and all 53 are now
+  rewritten to zero. So `--all --quiet` is a pre-commit hook (`documentation-style`)
+  and a step in the CI `sovereignty guards` job. The 88 warnings are NOT in the gate
+  and `--strict` stays out of it: 79 are `passive_voice`, decided by a regex with no
+  part-of-speech tagger behind it, and gating on that would fail commits over
+  constructions the checker cannot parse. New `--quiet` flag prints only the files
+  carrying an error, so 88 advisory lines on every docs commit do not train the
+  reader to skip the output that does fail. `tests/test_ste_check.py` holds the
+  hook's `files:` pattern to the checker's own `CHECKED_GLOBS`, so a page cannot
+  drop out of the gate without a test failing.
+
+### Removed
+
+- **The four backward-compat hook shims, and the blocker that outlived its own
+  condition.** `.claude/hooks/{prevent-secrets,protect-corporate,protect-docs,protect-personal-threads}.py`
+  were 28-line runpy delegators to `_dispatch.py`, kept for exec workspaces whose
+  `settings.local.json` named them individually. The removal condition, written in
+  2026-06 before the two-part topology hard-cut, was "every provisioned exec has
+  re-synced" — remote machine state nobody here can read, so the row could never
+  clear on evidence. The checkable version of the same claim is local, and it holds:
+  a workspace built from this repository gets its hooks by copying a tracked per-OS
+  template (`scripts/setup-platform.sh`), and all three templates have named
+  `_dispatch.py` since the engine's initial import. The legacy provisioner that once
+  wrote a `protect-corporate.py` reference now hard-refuses. `tests/test_settings_hook_targets.py`
+  makes it permanent: every hook a tracked settings file names must exist, and none
+  may name a retired shim. The `prevent-secrets.py` entry in `secret-scanner.py`'s
+  `SKIP_PATHS` went in the same change, and the migration-cruft table in
+  `.claude/rules/documentation.md` now has no open rows.
+
 ### Fixed
+
+- **A public docs page had been frozen for six weeks, and nothing said so.**
+  `docs/EMERGENCY-PROCEDURES.md` is served on the public docs site and is generated
+  from a template that lives in the private data overlay. The `sync-docs.py` hook
+  resolved its destination from the template's own location, a 2026-08 fix for a
+  CEO-only guide leaking into the engine tree that over-corrected: every pair went to
+  the overlay, so the engine's published copy stopped updating on 2026-06-26 while
+  the template moved on, with no error on any surface. Destination is now a property
+  of the FILE, not of where its template happens to live: `sync_targets()` returns the
+  overlay copy for everything and additionally the engine copy for the pages listed in
+  `ENGINE_PUBLISHED`. `tests/test_sync_docs_targets.py` asserts both directions,
+  including that a CEO-only guide still never reaches the engine, and compares the
+  live published page against its template so this exact drift fails a test rather
+  than sitting unnoticed.
 
 - **A judge that could not answer was scored as a router that answered wrong.**
   On 2026-08-10 the nightly router-accuracy run reported a 5-point fleet-wide drop

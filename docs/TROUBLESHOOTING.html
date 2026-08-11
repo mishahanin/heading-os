@@ -87,7 +87,7 @@
 <h2 id="install-and-toolchain">Install and toolchain</h2>
 <p><strong><code>uv sync</code> fails or the wrong Python is used.</strong> The engine targets Python 3.11+, managed by <code>uv</code>. Confirm <code>uv --version</code> and let <code>uv sync</code> create the environment; do not mix a system <code>pip</code> install into it. See <a href="prerequisites.html">prerequisites</a>.</p>
 <p><strong>On Windows.</strong> The engine runs under WSL2, not native Windows. Do the install and all work inside the WSL distribution. See the <a href="DEPLOYMENT.html">full deployment guide</a>.</p>
-<p><strong>The commit hook does not fire on a fresh clone.</strong> Git hooks are machine-local and are not shared by git, so a fresh clone has none until you arm them:</p>
+<p><strong>The commit hook does not fire on a fresh clone.</strong> Git hooks are machine-local. Git does not share them, so a fresh clone has none until you arm them:</p>
 <div class="highlight"><pre><span></span><code>pre-commit<span class="w"> </span>install
 </code></pre></div>
 <p>Run it once per clone or relocation. Verify with <code>python scripts/install-hooks.py --check</code>. Never commit with <code>--no-verify</code>: the authoritative gate is the push-time scan, but the commit hook is the fast local warning.</p>
@@ -100,9 +100,9 @@
 <p><strong>A file landed in the engine that should be private.</strong> The classifier fails closed, but if you wrote through an unusual path, check <code>config/routing-map.yaml</code> and run <code>scripts/classification-health.py</code>. Real data belongs in the data overlay; see <a href="data-structure.html">data overlay structure</a> and <a href="CONFIGURATION.html">configuration</a>.</p>
 <h2 id="memory-and-recall">Memory and recall</h2>
 <p><strong><code>/recall</code> returns nothing or errors on the embedder.</strong> Recall uses a local <code>bge-m3</code> embedder served by Ollama, on-machine at zero API cost. Confirm Ollama is installed and running and the model is pulled. See <a href="MODELS-SETUP.html">AI models</a>.</p>
-<p><strong>The first index build takes a long time.</strong> A full memory-index build is CPU-heavy and can run for an extended period on a machine without a GPU. It is resumable and commits per file, so do not kill it with a short timeout; let it finish once, then incremental refreshes are fast.</p>
+<p><strong>The first index build takes a long time.</strong> A full memory-index build is CPU-heavy. On a machine without a GPU it can run for an extended period. It is resumable and commits per file, so do not kill it with a short timeout; let it finish once, then incremental refreshes are fast.</p>
 <h2 id="browsing-operations">Browsing operations</h2>
-<p><strong>YouTube, Google, or LinkedIn return a blocked or empty result.</strong> Public services block datacenter and many VPN exit IPs. The <a href="RULES-REFERENCE.html">VPN pre-flight rule</a> gates these operations for exactly this reason: switch to a residential-friendly exit before running a browsing skill, and confirm the pre-flight prompt.</p>
+<p><strong>YouTube, Google, or LinkedIn return a blocked or empty result.</strong> Public services block datacenter and many VPN exit IPs. The <a href="RULES-REFERENCE.html">VPN pre-flight rule</a> gates these operations for exactly this reason. Switch to a residential-friendly exit before running a browsing skill, and confirm the pre-flight prompt.</p>
 <p><strong>A browser automation skill refuses to launch.</strong> The CDP-attach helper refuses to start when the automation browser is already running. Close the existing automation-profile browser and retry.</p>
 <h2 id="sending">Sending</h2>
 <p><strong>An outbound message will not send on its own.</strong> That is the design, not a bug. Every outbound send is human-gated by the <a href="SECURITY-MODEL.html">lethal-trifecta control</a>: an agent drafts and queues, a human approves. Approve from the terminal with the Action Queue (<code>scripts/action-queue.py approve &lt;id&gt;</code>), which sends synchronously in that command.</p>

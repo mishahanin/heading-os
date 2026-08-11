@@ -134,8 +134,8 @@ claude<span class="w">        </span><span class="c1"># then /prime</span>
 </code></pre></div>
 <p>Core <code>uv sync</code> installs only the light always-on set. Each integration (email,
 Telegram, browser automation, document generation, &hellip;) lives in an optional
-extra you arm on demand - <code>uv sync --extra &lt;name&gt;</code> - and a script that needs a
-dormant extra tells you the exact command to run. Want everything at once? Use
+extra you arm on demand: <code>uv sync --extra &lt;name&gt;</code>. A script that needs a dormant
+extra tells you the exact command to run. Want everything at once? Use
 <code>uv sync --all-extras</code>. See <a href="DEPLOYMENT.md">DEPLOYMENT.md</a> for the extras ladder.</p>
 <p>Full prerequisites, platform setup, authentication, plugins, and troubleshooting are
 in <a href="DEPLOYMENT.md">DEPLOYMENT.md</a>.</p>
@@ -213,12 +213,12 @@ expected until you create or import records.</p>
 </tr>
 </tbody>
 </table>
-<p>You can also just describe what you want in plain language — &ldquo;research this company&rdquo;,
-&ldquo;draft a reply&rdquo;, &ldquo;who haven&rsquo;t I followed up with&rdquo; — and it routes to the right
+<p>You can also describe what you want in plain language — &ldquo;research this company&rdquo;,
+&ldquo;draft a reply&rdquo;, &ldquo;who haven&rsquo;t I followed up with&rdquo;. It routes to the right
 capability automatically.</p>
 <p>On anything non-trivial the engine first plays back its understanding — objective,
-scope, assumptions — and waits for your go before acting, so a misread is caught before
-it becomes a wrong deliverable. Prefix a message with <code>!</code> to skip that and act
+scope, assumptions — and waits for your go before acting. A misread is therefore
+caught before it becomes a wrong deliverable. Prefix a message with <code>!</code> to skip that and act
 immediately; type <code>/align</code> to force a round of clarifying questions first. The full
 three-phase flow, the escape valves, and the <code>/align</code> · <code>/devil</code> · <code>/burst</code>
 escalations are documented in the

@@ -51,7 +51,11 @@ It does NOT apply to explanatory documentation, where the reasoning is the value
 
 ## The checker, and what it cannot see
 
-`python scripts/ste-check.py <file>` audits one file; `--all` audits the whole in-scope set; `--strict` fails on warnings as well as errors; `--json` emits machine output. It is **advisory**, in the same posture as `humanization-check.py`: wired into no hook and gating no commit, until its measured false-positive rate earns it one.
+`python scripts/ste-check.py <file>` audits one file; `--all` audits the whole in-scope set; `--strict` fails on warnings as well as errors; `--json` emits machine output; `--quiet` prints only the files that carry an error.
+
+**Errors gate; warnings stay advisory.** The first measurement, on 2026-08-11, reported 53 errors and 88 warnings across the twelve pages. The errors were 52 over-long sentences and one two-action step, all of them arithmetic on a word count with nothing to be wrong about, and the whole set was rewritten to zero the same day. So `--all --quiet` is now a pre-commit hook (`documentation-style`) and a step in the CI `sovereignty guards` job, and `tests/test_ste_check.py` holds the hook's file list to the checker's own scope so a page cannot fall out of the gate in silence.
+
+The warnings did NOT earn a gate and are not in it. Seventy-nine of the eighty-eight are `passive_voice`, decided by a regex with no part-of-speech tagger behind it, and the rest are the `-ing` opener, the padding vocabulary, and the non-imperative-step heuristic. `--strict` would gate on guesses. Read them, act on the true ones, and leave the checker where it cannot fail a commit over a construction it cannot actually parse.
 
 It verifies rules 3, 4, 7, 8, 9, and 10 mechanically, and flags rules 1 and 2 as heuristics with known false positives — there is no part-of-speech tagger behind the passive check. It **cannot** see rules 5 and 6: article omission and cross-corpus term drift need a parser and a glossary this engine does not have, so those two stay a human reading. That is why they are written down here rather than quietly dropped. Wrap any exempt block in `<!-- ste-skip-start -->` and `<!-- ste-skip-end -->`.
 

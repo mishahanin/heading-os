@@ -78,7 +78,7 @@
 <main class="content">
   <h1>Emergency Procedures</h1>
   <p class="page-meta">&gt; What to do when the normal sync/push/update chain is broken. For routine operations, see GETTING-STARTED.md (execs) or CEO-ADMIN-GUIDE.md (CEO).</p>
-  <!-- version: 1.2.0 | last-updated: 2026-06-26 -->
+  <!-- version: 1.2.1 | last-updated: 2026-08-11 -->
 
 <blockquote>
 <p>What to do when the normal sync/push/update chain is broken. For routine operations, see <code>GETTING-STARTED.md</code> (execs) or <code>CEO-ADMIN-GUIDE.md</code> (CEO).</p>
@@ -95,7 +95,8 @@
 <li>Don&rsquo;t panic. Your workspace remains fully operational on the last pulled state. Only new CEO-pushed updates will be missing.</li>
 <li>Stop retrying <code>/sync</code> &ndash; it will keep erroring until access is restored. There is no scheduled job to disable; nothing is alarming in the background.</li>
 <li>Contact CEO via the non-workspace channel (Telegram, personal phone). Do not assume Slack/email works if CEO infra is implicated.</li>
-<li>Wait for CEO confirmation of restoration, then run <code>/sync</code> once to catch up.</li>
+<li>Wait for CEO confirmation of restoration.</li>
+<li>Run <code>/sync</code> once to catch up.</li>
 </ol>
 <p><strong>Do NOT:</strong>
 - Try to push your own changes &ldquo;to help.&rdquo; Only the CEO publishes to the corporate repo.
@@ -207,7 +208,8 @@
 </ol>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/bridge-daemon.py<span class="w"> </span>--rotate-token
 </code></pre></div>
-<p>This rewrites <code>.daemon-state/token</code> with a fresh random nonce. <strong>The running daemon still holds the OLD token in memory</strong> - you must restart for the new token to take effect.</p>
+<p>This rewrites <code>.daemon-state/token</code> with a fresh random nonce.</p>
+<p><strong>The running daemon still holds the OLD token in memory.</strong> Restart it for the new token to take effect.</p>
 <ol start="2">
 <li>
 <p>Restart the daemon per Scenario 6 step 2.</p>
@@ -216,7 +218,7 @@
 <p>Reload the dashboard. The browser&rsquo;s <code>/_bootstrap</code> call refreshes its in-memory bearer token from the new file.</p>
 </li>
 <li>
-<p>If the leak was via a committed <code>.env</code> or git history, treat as Scenario 3 (general credential leak) - rotate every adjacent credential on the same machine.</p>
+<p>If the leak was via a committed <code>.env</code> or git history, treat it as Scenario 3, a general credential leak. Rotate every adjacent credential on the same machine.</p>
 </li>
 </ol>
 <hr />
@@ -233,7 +235,7 @@ git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </
 </code></pre></div>
 <ol start="2">
 <li>
-<p>Each exec&rsquo;s daemon will pick up the revert on its next 60-second reconciliation tick (Phase B reconciliation tick from spec 3.6). Worst case: until the exec&rsquo;s next manual <code>git pull</code> (<code>/sync</code>) brings the reverted config down, plus 60s for the daemon tick.</p>
+<p>Each exec&rsquo;s daemon picks up the revert on its next 60-second reconciliation tick. The tick is Phase B from spec 3.6. Worst case: until the exec&rsquo;s next manual <code>git pull</code> (<code>/sync</code>) brings the reverted config down, plus 60s for the daemon tick.</p>
 </li>
 <li>
 <p>For execs that need immediate recovery (before next sync), they can run:</p>

@@ -143,17 +143,17 @@ REQUIRED_SUBSTRING = {
 #
 # Why each is exempt: secret_patterns.py holds the vocabulary by definition and
 # would self-trigger on every edit, and _dispatch.py embeds a copy of it for the
-# same reason. prevent-secrets.py is a 28-line runpy shim holding no patterns at
-# all, and secret-scanner.py has held ZERO re.compile calls since the vocabulary
-# moved out of it — so for those two the "same pattern catalog" justification
-# stopped being true; both are kept because the scanner skips them by path and
-# the two walls agreeing is worth more than removing an allowance that costs
-# nothing.
+# same reason. secret-scanner.py has held ZERO re.compile calls since the
+# vocabulary moved out of it, so its "same pattern catalog" justification stopped
+# being true; it is kept because the scanner skips it by path and the two walls
+# agreeing is worth more than removing an allowance that costs nothing. The fourth
+# entry, .claude/hooks/prevent-secrets.py, went with the shim itself on
+# 2026-08-11 — an allowance for a file that cannot exist is a name waiting for
+# someone to recreate it and inherit the exemption.
 SECRETS_ALLOW_WORKSPACE_PATHS = {
     "scripts/secret-scanner.py",
     "scripts/utils/secret_patterns.py",
     ".claude/hooks/_dispatch.py",
-    ".claude/hooks/prevent-secrets.py",
 }
 # Directory allow-list, anchored to THIS workspace's own directory, not to any
 # path that happens to contain the segment.
@@ -271,14 +271,12 @@ def check_prevent_secrets(payload: dict) -> Optional[dict]:
     matched, desc = _scan_for_secrets("\n".join(parts))
     if matched:
         basename = os.path.basename(file_path)
-        # NOTE: the reason text below references `.claude/hooks/prevent-secrets.py`,
-        # NOT `.claude/hooks/_dispatch.py` where this code actually lives. This is
-        # intentional: byte parity with the original prevent-secrets.py hook output
-        # is preserved manually — regenerate fixtures via
-        # `python outputs/operations/workspace/capture_hook_fixtures.py` and diff
-        # against `tests/fixtures/expected/` before any change to this filename
-        # reference. The actual allow-list is the four SECRETS_ALLOW_* sets above
-        # in this same file (_dispatch.py).
+        # The reason text used to name `.claude/hooks/prevent-secrets.py` for byte
+        # parity with the original per-hook script. That script was a runpy shim
+        # and was removed on 2026-08-11, so the parity had nothing left to match
+        # and the message pointed an operator at a file that does not exist. It
+        # now names this file, which is where the four SECRETS_ALLOW_* sets above
+        # actually live. No fixture in tests/fixtures/expected/ carries the string.
         return {
             "decision": "block",
             "reason": (
@@ -287,7 +285,7 @@ def check_prevent_secrets(payload: dict) -> Optional[dict]:
                 f"Store API keys in .env (loaded via load_api_key() from scripts/utils/api.py). "
                 f"Store passwords in a password manager. "
                 f"If this is a false positive, the file may need to be added to the "
-                f"allow-list in .claude/hooks/prevent-secrets.py."
+                f"allow-list in .claude/hooks/_dispatch.py."
             ),
         }
     return None

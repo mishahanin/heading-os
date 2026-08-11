@@ -31,13 +31,13 @@ Maps each Action Queue `action_type` to a risk tier: `autonomous` (read-only, no
 
 ## `memory-index.yaml`: the recall index
 
-Drives `scripts/memory-index.py`, the local associative-memory index behind `/recall`: which workspace layers to embed, the on-machine embedder (`bge-m3` via Ollama), the salience threshold, and the air-gap denylist that keeps sensitive layers out of the index. Runs entirely on-machine at zero API cost. See [memory and ODIN](memory-odin.html).
+Drives `scripts/memory-index.py`, the local associative-memory index behind `/recall`. It sets which workspace layers to embed, the on-machine embedder (`bge-m3` via Ollama), and the salience threshold. It also carries the air-gap denylist that keeps sensitive layers out of the index. Runs entirely on-machine at zero API cost. See [memory and ODIN](memory-odin.html).
 
-The `audit:` block tunes the metamemory scan: `audit.near_dup_threshold` (float, default `0.86`) is the cosine-similarity threshold above which two auto-memory files are flagged as a near-duplicate merge candidate. The scan (`scan_redundancy()` in `scripts/utils/memory_health.py`) is advisory-only — it surfaces candidates in the weekly `scripts/memory-hygiene.py` report for a human to resolve via `/dream`, never in the hygiene exit-code gate and never auto-applied.
+The `audit:` block tunes the metamemory scan: `audit.near_dup_threshold` (float, default `0.86`) is the cosine-similarity threshold above which two auto-memory files are flagged as a near-duplicate merge candidate. The scan (`scan_redundancy()` in `scripts/utils/memory_health.py`) is advisory-only. It surfaces candidates in the weekly `scripts/memory-hygiene.py` report for a human to resolve via `/dream`. It never enters the hygiene exit-code gate, and it is never auto-applied.
 
 ## `llm_fallback.yaml`: model failover
 
-Maps each Anthropic model tier to an ordered fallback chain. When a primary call fails with a retriable error (5xx, 429, timeout, connection reset), the caller cascades through the chain instead of failing the whole operation. See [AI models](MODELS-SETUP.html).
+Maps each Anthropic model tier to an ordered fallback chain. A primary call can fail with a retriable error: a 5xx, a 429, a timeout, or a connection reset. The caller then cascades through the chain instead of failing the whole operation. See [AI models](MODELS-SETUP.html).
 
 ## `wizard-questions.yaml` and `wizard-templates/`
 
@@ -53,9 +53,16 @@ A place for local, per-clone skill overrides that should not ship with the engin
 
 ## Data root: pinning `HEADING_OS_DATA`
 
-The engine and your private data are two sibling repositories: the engine clone (`.heading-os`) and the data overlay (`.heading-os-data`). `get_data_root()` in `scripts/utils/paths.py` picks the overlay in this order, first hit wins: the `HEADING_OS_DATA` environment variable when it points at a real directory; in-tree data when it already lives inside the engine clone (the transitional single-workspace case); the sibling `../.heading-os-data`; then demo mode (the read-only bundled `examples/`). A standard side-by-side layout needs no configuration, because the sibling step resolves it automatically.
+The engine and your private data are two sibling repositories: the engine clone (`.heading-os`) and the data overlay (`.heading-os-data`). The resolver `get_data_root()` in `scripts/utils/paths.py` picks the overlay in this order, first hit wins:
 
-Set `HEADING_OS_DATA` only to pin the binding explicitly: when the data repo is not a direct sibling, when you run several clones, or as insurance so resolution can never drift. Two ways to set it, and they are not equal. An exported shell variable (`export HEADING_OS_DATA="/absolute/path/to/.heading-os-data"` in `~/.bashrc`) is the stronger form: every process, hooks and daemons included, inherits it before any Python import runs. A line in the gitignored `.env` is only partial, honored just by callers that run `load_env()` first, so it does not cover hooks or externally launched daemons. Use the `.env` line as belt-and-suspenders, not as the sole pin. The path is absolute, so if you relocate the workspace, update it in both places or the stale value points at a directory that no longer exists. Confirm the current resolution with `python3 -c "from scripts.utils.paths import get_data_root, data_root_is_demo as d; print(get_data_root()); print('demo?', d())"`, which prints your `.heading-os-data` path and `demo? False` on a correct setup.
+1. The `HEADING_OS_DATA` environment variable, when it points at a real directory.
+2. In-tree data, when it already lives inside the engine clone (the transitional single-workspace case).
+3. The sibling `../.heading-os-data`.
+4. Demo mode, the read-only bundled `examples/`.
+
+A standard side-by-side layout needs no configuration, because the sibling step resolves it automatically.
+
+Set `HEADING_OS_DATA` only to pin the binding explicitly. Pin it when the data repo is not a direct sibling, when you run several clones, or as insurance so resolution can never drift. Two ways to set it, and they are not equal. An exported shell variable (`export HEADING_OS_DATA="/absolute/path/to/.heading-os-data"` in `~/.bashrc`) is the stronger form: every process, hooks and daemons included, inherits it before any Python import runs. A line in the gitignored `.env` is only partial, honored just by callers that run `load_env()` first, so it does not cover hooks or externally launched daemons. Use the `.env` line as belt-and-suspenders, not as the sole pin. The path is absolute. If you relocate the workspace, update it in both places, or the stale value points at a directory that no longer exists. Confirm the current resolution with `python3 -c "from scripts.utils.paths import get_data_root, data_root_is_demo as d; print(get_data_root()); print('demo?', d())"`, which prints your `.heading-os-data` path and `demo? False` on a correct setup.
 
 ## Related
 

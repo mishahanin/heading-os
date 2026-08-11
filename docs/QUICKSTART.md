@@ -75,8 +75,8 @@ claude        # then /prime
 
 Core `uv sync` installs only the light always-on set. Each integration (email,
 Telegram, browser automation, document generation, ...) lives in an optional
-extra you arm on demand - `uv sync --extra <name>` - and a script that needs a
-dormant extra tells you the exact command to run. Want everything at once? Use
+extra you arm on demand: `uv sync --extra <name>`. A script that needs a dormant
+extra tells you the exact command to run. Want everything at once? Use
 `uv sync --all-extras`. See [DEPLOYMENT.md](DEPLOYMENT.md) for the extras ladder.
 
 Full prerequisites, platform setup, authentication, plugins, and troubleshooting are
@@ -111,13 +111,13 @@ expected until you create or import records.
 | `/backup` | Commit & push your data overlay |
 | `/sync` | Pull engine updates + refresh shared content |
 
-You can also just describe what you want in plain language — "research this company",
-"draft a reply", "who haven't I followed up with" — and it routes to the right
+You can also describe what you want in plain language — "research this company",
+"draft a reply", "who haven't I followed up with". It routes to the right
 capability automatically.
 
 On anything non-trivial the engine first plays back its understanding — objective,
-scope, assumptions — and waits for your go before acting, so a misread is caught before
-it becomes a wrong deliverable. Prefix a message with `!` to skip that and act
+scope, assumptions — and waits for your go before acting. A misread is therefore
+caught before it becomes a wrong deliverable. Prefix a message with `!` to skip that and act
 immediately; type `/align` to force a round of clarifying questions first. The full
 three-phase flow, the escape valves, and the `/align` · `/devil` · `/burst`
 escalations are documented in the

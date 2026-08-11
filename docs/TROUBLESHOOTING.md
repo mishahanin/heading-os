@@ -18,7 +18,7 @@ It reports the state of the data seam, the credential files, the commit gate, an
 
 **On Windows.** The engine runs under WSL2, not native Windows. Do the install and all work inside the WSL distribution. See the [full deployment guide](DEPLOYMENT.html).
 
-**The commit hook does not fire on a fresh clone.** Git hooks are machine-local and are not shared by git, so a fresh clone has none until you arm them:
+**The commit hook does not fire on a fresh clone.** Git hooks are machine-local. Git does not share them, so a fresh clone has none until you arm them:
 
 ```bash
 pre-commit install
@@ -39,11 +39,11 @@ Run it once per clone or relocation. Verify with `python scripts/install-hooks.p
 
 **`/recall` returns nothing or errors on the embedder.** Recall uses a local `bge-m3` embedder served by Ollama, on-machine at zero API cost. Confirm Ollama is installed and running and the model is pulled. See [AI models](MODELS-SETUP.html).
 
-**The first index build takes a long time.** A full memory-index build is CPU-heavy and can run for an extended period on a machine without a GPU. It is resumable and commits per file, so do not kill it with a short timeout; let it finish once, then incremental refreshes are fast.
+**The first index build takes a long time.** A full memory-index build is CPU-heavy. On a machine without a GPU it can run for an extended period. It is resumable and commits per file, so do not kill it with a short timeout; let it finish once, then incremental refreshes are fast.
 
 ## Browsing operations
 
-**YouTube, Google, or LinkedIn return a blocked or empty result.** Public services block datacenter and many VPN exit IPs. The [VPN pre-flight rule](RULES-REFERENCE.html) gates these operations for exactly this reason: switch to a residential-friendly exit before running a browsing skill, and confirm the pre-flight prompt.
+**YouTube, Google, or LinkedIn return a blocked or empty result.** Public services block datacenter and many VPN exit IPs. The [VPN pre-flight rule](RULES-REFERENCE.html) gates these operations for exactly this reason. Switch to a residential-friendly exit before running a browsing skill, and confirm the pre-flight prompt.
 
 **A browser automation skill refuses to launch.** The CDP-attach helper refuses to start when the automation browser is already running. Close the existing automation-profile browser and retry.
 

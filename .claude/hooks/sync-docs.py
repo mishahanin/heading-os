@@ -28,6 +28,38 @@ SYNC_FILES = {
     "EMERGENCY-PROCEDURES.html",
 }
 
+# Pairs that are ALSO published on the engine's public docs site, on top of the
+# copy that feeds the corporate repo. Destination is a property of the FILE, not
+# of where its template happens to live: anchoring every file to the template's
+# own sibling docs/ was the fix for a CEO-only guide leaking into the engine tree,
+# and it over-corrected. EMERGENCY-PROCEDURES is engine-routed and public, so
+# sending it to the overlay alone froze docs/EMERGENCY-PROCEDURES.md at its
+# 2026-06-26 content while the template moved on, in silence.
+ENGINE_PUBLISHED = {
+    "EMERGENCY-PROCEDURES.md",
+    "EMERGENCY-PROCEDURES.html",
+}
+
+# The engine clone, anchored to this file rather than to the session's cwd, so a
+# hook that fires while the cwd is the data overlay still finds the right tree.
+ENGINE_ROOT = Path(__file__).resolve().parents[2]
+
+
+def sync_targets(file_path: Path, engine_root: Path = ENGINE_ROOT) -> list:
+    """Every docs/ path a template must be copied to, in publish order.
+
+    The template's own sibling docs/ always receives the copy; an engine-published
+    pair additionally receives one in the engine clone. Kept a pure function so
+    tests can assert the destinations without running the hook.
+    """
+    targets = [file_path.resolve().parent.parent / "docs" / file_path.name]
+    if file_path.name in ENGINE_PUBLISHED:
+        engine_target = engine_root / "docs" / file_path.name
+        if engine_target not in targets:
+            targets.append(engine_target)
+    return targets
+
+
 # Load-bearing substrings that MUST survive in a synced file. The sync blindly
 # copies templates/ -> docs/, so an edit that silently drops a section would
 # faithfully propagate the deletion into the distributed docs (this has
@@ -80,16 +112,15 @@ def main():
     # Determine project directory (for the HTML renderer, which lives in the
     # engine clone) and the docs/ target.
     project_dir = Path(input_data.get("cwd") or Path.cwd())
-    # The docs/ target is resolved from the TEMPLATE's own location, NOT the cwd.
     # templates/ and docs/ are siblings under one root; for a CEO-only guide that
     # root is the DATA overlay, even though the edit is made from the engine cwd.
     # Resolving from cwd wrote the data-overlay guide's docs copy into the engine
     # tree, which the push-time leak-wall then (correctly) refused — a silent push
-    # failure. Anchor it to the template instead.
-    docs_dir = file_path.resolve().parent.parent / "docs"
-    target = docs_dir / file_path.name
+    # failure. See sync_targets() for why a public page needs the engine copy too.
+    targets = sync_targets(file_path)
 
-    docs_dir.mkdir(parents=True, exist_ok=True)
+    for t in targets:
+        t.parent.mkdir(parents=True, exist_ok=True)
 
     # Anchor guard: refuse to propagate a template that lost a load-bearing
     # section, rather than faithfully copying the deletion into docs/.
@@ -107,8 +138,9 @@ def main():
     # Copy the file
     sync_msg = ""
     try:
-        shutil.copy2(file_path, target)
-        sync_msg = f"Auto-synced templates/{file_path.name} -> docs/{file_path.name}"
+        for t in targets:
+            shutil.copy2(file_path, t)
+        sync_msg = f"Auto-synced templates/{file_path.name} -> {len(targets)} docs/ copy(ies)"
     except Exception as e:
         print(f"[sync-docs] failed to copy {file_path.name}: {e}", file=sys.stderr)
         json.dump({
@@ -123,7 +155,7 @@ def main():
         regen_script = project_dir / "scripts" / "regenerate-docs-html.py"
         if regen_script.exists():
             try:
-                for md_target in (file_path, target):
+                for md_target in [file_path, *targets]:
                     subprocess.run(
                         [sys.executable, str(regen_script), "--quiet", str(md_target)],
                         cwd=project_dir,

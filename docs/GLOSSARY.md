@@ -4,7 +4,7 @@ The vocabulary the engine and its documentation use. Two kinds: the operating ph
 
 ## Operating philosophy
 
-HEADING OS is named after the way it frames work. This vocabulary runs through the skills, the rules, and the outputs. On a fresh clone you can keep it, or rename it to your own via [make it yours](MAKE-IT-YOURS.html); the [terminology rule](RULES-REFERENCE.html) enforces whichever set you choose.
+HEADING OS is named after the way it frames work. This vocabulary runs through the skills, the rules, and the outputs. On a fresh clone you can keep it, or rename it to your own via [make it yours](MAKE-IT-YOURS.html). The [terminology rule](RULES-REFERENCE.html) enforces whichever set you choose.
 
 | Term | Meaning |
 |------|---------|
@@ -19,7 +19,7 @@ HEADING OS is named after the way it frames work. This vocabulary runs through t
 
 ## Example vocabulary (from the author's separate company)
 
-These terms belong to the author's company, 31 Concept. They appear in the default data examples and some skills purely as illustration. HEADING OS is a personal project of Misha Hanin, not a 31 Concept product; 31C is not involved in it and these terms carry no such implication. On your own clone you would replace them with your own.
+These terms belong to the author's company, 31 Concept. They appear in the default data examples and some skills purely as illustration. HEADING OS is a personal project of Misha Hanin, not a 31 Concept product. The company is not involved in it, and these terms carry no such implication. On your own clone you would replace them with your own.
 
 | Term | Meaning |
 |------|---------|

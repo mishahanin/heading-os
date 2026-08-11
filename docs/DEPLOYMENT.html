@@ -186,8 +186,8 @@ found&rdquo; — that is expected, not an error.</p>
 <h2 id="4-platform-setup">4. Platform setup</h2>
 <h3 id="40-fastest-path-open-in-a-devcontainer-demo-mode">4.0 Fastest path: open in a devcontainer (demo mode)</h3>
 <p>For a zero-setup, read-only look before you install anything, open the repository in
-a devcontainer: VS Code &ldquo;Reopen in Container&rdquo;, or a <strong>GitHub Codespace</strong> from the repo
-page. The container defaults to demo mode. It sets <code>HEADING_OS_DATA</code> to the bundled
+a devcontainer. Use the VS Code &ldquo;Reopen in Container&rdquo; command, or a <strong>GitHub
+Codespace</strong> from the repo page. The container defaults to demo mode. It sets <code>HEADING_OS_DATA</code> to the bundled
 <code>examples/</code> tree, installs <code>uv</code>, runs a core <code>uv sync</code>, and prints demo output from
 <code>scripts/crm-health.py</code> on first build. No <code>.env</code>, no API key, no private data
 repository, and nothing can write (demo mode refuses writes by design).</p>
@@ -202,8 +202,8 @@ PowerShell:</p>
 <p>If WSL is already present, <code>wsl --install</code> reports the distribution exists — that is
 fine, skip it. Open Ubuntu with <code>wsl -d Ubuntu</code>.</p>
 <p><strong>Keep all repos on the Linux filesystem (<code>~/…</code>), not <code>/mnt/c</code>.</strong> The Windows mount
-is an order of magnitude slower for git and Python, and has surprised more than one
-operator with permission quirks. macOS and Linux users skip this section.</p>
+is an order of magnitude slower for git and Python. It has also surprised more than
+one operator with permission quirks. Users on macOS and Linux skip this section.</p>
 <h3 id="42-toolchain-inside-ubuntu-macos-linux">4.2 Toolchain (inside Ubuntu / macOS / Linux)</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># system packages</span>
 sudo<span class="w"> </span>apt<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>build-essential<span class="w"> </span>curl<span class="w"> </span>git<span class="w"> </span>ca-certificates<span class="w"> </span>gh
@@ -237,7 +237,7 @@ claude<span class="w">            </span><span class="c1"># pick a theme, then &
 <p><strong>WSL has no default browser.</strong> Both logins fail to auto-open one and instead
 print a URL + a one-time code. Open the URL in your Windows browser manually,
 paste the code, approve. On the Claude trust prompt, <strong>do not trust a system
-folder</strong> such as <code>/mnt/c/WINDOWS/system32</code> — if a launch landed you there, exit,
+folder</strong> such as <code>/mnt/c/WINDOWS/system32</code>. If a launch landed you there, exit,
 <code>cd</code> to the engine directory, relaunch <code>claude</code>, and trust that.</p>
 </blockquote>
 <hr />
@@ -264,8 +264,9 @@ not yet have access — ask the administrator to grant it.</p>
 <code>.env</code>.</p>
 <h3 id="solo-deploy">Solo deploy</h3>
 <p>No identity file is required — the engine defaults to a single-user workspace. Create
-<code>.env</code> from the template and fill in the keys you have, then set your operator identity
-(one file names who runs the instance; see <a href="MAKE-IT-YOURS.html">MAKE-IT-YOURS</a> § 3.1):</p>
+<code>.env</code> from the template and fill in the keys you have. Then set your operator
+identity, one file that names who runs the instance (see
+<a href="MAKE-IT-YOURS.html">MAKE-IT-YOURS</a> § 3.1):</p>
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>&lt;engine&gt;
 cp<span class="w"> </span>.env.example<span class="w"> </span>.env
 <span class="c1"># edit .env: set the keys you have (Anthropic, and any integrations you use)</span>
@@ -365,10 +366,10 @@ pre-commit<span class="w"> </span>install<span class="w">    </span><span class=
 authoritative, unbypassable secret scan runs again at push time regardless.</p>
 </blockquote>
 <h3 id="two-install-paths-core-vs-all-extras-f-71">Two install paths: core vs. all extras (F-7.1)</h3>
-<p>Heavy integrations (Exchange email, Telegram, browser automation, document and
-deck generation, media/YouTube, the dashboard daemon, the Google/GenAI stack,
-observability, research scraping) live in <strong>optional-dependency extras</strong>, so the
-default <code>uv sync</code> stays small.</p>
+<p>Heavy integrations live in <strong>optional-dependency extras</strong>, so the default
+<code>uv sync</code> stays small. Those are Exchange email, Telegram, browser automation,
+document and deck generation, media, YouTube, the dashboard daemon, the Google
+and GenAI stack, observability, research scraping.</p>
 <ul>
 <li><strong>Adopter (recommended start):</strong> <code>uv sync</code> installs core only. Arm a capability
   when you first need it: <code>uv sync --extra email</code>, <code>uv sync --extra browser</code>,
@@ -453,10 +454,10 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
 </code></pre></div>
 <p><code>push-all.py</code> detects your workspace type. On a managed workspace it pushes the data
 overlay only and never touches the read-only engine. On a solo workspace it pushes
-your repo(s) directly, data overlay first. A repository it cannot push right now (say
-it is on a feature branch) is committed locally and reported as skipped rather than
-aborting the run, so a refusal about one repository never costs you the backup of the
-other.</p>
+your repo(s) directly, data overlay first. A repository it cannot push right now, say
+because it is on a feature branch, is committed locally and reported as skipped. The
+run does not abort, so a refusal about one repository never costs you the backup of
+the other.</p>
 <blockquote>
 <p><strong>Outbound is always human-gated.</strong> Email and messages are drafted and shown to you
 first. Nothing sends to the outside world autonomously.</p>
@@ -600,8 +601,8 @@ the engine, stop — see the troubleshooting table.</p>
 </tbody>
 </table>
 <blockquote>
-<p><strong>When in doubt, stop.</strong> If a destination, a divergence, or an error touches data
-location or git history, halt and capture the terminal text before acting. Never
+<p><strong>When in doubt, stop.</strong> Halt if a destination, a divergence, or an error touches
+data location or git history. Capture the terminal text before acting. Never
 guess past it.</p>
 </blockquote>
 <hr />

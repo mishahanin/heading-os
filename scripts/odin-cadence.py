@@ -25,6 +25,13 @@ Three signals (all read-only, counts only):
                              you keep passing over surfaces distinctly from material
                              that arrived yesterday.
 
+Both markers are version-controlled in the data overlay, and that symmetry is
+load-bearing rather than incidental. Until 2026-08-12 `.last-collect` was
+gitignored while `.last-reflect` was tracked, so a second machine that pulled the
+overlay read `last_collect: null` and counted every dated entry in the allowlist
+as un-harvested. The markers hold one ISO date each and no content, so tracking
+them costs nothing and keeps every clone answering the same question the same way.
+
 The counted source set MUST equal /odin collect's allowlist (mode-catalog.md):
 threads/business/*.md, crm/contacts/*.md (excluding .migration-backup/ + aggregated/),
 outputs/operations/viraid/state.json -- same globs, same exclusions, same gate.

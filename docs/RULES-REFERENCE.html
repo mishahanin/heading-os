@@ -271,6 +271,11 @@
 <td>Path-scoped</td>
 <td>One correlation ID per process tree, so a single grep answers &ldquo;what happened in this run?&rdquo; across the daemon logs.</td>
 </tr>
+<tr>
+<td><code>scope-claims.md</code></td>
+<td>Path-scoped</td>
+<td>A tool reports the coverage its method establishes and no more: resolve the claim, name what was left out, and widen rather than go silent when the evidence is missing. Enforced by <code>tests/test_scope_claims.py</code>, which makes every session-membership or live-execution claim declare what resolves it.</td>
+</tr>
 </tbody>
 </table>
 <h2 id="prompt-refinement-in-depth">Prompt refinement in depth</h2>

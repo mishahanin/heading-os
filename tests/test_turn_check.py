@@ -114,3 +114,83 @@ def test_import_lane_reports_a_broken_module(tmp_path, monkeypatch):
     monkeypatch.setattr(tc, "module_name", lambda p: "definitely_not_a_real_module_xyz")
     failures = tc.lane_import([tmp_path / "x.py"])
     assert failures and "definitely_not_a_real_module_xyz" in failures[0]
+
+
+# ============================================================
+# Whose edits (the 2026-08-12 misattribution)
+# ============================================================
+
+def _transcript(tmp_path: Path, written: list[Path]) -> Path:
+    """A session transcript naming exactly the files that session wrote."""
+    import json
+
+    path = tmp_path / "session.jsonl"
+    lines = [
+        json.dumps({"message": {"content": [
+            {"type": "tool_use", "name": "Edit", "input": {"file_path": str(p)}}
+        ]}})
+        for p in written
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_a_parallel_sessions_broken_file_is_not_this_turns_failure(tmp_path, monkeypatch):
+    """The exact 2026-08-12 shape, re-armed.
+
+    A syntactically broken file sits uncommitted in the shared tree, written by
+    another session. This turn wrote nothing. Before the scope narrowing the
+    compile lane failed and the hook blocked the turn on someone else's work.
+    """
+    theirs = tmp_path / "written_by_the_other_session.py"
+    theirs.write_text("def f(:\n", encoding="utf-8")
+    monkeypatch.setattr(tc, "changed_python_files", lambda: [theirs])
+
+    result = tc.run(timeout=30, use_cache=False,
+                    transcript=_transcript(tmp_path, []))
+
+    assert result["status"] == "idle", result
+    assert result["skipped_foreign"] == 1
+    assert "another" in result["reason"], "the drop has to be visible, not silent"
+
+
+def test_this_sessions_own_break_is_still_caught(tmp_path, monkeypatch):
+    """The narrowing must not become a way to stop noticing anything.
+
+    Same broken file, same tree, but this session's transcript claims it.
+    """
+    mine = tmp_path / "written_here.py"
+    mine.write_text("def f(:\n", encoding="utf-8")
+    monkeypatch.setattr(tc, "changed_python_files", lambda: [mine])
+
+    result = tc.run(timeout=30, use_cache=False,
+                    transcript=_transcript(tmp_path, [mine]))
+
+    assert result["status"] == "fail" and result["lane"] == "compile", result
+    assert result["skipped_foreign"] == 0
+
+
+def test_no_transcript_checks_the_whole_tree(tmp_path, monkeypatch):
+    """A hand run from a terminal belongs to no session and must lose nothing."""
+    broken = tmp_path / "broken.py"
+    broken.write_text("def f(:\n", encoding="utf-8")
+    monkeypatch.setattr(tc, "changed_python_files", lambda: [broken])
+
+    result = tc.run(timeout=30, use_cache=False, transcript=None)
+    assert result["status"] == "fail", result
+
+
+def test_the_render_names_what_the_scope_left_out():
+    """A narrowed check that prints like a complete one is the original defect
+    wearing a different hat."""
+    text = tc.render({"status": "pass", "files": 1, "tests_run": 0,
+                      "skipped_foreign": 3})
+    assert "3" in text and "another session" in text
+
+
+def test_the_hook_forwards_the_transcript_it_is_given():
+    """The wrapper is the only place the session identity exists; a wrapper that
+    drops it leaves the checker permanently un-scoped."""
+    source = (ROOT / ".claude" / "hooks" / "turn-check.py").read_text(encoding="utf-8")
+    assert "transcript_path" in source
+    assert "--session-transcript" in source

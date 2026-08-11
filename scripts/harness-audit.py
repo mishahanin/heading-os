@@ -137,6 +137,45 @@ def user_settings_path() -> Path:
     return home() / ".claude" / "settings.json"
 
 
+def installed_plugins_path() -> Path:
+    """The record of which cached plugin version is actually loaded."""
+    override = os.environ.get("HEADING_OS_INSTALLED_PLUGINS")
+    if override:
+        return Path(override)
+    return home() / ".claude" / "plugins" / "installed_plugins.json"
+
+
+def active_install_paths(path: Path) -> set | None:
+    """Resolved `installPath`s Claude Code actually loads, or None if unknown.
+
+    The cache keeps every version it ever fetched; the loader reads exactly one
+    per plugin. Walking the cache therefore over-counts, and this tool printed
+    that over-count under the words "running in this session" until 2026-08-12,
+    when it reported `superpowers` 6.1.1 and 6.2.0 as two live SessionStart
+    hooks. Only 6.2.0 was loaded; 6.1.1 was an orphan the cache had not swept.
+
+    None means the record could not be read, and a caller must then treat every
+    cached hook as live. An audit that hides an executing hook because a JSON
+    file was unreadable fails in the one direction it must not.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        return None
+    active = set()
+    for entries in plugins.values():
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            install = entry.get("installPath")
+            if isinstance(install, str) and install:
+                active.add(Path(install).resolve())
+    return active or None
+
+
 def _surface_files(root: Path):
     """Every installed file on the instruction-or-execution surface, sorted.
 
@@ -192,12 +231,38 @@ def _hooks_from_mapping(mapping, source: str):
     return found
 
 
-def third_party_hooks(root: Path, settings: Path):
-    """Every hook command that runs in our session and is not ours.
+def _is_loaded(source: Path, active: set | None) -> bool:
+    """Whether a plugin's `hooks.json` belongs to the version actually loaded.
+
+    Dormant requires PROOF, not absence of proof. A hook is called dormant only
+    when the record names a different version of the SAME plugin, which is what
+    a superseded directory in the cache looks like. Anything the record does not
+    mention at all is reported as live.
+
+    That asymmetry is the whole point. The first version of this function
+    reversed it and asked only "is this under an active path", which made every
+    hook under an unrelated cache root vanish from the report -- the audit
+    would have gone quiet about hooks that genuinely run, which is worse than
+    the over-count it was written to fix. The repository's own contract test
+    caught it.
+    """
+    if active is None:
+        return True
+    resolved = source.resolve()
+    if any(resolved == path or path in resolved.parents for path in active):
+        return True
+    # Under the plugin directory of an active version, but not under that
+    # version: the cache kept an older copy the loader no longer reads.
+    return not any(path.parent in resolved.parents for path in active)
+
+
+def third_party_hooks(root: Path, settings: Path, active: set | None = None):
+    """Every hook command on the installed surface, flagged by whether it loads.
 
     Two sources, because a hook can arrive by either road: a plugin's own
     `hooks.json`, and user-level settings that no file in this repository
-    mentions.
+    mentions. Each entry carries `loaded`: a cached version the loader does not
+    read is still reported, but never under the claim that it is running.
     """
     found = []
     for path in sorted(root.rglob("hooks.json")) if root.is_dir() else []:
@@ -205,19 +270,22 @@ def third_party_hooks(root: Path, settings: Path):
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             found.append({"event": "?", "command": f"<unreadable: {type(exc).__name__}>",
-                          "source": str(path)})
+                          "source": str(path), "loaded": True})
             continue
         block = data.get("hooks") if isinstance(data, dict) else None
-        found.extend(_hooks_from_mapping(block if block is not None else data, str(path)))
+        loaded = _is_loaded(path, active)
+        for entry in _hooks_from_mapping(block if block is not None else data, str(path)):
+            found.append({**entry, "loaded": loaded})
 
     if settings.is_file():
         try:
             data = json.loads(settings.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             found.append({"event": "?", "command": f"<unreadable: {type(exc).__name__}>",
-                          "source": str(settings)})
+                          "source": str(settings), "loaded": True})
         else:
-            found.extend(_hooks_from_mapping(data.get("hooks"), str(settings)))
+            for entry in _hooks_from_mapping(data.get("hooks"), str(settings)):
+                found.append({**entry, "loaded": True})
     return found
 
 
@@ -339,12 +407,26 @@ def _render(result) -> None:
           f"executes, as opposed to what it writes{RESET}")
     print()
 
-    print(f"{BOLD}{len(hooks)} third-party hook(s){RESET} "
-          f"{GRAY}running in this session and not owned by this repository{RESET}")
-    for entry in hooks:
+    live = [e for e in hooks if e.get("loaded", True)]
+    dormant = [e for e in hooks if not e.get("loaded", True)]
+    qualifier = ("" if result.get("activation_known", True)
+                 else f" {YELLOW}(activation record unreadable, so every cached "
+                      f"hook is listed as live){RESET}")
+    print(f"{BOLD}{len(live)} third-party hook(s){RESET} "
+          f"{GRAY}running in this session and not owned by this repository{RESET}"
+          f"{qualifier}")
+    for entry in live:
         print(f"  {YELLOW}{entry['event']:<20}{RESET} {entry['command'][:96]}")
         print(f"  {GRAY}{'':<20} from {entry['source']}{RESET}")
     print()
+
+    if dormant:
+        print(f"{GRAY}{len(dormant)} further hook(s) sit in the plugin cache in a "
+              f"version the loader does not read. On the surface, not in the "
+              f"session:{RESET}")
+        for entry in dormant:
+            print(f"  {GRAY}{entry['event']:<20} {entry['source']}{RESET}")
+        print()
 
     if result["baseline_missing"]:
         print(f"{RED}{BOLD}No reviewed baseline.{RESET} "
@@ -437,8 +519,10 @@ def main() -> int:
             seen.add(entry["path"])
             unreadable.append(entry)
 
+    active = active_install_paths(installed_plugins_path())
     result = {
-        "third_party_hooks": third_party_hooks(root, user_settings_path()),
+        "third_party_hooks": third_party_hooks(root, user_settings_path(), active),
+        "activation_known": active is not None,
         "baseline_missing": baseline is None,
         "drift": ({"added": [], "changed": [], "removed": []} if baseline is None
                   else compare(index, baseline)),

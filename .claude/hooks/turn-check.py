@@ -10,6 +10,11 @@ Behaviour:
   clean, cached, or nothing changed -> silent, exit 0
   a lane failed                     -> {"decision": "block"} with the failure text
 
+Scope. The payload's `transcript_path` is forwarded to the checker, which uses
+it to narrow the changed set to files THIS session wrote. Without that the hook
+reports another session's uncommitted work as a break in this turn, which it did
+on 2026-08-12 over a parallel session's deliberately-red TDD test.
+
 Anti-loop: bails on `stop_hook_active`, so a genuinely stuck failure blocks the
 turn once and then lets the operator take over. A hook that can block forever is
 worse than one that misses.
@@ -65,9 +70,15 @@ def main() -> int:
     if not CHECKER.is_file():
         return 0
 
+    command = [interpreter(), str(CHECKER), "--json",
+               "--timeout", str(BUDGET_SECONDS - 10)]
+    transcript = payload.get("transcript_path")
+    if isinstance(transcript, str) and transcript:
+        command += ["--session-transcript", transcript]
+
     try:
         proc = subprocess.run(
-            [interpreter(), str(CHECKER), "--json", "--timeout", str(BUDGET_SECONDS - 10)],
+            command,
             cwd=str(WORKSPACE), capture_output=True, text=True, timeout=BUDGET_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):

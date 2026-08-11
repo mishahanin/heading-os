@@ -7,6 +7,15 @@ full suite. The full suite is `scripts/run-tests.py` and takes minutes; this
 takes seconds, because something that runs at the end of every turn only helps
 if nobody is tempted to skip it.
 
+Whose edits. `git` knows a file changed, never who changed it, and this
+workspace runs more than one session against one checkout. Pass
+`--session-transcript` (the Stop hook passes the path Claude Code gives it) and
+the changed set is narrowed to the files THIS session wrote, with the drop
+count reported rather than swallowed. Without it the scope is the whole working
+tree, which is right for a hand run from a terminal that belongs to no session.
+Measured 2026-08-12: without this narrowing the hook blocked a turn over a
+deliberately-red TDD test a parallel session had written a minute earlier.
+
 Why it exists. On 2026-08-09 a one-line constant rename in
 `scripts/wizard-verify-key.py` broke four tests, and that was discovered only
 because a full suite happened to be run by hand later in the session. Nothing
@@ -46,6 +55,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.colors import GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
+from scripts.utils.session_scope import current_transcript, narrow  # noqa: E402
 from scripts.utils.workspace import get_workspace_root  # noqa: E402
 
 ROOT = get_workspace_root()
@@ -250,16 +260,21 @@ def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int]:
     return [], len(targets)
 
 
-def run(timeout: int, use_cache: bool) -> dict:
+def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     """Run the lanes and return a result dict. Never raises."""
     paths = changed_python_files()
+    paths, foreign = narrow(paths, transcript)
     if not paths:
-        return {"status": "idle", "reason": "no uncommitted Python edits", "files": 0}
+        reason = "no uncommitted Python edits"
+        if foreign:
+            reason = f"no uncommitted Python edits by this session ({foreign} by another)"
+        return {"status": "idle", "reason": reason, "files": 0,
+                "skipped_foreign": foreign}
 
     fp = fingerprint(paths)
     if use_cache and read_state().get("last_pass") == fp:
         return {"status": "cached", "reason": "unchanged since the last pass",
-                "files": len(paths)}
+                "files": len(paths), "skipped_foreign": foreign}
 
     failures = lane_compile(paths)
     lane = "compile"
@@ -272,21 +287,32 @@ def run(timeout: int, use_cache: bool) -> dict:
 
     if failures:
         return {"status": "fail", "lane": lane, "failures": failures,
-                "files": len(paths), "tests_run": tests_run}
+                "files": len(paths), "tests_run": tests_run,
+                "skipped_foreign": foreign}
 
     write_state({"last_pass": fp, "files": len(paths), "tests_run": tests_run})
-    return {"status": "pass", "files": len(paths), "tests_run": tests_run}
+    return {"status": "pass", "files": len(paths), "tests_run": tests_run,
+            "skipped_foreign": foreign}
+
+
+def _foreign_note(result: dict) -> str:
+    """What the scope left out, named. Silence here is how a narrowed check
+    starts reading as a complete one."""
+    count = result.get("skipped_foreign") or 0
+    if not count:
+        return ""
+    return f" {GRAY}[{count} changed file(s) written by another session, not checked]{RESET}"
 
 
 def render(result: dict) -> str:
     status = result["status"]
     if status in ("idle", "cached"):
-        return f"{GRAY}turn-check: {result['reason']}{RESET}"
+        return f"{GRAY}turn-check: {result['reason']}{RESET}" + _foreign_note(result)
     if status == "pass":
         return (f"{GREEN}turn-check: clean{RESET} "
                 f"{GRAY}({result['files']} changed file(s), "
-                f"{result['tests_run']} test file(s)){RESET}")
-    head = f"{RED}turn-check: {result['lane']} lane failed{RESET}"
+                f"{result['tests_run']} test file(s)){RESET}" + _foreign_note(result))
+    head = f"{RED}turn-check: {result['lane']} lane failed{RESET}" + _foreign_note(result)
     return head + "\n" + "\n".join(result["failures"])
 
 
@@ -300,13 +326,17 @@ def main(argv=None) -> int:
                         help="Re-run even if this exact tree already passed.")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TEST_TIMEOUT,
                         help=f"Cap the test lane, seconds (default {DEFAULT_TEST_TIMEOUT}).")
+    parser.add_argument("--session-transcript", default=None,
+                        help="Session transcript; narrows the check to files this "
+                             "session wrote. Omitted means the whole working tree.")
     args = parser.parse_args(argv)
 
     if args.timeout <= 0:
         print(f"{YELLOW}--timeout must be positive{RESET}", file=sys.stderr)
         return 2
 
-    result = run(timeout=args.timeout, use_cache=not args.no_cache)
+    result = run(timeout=args.timeout, use_cache=not args.no_cache,
+                 transcript=args.session_transcript or current_transcript())
     print(json.dumps(result, ensure_ascii=False) if args.json else render(result))
     return 1 if result["status"] == "fail" else 0
 

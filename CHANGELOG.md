@@ -6,6 +6,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two tools told the operator more than they had measured, and now a test says
+  they may not.** Within hours of each other on 2026-08-12: `scripts/harness-audit.py`
+  walked the plugin cache and printed the result under "running in this session",
+  so a superseded `superpowers` 6.1.1 was reported as a live SessionStart hook
+  beside the 6.2.0 the loader actually reads; and `scripts/turn-check.py` called
+  `git diff` "the edits made in this turn", so the Stop hook blocked a turn over a
+  deliberately-red TDD test a PARALLEL session had written a minute earlier. Neither
+  was a logic bug. A directory listing does not establish a session, `git` does not
+  establish an author, and both sentences survived review because they read as
+  obviously true.
+
+  The audit now resolves activation from `installed_plugins.json` and calls a hook
+  dormant only when the record names a different version of the SAME plugin -- an
+  unmentioned cache root stays reported as live, and an unreadable record widens to
+  everything, because hiding a hook that executes is the one direction this must not
+  fail in. The first cut had that backwards and the repository's own contract test
+  caught it. Dormant versions stay hashed and scanned; only the claim changes.
+
+  `turn-check` narrows to files this session wrote, via the new shared
+  `scripts/utils/session_scope.py`, which reads the session transcript the Stop hook
+  is handed. It returns None rather than an empty set when it cannot tell, so a
+  caller widens instead of quietly checking nothing and reporting a pass, and it
+  prints the count of files it skipped as another session's rather than letting a
+  narrowed check read like a complete one.
+
+  New `.claude/rules/scope-claims.md` states the obligation and
+  `tests/test_scope_claims.py` enforces it: an AST scan of every user-facing string
+  under `scripts/` and `.claude/hooks/` for phrases claiming session membership or
+  live execution, each of which must either name what resolves it or say why it is
+  not a coverage claim. The detector is deliberately wide, because a defect of this
+  shape is written in whatever words its author reached for.
+
+- **The Odin collect marker never left this machine.** `knowledge/odin-brain/.last-collect`
+  was gitignored while its twin `.last-reflect` was tracked, so a second machine
+  pulling the overlay read `last_collect: null` and counted the entire allowlist as
+  un-harvested. Each marker holds one ISO date and no content. Both are tracked now.
+
 ### Changed
 
 - **The documentation-style checker earned its gate, and only half of it.**

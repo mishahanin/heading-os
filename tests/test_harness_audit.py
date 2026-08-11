@@ -148,3 +148,110 @@ def test_accepting_an_empty_surface_over_a_real_baseline_is_refused(tmp_path):
     assert "empty" in (typo.stdout + typo.stderr).lower()
     entries = json.loads(manifest.read_text(encoding="utf-8"))["entries"]
     assert entries, "the baseline was overwritten with nothing"
+
+
+# ---------------------------------------------------------------------------
+# Which of the cached versions is actually running (2026-08-12)
+# ---------------------------------------------------------------------------
+
+def _cache_with_two_versions(tmp_path):
+    """One plugin, two versions on disk, each registering a SessionStart hook.
+
+    The shape the cache is always in after an upgrade: Claude Code fetches the
+    new version and never sweeps the old one.
+    """
+    cache = tmp_path / "cache"
+    for version in ("6.1.1", "6.2.0"):
+        hooks = cache / "vendor" / "thing" / version / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": f"run-{version}"}]}]}}),
+            encoding="utf-8")
+    return cache
+
+
+def _installed_record(tmp_path, install_path):
+    record = tmp_path / "installed_plugins.json"
+    record.write_text(json.dumps({"plugins": {"thing@vendor": [
+        {"installPath": str(install_path), "version": "6.2.0"}]}}), encoding="utf-8")
+    return record
+
+
+def _audit(tmp_path, cache, record):
+    manifest = tmp_path / "m.json"
+    # Always pointed somewhere inside tmp_path, never at the operator's real
+    # record: a test that reads the live machine passes or fails by accident.
+    env = dict(os.environ, HEADING_OS_PLUGIN_ROOT=str(cache),
+               HEADING_OS_USER_SETTINGS=str(tmp_path / "absent-settings.json"),
+               HEADING_OS_INSTALLED_PLUGINS=str(record or tmp_path / "absent.json"))
+    proc = subprocess.run(
+        [sys.executable, str(_CLI), "--manifest", str(manifest), "--json"],
+        capture_output=True, text=True, cwd=str(_ROOT), timeout=180, env=env)
+    return json.loads(proc.stdout)
+
+
+def test_a_superseded_cached_version_is_not_reported_as_running(tmp_path):
+    """The 2026-08-12 misreport, re-armed.
+
+    Walking the cache found both 6.1.1 and 6.2.0 and printed them under the
+    words "running in this session". Only the version named by the loader's own
+    record is running; the other is an orphan directory.
+    """
+    cache = _cache_with_two_versions(tmp_path)
+    record = _installed_record(tmp_path, cache / "vendor" / "thing" / "6.2.0")
+
+    hooks = _audit(tmp_path, cache, record)["third_party_hooks"]
+    live = [h for h in hooks if h["loaded"]]
+    dormant = [h for h in hooks if not h["loaded"]]
+
+    assert len(live) == 1, live
+    assert "6.2.0" in live[0]["command"]
+    assert len(dormant) == 1 and "6.1.1" in dormant[0]["source"], (
+        "the superseded version must still be reported, just not as running")
+
+
+def test_an_unreadable_activation_record_reports_every_hook_as_live(tmp_path):
+    """The one direction this must never fail in.
+
+    Hiding an executing hook because a JSON file could not be parsed is worse
+    than over-reporting one that is dormant, so unknown widens.
+    """
+    cache = _cache_with_two_versions(tmp_path)
+    result = _audit(tmp_path, cache, None)
+
+    assert result["activation_known"] is False
+    assert all(h["loaded"] for h in result["third_party_hooks"])
+    assert len(result["third_party_hooks"]) == 2
+
+
+def test_the_dormant_version_stays_on_the_hashed_surface(tmp_path):
+    """Dormant is not absent. A cached version can become the loaded one at any
+    upgrade, so it stays in the baseline and in the injection scan; only the
+    claim about it changes.
+    """
+    cache = _cache_with_two_versions(tmp_path)
+    record = _installed_record(tmp_path, cache / "vendor" / "thing" / "6.2.0")
+    manifest = tmp_path / "m.json"
+    subprocess.run(
+        [sys.executable, str(_CLI), "--manifest", str(manifest), "--update-manifest"],
+        capture_output=True, text=True, cwd=str(_ROOT), timeout=180,
+        env=dict(os.environ, HEADING_OS_PLUGIN_ROOT=str(cache),
+                 HEADING_OS_INSTALLED_PLUGINS=str(record)))
+    entries = json.loads(manifest.read_text(encoding="utf-8"))["entries"]
+    assert any("6.1.1" in path for path in entries), entries
+
+
+def test_a_cache_the_record_does_not_mention_is_reported_as_live(tmp_path):
+    """Dormant needs proof of supersession, never mere absence.
+
+    An activation record that says nothing about a plugin root (a second cache,
+    a machine-level install, a test fixture) must not silence every hook under
+    it. The first cut of this check asked only "is this path active" and would
+    have reported zero running hooks for an unmentioned root.
+    """
+    cache = _cache_with_two_versions(tmp_path)
+    unrelated = tmp_path / "elsewhere" / "other-plugin" / "1.0.0"
+    record = _installed_record(tmp_path, unrelated)
+
+    hooks = _audit(tmp_path, cache, record)["third_party_hooks"]
+    assert hooks and all(h["loaded"] for h in hooks), hooks

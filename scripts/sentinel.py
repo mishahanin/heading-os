@@ -1168,11 +1168,13 @@ class TelegramSource:
         ignore_chats = [c.lower() for c in self.config.get("ignore_chats", [])]
         max_msgs = self.config.get("max_messages_per_chat", 30)
 
-        # Collect dialogs with unread DMs first
+        # Newness is the dialog's top message id against our cursor, NOT the
+        # unread badge. Reading a message on the phone clears the badge, and a
+        # dialog where the operator wrote last never had one -- both used to
+        # make this reader permanently blind to those messages. iter_dialogs
+        # already carries the top message, so this test costs no API call.
         pending_dialogs = []
         async for dialog in self.client.iter_dialogs(limit=100):
-            if dialog.unread_count == 0:
-                continue
             if not isinstance(dialog.entity, types.User):
                 continue
             if dialog.entity.bot:
@@ -1180,20 +1182,39 @@ class TelegramSource:
             chat_name = self._entity_name(dialog.entity)
             if chat_name.lower() in ignore_chats:
                 continue
-            pending_dialogs.append((dialog, chat_name))
+
+            chat_id = str(dialog.entity.id)
+            last_known_id = self.state.get_telegram_last_id(chat_id)
+            top_id = dialog.message.id if dialog.message else 0
+
+            if top_id and top_id <= last_known_id:
+                continue
+
+            if last_known_id == 0:
+                # First sight. Seed the cursor instead of backfilling, or the
+                # first run after this change drags max_msgs out of every
+                # dialog at once. Anything genuinely unread is still reported,
+                # so a brand new counterpart is not silent for a cycle.
+                if dialog.unread_count == 0:
+                    if top_id:
+                        self.state.set_telegram_last_id(chat_id, chat_name, top_id)
+                    continue
+                limit = min(dialog.unread_count, max_msgs)
+            else:
+                limit = max_msgs
+
+            pending_dialogs.append((dialog, chat_name, last_known_id, limit))
 
         if not pending_dialogs:
             return []
 
-        # Fetch messages from all unread DMs in parallel
-        async def _fetch_dm(dialog, chat_name):
+        async def _fetch_dm(dialog, chat_name, last_known_id, limit):
             chat_id = str(dialog.entity.id)
-            last_known_id = self.state.get_telegram_last_id(chat_id)
             try:
                 messages = await asyncio.wait_for(
                     self.client.get_messages(
                         dialog.entity,
-                        limit=min(dialog.unread_count, max_msgs),
+                        limit=limit,
                         min_id=last_known_id,
                     ),
                     timeout=15,
@@ -1205,15 +1226,23 @@ class TelegramSource:
             if not messages:
                 return None
 
+            # The cursor advances over everything fetched, including the
+            # operator's own messages. Skipping that would rescan the dialog
+            # every cycle for as long as he happened to write last.
             max_id = max(m.id for m in messages)
             self.state.set_telegram_last_id(chat_id, chat_name, max_id)
 
             combined_text = []
             for msg in reversed(messages):
+                if getattr(msg, "out", False):
+                    continue  # his own message is not an alert about himself
                 if msg.text:
                     combined_text.append(msg.text)
                 elif msg.media:
                     combined_text.append("[media attachment]")
+
+            if not combined_text:
+                return None
 
             full_text = "\n---\n".join(combined_text)
             if len(full_text) > 2000:
@@ -1227,12 +1256,12 @@ class TelegramSource:
                 "subject": f"Telegram DM from {chat_name}",
                 "body": full_text,
                 "date": datetime.now(timezone.utc).isoformat()[:19],
-                "message_count": len(messages),
+                "message_count": len(combined_text),
                 "is_vip": False,
             }
 
         results = await asyncio.gather(
-            *[_fetch_dm(d, name) for d, name in pending_dialogs],
+            *[_fetch_dm(d, name, cursor, limit) for d, name, cursor, limit in pending_dialogs],
             return_exceptions=True,
         )
 

@@ -76,6 +76,9 @@ Manages running state of business and personal life situations across sessions. 
 | Thread done | `close` |
 | Thread paused for weeks | `hold` |
 | Thread reactivates | `reopen` |
+| Operator says "do not remind me about this until <date>" | `quiet --until <date>` |
+| Operator says "freeze this, I will raise it myself" | `quiet --indefinite` |
+| Quiet period is over | `quiet --clear` |
 | Survey active threads | `list` |
 | Lookup by keyword | `find <query>` |
 | Read full thread | `show <id>` |
@@ -108,8 +111,25 @@ python3 scripts/thread.py reopen <thread-id>
 python3 scripts/thread.py list [--type business|personal] [--status active|on-hold|closed]
 python3 scripts/thread.py find "<query>"
 python3 scripts/thread.py show <thread-id>
+python3 scripts/thread.py quiet <thread-id> [--until YYYY-MM-DD | --indefinite | --clear]
 python3 scripts/thread.py archive-scan [--apply]
 ```
+
+## Quiet periods
+
+A quiet thread is one the operator has asked me not to raise. I never surface it
+proactively. It stays out of session-opener rollups, `/next`, `/dashboard`,
+`/weekly-review`, ad-hoc "what is open" answers, and any nudge. I answer about it
+only when the operator raises it themselves.
+
+Two forms. `--until <date>` is a dated pause and it expires on its own.
+`--indefinite` has no end date and lifts only when the operator raises the
+subject. Both forms write the state into the thread's frontmatter. Both also stamp a
+`[quiet until <date>]` marker on the thread's line in the MEMORY.md index. That
+index loads every session, so it tells me the thread is quiet.
+
+`archive-scan` reports a dated quiet period once it expires, and it never
+proposes on-hold for a thread that is still quiet.
 
 ## Personal-thread rule
 

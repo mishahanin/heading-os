@@ -3,6 +3,7 @@
   "vm_engine_root": "/home/youruser/workspaces/heading-os",
   "vm_data_root": "/home/youruser/workspaces/.heading-os-data",
   "fireside_unit": "fireside.service",
+  "webhook_port": 8443,
   "mirror_dir": "datastore/operations/service-mirror",
   "state_dirs": [
     ["fireside-state", "data", "datastore/operations/tribe/fireside-state"],

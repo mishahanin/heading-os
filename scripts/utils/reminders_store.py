@@ -177,17 +177,9 @@ def due_records(today: date) -> list[dict]:
     return [r for r in load() if is_due(r, today)]
 
 
-def upcoming(today: date, days: int = 7) -> list[dict]:
-    out: list[dict] = []
-    horizon = today + timedelta(days=days)
-    for r in load():
-        if r.get("kind") == "once" and r.get("status") != "fired":
-            when = date.fromisoformat(r["when"])
-            if today < when <= horizon:
-                out.append(r)
-        elif r.get("kind") == "recurring":
-            for target in _recurring_candidates(r["when"], today):
-                if today < target <= horizon and r.get("last_fired") != target.isoformat():
-                    out.append(r)
-                    break
-    return out
+# A lookahead query (`upcoming(today, days=7)`) lived here until 2026-08-12 and
+# had exactly one caller, the /prime backstop, which used it to announce dated
+# reminders up to a week early. The operator asked for that to stop: a reminder
+# dated D is for D. Removed rather than left dangling, so re-adding the early
+# announcement is a deliberate act. `reminders.py list` still shows everything
+# with its date, which is the surface-on-request path.

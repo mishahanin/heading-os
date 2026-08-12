@@ -82,14 +82,22 @@ def test_mark_fired_recurring_catchup_writes_matched_target(tmp_path, monkeypatc
     assert rs.is_due(rec, date(2026, 5, 1)) is False
 
 
-def test_upcoming_recurring_across_month_boundary(tmp_path, monkeypatch):
+def test_the_store_offers_no_lookahead_query(tmp_path, monkeypatch):
+    """A reminder dated D is for D; nothing may announce it early.
+
+    The `upcoming(today, days)` helper was removed on 2026-08-12 with its only
+    caller (the /prime backstop). This pins the absence, so re-introducing an
+    early-announcement path is a deliberate act and not an accident.
+    """
+    assert not hasattr(rs, "upcoming")
+
+
+def test_a_future_reminder_is_not_due_today(tmp_path, monkeypatch):
     monkeypatch.setattr(rs, "store_path", lambda: tmp_path / "reminders.json")
-    rs.add({"kind": "recurring", "when": "first-friday-minus-1", "last_fired": None, "message": "m"})
-    hits = rs.upcoming(date(2026, 4, 27), days=7)
-    assert len(hits) == 1 and hits[0]["message"] == "m"
-    # A window that reaches neither this month's nor next month's candidate.
-    no_hits = rs.upcoming(date(2026, 5, 10), days=3)
-    assert no_hits == []
+    rs.add({"kind": "once", "when": "2026-09-01", "message": "September restart"})
+    assert rs.due_records(date(2026, 8, 12)) == []
+    assert rs.due_records(date(2026, 8, 31)) == []
+    assert len(rs.due_records(date(2026, 9, 1))) == 1
 
 
 def test_add_load_roundtrip_atomic(tmp_path, monkeypatch):

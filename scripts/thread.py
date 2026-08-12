@@ -15,7 +15,7 @@ from scripts.utils.threads_lib import (  # noqa: E402
     ThreadFile, write_thread_file, new_thread_path,
     ensure_active_threads_section, add_thread_to_index,
     parse_thread_file, update_thread_hook, remove_thread_from_index,
-    scan_for_archive,
+    read_thread_hook, scan_for_archive, is_quiet,
 )
 
 
@@ -196,12 +196,14 @@ def cmd_log(args: argparse.Namespace) -> int:
     rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
     # MEMORY hook is a short summary; full event is preserved in the thread body above.
     try:
-        update_thread_hook(memory_md, path=rel_path, hook=event[:120])
+        update_thread_hook(memory_md, path=rel_path, hook=event[:120],
+                           quiet_until=thread.quiet_until)
     except ValueError:
         # Section missing or hand-edited: repair and re-add the index line.
         ensure_active_threads_section(memory_md)
         add_thread_to_index(memory_md, type_=thread.type, title=thread.title,
-                            path=rel_path, hook=event[:120])
+                            path=rel_path, hook=event[:120],
+                            quiet_until=thread.quiet_until)
     print(f"logged to {path}")
     return 0
 
@@ -241,6 +243,41 @@ def cmd_reopen(args: argparse.Namespace) -> int:
     return _set_status(args.thread_id, "active", "add")
 
 
+def cmd_quiet(args: argparse.Namespace) -> int:
+    """Put a thread into, or take it out of, a deliberate quiet period."""
+    if not args.clear and not args.indefinite:
+        try:
+            date.fromisoformat(args.until)
+        except (ValueError, TypeError):
+            print("error: pass --until YYYY-MM-DD, --indefinite, or --clear "
+                  f"(got --until {args.until!r})", file=sys.stderr)
+            return 1
+    path = _find_thread_by_id(_threads_root(), args.thread_id)
+    thread = parse_thread_file(path)
+    thread.quiet_until = None if (args.clear or args.indefinite) else args.until
+    thread.do_not_remind = bool(args.indefinite)
+    write_thread_file(path, thread)
+
+    rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
+    memory_md = _memory_md()
+    try:
+        hook = read_thread_hook(memory_md, path=rel_path)
+        update_thread_hook(memory_md, path=rel_path, hook=hook,
+                           quiet_until=thread.quiet_until)
+    except (ValueError, FileNotFoundError) as exc:
+        # The frontmatter -- which every reader consults -- is already correct;
+        # say the index was not, rather than implying the whole change landed.
+        print(f"warning: frontmatter updated but MEMORY.md index was not: {exc}",
+              file=sys.stderr)
+    if args.clear:
+        print(f"{args.thread_id}: quiet period cleared")
+    elif args.indefinite:
+        print(f"{args.thread_id}: quiet indefinitely - surfaced only when you raise it")
+    else:
+        print(f"{args.thread_id}: quiet until {args.until} - not surfaced proactively before then")
+    return 0
+
+
 def _all_threads(threads_root: Path) -> list[ThreadFile]:
     threads: list[ThreadFile] = []
     for type_ in ("business", "personal"):
@@ -265,8 +302,10 @@ def cmd_list(args: argparse.Namespace) -> int:
         threads = [t for t in threads if t.status == args.status]
     else:
         threads = [t for t in threads if t.status == "active"]
+    today = datetime.now(get_default_tz()).date()
     for t in threads:
-        print(f"[{t.status}] {t.type}/{t.id} - {t.title} (last_touched: {t.last_touched})")
+        quiet = f" [quiet until {t.quiet_until}]" if is_quiet(t, today) else ""
+        print(f"[{t.status}] {t.type}/{t.id} - {t.title} (last_touched: {t.last_touched}){quiet}")
     return 0
 
 
@@ -311,6 +350,8 @@ def cmd_archive_scan(args: argparse.Namespace) -> int:
                 print(f"archived: {c.path} -> {dest} ({c.reason})")
             else:
                 print(f"would archive: {c.path} -> {dest} ({c.reason})")
+        elif c.action == "quiet-expired":
+            print(f"quiet expired: {c.path} ({c.reason})")
         else:
             print(f"propose on-hold: {c.path} ({c.reason})")
     return 0
@@ -338,6 +379,15 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name, help=f"{name} a thread")
         p.add_argument("thread_id")
         p.set_defaults(func=func)
+    p_quiet = sub.add_parser(
+        "quiet", help="Suppress a thread from proactive surfacing until a date")
+    p_quiet.add_argument("thread_id")
+    p_quiet.add_argument("--until", metavar="YYYY-MM-DD",
+                         help="Last date on which the thread stays quiet")
+    p_quiet.add_argument("--indefinite", action="store_true",
+                         help="Quiet with no end date; lifts only when you raise it")
+    p_quiet.add_argument("--clear", action="store_true", help="Lift the quiet period")
+    p_quiet.set_defaults(func=cmd_quiet)
     p_list = sub.add_parser("list", help="List threads")
     p_list.add_argument("--type", choices=["business", "personal"])
     p_list.add_argument("--status", choices=["active", "on-hold", "closed"])

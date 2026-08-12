@@ -17,6 +17,7 @@ Output policy:
 """
 import json
 import os
+import socket
 import subprocess
 import sys
 import io
@@ -148,11 +149,54 @@ def _query_service_host(host: str, ssh_timeout: int = 5, run_timeout: int = 12) 
         return None
 
 
+def _webhook_listening(host: str, port: int, timeout: float = 6.0) -> bool | None:
+    """Is the daemon's Telegram webhook port accepting TCP connections?
+
+    Returns True/False, or None when the SSH alias cannot be resolved to an
+    address (in which case nothing about the daemon has been established).
+    Second, independent evidence path for `_print_remote_status`: the SSH probe
+    failing says only that OUR ssh call failed - an outbound :22 block on the
+    operator's current network produces exactly the same failure as a dead VM.
+    """
+    try:
+        proc = subprocess.run(
+            ["ssh", "-G", host], capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    addr = next(
+        (ln.split(None, 1)[1].strip()
+         for ln in proc.stdout.splitlines() if ln.startswith("hostname ")),
+        "",
+    )
+    if not addr:
+        return None
+    try:
+        with socket.create_connection((addr, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def _print_remote_status(host: str) -> None:
     """Print a /prime-friendly one-line status for the service-host daemon."""
     data = _query_service_host(host)
     if not data:
-        print(f"🔥 Fireside (service-host {host}): UNREACHABLE - SSH probe failed")
+        # The SSH probe failing establishes that the probe failed, not that the
+        # daemon is down (see .claude/rules/scope-claims.md). Ask the webhook
+        # port before saying anything about the daemon.
+        port = int(_SVC.get("webhook_port", 8443))
+        listening = _webhook_listening(host, port)
+        if listening:
+            print(f"🔥 Fireside (service-host {host}): SSH probe failed, unit state UNKNOWN "
+                  f"- but webhook port {port} is accepting connections, so the daemon is listening")
+            print("  - check whether outbound :22 is blocked on this network before treating it as a VM fault")
+        elif listening is False:
+            print(f"🔥 Fireside (service-host {host}): SSH probe failed AND webhook port {port} "
+                  f"is not accepting connections - daemon state UNKNOWN, host may be down")
+        else:
+            print(f"🔥 Fireside (service-host {host}): SSH probe failed and the host address "
+                  f"could not be resolved - daemon state UNKNOWN")
         return
     active = data.get("active", "unknown")
     started = data.get("started", 0)

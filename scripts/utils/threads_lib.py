@@ -17,6 +17,12 @@ REQUIRED_FIELDS = (
 )
 VALID_STATUSES = ("active", "on-hold", "closed")
 VALID_TYPES = ("business", "personal")
+# Every frontmatter key ThreadFile models explicitly. Anything else round-trips
+# through `ThreadFile.extra` rather than being dropped on write.
+MODELLED_FIELDS = frozenset({
+    "id", "title", "status", "type", "classification", "opened", "last_touched",
+    "counterparties", "links", "tags", "quiet_until", "do_not_remind",
+})
 
 
 @dataclass
@@ -33,6 +39,18 @@ class ThreadFile:
     tags: list[str] = field(default_factory=list)
     body: str = ""
     path: Path | None = None
+    # ISO date up to and including which this thread must not be surfaced
+    # proactively. Optional; absent on almost every thread.
+    quiet_until: str | None = None
+    # Indefinite freeze: quiet with no end date, lifted only when the operator
+    # raises the subject themselves. Distinct from `quiet_until`, which expires.
+    do_not_remind: bool = False
+    # Frontmatter keys this dataclass does not model, carried verbatim so a
+    # rewrite cannot silently delete them. `write_thread_file` used to rebuild
+    # frontmatter from a fixed field list, which destroyed every hand-added key
+    # on the next `/thread log` -- discovered 2026-08-12 when it ate a freeze
+    # flag that had been sitting in a thread for six weeks.
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 def parse_thread_file(path: Path) -> ThreadFile:
@@ -74,6 +92,9 @@ def parse_thread_file(path: Path) -> ThreadFile:
         tags=fm.get("tags") or [],
         body=body.lstrip("\n"),
         path=path,
+        quiet_until=str(fm["quiet_until"]) if fm.get("quiet_until") else None,
+        do_not_remind=bool(fm.get("do_not_remind")),
+        extra={k: v for k, v in fm.items() if k not in MODELLED_FIELDS},
     )
 
 
@@ -123,10 +144,53 @@ def write_thread_file(path: Path, thread: ThreadFile) -> None:
         "links": thread.links,
         "tags": thread.tags,
     }
+    # Emitted only when set, so the field never appears on the threads that have
+    # no quiet period. It IS emitted here rather than dropped: the previous
+    # fixed-field rebuild silently deleted any freeze flag on the next log.
+    if thread.quiet_until:
+        fm["quiet_until"] = thread.quiet_until
+    if thread.do_not_remind:
+        fm["do_not_remind"] = True
+    # Unmodelled keys last, and never allowed to overwrite a modelled one.
+    for key, value in thread.extra.items():
+        if key not in fm:
+            fm[key] = value
     fm_yaml = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, default_flow_style=False)
     path.parent.mkdir(parents=True, exist_ok=True)
     body = thread.body.lstrip("\n")
     atomic_write_text(path, f"---\n{fm_yaml}---\n\n{body}")
+
+
+# ============================================================
+# Quiet periods
+# ============================================================
+
+QUIET_PREFIX_RE = re.compile(r"^\[quiet until \d{4}-\d{2}-\d{2}\]\s*")
+
+
+def is_quiet(thread: ThreadFile, today: date) -> bool:
+    """Is this thread inside a deliberate quiet period on `today`?
+
+    A quiet thread must not be surfaced proactively -- not in a session-opener
+    rollup, /next, /dashboard, /weekly-review, or an ad-hoc "what is open"
+    answer. An unset or unparseable `quiet_until` is NOT quiet: a broken date
+    must fail toward surfacing the thread, never toward silencing it forever.
+    `do_not_remind` is the dateless form, lifted only when the operator raises
+    the subject themselves.
+    """
+    if thread.do_not_remind:
+        return True
+    if not thread.quiet_until:
+        return False
+    try:
+        return today <= date.fromisoformat(thread.quiet_until)
+    except (ValueError, TypeError):
+        return False
+
+
+def quiet_hook_prefix(quiet_until: str | None) -> str:
+    """The marker prepended to a quiet thread's MEMORY.md hook."""
+    return f"[quiet until {quiet_until}] " if quiet_until else ""
 
 
 # ============================================================
@@ -187,7 +251,8 @@ def _split_at_subheader(block: str, sub_header: str) -> tuple[str, str]:
     return block[: m.end()], block[m.end():]
 
 
-def add_thread_to_index(memory_md: Path, *, type_: str, title: str, path: str, hook: str) -> None:
+def add_thread_to_index(memory_md: Path, *, type_: str, title: str, path: str, hook: str,
+                        quiet_until: str | None = None) -> None:
     """Append a thread line under ### Business or ### Personal (CEO-ONLY)."""
     if "\n" in hook or "\r" in hook:
         raise ValueError("hook must not contain newlines or carriage returns")
@@ -195,6 +260,7 @@ def add_thread_to_index(memory_md: Path, *, type_: str, title: str, path: str, h
         raise ValueError(f"invalid type '{type_}'")
     before, block, after = _index_block(memory_md)
     sub_header = SUBSECTIONS[type_]
+    hook = quiet_hook_prefix(quiet_until) + QUIET_PREFIX_RE.sub("", hook)
     line = f"- [{title}]({path}) - {hook}\n"
     head_with_subheader, tail = _split_at_subheader(block, sub_header)
     # Append after the sub-header (and after any existing entries)
@@ -209,16 +275,32 @@ def add_thread_to_index(memory_md: Path, *, type_: str, title: str, path: str, h
     atomic_write_text(memory_md, before + new_block + after)
 
 
-def update_thread_hook(memory_md: Path, *, path: str, hook: str) -> None:
-    """Replace the hook text on the line whose link target matches `path`."""
+def update_thread_hook(memory_md: Path, *, path: str, hook: str,
+                       quiet_until: str | None = None) -> None:
+    """Replace the hook text on the line whose link target matches `path`.
+
+    The quiet marker is REGENERATED from `quiet_until` on every write rather
+    than carried over from the old hook, so it can neither be dropped by a
+    routine log nor stack up across writes.
+    """
     if "\n" in hook or "\r" in hook:
         raise ValueError("hook must not contain newlines or carriage returns")
     before, block, after = _index_block(memory_md)
+    hook = quiet_hook_prefix(quiet_until) + QUIET_PREFIX_RE.sub("", hook)
     pattern = re.compile(rf"(- \[[^\]]+\]\({re.escape(path)}\)) - [^\n]*", re.MULTILINE)
-    new_block, n = pattern.subn(rf"\1 - {hook}", block)
+    new_block, n = pattern.subn(lambda m: f"{m.group(1)} - {hook}", block)
     if n == 0:
         raise ValueError(f"no thread line found for path '{path}'")
     atomic_write_text(memory_md, before + new_block + after)
+
+
+def read_thread_hook(memory_md: Path, *, path: str) -> str:
+    """Return the current hook for `path`, stripped of any quiet marker."""
+    _, block, _ = _index_block(memory_md)
+    m = re.search(rf"- \[[^\]]+\]\({re.escape(path)}\) - ([^\n]*)", block, re.MULTILINE)
+    if not m:
+        raise ValueError(f"no thread line found for path '{path}'")
+    return QUIET_PREFIX_RE.sub("", m.group(1)).strip()
 
 
 def remove_thread_from_index(memory_md: Path, *, path: str) -> None:
@@ -238,12 +320,20 @@ def remove_thread_from_index(memory_md: Path, *, path: str) -> None:
 @dataclass
 class ArchiveCandidate:
     path: Path
-    action: str  # "archive" | "propose-on-hold"
+    action: str  # "archive" | "propose-on-hold" | "quiet-expired"
     reason: str
 
 
 def scan_for_archive(threads_root: Path, *, today: date | None = None) -> list[ArchiveCandidate]:
-    """Find threads to archive (closed >90 days) or propose on-hold for (active >60 days)."""
+    """Find threads to archive (closed >90 days), propose on-hold for (active
+    >60 days), or whose quiet period has run out.
+
+    A thread inside its quiet period is skipped entirely: the 60-day staleness
+    nudge is exactly the noise the quiet exists to suppress, and a deliberate
+    pause reads as neglect to a date-only check. Once the quiet expires it is
+    reported ONCE as `quiet-expired`, which is what closes the loop -- without
+    it a freeze would outlive the condition it was set for.
+    """
     today = today or datetime.now(get_default_tz()).date()
     candidates: list[ArchiveCandidate] = []
     for type_ in ("business", "personal"):
@@ -255,6 +345,14 @@ def scan_for_archive(threads_root: Path, *, today: date | None = None) -> list[A
                 t = parse_thread_file(f)
             except (ValueError, yaml.YAMLError):
                 continue
+            if is_quiet(t, today):
+                continue
+            if t.quiet_until:
+                candidates.append(ArchiveCandidate(
+                    path=f, action="quiet-expired",
+                    reason=f"quiet period ended {t.quiet_until}; clear it with "
+                           f"`thread.py quiet {t.id} --clear`",
+                ))
             try:
                 last = date.fromisoformat(t.last_touched)
             except (ValueError, TypeError):

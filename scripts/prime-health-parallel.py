@@ -398,10 +398,17 @@ def run_ops_radar(workspace_root: Path) -> dict[str, Any]:
 
 
 def run_reminders_due(workspace_root: Path) -> dict[str, Any]:
-    """Read-only: surface due + upcoming durable reminders as a /prime backstop.
+    """Read-only: surface durable reminders that are DUE, as a /prime backstop.
+
+    Due only, deliberately. This check used to also list everything falling
+    inside a 7-day lookahead, which meant a reminder the operator had dated for
+    a specific day reached them up to a week early, every session until then --
+    the exact noise the date was chosen to avoid. A reminder dated D is for D.
+    `scripts/reminders-notify.py`, the Telegram path, has always been due-only;
+    this brings the /prime backstop in line with it.
 
     Never mutates the store, never marks fired. ceo-only surface via outputs/;
-    omit_if_empty keeps the brief clean when nothing is due or upcoming.
+    omit_if_empty keeps the brief clean when nothing is due.
     """
     from datetime import datetime as _dt
 
@@ -409,16 +416,13 @@ def run_reminders_due(workspace_root: Path) -> dict[str, Any]:
         from scripts.utils import reminders_store as rs
         today = _dt.now(get_default_tz()).date()
         due = rs.due_records(today)
-        upcoming = rs.upcoming(today, days=7)
     except Exception as exc:  # noqa: BLE001 - boundary; reported inline
         return {"status": "error", "output": f"reminders check failed: {exc}",
                 "omit_if_empty": True}
-    lines = []
-    for r in due:
-        lines.append(f"DUE: {r['message']}" + (f"  -> {r['command']}" if r.get("command") else ""))
-    for r in upcoming:
-        when = r["when"] if r["kind"] == "once" else "recurring"
-        lines.append(f"upcoming ({when}): {r['message']}")
+    lines = [
+        f"DUE: {r['message']}" + (f"  -> {r['command']}" if r.get("command") else "")
+        for r in due
+    ]
     return {"status": "ok", "output": "\n".join(lines), "omit_if_empty": True}
 
 

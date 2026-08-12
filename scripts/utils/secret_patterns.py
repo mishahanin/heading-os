@@ -36,6 +36,7 @@ SECRET_PATTERNS = [
     (re.compile(r'r8_[a-zA-Z0-9]{16,}'), "Replicate API token"),
     (re.compile(r'fc-[A-Za-z0-9]{16,}'), "Firecrawl API key"),
     (re.compile(r'ctx7sk-[a-zA-Z0-9-]{16,}'), "Context7 API key"),
+    (re.compile(r'cpx-[a-zA-Z0-9]{16,}'), "CLIProxyAPI local proxy key"),
     (re.compile(r'ghp_[a-zA-Z0-9]{16,}'), "GitHub personal access token"),
     (re.compile(r'gho_[a-zA-Z0-9]{16,}'), "GitHub OAuth token"),
     (re.compile(r'AKIA[0-9A-Z]{16}'), "AWS access key"),

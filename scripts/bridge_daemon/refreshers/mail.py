@@ -44,6 +44,35 @@ def read_email_state(workspace_root: Path, data_root: "Path | None" = None) -> d
 def count_unread(state: dict) -> int:
     return sum(1 for m in state.get("messages", []) if m.get("unread"))
 
+def _failure_detail(result: "subprocess.CompletedProcess") -> str:
+    """Best available reason for a non-zero producer exit.
+
+    The producer reports its one expected failure -- `exchange_unreachable`,
+    the WSL/CGNAT route to mail.31c.io being down -- as a JSON object on
+    STDOUT, then exits 2. Logging stderr alone therefore printed a bare exit
+    code with the explanation sitting one stream away, which is what two
+    2026-08-12 log lines looked like. Read stdout too, and prefer its
+    structured error when there is one.
+    """
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    try:
+        payload = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("error"):
+        parts = [f"error={payload['error']}"]
+        for key in ("detail", "hint"):
+            if payload.get(key):
+                parts.append(f"{key}={str(payload[key])[:200]}")
+        return "; ".join(parts)
+    if stderr:
+        return f"stderr={stderr[:500]}"
+    if stdout:
+        return f"stdout={stdout[:500]}"
+    return "no output on either stream"
+
+
 def refresh(workspace_root: Path, state_obj: "State") -> None:
     """Refresher callback: invoke `email-intelligence.py --unread`.
 
@@ -53,17 +82,19 @@ def refresh(workspace_root: Path, state_obj: "State") -> None:
     actual inbox: anything read or deleted in Outlook drops off here.
 
     Failure modes are caught and logged, never raised - a daemon
-    scheduler must not crash on transient Exchange errors. We bump inbox
-    so the version counter (and freshness UI) advances regardless.
+    scheduler must not crash on transient Exchange errors. The version
+    counter advances either way so the browser re-reads; the freshness
+    clock advances only on a run that actually fetched.
     """
     if not PRODUCER_SCRIPT.exists():
         logging.warning(
             "bridge.email: producer script missing at %s; skipping fetch",
             PRODUCER_SCRIPT,
         )
-        state_obj.bump("inbox")
+        state_obj.bump("inbox", fresh=False)
         return
 
+    fetched = False
     try:
         result = subprocess.run(
             [sys.executable, str(PRODUCER_SCRIPT), "--unread"],
@@ -75,11 +106,12 @@ def refresh(workspace_root: Path, state_obj: "State") -> None:
         )
         if result.returncode != 0:
             logging.warning(
-                "bridge.email: producer exited %d; stderr=%s",
+                "bridge.email: producer exited %d; %s",
                 result.returncode,
-                result.stderr.strip()[:500],
+                _failure_detail(result),
             )
         else:
+            fetched = True
             logging.info("bridge.email: producer ok")
     except subprocess.TimeoutExpired:
         logging.warning(
@@ -88,6 +120,6 @@ def refresh(workspace_root: Path, state_obj: "State") -> None:
     except OSError as e:
         logging.warning("bridge.email: subprocess failed: %s", e)
 
-    # Always bump inbox so the ETag advances and the browser sees a fresh
-    # data_time even if the producer didn't update state.json.
-    state_obj.bump("inbox")
+    # Version always, data_time only when the fetch happened: a failed run has
+    # established nothing about how old the inbox on screen is.
+    state_obj.bump("inbox", fresh=fetched)

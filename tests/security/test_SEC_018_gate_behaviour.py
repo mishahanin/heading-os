@@ -99,6 +99,7 @@ _PREFIX_DESCRIPTIONS = {
     "r8_": "Replicate API token",
     "fc-": "Firecrawl API key",
     "ctx7sk-": "Context7 API key",
+    "cpx-": "CLIProxyAPI local proxy key",
     "ghp_": "GitHub personal access token",
     "gho_": "GitHub OAuth token",
 }

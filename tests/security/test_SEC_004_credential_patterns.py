@@ -189,6 +189,38 @@ def test_a_marker_prefixed_high_entropy_value_is_flagged(marker, tail):
     )
 
 
+# 2026-08-12: the local CLIProxyAPI key (cpx- prefix) was found verbatim in a
+# git-TRACKED handoff archive written 2026-07-18. checkpoint-save.py runs every
+# summary through redact() precisely to stop that, and the redactor passed it
+# through because no pattern named the prefix. The vocabulary gap IS the
+# failure: every layer that guards credentials reads this one list.
+# Synthetic fixture below - format only, no relation to any live value.
+_CPX_FIXTURE = "cpx-" + "SyntheticFixtureValue0000000000a"  # pragma: allowlist secret
+
+
+def test_the_local_proxy_key_prefix_is_in_the_shared_vocabulary():
+    from scripts.utils.secret_patterns import SECRET_PATTERNS
+
+    assert _flagged_by(SECRET_PATTERNS, _CPX_FIXTURE), (
+        "the cpx- local proxy key format is not matched by SECRET_PATTERNS"
+    )
+
+
+def test_the_local_proxy_key_is_redacted_rather_than_passed_through():
+    from scripts.utils.secret_patterns import redact
+
+    assert _CPX_FIXTURE not in redact(f"apikey: {_CPX_FIXTURE}")
+
+
+def test_the_blocking_gate_copy_flags_the_local_proxy_key_too():
+    patterns = getattr(_load_dispatch_module(), "SECRET_PATTERNS", [])
+
+    assert patterns, "could not load _dispatch.py SECRET_PATTERNS"
+    assert _flagged_by(patterns, _CPX_FIXTURE), (
+        "the PreToolUse gate does not flag the cpx- local proxy key format"
+    )
+
+
 @pytest.mark.parametrize("marker,tail", _BYPASSES)
 def test_the_blocking_gate_copy_flags_the_same_bypass(marker, tail):
     """_dispatch.py keeps its own copy; the hole must be closed there too.
@@ -241,7 +273,7 @@ from pathlib import Path as _Path  # noqa: E402
 _ROOT = _Path(__file__).resolve().parent.parent.parent
 
 # (prefix, key-material alphabet sample char) for the 7 aligned prefixes.
-_ALIGNED_PREFIXES = ["sk-ant-", "pplx-", "r8_", "fc-", "ctx7sk-", "ghp_", "gho_"]
+_ALIGNED_PREFIXES = ["sk-ant-", "pplx-", "r8_", "fc-", "ctx7sk-", "cpx-", "ghp_", "gho_"]
 
 
 def _load_scanner_module(rel_path: str):

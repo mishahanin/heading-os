@@ -87,14 +87,25 @@ def test_verify_anthropic_uses_env_model_override(monkeypatch):
 
 
 def test_verify_anthropic_uses_the_resolved_family_when_env_unset(monkeypatch):
-    """Without WIZARD_PING_MODEL, the ping resolves PING_FAMILY to a live model.
+    """Without WIZARD_PING_MODEL, the ping resolves PING_FAMILY and sends it.
 
     Asserts the family, not a release: the whole point of the 2026-08-09 change
     is that this script keeps working when the model it used to name is retired.
+
+    `claude_models.latest` is stubbed rather than left to run, and that is the
+    fix for a real flake. `wizard-verify-key` and `claude_models` share one
+    `urllib.request` module object, so patching urlopen here also patches the
+    model-list fetch. Whether that fetch happens at all depends on a memo and an
+    on-disk cache TTL: warm, `latest()` returns immediately and the test passes;
+    expired, it issues a GET into this stub, whose `req.data` is None, and the
+    test dies on an AttributeError that says nothing about the wizard. It blocked
+    a push on 2026-08-12 for exactly that reason, under `-n auto` where each
+    worker starts with a cold memo. A test must not resolve on a cache clock.
     """
     import json as _json
     mod = _load_verify()
     captured = {}
+    asked = {}
 
     class FakeResp:
         status = 200
@@ -106,9 +117,17 @@ def test_verify_anthropic_uses_the_resolved_family_when_env_unset(monkeypatch):
         captured["body"] = _json.loads(req.data.decode("utf-8"))
         return FakeResp()
 
+    def fake_latest(family, **kw):
+        asked["family"] = family
+        return f"claude-{family}-9-9-test-fixture"
+
     monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(mod.claude_models, "latest", fake_latest)
     monkeypatch.delenv("WIZARD_PING_MODEL", raising=False)
+
     mod.verify_anthropic("TEST-FIXTURE-KEY")
+
+    assert asked["family"] == mod.PING_FAMILY, "the ping did not resolve PING_FAMILY"
     sent = captured["body"]["model"]
     assert sent.startswith(f"claude-{mod.PING_FAMILY}-"), sent
 

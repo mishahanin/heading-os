@@ -158,6 +158,11 @@
 <td>Where secrets belong (never in tracked files), the defence layers, credential rotation, and incident response.</td>
 </tr>
 <tr>
+<td><code>generated-code-execution.md</code></td>
+<td>Path-scoped</td>
+<td>The single documented carve-out from the global ban on executing generated code: the <code>/census</code> traversal, the four sandbox controls that compensate for it, and the four conditions that void the exception. It licenses executing a model-written program under those controls, never <code>eval</code>, <code>exec</code>, or <code>compile</code>, which stay forbidden outright.</td>
+</tr>
+<tr>
 <td><code>classification.md</code></td>
 <td>Always-on</td>
 <td>Record classification (engine / private / corporate) driven by <code>config/routing-map.yaml</code>. The fail-closed direction that keeps real data out of the engine.</td>

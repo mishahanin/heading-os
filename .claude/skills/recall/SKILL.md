@@ -13,7 +13,10 @@ description: >
   brief / contact / note by meaning rather than exact words. Do NOT use for:
   Odin-brain-only advice or episode dedup (use /odin recall, which is
   brain-scoped); external/world intelligence on a company or person (use /osint);
-  capturing a NEW note (use /zk); plain exact-string file search (use Grep). This
+  capturing a NEW note (use /zk); plain exact-string file search (use Grep);
+  counting or aggregating ACROSS many files, where the answer sits in no single
+  chunk ("how many threads have not moved in 30 days", "which pipeline rows have
+  no CRM card") - that is /census, which traverses rather than retrieves. This
   skill never fabricates beyond returned sources and never sends anything. CEO-only.
 argument-hint: "<what to recall> [--collection content|code|all] [--layer NAME] [--personal]"
 allowed-tools: "Read, Bash(python3:*), Bash(python:*)"

@@ -20,7 +20,12 @@ an unset variable is the machine's default, not a declaration.
 **Reproduction.** The model proposes a command, this file runs it, and the
 fail-to-pass transition is observed across the fix rather than narrated. A
 finding reproduced by a command needs no jury, which is why `REPRODUCED` outranks
-a debate - but only the harness may write it.
+a debate - but only the harness may write it, and only for an exit code that
+came from the intended check. Until 2026-08-13 any non-zero exit bought that
+verdict, so a command that never ran - a shell pipeline passed as literal argv, a
+mistyped pytest path collecting nothing, a missing executable - recorded as a
+reproduced finding. `_run` now separates "the check ran and failed" from "the
+check did not run", and the second records nothing (exit `4`).
 
 Every result lands in the run record through `scripts/utils/scrutinize_record.py`.
 What this does NOT do is make omission impossible: the Claude-side judge IS the
@@ -43,6 +48,7 @@ Exit codes:
   1  degraded: no judge verdict was produced (sensitivity or proxy)
   2  bad arguments
   3  the reproduction did not reproduce, or the promotion had nothing to join
+  4  the command did not run its check, so its exit code is not evidence
 """
 from __future__ import annotations
 
@@ -55,6 +61,7 @@ import re
 import shlex
 import subprocess  # nosec B404 - fixed argv reproduction commands, never shell=True
 import sys
+from dataclasses import dataclass
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -80,6 +87,36 @@ from scripts.utils.sensitive import sensitivity_is_declared  # noqa: E402
 KIMI_REASONING = "high"
 _PYPI_BASE = "https://pypi.org/pypi/"
 REPRODUCTION_TIMEOUT_S = 300
+
+# A reproduction command is run as a fixed argv, never through a shell, so a
+# token the operator meant as a shell operator arrives at the child process as a
+# literal argument and the pipeline they wrote never happens. The exit code that
+# comes back is then an artifact of the malformed invocation, and it is non-zero,
+# which is exactly the value `REPRODUCED` reads as proof. Refuse the command
+# instead of recording the artifact.
+SHELL_OPERATORS = frozenset({"|", "||", "&&", ";", "&", ">", ">>", "<", "<<"})
+
+# Exit codes that report the command never got as far as its check.
+EXIT_NOT_EXECUTABLE = 126
+EXIT_NOT_FOUND = 127
+
+# pytest is this workspace's only test harness and these codes are its way of
+# saying the check did not run, as opposed to ran and failed:
+#
+#   2  interrupted before or during collection - a bad import in the test module
+#      is the common case, and it is at least as frequent as the mistyped path
+#      this carve-out was first written for
+#   3  internal error
+#   4  usage error
+#   5  no tests collected - what a mistyped test path produces
+#
+# Only exit 1 means "tests ran and something failed", which is the only non-zero
+# code that may be recorded as REPRODUCED. Exit 2 was missing until the
+# 2026-08-13 audit, so a test module with a broken import was written into the
+# run record as a reproduced finding for a check that never executed.
+PYTEST_DID_NOT_RUN = frozenset({2, 3, 4, 5})
+
+OUTPUT_TAIL_CHARS = 800
 
 
 def kimi_model() -> str:
@@ -375,24 +412,107 @@ def currency(*, run_id: str, target: str, imports: list[str]) -> int:
 # ============================================================
 # Reproduction
 # ============================================================
-def _run(cmd: list[str]) -> int:
-    proc = subprocess.run(  # nosec B603 - list argv from the operator, never shell
-        cmd, capture_output=True, text=True, timeout=REPRODUCTION_TIMEOUT_S)
-    return proc.returncode
+@dataclass(frozen=True)
+class CommandRun:
+    """One observed execution, and whether its exit code means anything.
+
+    `unusable` is the field that matters. A non-zero exit is the evidence behind
+    `REPRODUCED`, so an exit code produced by a command that never reached its
+    check is not weak evidence, it is a false positive wearing the same number.
+    When `unusable` is set, the caller records nothing.
+    """
+
+    exit_code: int | None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+    unusable: str | None = None
+
+
+def _tail(text: str) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= OUTPUT_TAIL_CHARS else "..." + text[-OUTPUT_TAIL_CHARS:]
+
+
+def _reject_shell_syntax(cmd: list[str]) -> str | None:
+    """The operator's shell operators, which this harness will not honour."""
+    found = [tok for tok in cmd if tok in SHELL_OPERATORS]
+    if not found:
+        return None
+    return (f"the command carries shell syntax ({' '.join(sorted(set(found)))}) "
+            "but runs as a fixed argv with no shell, so it would not do what it "
+            "reads as; rewrite it as a single command or wrap it in a script")
+
+
+def _run(cmd: list[str]) -> CommandRun:
+    """Run a reproduction command and report whether its exit code is evidence."""
+    if not cmd:
+        return CommandRun(None, unusable="empty command")
+    rejected = _reject_shell_syntax(cmd)
+    if rejected:
+        return CommandRun(None, unusable=rejected)
+    try:
+        proc = subprocess.run(  # nosec B603 - list argv from the operator, never shell
+            cmd, capture_output=True, text=True, timeout=REPRODUCTION_TIMEOUT_S)
+    except FileNotFoundError:
+        return CommandRun(None, unusable=f"executable not found: {cmd[0]}")
+    except PermissionError:
+        return CommandRun(None, unusable=f"not executable: {cmd[0]}")
+    except subprocess.TimeoutExpired:
+        return CommandRun(
+            None, unusable=f"no exit within {REPRODUCTION_TIMEOUT_S}s: the check "
+                           "did not finish, so its outcome is unknown")
+
+    code = proc.returncode
+    out, err = _tail(proc.stdout), _tail(proc.stderr)
+    if code < 0:
+        return CommandRun(code, out, err,
+                          unusable=f"killed by signal {-code} before it could report")
+    if code in (EXIT_NOT_EXECUTABLE, EXIT_NOT_FOUND):
+        return CommandRun(code, out, err,
+                          unusable=f"exit {code}: the command was never executed")
+    if any("pytest" in tok for tok in cmd) and code in PYTEST_DID_NOT_RUN:
+        return CommandRun(code, out, err,
+                          unusable=f"pytest exit {code}: no test ran (collection "
+                                   "error, internal error, usage error or nothing "
+                                   "collected), so nothing was checked")
+    return CommandRun(code, out, err)
+
+
+def _refuse_unusable(run: CommandRun) -> None:
+    print(f"{RED}the command did not run its check: {run.unusable}{RESET}",
+          file=sys.stderr)
+    if run.stderr_tail:
+        print(run.stderr_tail, file=sys.stderr)
 
 
 def reproduce(*, run_id: str, target: str, finding_id: str, cmd: list[str]) -> int:
     """Run the proposed command and record the pre-fix exit code."""
-    exit_before = _run(cmd)
-    if exit_before == 0:
+    run = _run(cmd)
+    if run.unusable:
+        # Recorded, not merely printed. The module docstring promises every
+        # result lands in the run record, and `judge()` already writes a
+        # `degraded` row on both of its failure paths; this one printed to
+        # stderr and returned, so `--validate` saw a finding with no attempt
+        # against it and could not tell that from a finding nobody tried.
+        append_row(run_id=run_id, kind="degraded", target=target,
+                   finding_id=finding_id,
+                   degraded=f"reproduction refused: {run.unusable}")
+        _refuse_unusable(run)
+        return 4
+    if run.exit_code == 0:
+        append_row(run_id=run_id, kind="degraded", target=target,
+                   finding_id=finding_id,
+                   degraded="command exits 0 before any fix: it reproduces nothing")
         print(f"{RED}command exits 0 before any fix: it reproduces nothing{RESET}",
               file=sys.stderr)
         return 3
     append_row(run_id=run_id, kind="reproduction", target=target,
                finding_id=finding_id, verdict="REPRODUCED",
-               reproduction={"cmd": " ".join(cmd), "exit_before": exit_before,
-                             "exit_after": None})
-    print(f"{GREEN}REPRODUCED (exit {exit_before}){RESET}")
+               reproduction={"cmd": " ".join(cmd), "exit_before": run.exit_code,
+                             "exit_after": None,
+                             "stdout_tail": run.stdout_tail,
+                             "stderr_tail": run.stderr_tail})
+    print(f"{GREEN}REPRODUCED (exit {run.exit_code}){RESET}")
     return 0
 
 
@@ -403,16 +523,24 @@ def promote(*, run_id: str, target: str, finding_id: str, cmd: list[str]) -> int
         print(f"{RED}no prior reproduction for {finding_id}: nothing to promote{RESET}",
               file=sys.stderr)
         return 3
-    exit_after = _run(cmd)
-    if exit_after != 0:
-        print(f"{RED}command still exits {exit_after}: the fix did not falsify it{RESET}",
+    run = _run(cmd)
+    if run.unusable:
+        append_row(run_id=run_id, kind="degraded", target=target,
+                   finding_id=finding_id,
+                   degraded=f"promotion refused: {run.unusable}")
+        _refuse_unusable(run)
+        return 4
+    if run.exit_code != 0:
+        print(f"{RED}command still exits {run.exit_code}: the fix did not falsify it{RESET}",
               file=sys.stderr)
         return 3
     append_row(run_id=run_id, kind="reproduction", target=target,
                finding_id=finding_id, verdict="FALSIFIED",
                reproduction={"cmd": " ".join(cmd),
                              "exit_before": prior["reproduction"]["exit_before"],
-                             "exit_after": exit_after})
+                             "exit_after": run.exit_code,
+                             "stdout_tail": run.stdout_tail,
+                             "stderr_tail": run.stderr_tail})
     print(f"{GREEN}FALSIFIED{RESET}")
     return 0
 

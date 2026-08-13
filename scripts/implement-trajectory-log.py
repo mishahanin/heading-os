@@ -69,6 +69,11 @@ Four subcommands:
 Event types: run_start, step_start, step_end, validation_check,
               evaluation_result, deviation, wave_start, wave_end, run_end.
 
+wave_start.parallel records the PLAN'S declaration that a wave's steps may
+interleave, not an observation that they did. Nothing here watches execution,
+so a declared-parallel wave whose steps ran back-to-back is normal
+(`.claude/rules/scope-claims.md`: say what the method establishes).
+
 Each event record: {timestamp, event_type, step_number, payload}.
 
 Atomic append discipline: the JSONL is shared-state in wave-mode
@@ -1014,7 +1019,13 @@ def main(argv: list[str] | None = None) -> int:
     typed.add_argument("--step-count", type=int, dest="step_count",
                        help="wave_start step count.")
     typed.add_argument("--parallel", action=argparse.BooleanOptionalAction,
-                       default=None, help="wave_start parallel flag (--parallel/--no-parallel).")
+                       default=None,
+                       help="wave_start: the PLAN'S declaration that this wave's steps "
+                            "may interleave (--parallel/--no-parallel). It records what "
+                            "was permitted, never what was observed - a declared-parallel "
+                            "wave whose steps ran back-to-back is normal and is not a "
+                            "defect. The emit-time sequencing guard reads it as a "
+                            "permission; do not read it as evidence of concurrency.")
     typed.add_argument("--successes", type=int, help="wave_end successes count.")
     typed.add_argument("--failures", type=int, help="wave_end failures count.")
     typed.add_argument("--check", help="validation_check name.")

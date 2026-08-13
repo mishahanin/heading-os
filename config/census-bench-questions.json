@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "description": "Question set for the /census acceptance benchmark. Every question is phrased STRUCTURALLY (no person, company or deal is named) so this file routes to the public engine and so the set resolves on any HEADING OS workspace, not only the one it was written on. Ground truth is computed by scripts/utils/census_oracles.py, never by a model.",
+  "plan": "plans/2026-08-13-census-acceptance-benchmark.md",
+  "question_class": {
+    "traversal": "The answer requires visiting many files. A retrieval ceiling below 1.0 here is evidence that top-K cannot carry the answer, which is the case /census is proposed for.",
+    "cross_source": "The answer is a set relation between two small, dense files. The ceiling will sit near 1.0 and says only that retrieval is not the bottleneck; a wrong answer at ceiling 1.0 localises the failure to reasoning, where SRLM (arXiv:2603.15653) warns a traversal primitive HURTS.",
+    "control_note": "A control's answer must be LITERALLY WRITTEN in the file that constitutes it. Set-extremum questions (most recent, longest untouched, most linked-to) are aggregation in disguise: no file states that it holds the extremum. That error scored the group 0.500 on 2026-08-13 while the two genuine controls scored 1.00 each. A control's truth must also have cardinality exactly 1: 'find every file carrying marker X' is traversal again once X sits in more than one file, measured 1.00 / 1.00 / 1.00 for the cardinality-1 controls against 0.50 and 0.17 for the two that returned sets."
+  },
+  "questions": [
+    {
+      "id": "agg-01",
+      "group": "aggregate",
+      "question_class": "traversal",
+      "oracle": "agg-01",
+      "answer_type": "paths",
+      "corpus": [
+        "threads"
+      ],
+      "question_ru": "Сколько активных тредов не двигалось больше 30 дней, и какие именно",
+      "question_en": "How many active threads have not moved in over 30 days, and which ones"
+    },
+    {
+      "id": "agg-02",
+      "group": "aggregate",
+      "question_class": "cross_source",
+      "oracle": "agg-02",
+      "answer_type": "count",
+      "corpus": [
+        "context",
+        "threads"
+      ],
+      "question_ru": "Какие компании из pipeline не упоминаются ни в одном активном треде",
+      "question_en": "Which pipeline companies are mentioned in no active thread",
+      "census_scored": false,
+      "not_scored_because": "The question does not state how to ENUMERATE the pipeline table rows or the people bullets, so oracle and traversal cannot converge on a rule neither was given. Diagnosed 2026-08-13: the three disagreements are 66 vs 19, 51 vs 1, 74 vs 13, none of them about traversal. The retrieval CEILING for this class stays measured and reported - it is the evidence for the Non-Goal - but /census is not graded on it."
+    },
+    {
+      "id": "agg-03",
+      "group": "aggregate",
+      "question_class": "cross_source",
+      "oracle": "agg-03",
+      "answer_type": "count",
+      "corpus": [
+        "context",
+        "crm"
+      ],
+      "question_ru": "Кто перечислен в файле ключевых контактов, но не имеет карточки CRM",
+      "question_en": "Who is listed in the key-contacts file but has no CRM card",
+      "census_scored": false,
+      "not_scored_because": "The question does not state how to ENUMERATE the pipeline table rows or the people bullets, so oracle and traversal cannot converge on a rule neither was given. Diagnosed 2026-08-13: the three disagreements are 66 vs 19, 51 vs 1, 74 vs 13, none of them about traversal. The retrieval CEILING for this class stays measured and reported - it is the evidence for the Non-Goal - but /census is not graded on it."
+    },
+    {
+      "id": "agg-04",
+      "group": "aggregate",
+      "question_class": "cross_source",
+      "oracle": "agg-04",
+      "answer_type": "count",
+      "corpus": [
+        "context",
+        "crm"
+      ],
+      "question_ru": "Какие строки pipeline не имеют ни одной карточки CRM с этой компанией",
+      "question_en": "Which pipeline rows have no CRM card carrying that company",
+      "census_scored": false,
+      "not_scored_because": "The question does not state how to ENUMERATE the pipeline table rows or the people bullets, so oracle and traversal cannot converge on a rule neither was given. Diagnosed 2026-08-13: the three disagreements are 66 vs 19, 51 vs 1, 74 vs 13, none of them about traversal. The retrieval CEILING for this class stays measured and reported - it is the evidence for the Non-Goal - but /census is not graded on it."
+    },
+    {
+      "id": "agg-05",
+      "group": "aggregate",
+      "question_class": "traversal",
+      "oracle": "agg-05",
+      "answer_type": "paths",
+      "corpus": [
+        "crm"
+      ],
+      "question_ru": "Сколько карточек CRM с типом отношений prospect не трогалось больше 60 дней",
+      "question_en": "How many CRM cards of relationship type prospect have not been touched in over 60 days"
+    },
+    {
+      "id": "agg-06",
+      "group": "aggregate",
+      "question_class": "traversal",
+      "oracle": "agg-06",
+      "answer_type": "paths",
+      "corpus": [
+        "threads",
+        "crm"
+      ],
+      "question_ru": "Какие активные треды перечисляют контрагента, чьё имя не находится ни в одной карточке CRM. Контрагент считается найденным, если имя какой-либо карточки встречается как подстрока в строке контрагента, без учёта регистра и с дефисами, заменёнными на пробелы",
+      "question_en": "Which active threads list a counterparty whose name matches no CRM card. A counterparty counts as matched when some card name occurs as a substring of the counterparty entry, case-insensitively, with hyphens collapsed to spaces"
+    },
+    {
+      "id": "agg-07",
+      "group": "aggregate",
+      "question_class": "traversal",
+      "oracle": "agg-07",
+      "answer_type": "paths",
+      "corpus": [
+        "auto_memory"
+      ],
+      "question_ru": "Сколько файлов памяти содержат ссылку на несуществующий файл, и какие ссылки битые",
+      "question_en": "How many memory files carry a link to a file that does not exist, and which links are broken"
+    },
+    {
+      "id": "agg-08",
+      "group": "aggregate",
+      "question_class": "traversal",
+      "oracle": "agg-08",
+      "answer_type": "paths",
+      "corpus": [
+        "threads"
+      ],
+      "question_ru": "Какие активные треды не имеют ни одного открытого follow-up",
+      "question_en": "Which active threads have no open follow-up at all"
+    },
+    {
+      "id": "agg-09",
+      "group": "aggregate",
+      "question_class": "traversal",
+      "oracle": "agg-09",
+      "answer_type": "paths",
+      "corpus": [
+        "threads"
+      ],
+      "question_ru": "Сколько тредов упоминают две и более страны из справочного списка английских названий стран, и какие это треды. Название засчитывается только как отдельное слово, а не как часть другого слова",
+      "question_en": "How many threads mention two or more countries from the reference list of English country names, and which threads are they. A name counts only as a whole word, never as part of another word"
+    },
+    {
+      "id": "agg-10",
+      "group": "aggregate",
+      "question_class": "traversal",
+      "oracle": "agg-10",
+      "answer_type": "paths",
+      "corpus": [
+        "crm"
+      ],
+      "question_ru": "Какие карточки CRM стоят в статусе, отличном от active",
+      "question_en": "Which CRM cards stand in a status other than active"
+    },
+    {
+      "id": "ctl-01",
+      "group": "control",
+      "question_class": "traversal",
+      "oracle": "ctl-01",
+      "answer_type": "paths",
+      "corpus": [
+        "threads"
+      ],
+      "question_ru": "Какой тред стоит в статусе on-hold",
+      "question_en": "Which thread stands in status on-hold"
+    },
+    {
+      "id": "ctl-02",
+      "group": "control",
+      "question_class": "traversal",
+      "oracle": "ctl-02",
+      "answer_type": "paths",
+      "corpus": [
+        "crm"
+      ],
+      "question_ru": "Какие карточки CRM стоят в статусе dormant",
+      "question_en": "Which CRM cards stand in status dormant"
+    },
+    {
+      "id": "ctl-03",
+      "group": "control",
+      "question_class": "traversal",
+      "oracle": "ctl-03",
+      "answer_type": "paths",
+      "corpus": [
+        "threads"
+      ],
+      "question_ru": "Какой тред несёт метку тишины с датой",
+      "question_en": "Which thread carries a dated quiet marker"
+    },
+    {
+      "id": "ctl-04",
+      "group": "control",
+      "question_class": "traversal",
+      "oracle": "ctl-04",
+      "answer_type": "paths",
+      "corpus": [
+        "crm"
+      ],
+      "question_ru": "Какой контакт помечен типом отношений customer",
+      "question_en": "Which contact is typed relationship_type customer"
+    },
+    {
+      "id": "ctl-05",
+      "group": "control",
+      "question_class": "traversal",
+      "oracle": "ctl-05",
+      "answer_type": "paths",
+      "corpus": [
+        "auto_memory"
+      ],
+      "question_ru": "Какой файл памяти служит индексом всех остальных",
+      "question_en": "Which memory file serves as the index of all the others"
+    }
+  ]
+}

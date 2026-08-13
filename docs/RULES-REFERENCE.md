@@ -37,6 +37,7 @@ The controls with teeth. These are enforced by hooks and code, not by prose alon
 | `lethal-trifecta.md` | Always-on | The one control every send-capable path inherits: outbound send is always human-gated, never autonomous. An agent may draft and queue, a human clicks before anything leaves. |
 | `tiered-risk.md` | Path-scoped | The three-tier risk gate (`autonomous` / `notify` / `gated`) for Action Queue cards, and the invariant that a send-capable action always floors to `gated` regardless of config. |
 | `security.md` | Always-on | Where secrets belong (never in tracked files), the defence layers, credential rotation, and incident response. |
+| `generated-code-execution.md` | Path-scoped | The single documented carve-out from the global ban on executing generated code: the `/census` traversal, the four sandbox controls that compensate for it, and the four conditions that void the exception. It licenses executing a model-written program under those controls, never `eval`, `exec`, or `compile`, which stay forbidden outright. |
 | `classification.md` | Always-on | Record classification (engine / private / corporate) driven by `config/routing-map.yaml`. The fail-closed direction that keeps real data out of the engine. |
 | `vpn-preflight.md` | Always-on | A confirmation gate before browsing operations that public services block from datacenter IPs (YouTube, Google, LinkedIn, some OSINT). |
 

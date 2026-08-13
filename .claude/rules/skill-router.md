@@ -155,6 +155,7 @@ Full triggers, exclusions, and compound patterns: `reference/skill-router/operat
 | `/burst [N]` | NEVER auto-trigger. Explicit `/burst [N]` or `/burst [N]: <seed>` only. |
 | `/calibrate [light]` | NEVER auto-trigger. Explicit `/calibrate [light]` only. |
 | `/canopus [note \| check \| probe]` | NEVER auto-trigger. Explicit `/canopus [note \| check \| probe]` only. Bare `/canopus` prints the seven steps and the two the operator owns. |
+| `/census` | how many X have Y, count across the workspace, which pipeline rows have no card, which threads have not moved in N days, aggregate over the whole corpus, intersection of people and pipeline |
 | `/checkpoint [note]` | NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/` without running /compact. Surfaces from the two-tier checkpoint-offer hook at 25%/30% used context. |
 | `/cold-sweep` | cold sweep, cold-sweep, drain cold contacts, sweep overdue contacts, drain the red debt |
 | `/context7` | context7, look up docs for [library], library documentation |

@@ -1,0 +1,364 @@
+"""The four sandbox controls, asserted as refusals rather than as intentions.
+
+These began as five commands run by hand in a shell on 2026-08-13. A control
+proven once, by a human, in a terminal, is a control nobody will notice losing:
+the whole value of `/census` executing model-written Python rests on this box,
+so the proof has to run on every suite.
+
+Two disciplines this file holds to, both learned the same day.
+
+**Assert the SPECIFIC refusal.** A test satisfied by "some failure" passes
+against a sandbox that never started, which is exactly the defect `/scrutinize`
+found in the reproduction harness hours earlier: any non-zero exit read as
+evidence. So each control here asserts the symptom of its own failure mode -
+`Errno 101` for the network, a read-only filesystem for the corpus - and the
+corpus test additionally verifies the bytes on disk did not move, because a
+refusal message is a claim and unchanged bytes are the proof.
+
+**Refuse before the process exists.** The air-gap and missing-bwrap tests assert
+that nothing ran at all, not that a run failed. A guard that fires after the
+traversal has read the corpus is a report.
+"""
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+import textwrap
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.utils import sandbox
+from scripts.utils.sandbox import run_sandboxed
+
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "census_corpus"
+
+needs_bwrap = pytest.mark.skipif(
+    shutil.which("bwrap") is None,
+    reason="bubblewrap absent; the refusal path is covered separately below")
+
+
+@pytest.fixture
+def out(tmp_path):
+    d = tmp_path / "out"
+    d.mkdir()
+    return d
+
+
+def program(tmp_path: Path, body: str) -> Path:
+    p = tmp_path / "traverse.py"
+    p.write_text(textwrap.dedent(body), encoding="utf-8")
+    return p
+
+
+def answer(out_dir: Path) -> dict:
+    return json.loads((out_dir / "answer.json").read_text(encoding="utf-8"))
+
+
+# ============================================================
+# Control 1 - no network inside the box
+# ============================================================
+
+@needs_bwrap
+def test_the_box_cannot_reach_the_network(tmp_path, out):
+    prog = program(tmp_path, '''
+        import json, pathlib, socket
+        results = {}
+        for label, target in (("ip", ("1.1.1.1", 443)), ("proxy", ("127.0.0.1", 8317))):
+            try:
+                socket.create_connection(target, timeout=4)
+                results[label] = "REACHED"
+            except OSError as exc:
+                results[label] = f"refused: [Errno {exc.errno}] {exc}"
+        pathlib.Path("/out/answer.json").write_text(json.dumps(results))
+    ''')
+    run_sandboxed(program=prog, corpus_paths=[FIXTURE], out_dir=out, timeout_s=60)
+    got = answer(out)
+    assert "Errno 101" in got["ip"], got["ip"]
+    # The local proxy matters on its own: the design forbids a model call from
+    # inside, and an empty netns is what makes that structural rather than
+    # a promise in a docstring.
+    assert got["proxy"].startswith("refused:"), got["proxy"]
+
+
+# ============================================================
+# Control 2 - no secrets in the box
+# ============================================================
+
+@needs_bwrap
+def test_nothing_crosses_from_the_parent_environment(tmp_path, out, monkeypatch):
+    monkeypatch.setenv("CENSUS_CANARY_SECRET", "must-not-cross-the-boundary")
+    prog = program(tmp_path, '''
+        import json, os, pathlib
+        pathlib.Path("/out/answer.json").write_text(json.dumps(sorted(os.environ)))
+    ''')
+    run_sandboxed(program=prog, corpus_paths=[FIXTURE], out_dir=out, timeout_s=60)
+    keys = answer(out)
+    assert "CENSUS_CANARY_SECRET" not in keys, keys
+    # LC_CTYPE is created by CPython at startup (PEP 538 C-locale coercion), not
+    # inherited: bare `bwrap ... /usr/bin/env` hands over PATH and PWD only.
+    assert set(keys) <= {"PATH", "PWD", "LC_CTYPE"}, keys
+
+
+@needs_bwrap
+def test_the_engine_dotenv_does_not_exist_inside(tmp_path, out):
+    prog = program(tmp_path, '''
+        import json, pathlib
+        found = []
+        for candidate in ("/data/.env", "/.env", "/data/census_corpus/.env"):
+            if pathlib.Path(candidate).exists():
+                found.append(candidate)
+        pathlib.Path("/out/answer.json").write_text(json.dumps(found))
+    ''')
+    run_sandboxed(program=prog, corpus_paths=[FIXTURE], out_dir=out, timeout_s=60)
+    assert answer(out) == []
+
+
+# ============================================================
+# Control 3 - the corpus is read-only
+# ============================================================
+
+@needs_bwrap
+def test_the_corpus_cannot_be_written_and_does_not_change(tmp_path, out):
+    prog = program(tmp_path, '''
+        import json, pathlib
+        results = {}
+        target = sorted(pathlib.Path("/data").rglob("*.md"))[0]
+        try:
+            target.write_text("mutated")
+            results["overwrite"] = "WROTE"
+        except OSError as exc:
+            results["overwrite"] = f"refused: {exc.strerror}"
+        try:
+            (target.parent / "planted.md").write_text("planted")
+            results["create"] = "WROTE"
+        except OSError as exc:
+            results["create"] = f"refused: {exc.strerror}"
+        pathlib.Path("/out/answer.json").write_text(json.dumps(results))
+    ''')
+    before = {p: p.read_bytes() for p in sorted(FIXTURE.rglob("*"))if p.is_file()}
+    run_sandboxed(program=prog, corpus_paths=[FIXTURE], out_dir=out, timeout_s=60)
+    got = answer(out)
+    assert "Read-only file system" in got["overwrite"], got["overwrite"]
+    assert "Read-only file system" in got["create"], got["create"]
+    after = {p: p.read_bytes() for p in sorted(FIXTURE.rglob("*")) if p.is_file()}
+    assert after == before, "the corpus changed despite the read-only mount"
+
+
+@needs_bwrap
+def test_the_output_directory_is_the_only_writable_path(tmp_path, out):
+    prog = program(tmp_path, '''
+        import json, pathlib
+        pathlib.Path("/out/answer.json").write_text(json.dumps({"wrote": True}))
+    ''')
+    result = run_sandboxed(program=prog, corpus_paths=[FIXTURE], out_dir=out,
+                           timeout_s=60)
+    assert result.ok, (result.refused, result.stderr)
+    assert answer(out) == {"wrote": True}
+
+
+# ============================================================
+# Refusals that happen BEFORE any process starts
+# ============================================================
+
+def test_an_air_gapped_corpus_path_is_refused_without_running(tmp_path):
+    """The CEO-private thread branch is never mounted, whatever was asked for."""
+    private = tmp_path / "threads" / "personal"
+    private.mkdir(parents=True)
+    (private / "note.md").write_text("private", encoding="utf-8")
+    prog = program(tmp_path, "raise SystemExit('this program must never run')\n")
+    out_dir = tmp_path / "out"
+
+    result = run_sandboxed(program=prog, corpus_paths=[private], out_dir=out_dir,
+                           timeout_s=60)
+    assert result.refused is not None
+    assert "air-gapped" in result.refused
+    assert result.exit_code is None, "the program ran despite the air-gap refusal"
+    assert not (out_dir / "answer.json").exists()
+
+
+def test_a_secure_prefix_is_refused(tmp_path, monkeypatch):
+    """`_secure/` is a prefix rule, so it is checked in root-relative form.
+
+    The reason is asserted, not merely the refusal. On the first run of this
+    test the path did not exist, so it refused with "corpus path does not
+    exist" and passed anyway - a test satisfied by the wrong refusal proves
+    nothing about the rule it is named after, and the air-gap check now runs
+    before the existence check partly because of it.
+    """
+    root = Path(__file__).resolve().parent.parent
+    monkeypatch.setattr(sandbox, "_known_roots", lambda: [root])
+    vault = root / "_secure" / "vault"
+    result = run_sandboxed(program=Path(__file__), corpus_paths=[vault],
+                           out_dir=tmp_path / "out", timeout_s=5)
+    assert result.refused is not None
+    assert "air-gapped" in result.refused, result.refused
+    assert result.exit_code is None
+
+
+def test_the_air_gap_decides_before_the_filesystem_is_consulted(tmp_path):
+    """An air-gapped path that does not exist still refuses AS air-gapped."""
+    missing = tmp_path / "threads" / "personal" / "not-there"
+    result = run_sandboxed(program=Path(__file__), corpus_paths=[missing],
+                           out_dir=tmp_path / "out", timeout_s=5)
+    assert "air-gapped" in (result.refused or ""), result.refused
+
+
+@needs_bwrap
+def test_an_air_gapped_child_of_a_mounted_scope_is_blanked(tmp_path, out):
+    """The hole the path-level check leaves open, closed by a tmpfs overlay.
+
+    Found on the first live run, 2026-08-13. The air-gap check looked at the
+    path the caller NAMED, and the CEO-private thread branch is a CHILD of the
+    threads directory: `--corpus <data>/threads` passes the check and then
+    mounts the private branch read-only, where a traversal reads every note in
+    it. Refusing the whole scope would have been safe and useless; laying a
+    tmpfs over the denied child after the read-only bind makes the branch not
+    denied but ABSENT.
+    """
+    corpus = tmp_path / "threads"
+    (corpus / "business").mkdir(parents=True)
+    (corpus / "business" / "deal.md").write_text("public", encoding="utf-8")
+    (corpus / "personal").mkdir()
+    (corpus / "personal" / "medical.md").write_text("PRIVATE", encoding="utf-8")
+
+    prog = program(tmp_path, '''
+        import json, pathlib
+        seen = sorted(str(p) for p in pathlib.Path("/data").rglob("*.md"))
+        personal = pathlib.Path("/data/threads/personal")
+        pathlib.Path("/out/answer.json").write_text(json.dumps({
+            "seen": seen,
+            "personal_exists": personal.exists(),
+            "personal_contents": sorted(str(p) for p in personal.rglob("*")),
+        }))
+    ''')
+    run_sandboxed(program=prog, corpus_paths=[corpus], out_dir=out, timeout_s=60,
+                  mount_names={corpus: "threads"})
+    got = answer(out)
+    assert got["seen"] == ["/data/threads/business/deal.md"], got["seen"]
+    assert got["personal_contents"] == [], got["personal_contents"]
+    assert not any("PRIVATE" in s for s in got["seen"])
+
+
+def test_denied_descendants_finds_the_private_branch(tmp_path):
+    corpus = tmp_path / "threads"
+    (corpus / "business").mkdir(parents=True)
+    (corpus / "personal").mkdir()
+    found = [p.name for p in sandbox.denied_descendants(corpus)]
+    assert found == ["personal"], found
+
+
+def test_a_missing_bwrap_refuses_and_never_falls_back(tmp_path, out, monkeypatch):
+    """The one failure mode a soft degradation would quietly convert into the
+    configuration this whole design exists to refuse."""
+    monkeypatch.setattr(sandbox.shutil, "which", lambda _name: None)
+    prog = program(tmp_path, "open('/out/answer.json', 'w').write('{}')\n")
+    result = run_sandboxed(program=prog, corpus_paths=[FIXTURE], out_dir=out,
+                           timeout_s=60)
+    assert result.refused is not None
+    assert "does not run without its sandbox" in result.refused
+    assert result.exit_code is None
+    assert not (out / "answer.json").exists(), "it ran unsandboxed"
+
+
+def test_a_missing_corpus_path_is_refused(tmp_path, out):
+    prog = program(tmp_path, "pass\n")
+    result = run_sandboxed(program=prog, corpus_paths=[tmp_path / "nope"],
+                           out_dir=out, timeout_s=60)
+    assert result.refused is not None
+    assert "does not exist" in result.refused
+
+
+def test_an_empty_corpus_list_is_refused(tmp_path, out):
+    prog = program(tmp_path, "pass\n")
+    result = run_sandboxed(program=prog, corpus_paths=[], out_dir=out, timeout_s=60)
+    assert result.refused is not None
+
+
+# ============================================================
+# A run that does not finish is not an answer
+# ============================================================
+
+@needs_bwrap
+def test_a_program_that_never_exits_is_killed_and_reported_as_refused(tmp_path, out):
+    prog = program(tmp_path, '''
+        import time
+        time.sleep(600)
+    ''')
+    result = run_sandboxed(program=prog, corpus_paths=[FIXTURE], out_dir=out,
+                           timeout_s=2)
+    assert result.timed_out
+    assert result.refused is not None
+    assert result.exit_code is None
+    assert not result.ok
+
+
+# ============================================================
+# Mount construction
+# ============================================================
+
+def test_colliding_basenames_get_distinct_mounts(tmp_path):
+    a = tmp_path / "one" / "contacts"
+    b = tmp_path / "two" / "contacts"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    names = sandbox._mount_names([a, b])
+    assert len(set(names.values())) == 2, names
+
+
+def test_the_argv_never_reaches_a_shell(tmp_path):
+    """Every element is a separate argument; `shell=True` is never used."""
+    prog = program(tmp_path, "pass\n")
+    argv = sandbox.build_argv(program=prog, corpus_paths=[FIXTURE],
+                              out_dir=tmp_path, mount_names={FIXTURE: "c"})
+    assert argv[0] == "bwrap"
+    assert "--unshare-all" in argv
+    assert "--clearenv" in argv
+    assert "--die-with-parent" in argv
+    assert argv[-2:] == ["/usr/bin/python3", "/traverse.py"]
+    assert "--ro-bind" in argv and "--bind" in argv
+    source = Path(sandbox.__file__).read_text(encoding="utf-8")
+    assert "shell=True" not in source
+
+
+def test_the_writable_output_may_not_sit_inside_the_corpus(tmp_path):
+    """The one writable mount is a control only while it lies outside the corpus.
+
+    An `out_dir` under a corpus path re-binds that subtree read-write, defeating
+    the read-only mount on the host - voiding condition #2 of the carve-out rule.
+    `census.py` passes a temp directory and was never at risk; the gap was in the
+    reusable helper, which a second caller would inherit.
+    """
+    corpus = tmp_path / "corpus"
+    (corpus / "sub").mkdir(parents=True)
+    (corpus / "a.md").write_text("x", encoding="utf-8")
+    program = tmp_path / "t.py"
+    program.write_text("pass\n", encoding="utf-8")
+
+    result = sandbox.run_sandboxed(program=program, corpus_paths=[corpus],
+                                   out_dir=corpus / "sub", timeout_s=10)
+    assert result.refused is not None
+    assert "inside the corpus" in result.refused
+
+    outside = sandbox.run_sandboxed(program=program, corpus_paths=[corpus],
+                                    out_dir=tmp_path / "out", timeout_s=30)
+    assert outside.refused is None, outside.refused
+
+
+def test_the_box_gets_its_own_session_so_it_cannot_reach_the_tty(tmp_path):
+    """Without --new-session the box inherits the controlling terminal.
+
+    On a host with `dev.tty.legacy_tiocsti=1` that is keystroke injection out of
+    the sandbox. Measured 0 on this kernel; the engine ships to a fleet, so the
+    flag is asserted on the command line rather than on this machine's setting.
+    """
+    program = tmp_path / "t.py"
+    program.write_text("pass\n", encoding="utf-8")
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    argv = sandbox.build_argv(program=program, corpus_paths=[corpus],
+                              out_dir=tmp_path / "out", mount_names={corpus: "corpus"})
+    assert "--new-session" in argv

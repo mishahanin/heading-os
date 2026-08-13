@@ -1,0 +1,19 @@
+[
+  {"query": "how many active threads have not moved in 30 days", "should_trigger": true},
+  {"query": "which pipeline rows have no CRM card", "should_trigger": true},
+  {"query": "count how many contacts have not been touched since May", "should_trigger": true},
+  {"query": "which memory files link to a note that does not exist", "should_trigger": true},
+  {"query": "aggregate over the whole workspace and tell me how many threads have no open follow-up", "should_trigger": true},
+  {"query": "give me the intersection of the people file and the CRM cards", "should_trigger": true},
+  {"query": "how many threads mention two or more countries", "should_trigger": true},
+  {"query": "count across the corpus the cards whose status is not active", "should_trigger": true},
+
+  {"query": "what do we know about Northwind Telecom", "should_trigger": false},
+  {"query": "where did we decide on the Contoso pricing", "should_trigger": false},
+  {"query": "recall what we said about the Vantage deferral", "should_trigger": false},
+  {"query": "have we touched that market before", "should_trigger": false},
+  {"query": "add a note about the RLM paper to the knowledge base", "should_trigger": false},
+  {"query": "what would Odin say about this negotiation", "should_trigger": false},
+  {"query": "dig into Northwind Telecom and give me a dossier", "should_trigger": false},
+  {"query": "grep the scripts directory for load_api_key", "should_trigger": false}
+]

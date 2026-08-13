@@ -183,6 +183,17 @@ Operations: daily drivers</h3>
 </section>
 
 <section class="skill">
+<h3 id="s-census"><code>/census &lt;aggregating question&gt; [--corpus SCOPE]</code><span class="badge">Operations</span></h3>
+<p class="skill-meta">Auto-routes from natural language (CEO-only, never synced) · read-only, sandboxed (no network, no writes, no sends)</p>
+<p><strong>What it is.</strong> Recursive Language Models (RLM, arXiv:2512.24601) applied to the workspace: a question whose answer requires visiting many files is answered by a traversal program rather than by retrieval, so the corpus never enters the context window.</p>
+<p><strong>What it does.</strong> Runs <code>scripts/census.py</code>, which mounts the named corpus scopes read-only inside a bubblewrap sandbox with no network and no secrets, executes a Python traversal program at recursion depth 1, and returns structured JSON of counts, paths or pairs with the sources that produced them. Free prose needs <code>--free-text</code> and comes back tagged <code>provenance: untrusted</code>. It refuses any scope naming an air-gapped path (exit <code>5</code>, checked first) and a corpus that fits the context window (exit <code>4</code>).</p>
+<p><strong>How to use it.</strong> Use when the answer sits in no single file and needs the whole set counted. Do NOT use to find something already recorded (<code>/recall</code>), to capture a note (<code>/zk</code>), for external intel (<code>/osint</code>), or for an exact string (Grep). Read the printed traversal program before approving it.</p>
+<pre><code>/census "how many active threads have not moved in 30 days" --corpus threads
+"which pipeline rows have no CRM card"</code></pre>
+<p><strong>Customize.</strong> Scopes are named with repeated <code>--corpus</code> flags (<code>threads</code>, <code>crm</code>, <code>context</code>, <code>auto_memory</code>, <code>knowledge</code>, <code>outputs</code>); an unnamed scope is not mounted at all. <code>--return-budget</code> caps the characters allowed back into the caller's context. The eval/exec carve-out and its four compensating controls are governed by <code>.claude/rules/generated-code-execution.md</code>. CEO-only, never synced to executives.</p>
+</section>
+
+<section class="skill">
 <h3 id="s-sentinel"><code>/sentinel [start|stop|status|logs|config]</code><span class="badge">Operations 🔒</span></h3>
 <p class="skill-meta">Explicit invocation only (🔒) · writes to <code>.sentinel/</code> (daemon state)</p>
 <p><strong>What it is.</strong> Manages the Sentinel background daemon that monitors corporate email (Exchange) and Telegram for urgent messages and evaluates meeting invites against the CEO Calendar Policy.</p>

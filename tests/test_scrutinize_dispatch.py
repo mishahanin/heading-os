@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,11 @@ def _load():
     path = Path(__file__).resolve().parent.parent / "scripts" / "scrutinize-dispatch.py"
     spec = importlib.util.spec_from_file_location("scrutinize_dispatch", path)
     mod = importlib.util.module_from_spec(spec)
+    # Register BEFORE exec: `@dataclass` resolves its annotations through
+    # `sys.modules[cls.__module__]`, so a module executed while absent from the
+    # table raises `AttributeError: 'NoneType' object has no attribute '__dict__'`
+    # at class-creation time.
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -281,14 +287,118 @@ def test_promote_joins_the_stored_exit_before(runs):
                       cmd=["python3", "-c", "pass"])
     assert rc == 0
     rows = [r for r in _rows(runs) if r["verdict"] == "FALSIFIED"]
-    assert rows and rows[0]["reproduction"] == {"cmd": "python3 -c pass",
-                                                "exit_before": 3, "exit_after": 0}
+    assert rows
+    repro = rows[0]["reproduction"]
+    assert repro["cmd"] == "python3 -c pass"
+    assert repro["exit_before"] == 3
+    assert repro["exit_after"] == 0
 
 
 def test_promote_without_a_prior_reproduction_is_refused(runs):
     rc = disp.promote(run_id="r1", target="file:x", finding_id="H9",
                       cmd=["python3", "-c", "pass"])
     assert rc != 0
+    assert [r for r in _rows(runs) if r["verdict"] == "FALSIFIED"] == []
+
+
+# ============================================================
+# A non-zero exit is evidence only if the check actually ran
+# ============================================================
+# Found by /scrutinize on 2026-08-13. `REPRODUCED` was written on ANY non-zero
+# exit, refusing only exit 0, so every way a command can fail BEFORE reaching its
+# check produced the same number the verdict reads as proof. Three rows of that
+# run's own record carry artifact exits from pipelines that never piped. The
+# property below is the one the verdict needs: an exit code counts only when the
+# intended check is what produced it.
+
+def test_a_pipeline_is_refused_because_no_shell_will_honour_it(runs):
+    """`--cmd "a | b"` shlex-splits to a literal `|` argument.
+
+    The pipeline never happens, the child chokes on the stray operator, and the
+    non-zero exit that comes back says nothing about the finding.
+    """
+    rc = disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                        cmd=["python3", "-c", "pass", "|", "grep", "x"])
+    assert rc == 4
+    assert [r for r in _rows(runs) if r["kind"] == "reproduction"] == []
+
+
+@pytest.mark.parametrize("operator", ["|", "&&", ";", ">", "<", "||", "&"])
+def test_every_shell_operator_is_caught_not_just_the_pipe(operator):
+    assert disp._reject_shell_syntax(["true", operator, "false"]) is not None
+
+
+def test_a_plain_command_carries_no_shell_syntax():
+    assert disp._reject_shell_syntax(["python3", "-m", "pytest", "-q"]) is None
+
+
+def test_a_missing_executable_is_not_a_reproduction(runs):
+    rc = disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                        cmd=["definitely-not-a-real-binary-31c"])
+    assert rc == 4
+    assert [r for r in _rows(runs) if r["kind"] == "reproduction"] == []
+
+
+def test_pytest_collecting_nothing_is_not_a_reproduction(runs, tmp_path):
+    """Exit 5 is pytest's "no tests collected" - the mistyped-path artifact."""
+    rc = disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                        cmd=["python3", "-m", "pytest", str(tmp_path), "-q"])
+    assert rc == 4
+    assert [r for r in _rows(runs) if r["kind"] == "reproduction"] == []
+
+
+def test_a_genuine_test_failure_still_reproduces(runs, tmp_path):
+    """The guard must not eat the case it exists to protect.
+
+    pytest exit 1 means tests ran and failed, which is a real reproduction.
+    """
+    (tmp_path / "test_red.py").write_text("def test_red():\n    assert False\n")
+    rc = disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                        cmd=["python3", "-m", "pytest", str(tmp_path), "-q"])
+    assert rc == 0
+    row = [r for r in _rows(runs) if r["kind"] == "reproduction"][0]
+    assert row["reproduction"]["exit_before"] == 1
+
+
+def test_a_signal_death_is_not_a_reproduction():
+    run = disp._run(["python3", "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"])
+    assert run.unusable is not None
+    assert "signal" in run.unusable
+
+
+def test_a_command_that_never_returns_is_not_a_reproduction(monkeypatch, runs):
+    monkeypatch.setattr(disp, "REPRODUCTION_TIMEOUT_S", 1)
+    rc = disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                        cmd=["python3", "-c", "import time; time.sleep(30)"])
+    assert rc == 4
+    assert [r for r in _rows(runs) if r["kind"] == "reproduction"] == []
+
+
+def test_the_recorded_row_carries_the_output_that_justified_it(runs):
+    """A bare exit code cannot be audited later; the tail can."""
+    disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                   cmd=["python3", "-c",
+                        "import sys; print('boom'); sys.stderr.write('why'); sys.exit(2)"])
+    repro = [r for r in _rows(runs) if r["kind"] == "reproduction"][0]["reproduction"]
+    assert repro["stdout_tail"] == "boom"
+    assert repro["stderr_tail"] == "why"
+
+
+def test_a_long_tail_is_truncated_from_the_front(runs):
+    run = disp._run(["python3", "-c",
+                     f"import sys; print('x' * {disp.OUTPUT_TAIL_CHARS * 2}); sys.exit(1)"])
+    assert run.unusable is None
+    assert run.stdout_tail.startswith("...")
+    assert len(run.stdout_tail) == disp.OUTPUT_TAIL_CHARS + 3
+
+
+def test_promote_refuses_an_unusable_run_rather_than_reading_it_as_still_broken(runs):
+    """The mirror defect: promote read any non-zero as "the fix did not work"."""
+    disp.reproduce(run_id="r1", target="file:x", finding_id="H1",
+                   cmd=["python3", "-c", "import sys; sys.exit(3)"])
+    rc = disp.promote(run_id="r1", target="file:x", finding_id="H1",
+                      cmd=["python3", "-c", "pass", "|", "grep", "x"])
+    assert rc == 4
     assert [r for r in _rows(runs) if r["verdict"] == "FALSIFIED"] == []
 
 
@@ -338,3 +448,29 @@ def test_flag_fp_tally_on_an_empty_record(tmp_path, monkeypatch, runs, capsys):
     mod = _load_flag_fp(tmp_path, monkeypatch)
     mod.print_running_tally()
     assert "0 FPs recorded" in capsys.readouterr().out
+
+
+def test_a_collection_error_is_not_a_reproduced_finding(tmp_path):
+    """pytest exit 2 means the check never ran, so it may not be REPRODUCED.
+
+    A test module with a bad import returns 2. Until the 2026-08-13 audit only 4
+    and 5 were carved out, so a broken import was recorded as a reproduced
+    finding for a check that never executed - the failure mode this guard exists
+    to close, one exit code short of closed.
+    """
+    broken = tmp_path / "test_broken_import.py"
+    broken.write_text("import a_module_that_does_not_exist\n\ndef test_x():\n    pass\n",
+                      encoding="utf-8")
+    run = disp._run([sys.executable, "-m", "pytest", str(broken), "-q"])
+    assert run.exit_code == 2
+    assert run.unusable is not None
+    assert "no test ran" in run.unusable
+
+
+def test_a_genuine_test_failure_is_still_usable(tmp_path):
+    """Exit 1 is the only non-zero code that means the check ran and failed."""
+    failing = tmp_path / "test_fails.py"
+    failing.write_text("def test_x():\n    assert False\n", encoding="utf-8")
+    run = disp._run([sys.executable, "-m", "pytest", str(failing), "-q"])
+    assert run.exit_code == 1
+    assert run.unusable is None

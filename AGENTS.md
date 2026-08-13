@@ -143,11 +143,15 @@ detectors `scripts/utils/engine_guard.py` and
 `scripts/utils/tool_risk.py` with its ledger `config/tool-risk.json`; the two
 egress controls, `scripts/utils/sensitive.py` (the fail-closed flag deciding
 whether anything leaves for a third party) and `scripts/utils/egress_proof.py`
-(the only sanctioned per-payload exemption from it); the classifier input
+(the only sanctioned per-payload exemption from it); the sandbox that contains model-written code,
+`scripts/utils/sandbox.py`, and the return schema that keeps its output from
+becoming an instruction to the parent, `scripts/utils/census_schema.py`; the
+classifier input
 `config/routing-map.yaml`, which decides what counts as private; the test gate
 `scripts/run-tests.py` and `tests/conftest.py`; and the rules those controls
 implement in prose — `.claude/rules/security.md`,
-`.claude/rules/lethal-trifecta.md`, `.claude/rules/tiered-risk.md` — because
+`.claude/rules/lethal-trifecta.md`, `.claude/rules/tiered-risk.md`,
+`.claude/rules/generated-code-execution.md` — because
 the prose is what an agent reads before it acts.
 
 What actually guards a change to them, and nothing else does: the pre-commit

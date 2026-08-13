@@ -89,7 +89,7 @@ refutation all along.
 
 | Outcome | When | Rank |
 |---|---|---|
-| `REPRODUCED` | Phase 2.5. The harness ran the command and observed a non-zero exit. | Outranks a 2.5b debate; the finding proceeds without one. |
+| `REPRODUCED` | Phase 2.5. The harness ran the command and observed a non-zero exit FROM THE INTENDED CHECK. | Outranks a 2.5b debate; the finding proceeds without one. |
 | `FALSIFIED` | Phase 4. The harness re-ran the same command after the fix and observed zero. | Terminal. The finding is closed by evidence, not by opinion. |
 
 **The harness runs the command, never the model.** The model proposes it;
@@ -99,6 +99,32 @@ is the whole excuse-prevention: a narrated reproduction is not one. Three refusa
 enforce it - a command that already exits 0 reproduces nothing, a promotion with
 no stored `exit_before` has nothing to join, and the record itself refuses a
 `FALSIFIED` row whose exit codes do not show the fail-to-pass transition.
+
+**A fourth refusal, added 2026-08-13: the exit code must come from the check.**
+Until then every non-zero exit bought `REPRODUCED`, and only exit 0 was refused -
+so each way a command can fail BEFORE reaching its check produced the same number
+the verdict reads as proof. The live case was a shell pipeline: `--cmd` is
+`shlex.split` and run as a fixed argv with no shell, so `|` arrives as a literal
+argument, the pipeline never happens, and the child's complaint about the stray
+operator records as a reproduced finding. Three rows of the 2026-08-13 trajectory
+pass carry exactly that artifact. The dispatcher now refuses with exit `4`, and RECORDS the refusal as a
+`degraded` row so `--validate` can tell a refused attempt from an attempt nobody
+made, when the command carries a shell operator as a whole token, when the
+executable is missing or not executable, when the run dies on a signal or
+outruns `REPRODUCTION_TIMEOUT_S`, or when pytest exits 2/3/4/5 - every code that
+means the tests did not run, leaving exit `1` as the only non-zero code that may
+be read as reproduced.
+
+The shell-syntax guard matches whole TOKENS, which is its honest limit: `2>&1`
+and an unglued `>/tmp/x` are single tokens containing an operator and pass
+through. They are then handed to `subprocess` as literal arguments, so they do
+not execute - the failure they produce is a confusing one, not a dangerous one. A genuine test failure, pytest
+exit 1, still reproduces. Each recorded row now also carries an 800-character
+`stdout_tail` and `stderr_tail`, so a later reader can see WHAT failed rather
+than only that something did.
+
+When you write a reproduction command, write ONE command. A pipeline, a
+redirect, or a `&&` chain needs a script the harness can invoke as a single argv.
 
 A finding whose fix is rejected or deferred stops at `REPRODUCED`. It is never
 promoted, and that is the correct terminal state for it.

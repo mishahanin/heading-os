@@ -343,6 +343,24 @@ def test_the_writable_output_may_not_sit_inside_the_corpus(tmp_path):
     assert result.refused is not None
     assert "inside the corpus" in result.refused
 
+
+@needs_bwrap
+def test_an_output_outside_the_corpus_is_accepted(tmp_path):
+    """The positive control for the rule above: the placement check must refuse a
+    bad `out_dir` without refusing every `out_dir`.
+
+    Split out of that test on 2026-08-14. Held together, the pair could only run
+    where bubblewrap is installed, because this half is a real run - so the
+    refusal half, which asserts a decision made BEFORE any process exists, was
+    silently unavailable exactly on the hosts that had no sandbox. That is where
+    the check-ordering defect this file exists to catch was hiding.
+    """
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("x", encoding="utf-8")
+    program = tmp_path / "t.py"
+    program.write_text("pass\n", encoding="utf-8")
+
     outside = sandbox.run_sandboxed(program=program, corpus_paths=[corpus],
                                     out_dir=tmp_path / "out", timeout_s=30)
     assert outside.refused is None, outside.refused

@@ -20,7 +20,16 @@ import sys
 from pathlib import Path
 
 import pytest
-from telethon import types
+
+# F-7.1: skip on a core-only clone (needs the telegram extra). Every other test
+# module that reaches for an optional extra already guards it this way; this one
+# did not, and a bare `from telethon import types` turns the absence into a
+# COLLECTION error. One collection error aborts the whole run: the py3.12 CI job
+# reported "16 skipped, 36 deselected, 1 error" and exit 2, so five thousand
+# unrelated tests never ran. Note this skips only when telethon is genuinely
+# ABSENT; an installed-but-broken telethon still errors, which is the right way
+# round, because a broken dependency should be loud.
+types = pytest.importorskip("telethon.types", reason="optional `telegram` extra")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

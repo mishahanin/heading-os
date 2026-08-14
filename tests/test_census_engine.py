@@ -39,9 +39,23 @@ def _has_populated_overlay() -> bool:
     question set. On a bare public clone the overlay is absent, both fail, and
     the failure says nothing about the engine. The 2026-08-13 audit reproduced
     exactly that by pointing `HEADING_OS_DATA` at an empty tree.
+
+    An EMPTY tree was the wrong shape to rehearse, and testing only that shape
+    is why this guard shipped broken. A bare clone does not resolve to nothing:
+    `get_data_root()` falls back to the engine's own bundled `examples/`, which
+    ships one demo thread. One populated directory satisfied the content check
+    below, so the guard said "overlay present" and both tests then ran against
+    the engine's demo files - refusing a 567-byte corpus as too small, and
+    tripping the oracle on a demo thread that carries no frontmatter. Ask the
+    seam that already answers this precisely: `data_overlay_present()` is False
+    for a demo root AND for an engine clone wearing a data root, True only for a
+    real sibling or an explicit `HEADING_OS_DATA`.
     """
     try:
         from scripts.utils.census_oracles import CorpusPaths
+        from scripts.utils.paths import data_overlay_present
+        if not data_overlay_present():
+            return False
         corpus = CorpusPaths.from_workspace()
     except Exception:  # noqa: BLE001 - an unresolvable overlay IS an absent one
         return False

@@ -140,7 +140,7 @@
   <p>Routing between the two is declared in <code>config/routing-map.yaml</code> and resolved at runtime by the data-root seam in <code>scripts/utils/workspace.py</code>. A mechanical guard refuses to commit data-class files into the engine, so the split cannot drift. On a public clone the data overlay is simply absent and the engine runs on its defaults and <code>*.example.*</code> templates.</p>
 
   <h2>By the numbers</h2>
-  <p>Every figure here is produced by CI, not asserted by hand. Counts as of <code>v0.3.0</code>.</p>
+  <p>Every figure here is produced by CI, not asserted by hand. Counts as of <code>v0.8.0</code>.</p>
   <ul>
     <li><strong>554 security tests</strong>, run on every commit by the security suite over <code>tests/security/</code>. This is the suite that proves the guarantee above.</li>
     <li><strong>6 enforcement layers</strong> hold the engine and data apart: a bypass guard, a leak guard, a data-path redirect, a build partition, a runtime tree-clean check, and an unbypassable push-time wall.</li>

@@ -257,20 +257,13 @@ def run_sandboxed(*, program: Path, corpus_paths: list[Path], out_dir: Path,
     Every refusal below happens before a process exists. That ordering is the
     point: a check that runs after the traversal has already read the corpus is
     a report, not a control.
+
+    Among those refusals the order is also load-bearing, and it runs
+    specific-before-generic: what the caller ASKED FOR is judged first (program,
+    corpus, air-gap, existence, output placement), and only then whether this
+    HOST can run it (bubblewrap, interpreter). A generic refusal that fires
+    first does not merely reorder the message, it conceals the request.
     """
-    if not sandbox_available():
-        return SandboxResult(
-            None, refused=(
-                f"{BWRAP} is not on PATH: /census does not run without its "
-                "sandbox, and there is no unsandboxed fallback by design "
-                "(install bubblewrap)"))
-
-    if not Path(INTERPRETER).exists():
-        return SandboxResult(None, refused=(
-            f"{INTERPRETER} is absent on this host, so the box has nothing to run "
-            "the traversal with; without this check the run reports 'exited 127', "
-            "which reads as a broken traversal rather than a missing interpreter"))
-
     if not program.is_file():
         return SandboxResult(None, refused=f"traversal program not found: {program}")
 
@@ -306,6 +299,32 @@ def run_sandboxed(*, program: Path, corpus_paths: list[Path], out_dir: Path,
             return SandboxResult(None, refused=(
                 f"output directory {out_dir} lies inside the corpus path {path}; "
                 "the writable mount would re-bind read-only corpus as writable"))
+
+    # Host readiness comes LAST, after every judgement about what the caller
+    # asked for. Both orderings refuse, and no process starts either way, so on
+    # a machine with bubblewrap the difference is invisible - which is exactly
+    # why it survived. On a machine without it, every argument refusal above
+    # came back as "bwrap is not on PATH", so a request for the CEO-private
+    # branch read as a missing tool. That is the same defect the air-gap /
+    # existence ordering above was written to prevent, one level out: a refusal
+    # naming the wrong reason hides what was actually asked for. CI has no
+    # bubblewrap, which is where it finally showed.
+    #
+    # This is a message-precedence change, not a fallback. `bwrap` absent
+    # remains a hard refusal before any process exists, so condition #1 of
+    # `.claude/rules/generated-code-execution.md` is untouched.
+    if not sandbox_available():
+        return SandboxResult(
+            None, refused=(
+                f"{BWRAP} is not on PATH: /census does not run without its "
+                "sandbox, and there is no unsandboxed fallback by design "
+                "(install bubblewrap)"))
+
+    if not Path(INTERPRETER).exists():
+        return SandboxResult(None, refused=(
+            f"{INTERPRETER} is absent on this host, so the box has nothing to run "
+            "the traversal with; without this check the run reports 'exited 127', "
+            "which reads as a broken traversal rather than a missing interpreter"))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     names = _mount_names(list(corpus_paths), mount_names)

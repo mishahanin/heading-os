@@ -73,8 +73,8 @@ Manages running state of business and personal life situations across sessions. 
 | Decision made on an active thread | `log --decision "..."` |
 | Pending action surfaced | `log --follow-up "..."` |
 | Follow-up completed | `log --done <index>` |
-| Thread done | `close` |
-| Thread paused for weeks | `hold` |
+| Thread done | `close --reason "<why>"` |
+| Thread paused for weeks | `hold --reason "<why>"` |
 | Thread reactivates | `reopen` |
 | Operator says "do not remind me about this until <date>" | `quiet --until <date>` |
 | Operator says "freeze this, I will raise it myself" | `quiet --indefinite` |
@@ -105,8 +105,8 @@ The user approves, modifies, or skips. After several months of trusted use, this
 ```bash
 python3 scripts/thread.py open <business|personal> "<title>"
 python3 scripts/thread.py log <thread-id> "<event>" [--artifact PATH ...] [--decision TEXT ...] [--follow-up TEXT ...] [--done INDEX]
-python3 scripts/thread.py close <thread-id>
-python3 scripts/thread.py hold <thread-id>
+python3 scripts/thread.py close <thread-id> --reason "<why it leaves the index>"
+python3 scripts/thread.py hold <thread-id> --reason "<why it leaves the index>"
 python3 scripts/thread.py reopen <thread-id>
 python3 scripts/thread.py list [--type business|personal] [--status active|on-hold|closed]
 python3 scripts/thread.py find "<query>"

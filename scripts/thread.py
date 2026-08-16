@@ -208,13 +208,36 @@ def cmd_log(args: argparse.Namespace) -> int:
     return 0
 
 
-def _set_status(thread_id: str, new_status: str, index_action: str) -> int:
-    """index_action: 'remove' | 'add'."""
+def _set_status(thread_id: str, new_status: str, index_action: str,
+                reason: str | None = None) -> int:
+    """index_action: 'remove' | 'add'.
+
+    A status change that REMOVES a thread from the index must carry a reason.
+    Until 2026-08-17 it did not, and one operator run closed nineteen threads at
+    once with only `status` and `last_touched` written. Six of them closed over
+    a loop the deal pipeline still showed as live - one side awaiting a data
+    dump, another awaiting a meeting slot - and nothing on disk distinguished
+    those from the threads that were genuinely resolved. Reopening
+    (`index_action == "add"`) is exempt: resuming work is not a decision that
+    needs defending, and friction there buys nothing.
+    """
+    if index_action == "remove" and not (reason or "").strip():
+        raise ValueError(
+            f"{new_status} needs --reason: a status change that drops a thread "
+            f"from the index must say why, or nobody can tell later whether the "
+            f"work finished or just went quiet"
+        )
     threads_root = _threads_root()
     path = _find_thread_by_id(threads_root, thread_id)
     thread = parse_thread_file(path)
     thread.status = new_status
-    thread.last_touched = datetime.now(get_default_tz()).date().isoformat()
+    today = datetime.now(get_default_tz()).date().isoformat()
+    thread.last_touched = today
+    if reason:
+        verb = {"closed": "Closed", "on-hold": "On hold"}.get(new_status, new_status)
+        event = re.sub(r"\s+", " ", reason.replace("\n", " ").replace("\r", "")).strip()
+        thread.body = _prepend_log_entry(
+            thread.body, f"### {today} - **{verb}.** {event}\n")
     write_thread_file(path, thread)
     rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
     memory_md = _memory_md()
@@ -232,11 +255,11 @@ def _set_status(thread_id: str, new_status: str, index_action: str) -> int:
 
 
 def cmd_close(args: argparse.Namespace) -> int:
-    return _set_status(args.thread_id, "closed", "remove")
+    return _set_status(args.thread_id, "closed", "remove", args.reason)
 
 
 def cmd_hold(args: argparse.Namespace) -> int:
-    return _set_status(args.thread_id, "on-hold", "remove")
+    return _set_status(args.thread_id, "on-hold", "remove", args.reason)
 
 
 def cmd_reopen(args: argparse.Namespace) -> int:
@@ -378,6 +401,11 @@ def main(argv: list[str] | None = None) -> int:
     for name, func in [("close", cmd_close), ("hold", cmd_hold), ("reopen", cmd_reopen)]:
         p = sub.add_parser(name, help=f"{name} a thread")
         p.add_argument("thread_id")
+        if name != "reopen":
+            p.add_argument(
+                "--reason", required=True,
+                help="Why the thread leaves the index. Recorded as a log entry, "
+                     "so a later reader can tell a finished thread from a quiet one")
         p.set_defaults(func=func)
     p_quiet = sub.add_parser(
         "quiet", help="Suppress a thread from proactive surfacing until a date")

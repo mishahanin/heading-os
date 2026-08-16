@@ -65,7 +65,7 @@ def test_thread_close_removes_from_index_keeps_file(tmp_path: Path, monkeypatch)
     thread_id = files[0].stem
 
     result = subprocess.run(
-        [sys.executable, "scripts/thread.py", "close", thread_id],
+        [sys.executable, "scripts/thread.py", "close", thread_id, "--reason", "resolved"],
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -86,7 +86,8 @@ def test_thread_hold_and_reopen_round_trip(tmp_path: Path, monkeypatch) -> None:
     subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Holdable"], check=True)
     thread_id = list((threads_root / "business").glob("*.md"))[0].stem
 
-    subprocess.run([sys.executable, "scripts/thread.py", "hold", thread_id], check=True)
+    subprocess.run([sys.executable, "scripts/thread.py", "hold", thread_id,
+                    "--reason", "waiting on counterparty"], check=True)
     parsed = parse_thread_file(threads_root / "business" / f"{thread_id}.md")
     assert parsed.status == "on-hold"
     mem = memory_md.read_text(encoding="utf-8")
@@ -150,7 +151,8 @@ def test_thread_archive_scan_moves_old_closed_threads(tmp_path: Path, monkeypatc
     subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Old"], check=True)
     files = list((threads_root / "business").glob("*.md"))
     thread_id = files[0].stem
-    subprocess.run([sys.executable, "scripts/thread.py", "close", thread_id], check=True)
+    subprocess.run([sys.executable, "scripts/thread.py", "close", thread_id,
+                    "--reason", "resolved"], check=True)
 
     # Backdate the file's last_touched to 100 days ago
     parsed = parse_thread_file(files[0])
@@ -425,3 +427,88 @@ def test_log_self_heals_corrupted_memory_section(tmp_path: Path, monkeypatch) ->
     mem = memory_md.read_text(encoding="utf-8")
     assert "## Active Threads" in mem
     assert "Self-heal test" in mem
+
+
+def _open_thread(tmp_path: Path, monkeypatch, title: str = "Test thread"):
+    """Set up an isolated registry with one open thread; return its id."""
+    threads_root = tmp_path / "threads"
+    memory_md = tmp_path / "MEMORY.md"
+    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
+    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
+    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", title], check=True)
+    return threads_root, list((threads_root / "business").glob("*.md"))[0]
+
+
+def test_close_refuses_without_a_reason(tmp_path: Path, monkeypatch) -> None:
+    """A close with no recorded reason is the defect this guard exists for.
+
+    One operator run flipped nineteen threads from active to closed at once.
+    `close` wrote exactly `status` and `last_touched`, so a thread that was
+    resolved and a thread that merely went quiet became indistinguishable on
+    disk. Six of them closed over a loop the deal pipeline still showed as live:
+    one awaiting a data dump, another a meeting slot. Reading the registry
+    afterwards could not tell you which.
+    """
+    threads_root, path = _open_thread(tmp_path, monkeypatch)
+    result = subprocess.run(
+        [sys.executable, "scripts/thread.py", "close", path.stem],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode != 0, "close succeeded with no reason"
+    assert "reason" in (result.stderr + result.stdout).lower()
+    assert parse_thread_file(path).status == "active", "status changed on a refused close"
+
+
+def test_close_with_a_reason_records_it_in_the_log(tmp_path: Path, monkeypatch) -> None:
+    """The reason must land in the body, not only in the operator's memory."""
+    threads_root, path = _open_thread(tmp_path, monkeypatch)
+    result = subprocess.run(
+        [sys.executable, "scripts/thread.py", "close", path.stem,
+         "--reason", "Superseded by the Q3 rollout thread"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    parsed = parse_thread_file(path)
+    assert parsed.status == "closed"
+    assert "Superseded by the Q3 rollout thread" in parsed.body
+    assert "Closed" in parsed.body
+
+
+def test_hold_also_requires_a_reason(tmp_path: Path, monkeypatch) -> None:
+    """`hold` removes a thread from the index exactly like `close` does.
+
+    A silent hold is the same loss of information, so the guard covers both.
+    `reopen` is deliberately exempt: it ADDS a thread back to the index, and
+    demanding a justification to resume work is friction with nothing behind it.
+    """
+    threads_root, path = _open_thread(tmp_path, monkeypatch)
+    bare = subprocess.run(
+        [sys.executable, "scripts/thread.py", "hold", path.stem],
+        capture_output=True, text=True, check=False,
+    )
+    assert bare.returncode != 0
+    assert parse_thread_file(path).status == "active"
+
+    ok = subprocess.run(
+        [sys.executable, "scripts/thread.py", "hold", path.stem,
+         "--reason", "Waiting on the counterparty's legal review"],
+        capture_output=True, text=True, check=False,
+    )
+    assert ok.returncode == 0, ok.stderr
+    parsed = parse_thread_file(path)
+    assert parsed.status == "on-hold"
+    assert "Waiting on the counterparty's legal review" in parsed.body
+
+
+def test_reopen_needs_no_reason(tmp_path: Path, monkeypatch) -> None:
+    """Resuming work is not a decision that needs defending."""
+    threads_root, path = _open_thread(tmp_path, monkeypatch)
+    subprocess.run([sys.executable, "scripts/thread.py", "close", path.stem,
+                    "--reason", "done"], check=True)
+    result = subprocess.run(
+        [sys.executable, "scripts/thread.py", "reopen", path.stem],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert parse_thread_file(path).status == "active"

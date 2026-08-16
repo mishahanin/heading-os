@@ -54,7 +54,9 @@ x-heading-routing:
 ---
 # Scrutinize
 
-Manually-invoked quality gate. Runs a maximum-effort VIIA pass (Validate - Identify - Improve - Adjust) over a target, applies an adversarial refutation layer that filters false positives, produces findings with concrete fixes and per-finding confidence scores, and blocks forward progress until the user explicitly approves the fix batch. Principal-engineer posture: find what is wrong, not what works. Every finding requires evidence; every BLOCKER and HIGH survives an adversarial debate before reaching the approval block; no shortcut exits. Version history (v2.0-v2.2): `references/version-history.md`.
+Manually-invoked quality gate. It runs a maximum-effort VIIA pass (Validate - Identify - Improve - Adjust) over a target. An adversarial layer then filters the false positives. Each finding carries a concrete fix and a confidence score, and the gate blocks progress until the user approves the batch.
+
+Principal-engineer posture: find what is wrong, not what works. Every finding needs evidence. Every BLOCKER and HIGH survives a debate first. No shortcut exits. Version history: `references/version-history.md`.
 
 ---
 
@@ -71,7 +73,11 @@ Manually-invoked quality gate. Runs a maximum-effort VIIA pass (Validate - Ident
 
 ## When to Engage
 
-Manual invocation only. **Use** before approving a high-stakes plan, after `/implement` to audit changes against it, on a file or dir when something feels off, or periodically on the workspace to catch drift. **Do NOT use** for artifact grading (`/evaluate`), draft fact-checking (`/validate`), decision reasoning (`/deep-think`), or content-quality review of a post or email (`/evaluate`).
+Manual invocation only.
+
+**Use** it before approving a high-stakes plan, or after `/implement` to audit the changes against that plan. Use it on a file or a dir when something feels off, and periodically on the workspace to catch drift.
+
+**Do NOT use** it for artifact grading (`/evaluate`), draft fact-checking (`/validate`), decision reasoning (`/deep-think`), or content-quality review of a post or an email (`/evaluate`).
 
 ---
 
@@ -81,7 +87,7 @@ Manual invocation only. **Use** before approving a high-stakes plan, after `/imp
 
 2. **Load applicable rules:** `.claude/rules/{development-standards,hidden-chars,security,classification,voice}.md`.
 
-3. **Resolve target** per `references/target-detection.md`: parse an explicit argument from the invocation if present; else apply priority order plan > execution (git) > menu, printing a confirmation line for priorities 2-4 and waiting for the user (use the new target if redirected).
+3. **Resolve target** per `references/target-detection.md`. Parse an explicit argument from the invocation when one is present. Otherwise apply the priority order plan > execution (git) > menu. Print a confirmation line for priorities 2 to 4 and wait for the user. Use the new target when they redirect you.
 
 4. **Resolve scope** per target:
    - Plan: extract the most recent plan text from conversation.
@@ -94,7 +100,7 @@ Manual invocation only. **Use** before approving a high-stakes plan, after `/imp
 
 6. **Open Langfuse trace** (skipped in vault mode or when `LANGFUSE_ENABLED=false`); tags per `references/observability.md`; trace ID appended to the saved report.
 
-7. **Optional - prime the Identify pass with named methods.** For a hard/unfamiliar target, pull 2-5 critique methods (Pre-mortem, Inversion, Assumption Audit, ...) from `reference/elicitation-methods.md` via `python scripts/elicit.py list --category risk|core` then `show "<Method>"`, to structure the VIIA Identify stage. Composes with — does not replace — Phase 2.5; skip when viia-framework subchecks already cover the target.
+7. **Optional - prime the Identify pass with named methods.** On a hard target, pull 2 to 5 critique methods from `reference/elicitation-methods.md`. Examples: Pre-mortem, Inversion, Assumption Audit. Run `python scripts/elicit.py list --category risk|core`, then `show "<Method>"`. Use them to structure the VIIA Identify stage. This composes with Phase 2.5 and never replaces it. Skip it when the viia-framework subchecks already cover the target.
 
 ---
 
@@ -104,7 +110,7 @@ For targets `plan`, `execution`, `file`, `dir`:
 
 Apply the four phases from `references/viia-framework.md`:
 
-**For target type `trajectory:<run_id>`** — dispatch the trajectory lens in `references/trajectory-evaluation.md` instead of the file/dir VIIA lens: universal subchecks 1-9 re-interpreted for the sequential-decision shape; subchecks 10-14 default to `N/A (out of scope)` unless `step_end` events list content/comms/doctype files. Deterministic tool-call records win over rationale prose on disagreement.
+**For target type `trajectory:<run_id>`** — dispatch the trajectory lens in `references/trajectory-evaluation.md` instead of the file/dir VIIA lens. Universal subchecks 1 to 9 are re-interpreted for the sequential-decision shape. Subchecks 10 to 14 default to `N/A (out of scope)`, unless the `step_end` events list content, comms, or doctype files. On disagreement, the deterministic tool-call records beat the rationale prose.
 
 1. **Validate** - run all 14 subchecks (9 universal + 5 workspace-specific compliance gates per the target-to-subcheck map); no shortcut exits.
 2. **Identify** - adversarial pass; each finding gets ID, Severity, **Confidence (0-100)**, Location, Statement, Evidence.
@@ -119,7 +125,7 @@ For any `SKILL.md`, `scripts/*.py`, rule, or reference file in scope: call `pyth
 
 **Currency (code scopes):** `--currency --paths <scope>` checks each third-party import's pinned version against the latest known, writing `ok`/`mismatch`/`inconclusive`. A mismatch whose behaviour changed is a BLOCKER. It never fails the pass.
 
-**Sentinel execution targets:** when the target includes `scripts/sentinel.py` or any `tests/integration/` file, also run `python3 scripts/run-integration-tests.py --quiet --no-cov`; treat any failure as an automatic `HIGH` (or `BLOCKER` if it is a daemon crash-safety regression).
+**Sentinel execution targets:** when the target includes `scripts/sentinel.py` or any `tests/integration/` file, also run `python3 scripts/run-integration-tests.py --quiet --no-cov`. Treat any failure as an automatic `HIGH`. Raise it to `BLOCKER` when it is a daemon crash-safety regression.
 
 Engage maximum reasoning effort throughout. Ultrathink.
 
@@ -145,19 +151,24 @@ Inserted in v2.0. Full protocol in `references/refutation-protocol.md`. Bias mit
 
 Announce the skip explicitly in the approval block header.
 
-Run the two sub-passes — **2.5a** single-pass refutation (BLOCKER + HIGH + MEDIUM) then **2.5b** two-agent debate (BLOCKER + HIGH survivors only) — per the full briefs, dispatch commands, outcome rules (REFUTED/REFUTE_PARTIAL/REFUTATION_FAILED; CORRECT[_DOWNGRADE]/INCORRECT/AMBIGUOUS), and confidence-adjustment tables in `references/refutation-protocol.md` (judge-family rotation in `bias-mitigation.md`).
+Run the two sub-passes in order:
 
-**Every judge call goes through `scripts/scrutinize-dispatch.py --judge`**, never by hand: it assigns the family (Skeptic and Meta-Judge never share one), gates the external side on a DECLARED sensitive session, and writes the verdict row. A reproduction outranks a debate: `--reproduce` runs the command and records the exit, and only the harness may write `REPRODUCED`/`FALSIFIED`.
+- **2.5a** single-pass refutation, over BLOCKER + HIGH + MEDIUM.
+- **2.5b** two-agent debate, over the BLOCKER + HIGH survivors only.
 
-**Logging (mandatory):** every Phase 2.5 pass appends a `## Judge layer` section to the
-saved Phase 5 report — family per call, swap bit, Meta-Judge verdicts — for the
-human-agreement benchmark.
+`references/refutation-protocol.md` carries the full briefs, the dispatch commands, the outcome rules, and the confidence-adjustment tables. The outcomes are REFUTED, REFUTE_PARTIAL, REFUTATION_FAILED for 2.5a, and CORRECT, CORRECT_DOWNGRADE, INCORRECT, AMBIGUOUS for 2.5b. Judge-family rotation lives in `bias-mitigation.md`.
+
+**Every judge call goes through `scripts/scrutinize-dispatch.py --judge`**, never by hand. It assigns the family, and the Skeptic and the Meta-Judge never share one. It gates the external side on a DECLARED sensitive session, and it writes the verdict row.
+
+A reproduction outranks a debate. `--reproduce` runs the command and records the exit code. Only the harness may write `REPRODUCED` or `FALSIFIED`.
+
+**Logging (mandatory):** every Phase 2.5 pass appends a `## Judge layer` section to the saved Phase 5 report. It carries the family per call, the swap bit, and the Meta-Judge verdicts, for the human-agreement benchmark.
 
 ---
 
 ## Phase 3 - Approval Block
 
-**If `--relentless` is active:** SKIP this phase — every finding with a concrete proposed fix is treated as approved; findings without one are marked `deferred` for the iteration report. Proceed directly to Phase 4.
+**If `--relentless` is active:** SKIP this phase. Every finding with a concrete proposed fix counts as approved. Mark the findings without one as `deferred` for the iteration report. Proceed directly to Phase 4.
 
 Produce the approval block inline per the exact layout in `references/approval-block.md` (loaded in Phase 0). Do NOT apply any change before user approval.
 
@@ -181,23 +192,39 @@ For each `flag-as-fp <ids>`: `python scripts/scrutinize-flag-fp.py --scrutiny-id
 
 For `workspace` target: apply per area, with one-line confirmation per area completion.
 
-**In `--relentless` mode:** use the adaptive termination + verbal memory ledger from `references/relentless-adaptive.md`; track `improvement_marginal` per iteration, detect fix-revert oscillation, terminate on first of {two-zero, marginal-twice, hard-cap (10), check-failure, oscillation}.
+**In `--relentless` mode:** use the adaptive termination and the verbal memory ledger from `references/relentless-adaptive.md`. Track `improvement_marginal` per iteration and detect fix-revert oscillation. Terminate on the first of: two-zero, marginal-twice, hard-cap (10), check-failure, oscillation.
 
 ---
 
 ## Phase 4.5 - Eval-Case Promotion (single-pass only, CEO-gated)
 
-Full eligibility rules, draft-case generation, auto-scaffold workflow, target-type artefact shapes (skill JSON / script pytest / rule YAML), and the approval-block format live in `references/eval-case-template.md`; read it before proposing any promotion.
+`references/eval-case-template.md` carries the eligibility rules, the draft-case generation, the auto-scaffold workflow, the per-target artefact shapes, and the approval-block format. Read it before you propose a promotion.
 
-**Skip entirely when:** `--relentless` is active; `target = plan`; or no applied finding qualifies.
+**Skip entirely when:** `--relentless` is active, `target = plan`, or no applied finding qualifies.
 
-**Flow:** filter Phase 4 applied findings to qualifiers → offer CEO-gated auto-scaffold if the target lacks `evals/cases/` (`scaffold and promote all|<ids>`, `scaffold only`, `skip`) → build a draft case per the target-type shape → present the approval block with every draft inline and **wait for explicit `promote all|<ids>` / `skip all` / `revise <id>`** (silent-write-forbidden; "looks good" means WAIT) → on promote, write + `sanitize-text.py --scan` + shape validation (JSON/py_compile/YAML), halting on failure → record for Phase 5. When ≥1 candidate exists, announce before the block: `"Phase 4.5: <N> finding(s) eligible for eval-case promotion. CEO approval required per case."`
+**Flow:**
+
+1. Filter the Phase 4 applied findings down to the qualifiers.
+2. When the target lacks `evals/cases/`, offer the CEO-gated auto-scaffold: `scaffold and promote all|<ids>`, `scaffold only`, or `skip`.
+3. Build a draft case per the target-type shape.
+4. Present the approval block with every draft inline. **Wait for an explicit `promote all|<ids>`, `skip all`, or `revise <id>`.** A silent write is forbidden, and "looks good" means WAIT.
+5. On promote, write the case, run `sanitize-text.py --scan`, then validate the shape. Halt on any failure.
+6. Record the result for Phase 5.
+
+With one or more candidates, announce before the block: `"Phase 4.5: <N> finding(s) eligible for eval-case promotion. CEO approval required per case."`
 
 ---
 
 ## Phase 5 - Report Persistence (tiered)
 
-`plan` — inline output only, save nothing. Every other target saves to `outputs/operations/scrutiny/YYYY-MM-DD-<slug>.md` (the `Write` tool auto-creates the dir): slug is `execution` and `workspace` literally, `file:<path>` → last path segment without extension, `dir:<path>` → last dir segment, `trajectory:<run_id>` → `trajectory-<run_id-slug>` (the part after the final `_`).
+`plan` gives inline output only. Save nothing.
+
+Every other target saves to `outputs/operations/scrutiny/YYYY-MM-DD-<slug>.md`, and the `Write` tool creates the directory. The slug is:
+
+- `execution` and `workspace`, literally
+- for `file:<path>`, the last path segment without its extension
+- for `dir:<path>`, the last dir segment
+- for `trajectory:<run_id>`, `trajectory-<run_id-slug>`, taking the part after the final `_`
 
 After saving, run `python scripts/scrutinize-record.py --validate --run-id <id> --report <path>` and surface any defect verbatim. It sees omission, not intent: the Claude-side verdict is still session-supplied.
 
@@ -233,8 +260,8 @@ After saving, run `python scripts/scrutinize-record.py --validate --run-id <id> 
 - Never cross-feed one judge's refutation to another's debate (each agent reasons independently)
 - Never skip the `Judge Layer` section in the saved report when Phase 2.5 ran (audit trail required for human-agreement benchmark)
 - Never run every judge on Claude without naming the cause in `Judge Layer`
-- Never dispatch the external judge when a session is DECLARED sensitive (`sensitivity_is_declared()`, never `is_sensitive()`, whose unset default would disable half the roster) - fall back to 2.5a on Claude, write the `degraded` row, surface the cause in the header
-- Never pin a Claude model version anywhere in this skill - that judge IS the running session, so it is always the latest Opus; `tests/test_scrutinize_no_model_pins.py` fails on a literal
+- Never dispatch the external judge when a session is DECLARED sensitive. Read it with `sensitivity_is_declared()` and never with `is_sensitive()`, whose unset default would disable half the roster. Fall back to 2.5a on Claude, write the `degraded` row, and surface the cause in the header
+- Never pin a Claude model version anywhere in this skill. That judge IS the running session, so it is always the latest Opus, and `tests/test_scrutinize_no_model_pins.py` fails on a literal
 - Never write a verdict, role or currency claim into a report without its row in the record
 - Never write `REPRODUCED` or `FALSIFIED` from a narrated command - the harness observes both exit codes or neither verdict exists
 - Never silently disable Langfuse observability - the saved report's Observability footer must always state whether it was on, off (by env var), or disabled (`SENSITIVE_MODE`)

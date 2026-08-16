@@ -44,9 +44,9 @@ x-heading-capability:
 # Canopus
 
 The standard for building anything non-trivial here. Seven steps, two of them the
-operator's own, and every mechanical part built out of git, GitHub and pytest
-rather than re-implemented in Python: 93 percent of the retired version's
-hand-built prevention surface was defeated by one shell command.
+operator's own. Every mechanical part is built out of git, GitHub and pytest
+rather than re-implemented in Python. One shell command defeated 93 percent of
+the retired version's hand-built prevention surface.
 
 **The one thing this exists to prevent:** a contract too weak to decide anything,
 passing as one that decided. Across all 62 prior records a contract was never once
@@ -55,9 +55,10 @@ is the one no wrong implementation was ever made to fail.
 
 ## Bare `/canopus` — the seven steps
 
-Nothing is run. Show the agenda below and say which step the work in hand is at, from
-the conversation rather than from the disk: only steps 4 and 7 leave a trace in this
-repository, so a position read off it would be a guess dressed as a measurement.
+Nothing is run. Show the agenda below and name the step the work in hand is at.
+Read that position from the conversation, never from the disk. Only steps 4 and 7
+leave a trace in this repository, so a position read off it is a guess dressed as
+a measurement.
 
 ## The seven steps
 
@@ -74,9 +75,12 @@ file may summarise it and may never renumber it.
 7. Production
 ```
 
-Steps 4 and 7 are the operator's. Act 1 is steps 1 to 4, nothing built yet; act 2 is
-step 5, where the implementer is not the planner; act 3 is step 6, where green is not
-the same as right; act 4 is step 7, where the undo is named before it is needed.
+Steps 4 and 7 are the operator's. The seven steps fall into four acts:
+
+- Act 1, steps 1 to 4. Nothing is built yet.
+- Act 2, step 5. The implementer is not the planner.
+- Act 3, step 6. Green is not the same as right.
+- Act 4, step 7. The undo is named before anyone needs it.
 
 ## Step 3 — what makes a plan worth committing
 
@@ -90,45 +94,48 @@ each earned by a measured failure, and how to read `probe`'s table — is
    `tests/contract/{YYYY-MM-DD}-{slug}/` importing the code under test INSIDE each
    test body. It is the only generator of a strong contract we have, and a contract
    born too weak is the dominant measured defect.
-2. **A byte budget on the plan itself: warn at 16,384 bytes, hard at 24,576**,
-   measured across 99 real plans (median 23,704). The warn mirrors the SKILL.md
-   warn `skill-metadata-check.py` already enforces, so the workspace carries one
-   number rather than two. **You measure the plan yourself and you decide.** No
-   code anywhere reads these numbers: `PLAN_BYTE_WARN` / `PLAN_BYTE_HARD` in
-   `canopus_steps.py` are two constants that exist so this paragraph and the
-   agenda module cannot drift apart, and a test holds them in lockstep. Nothing
-   counts a plan's bytes, nothing warns, and nothing refuses a commit. It is a
-   proposal with operator override, and it earns its keep by forcing the writer
-   to discard what does not matter; without one the plan grows until nobody
-   reads the part that decides.
+2. **A byte budget on the plan itself: warn at 16,384 bytes, hard at 24,576.**
+   Measured across 99 real plans, median 23,704. The warn mirrors the SKILL.md
+   warn that `skill-metadata-check.py` already enforces, so the workspace carries
+   one number rather than two. **You measure the plan yourself and you decide.**
+   No code anywhere reads these numbers. `PLAN_BYTE_WARN` and `PLAN_BYTE_HARD`
+   in `canopus_steps.py` exist for one purpose: to stop this paragraph and the
+   agenda module drifting apart. A test holds them in lockstep. Nothing counts a plan's bytes,
+   nothing warns, and nothing refuses a commit. It is a proposal with operator
+   override. It earns its keep by forcing the writer to discard what does not
+   matter. Without one, the plan grows until nobody reads the part that decides.
 3. **The plan does not decide what the implementer can decide from its own context**,
    and it names the files to read first. Re-specifying what the code already says
    wastes the implementer's attention on agreement.
 4. **Vacuity is measured, not assumed.** `.venv/bin/python scripts/canopus.py
    probe tests/contract/{date}-{slug}/` null-stubs the missing modules and runs
-   the contract twice, each stub carrying different values: a test that never
-   FAILS under either run is vacuous, because an outcome invariant to the stub
-   proves nothing. Passing, skipping and erroring all leave a test unproved;
-   only a failure shows it read the value. It also runs three wrong
-   implementations that EXIST
-   (`none`, `echo`, `greedy`) and prints what each took of the red set. `greedy 2
-   of 3` says two checks are greps for a word, not assertions about a value.
+   the contract twice, each stub carrying different values. A test that never
+   FAILS under either run is vacuous: an outcome invariant to the stub proves
+   nothing. Passing, skipping and erroring all leave a test unproved. Only a
+   failure shows that it read the value. The probe also runs three wrong
+   implementations that EXIST: `none`, `echo`, `greedy`. It prints what each one
+   took of the red set. `greedy 2 of 3` says two checks are greps for a word
+   rather than assertions about a value.
 
 ## Step 4 — the freeze is a commit
 
-The operator's COMMIT of the plan and the RED contract IS the approval, and its sha
-is the freeze. Nothing else is needed: `git show <sha>:<path>` reads the frozen
-bytes, `git diff` against it answers whether the contract moved, and `git merge-base
---is-ancestor` answers whether the implementation descends from the approval. Put
-that sha in the note as `approval_sha`.
+The operator's COMMIT of the plan and the RED contract IS the approval, and its
+sha is the freeze. Nothing else is needed:
+
+- `git show <sha>:<path>` reads the frozen bytes.
+- `git diff` against it answers whether the contract moved.
+- `git merge-base --is-ancestor` answers whether the implementation descends from the approval.
+
+Put that sha in the note as `approval_sha`.
 
 ## Step 5 — the separation is a dispatch
 
-`superpowers:subagent-driven-development` sends a fresh implementer per task plus a
-reviewer who did not write the code, so the entity that decides what "done" means is
-not the entity that decides it is done. Executing the plan inline in the session
-that wrote it IS the gap. The note is a RECORD and never an agent input: feeding it
-back hands a reviewer the previous author's framing and destroys what separation buys.
+`superpowers:subagent-driven-development` sends a fresh implementer per task plus
+a reviewer who did not write the code. The entity that decides what "done" means
+is then not the entity that decides it is done. Executing the plan inline in the
+session that wrote it IS the gap. The note is a RECORD and never an agent input.
+Feeding it back hands a reviewer the previous author's framing, which destroys
+what the separation buys.
 
 ## Step 6 — every finding carries an origin
 
@@ -139,17 +146,17 @@ five rounds here without a line of code being written.
 Three origins. A contract-origin finding returns to step 3 and produces a NEW
 contract; it never becomes a patch that leaves the old contract green. A
 code-origin finding is fixed against the contract that already exists. A
-value-origin finding, the built thing revealing that step 1's value statement
-was wrong, returns to step 1, and it is the OPERATOR's call, not the
-assistant's: step 1 is where he said what would be worth having. Filed as
-contract-origin instead, step 3 faithfully writes a strong contract against a
-value that is still wrong.
+value-origin finding returns to step 1. That is the built thing revealing that
+step 1's value statement was wrong. The call is the OPERATOR's and not the
+assistant's, because step 1 is where he said what would be worth having. File it
+as contract-origin instead, and step 3 faithfully writes a strong contract
+against a value that is still wrong.
 
 Add one blinded pass: a reviewer seeing only the diff and the tree, blind to the
-plan and the value statement. ONE, not a panel: the more of the original
-session's context a reviewer is given, the more it reproduces that session's
-reasoning with the same weights and reaches the same conclusions. It cannot see
-a gap between intent and result, so it sits beside the ordinary pass, never in
+plan and the value statement. ONE, not a panel. The more of the original
+session's context a reviewer gets, the more it reproduces that session's
+reasoning with the same weights. It then reaches the same conclusions. It cannot see a
+gap between intent and result, so it sits beside the ordinary pass and never in
 place of it.
 
 Naming the origin is what keeps a weak contract from surviving its slice.
@@ -170,12 +177,13 @@ Every flag above is required by the schema, and the schema refuses the note
 rather than writing a half-formed one. `--show` prints a written note back.
 
 One committed markdown file per slice under `records/slices/`, engine-relative
-paths only. This repository is PUBLIC: a note carries no absolute path and no
-overlay path, which is why the plan and the scope document go in by sha256
-digest. Retiring the contract into the ordinary suite is part of the step, and a
-retirement is RECORDED: `--retired-sha` is the commit that removed the contract and
-`--promoted-to` the file carrying the coverage now. Without both, the clauses below
-read a shipped slice as a broken one.
+paths only. This repository is PUBLIC, so a note carries no absolute path and no
+overlay path. That is why the plan and the scope document go in by sha256 digest.
+
+Retire the contract into the ordinary suite as part of the step. RECORD the
+retirement with two flags. `--retired-sha` is the commit that removed the
+contract. `--promoted-to` is the file carrying the coverage now. Without both,
+the clauses below read a shipped slice as a broken one.
 
 ## `probe --after-build` — the same question, over code that already exists
 
@@ -185,38 +193,40 @@ read a shipped slice as a broken one.
 
 All three subcommands take a global `--root <path>` ahead of the subcommand
 name, which sets the working tree they read. It defaults to this script's own
-repository root rather than the shell's cwd, so an invocation from anywhere
-answers about the same tree unless you say otherwise.
+repository root rather than the shell's cwd. An invocation from anywhere then
+answers about the same tree, unless you say otherwise.
 
 Step 3 asks "if this code were wrong, would any gate notice" exactly once, at a
 moment when the code does not exist. Retiring the contract into the ordinary
 suite at step 7 ends the asking: nothing re-asks, ever. This flag asks it again
 over code that ALREADY EXISTS. It puts the same three wrong implementations in
-front of whatever tests now cover the shipped slice and names every test that
-stayed green under all three. Reach for it when a later slice is about to lean
-on a retired contract's coverage, or when a suite looks greener than the work
-behind it.
+front of whatever tests now cover the shipped slice. It then names every test
+that stayed green under all three.
 
-It REPORTS and never refuses. Exit 0 whether it names twenty survivors or none;
-exit 1 only when no reading could be made at all, which is a different statement
-from a clean one. **Nobody has calibrated this reading**, and rule 3 below
-forbids an uncalibrated reading from becoming a gate, so do not wire it into
-one.
+Reach for it when a later slice is about to lean on a retired contract's
+coverage. Reach for it when a suite looks greener than the work behind it.
 
-Three things about the page, all of which decide whether it is read correctly. A
-name in the list is NOT a bad test: the claim is exactly that the test did not
-tell right from wrong under those three wrongnesses, and a test of a document or
-of a file on disk lands there while being a perfectly good test of what it is
-about. The page names which modules were replaced and which were not, so a test
-whose subject sits on the `not replaced` line was measured against nothing and
-its name says only that; a module the run never imported is on that line too,
-because nothing stood in for it. And a SKIPPED test is neither a survivor nor a
-test that bit: it is named on its own `never ran` line, it is out of the total,
-and a run in which every test skipped produces no reading at all. A test the
-CANDIDATES skipped is that same third thing arriving by the other door — it
-passes for real, so the real run cannot see it, and a fixture reading a value
-the candidates stand in for is the ordinary way it happens — and it is named on
-a `sat out` line.
+It REPORTS and never refuses. Exit 0 whether it names twenty survivors or none.
+Exit 1 only when it could make no reading at all, which is a different statement
+from a clean one. **Nobody has calibrated this reading.** Rule 3 below forbids an
+uncalibrated reading from becoming a gate, so do not wire it into one.
+
+Three things decide whether you read the page correctly:
+
+- **A name in the list is NOT a bad test.** The claim is only that the test did
+  not tell right from wrong under those three wrongnesses. A test of a document
+  or of a file on disk lands there while being a perfectly good test of what it
+  is about.
+- **The page names which modules it replaced and which it did not.** A test whose
+  subject sits on the `not replaced` line was measured against nothing, and its
+  name says only that. A module the run never imported is on that line too,
+  because nothing stood in for it.
+- **A SKIPPED test is neither a survivor nor a test that bit.** It is named on
+  its own `never ran` line and it is out of the total. A run in which every test
+  skipped produces no reading at all. A test the CANDIDATES skipped is that same
+  third thing arriving by the other door. It passes for real, so the real run
+  cannot see it. A fixture reading a value the candidates stand in for is the
+  ordinary way that happens, and it is named on a `sat out` line.
 
 ## `check` — the four clauses
 
@@ -228,13 +238,18 @@ C1 the contract did not move between the approval sha and the end state. C2 the
 implementation descends from the approval. C3 the contract, checked out at the
 approval sha and RUN there, was red. C4 the target is green at HEAD, with per-file
 junit counts above zero, because collected is not run. The subcommand is a
-passthrough to `scripts/canopus_check.py`, and a CI step in the `sovereignty
-guards` job runs that same module on every push, so the local reading and the CI
-reading are one reading. It REPORTS. It does not block:
-`enforce_admins` is false on the only push path in use, and a control that cannot
-enforce must never be described as if it can.
+passthrough to `scripts/canopus_check.py`. A CI step in the `sovereignty guards`
+job runs that same module on every push, so the local reading and the CI reading
+are one reading. It REPORTS. It does not block, because `enforce_admins` is
+false on the only push path in use. Never describe a control that cannot enforce
+as if it can.
 
 ## The four rules the measurements bought
+
+<!-- ste-skip-start -->
+<!-- Explanatory: each rule IS the measurement that bought it, and the section
+     opens by saying a reader who does not know why will delete them. Per
+     .claude/rules/documentation-style.md, flattening this destroys the point. -->
 
 Each was learned expensively. A reader who does not know why will delete them.
 
@@ -253,6 +268,7 @@ Each was learned expensively. A reader who does not know why will delete them.
 4. **Prove a record is alive; do not infer it from silence.** 24 broad exception
    handlers wrap a call into this system, 10 of them invisibly, and 6 were a flagship's
    own pytest hooks where total failure changed the corpus by exactly zero tests.
+<!-- ste-skip-end -->
 
 ## NEVER
 

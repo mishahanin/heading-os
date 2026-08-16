@@ -46,21 +46,25 @@ At a high level, the process of creating a skill goes like this:
 - Write a draft of the skill
 - Create a few test prompts and run claude-with-access-to-the-skill on them
 - Help the user evaluate the results both qualitatively and quantitatively
-  - While the runs happen in the background, draft some quantitative evals if there aren't any (if there are some, you can either use as is or modify if you feel something needs to change about them). Then explain them to the user (or if they already existed, explain the ones that already exist)
-  - Use the `eval-viewer/generate_review.py` script to show the user the results for them to look at, and also let them look at the quantitative metrics
-- Rewrite the skill based on feedback from the user's evaluation of the results (and also if there are any glaring flaws that become apparent from the quantitative benchmarks)
+  - While the runs happen in the background, draft some quantitative evals if there are none. Use any that exist as they are, or modify them where something needs to change. Then explain them to the user.
+  - Run `eval-viewer/generate_review.py` to show the user the results and the quantitative metrics
+- Rewrite the skill from the user's evaluation of the results. Also fix any glaring flaw that the quantitative benchmarks make apparent.
 - Repeat until you're satisfied
 - Expand the test set and try again at larger scale
 
-Your job when using this skill is to figure out where the user is in this process and then jump in and help them progress through these stages. So for instance, maybe they're like "I want to make a skill for X". You can help narrow down what they mean, write a draft, write the test cases, figure out how they want to evaluate, run all the prompts, and repeat.
+Find out where the user stands in this process, then help them through the remaining stages. Say they open with "I want to make a skill for X". Narrow down what they mean, write a draft, write the test cases, agree how to evaluate, run the prompts, and repeat.
 
 On the other hand, maybe they already have a draft of the skill. In this case you can go straight to the eval/iterate part of the loop.
 
-Of course, you should always be flexible and if the user is like "I don't need to run a bunch of evaluations, just vibe with me", you can do that instead.
+Stay flexible. If the user says "I don't need a bunch of evaluations, just vibe with me", do that instead.
 
-Then after the skill is done (but again, the order is flexible), you can also run the skill description improver, which we have a whole separate script for, to optimize the triggering of the skill.
+Once the skill is done, and the order here is flexible too, run the skill description improver. A separate script owns it, and it optimizes how the skill triggers.
 
 Cool? Cool.
+
+<!-- ste-skip-start -->
+<!-- Explanatory: register calibration, where the reasoning is the value. Per
+     .claude/rules/documentation-style.md, flattening this destroys the point. -->
 
 ## Communicating with the user
 
@@ -72,6 +76,7 @@ So please pay attention to context cues to understand how to phrase your communi
 - for "JSON" and "assertion" you want to see serious cues from the user that they know what those things are before using them without explaining them
 
 It's OK to briefly explain terms if you're in doubt, and feel free to clarify terms with a short definition if you're unsure if the user will get it.
+<!-- ste-skip-end -->
 
 ---
 
@@ -94,11 +99,26 @@ Check available MCPs - if useful for research (searching docs, finding similar s
 
 ### Write the SKILL.md
 
-Read `references/anthropic-skill-spec.md` for the full SKILL.md spec - frontmatter field-by-field walkthrough (name, description, the namespaced `x-heading-orchestration:` workspace extension, compatibility), skill anatomy (skill-name/SKILL.md + scripts/ + references/ + assets/), progressive-disclosure rules (three-level loading, <500 lines, domain-organized references), the Principle of Lack of Surprise, writing patterns (output format templates, examples pattern), and writing-style guidance. Apply that spec when filling in the draft.
+Read `references/anthropic-skill-spec.md` for the full SKILL.md spec. It covers:
+
+- the frontmatter field by field, including the namespaced `x-heading-orchestration:` workspace extension
+- skill anatomy: `skill-name/SKILL.md` plus `scripts/`, `references/`, and `assets/`
+- progressive disclosure: three-level loading, under 500 lines, domain-organized references
+- the Principle of Lack of Surprise
+- writing patterns and style, including output-format templates
+
+Apply that spec when you fill in the draft.
 
 The two most important fields:
 
-- **description**: The primary triggering mechanism. Include both what the skill does AND specific when-to-use contexts. Be a little "pushy" to combat Claude's tendency to undertrigger - e.g., "Make sure to use this skill whenever the user mentions dashboards, data visualization, internal metrics, or wants to display any kind of company data, even if they don't explicitly ask for a 'dashboard.'"
+- **description**: The primary triggering mechanism. Include both what the skill does AND specific when-to-use contexts. Be a little "pushy" here, to counter Claude's tendency to undertrigger. For example:
+
+  ```
+  Make sure to use this skill whenever the user mentions dashboards, data
+  visualization, internal metrics, or wants to display any kind of company
+  data, even if they don't explicitly ask for a "dashboard".
+  ```
+
 - **`x-heading-orchestration:`**: Namespaced workspace extension carrying `parallel_safe`, `shared_state`, `triggers`. See the reference for the full contract. When in doubt on `parallel_safe`, use `false`.
 
 ### Test Cases
@@ -125,7 +145,15 @@ See `references/schemas.md` for the full schema (including the `assertions` fiel
 
 ## Running and evaluating test cases
 
-Read `references/running-evals.md` for the full sequence - this section is one continuous flow and must not stop partway through. The reference covers: workspace layout (`<skill-name>-workspace/iteration-N/eval-ID/`), Step 1 (spawn with-skill AND baseline runs in the same turn, eval_metadata.json shape), Step 2 (draft assertions while runs are in progress), Step 3 (capture timing data from task notifications immediately - it isn't persisted anywhere else), Step 4 (grade with `agents/grader.md`, aggregate via `python -m scripts.aggregate_benchmark`, analyst pass per `agents/analyzer.md`, launch viewer with `eval-viewer/generate_review.py`, headless `--static` mode for Cowork), Step 5 (read `feedback.json` and kill the viewer).
+Read `references/running-evals.md` for the full sequence. This section is one
+continuous flow. Do not stop partway through it. The reference covers the
+workspace layout (`<skill-name>-workspace/iteration-N/eval-ID/`) and five steps:
+
+1. Spawn the with-skill AND baseline runs in the same turn. See the reference for the `eval_metadata.json` shape.
+2. Draft assertions while the runs are in progress.
+3. Capture the timing data from the task notifications at once. Nothing else persists it.
+4. Grade with `agents/grader.md`, aggregate via `python -m scripts.aggregate_benchmark`, run the analyst pass per `agents/analyzer.md`, then launch the viewer with `eval-viewer/generate_review.py`. Cowork needs the headless `--static` mode.
+5. Read `feedback.json`, then kill the viewer.
 
 Do NOT use `/skill-test` or any other testing skill. Always use `generate_review.py` rather than writing custom HTML. The grading.json expectations array must use the exact fields `text`, `passed`, `evidence` - the viewer depends on these names.
 
@@ -133,7 +161,12 @@ Do NOT use `/skill-test` or any other testing skill. Always use `generate_review
 
 A new **auto-routable** skill (`x-heading-routing.router: auto` AND NOT `disable-model-invocation: true`) is not finished until it ships a valid `triggers.json`. A `router: manual` or `disable-model-invocation: true` skill is EXEMPT (it never auto-routes). This is a mechanical gate: `scripts/skill-metadata-check.py` exits 1 (CI + the `skill-size-budget` pre-commit hook) on any auto-routable skill lacking a valid corpus that is not grandfathered.
 
-A valid corpus is a JSON array (distinct from `evals/evals.json`) of `>= 6` `{ "query": "...", "should_trigger": true|false }` cases: `>= 4` positives from the skill's `x-heading-routing.triggers`, `>= 2` hard negatives from its `x-heading-routing.exclusions` (each naming the neighbor skill it should route to instead). Illustrative placeholders only. Run `python scripts/skill-metadata-check.py` and confirm exit 0 before declaring done. New skills are never grandfathered, so do not try to add one to `config/triggers-coverage-baseline.json` (`--write-baseline` is shrink-only and refuses).
+A valid corpus is a JSON array of at least 6 `{ "query": "...", "should_trigger": true|false }` cases. It is a different file from `evals/evals.json`. It needs:
+
+- at least 4 positives, drawn from the skill's `x-heading-routing.triggers`
+- at least 2 hard negatives, drawn from its `x-heading-routing.exclusions`. Each negative names the neighbor skill it should route to instead.
+
+Use illustrative placeholders only. Run `python scripts/skill-metadata-check.py` and confirm exit 0 before you declare the skill done. New skills are never grandfathered, so do not add one to `config/triggers-coverage-baseline.json`. `--write-baseline` is shrink-only and refuses.
 
 ---
 
@@ -142,6 +175,11 @@ A valid corpus is a JSON array (distinct from `evals/evals.json`) of `>= 6` `{ "
 This is the heart of the loop. You've run the test cases, the user has reviewed the results, and now you need to make the skill better based on their feedback.
 
 ### How to think about improvements
+
+<!-- ste-skip-start -->
+<!-- Explanatory: this section IS the reasoning it asks the model to adopt, and
+     it argues against rigid instruction shapes in its own third point. Per
+     .claude/rules/documentation-style.md, flattening it destroys the point. -->
 
 1. **Generalize from the feedback.** The big picture thing that's happening here is that we're trying to create skills that can be used a million times (maybe literally, maybe even more who knows) across many different prompts. Here you and the user are iterating on only a few examples over and over again because it helps move faster. The user knows these examples in and out and it's quick for them to assess new outputs. But if the skill you and the user are codeveloping works only for those examples, it's useless. Rather than put in fiddly overfitty changes, or oppressively constrictive MUSTs, if there's some stubborn issue, you might try branching out and using different metaphors, or recommending different patterns of working. It's relatively cheap to try and maybe you'll land on something great.
 
@@ -152,13 +190,14 @@ This is the heart of the loop. You've run the test cases, the user has reviewed 
 4. **Look for repeated work across test cases.** Read the transcripts from the test runs and notice if the subagents all independently wrote similar helper scripts or took the same multi-step approach to something. If all 3 test cases resulted in the subagent writing a `create_docx.py` or a `build_chart.py`, that's a strong signal the skill should bundle that script. Write it once, put it in `scripts/`, and tell the skill to use it. This saves every future invocation from reinventing the wheel.
 
 This task is pretty important (we are trying to create billions a year in economic value here!) and your thinking time is not the blocker; take your time and really mull things over. I'd suggest writing a draft revision and then looking at it anew and making improvements. Really do your best to get into the head of the user and understand what they want and need.
+<!-- ste-skip-end -->
 
 ### The iteration loop
 
 After improving the skill:
 
 1. Apply your improvements to the skill
-2. Rerun all test cases into a new `iteration-<N+1>/` directory, including baseline runs. If you're creating a new skill, the baseline is always `without_skill` (no skill) -- that stays the same across iterations. If you're improving an existing skill, use your judgment on what makes sense as the baseline: the original version the user came in with, or the previous iteration.
+2. Rerun all test cases into a new `iteration-<N+1>/` directory, baseline runs included. For a new skill the baseline is always `without_skill`, and it stays the same across iterations. For an existing skill, pick the baseline yourself: either the version the user arrived with, or the previous iteration.
 3. Launch the reviewer with `--previous-workspace` pointing at the previous iteration
 4. Wait for the user to review and tell you they're done
 5. Read the new feedback, improve again, repeat
@@ -172,7 +211,7 @@ Keep going until:
 
 ## Advanced: Blind comparison
 
-For situations where you want a more rigorous comparison between two versions of a skill (e.g., the user asks "is the new version actually better?"), there's a blind comparison system. Read `agents/comparator.md` and `agents/analyzer.md` for the details. The basic idea is: give two outputs to an independent agent without telling it which is which, and let it judge quality. Then analyze why the winner won.
+A blind comparison system exists for a rigorous comparison between two versions of a skill. Reach for it when the user asks "is the new version actually better?". Read `agents/comparator.md` and `agents/analyzer.md` for the details. The basic idea: give two outputs to an independent agent without telling it which is which, and let it judge quality. Then analyze why the winner won.
 
 This is optional, requires subagents, and most users won't need it. The human review loop is usually sufficient.
 
@@ -180,9 +219,14 @@ This is optional, requires subagents, and most users won't need it. The human re
 
 ## Description Optimization
 
-After a skill is otherwise stable, offer to optimize the `description` frontmatter field - this is the primary mechanism Claude uses to decide whether to invoke a skill. Read `references/description-optimization.md` for the full sequence: Step 1 (generate 20 realistic should-trigger / should-not-trigger eval queries with near-miss negatives), Step 2 (review with the user via `assets/eval_review.html`), Step 3 (run `python -m scripts.run_loop` in the background with extended-thinking-driven iteration on a 60/40 train/test split), and Step 4 (apply `best_description` from the loop's JSON output).
+Once a skill is otherwise stable, offer to optimize the `description` frontmatter field. Claude uses that field to decide whether to invoke a skill at all. Read `references/description-optimization.md` for the full sequence:
 
-The reference also explains how skill triggering actually works under the hood - relevant for designing substantive eval queries that Claude would actually benefit from consulting a skill on.
+1. Generate 20 realistic should-trigger and should-not-trigger eval queries, with near-miss negatives.
+2. Review them with the user through `assets/eval_review.html`.
+3. Run `python -m scripts.run_loop` in the background. It iterates with extended thinking on a 60/40 train/test split.
+4. Apply `best_description` from the loop's JSON output.
+
+The reference also explains how skill triggering works under the hood. Use that to design eval queries a skill would genuinely help Claude answer.
 
 ---
 
@@ -200,7 +244,12 @@ After packaging, direct the user to the resulting `.skill` file path so they can
 
 ## Platform-specific instructions
 
-If running on Claude.ai (no subagents) or Cowork (subagents but no browser/display), read `references/platform-specific.md` for the full adaptations. Key points: Claude.ai runs test cases inline one at a time and skips baselines, benchmarking, description optimization, and blind comparison; Cowork keeps the full parallel workflow but must use `--static <output_path>` for the eval viewer and ALWAYS generate the viewer before evaluating outputs yourself. In Claude Code, the default workflow applies and no adaptation is needed.
+On Claude.ai (no subagents) or Cowork (subagents but no browser), read `references/platform-specific.md` for the full adaptations. The key points:
+
+- Claude.ai runs test cases inline, one at a time. It skips baselines, benchmarking, description optimization, and blind comparison.
+- Cowork keeps the full parallel workflow. Pass `--static <output_path>` to the eval viewer, and ALWAYS generate the viewer before you evaluate any output yourself.
+
+In Claude Code the default workflow applies and needs no adaptation.
 
 ---
 
@@ -233,6 +282,10 @@ Repeating one more time the core loop here for emphasis:
 - Repeat until you and the user are satisfied
 - Package the final skill and return it to the user.
 
-Please add steps to your TodoList, if you have such a thing, to make sure you don't forget. If you're in Cowork, please specifically put "Create evals JSON and run `eval-viewer/generate_review.py` so human can review test cases" in your TodoList to make sure it happens.
+Please add these steps to your TodoList, if you have such a thing, so you don't forget. In Cowork, add this one item verbatim:
+
+```
+Create evals JSON and run eval-viewer/generate_review.py so human can review test cases
+```
 
 Good luck!

@@ -104,6 +104,47 @@ def test_explanatory_docs_are_out_of_scope(ste):
         assert excluded not in ste.CHECKED_GLOBS
 
 
+def test_all_does_not_claim_the_coverage_it_does_not_have(ste):
+    """scope-claims, turned on this checker itself.
+
+    The rule governs the twelve pages AND the instruction bodies of every
+    `.claude/skills/**/SKILL.md`. `--all` resolves the twelve pages only, and
+    described itself as "every in-scope file", which reads as a clean corpus to
+    anyone who runs it. Measured 2026-08-16: 74 of 96 skills carry 300 errors
+    that this wording said did not exist.
+    """
+    help_text = ste.ALL_HELP.lower()
+    assert "in-scope" not in help_text, (
+        "--all says 'in-scope', but the rule's scope is larger than CHECKED_GLOBS"
+    )
+    assert "skill" in help_text, (
+        "--all must name the part of the rule's scope it does NOT cover"
+    )
+
+
+def test_skills_scope_resolves_the_skill_corpus(ste):
+    """The ungated half of the rule's scope must at least be measurable.
+
+    A gap nobody can measure from the CLI is a gap that gets argued about from
+    memory. `--skills` is the number, not the gate.
+    """
+    resolved = ste.resolve_skill_scope()
+    assert len(resolved) > 50, f"only {len(resolved)} SKILL.md files resolved"
+    assert all(p.name == "SKILL.md" for p in resolved)
+    assert not set(resolved) & set(ste.resolve_scope()), (
+        "the two scopes overlap; a file would be audited twice"
+    )
+
+
+def test_the_skill_scope_is_authorised_by_the_rule():
+    """The same contract CHECKED_GLOBS answers to: audit only what the rule governs."""
+    authorised = rule_paths()
+    assert any(fnmatch.fnmatch(".claude/skills/checkpoint/SKILL.md", p) for p in authorised), (
+        "the rule's paths: frontmatter does not govern SKILL.md bodies, so "
+        "--skills would audit files no rule authorises"
+    )
+
+
 # ============================================================
 # Text preparation
 # ============================================================

@@ -13,7 +13,8 @@ must not be claimed - see the rule file for why.
 
 Usage:
   python scripts/ste-check.py <file>              # Audit one file
-  python scripts/ste-check.py --all               # Audit every in-scope file
+  python scripts/ste-check.py --all               # Audit the 12 gated pages
+  python scripts/ste-check.py --skills --quiet    # Audit skill bodies (ungated)
   python scripts/ste-check.py --strict <file>     # Fail on warnings too
   python scripts/ste-check.py --json <file>       # JSON output for CI
   python scripts/ste-check.py --text "string"     # Inline text audit
@@ -489,10 +490,41 @@ def print_report(result, source):
     print()
 
 
+ALL_HELP = (
+    "Audit the 12 gated documentation pages (CHECKED_GLOBS). This is NOT the "
+    "whole scope the rule governs: skill instruction bodies are in scope too "
+    "and are NOT gated - use --skills for those."
+)
+
+SKILLS_HELP = (
+    "Audit every .claude/skills/*/SKILL.md. In scope per the rule, ungated on "
+    "purpose: 74 of 96 carried 300 errors when first measured (2026-08-16), and "
+    "a gate armed on that would block every commit until the corpus is rewritten."
+)
+
+
 def resolve_scope():
-    """Return the in-scope files that exist on disk."""
+    """Return the twelve GATED pages that exist on disk.
+
+    Deliberately narrower than the rule's scope. The rule also governs skill
+    instruction bodies, which `resolve_skill_scope` answers for; keeping them
+    out of this list is what lets the pre-commit gate stay armed at zero errors
+    while the skill corpus is still being brought down.
+    """
     root = get_workspace_root()
     return [root / g for g in CHECKED_GLOBS if (root / g).exists()]
+
+
+def resolve_skill_scope():
+    """Return every skill instruction body, the ungated half of the rule's scope.
+
+    Separate from `resolve_scope` so the gap has a number instead of an
+    assumption. Before this existed, `--all` called itself "every in-scope
+    file" and reported a clean corpus, while 74 of 96 skills carried errors it
+    never opened.
+    """
+    root = get_workspace_root()
+    return sorted((root / ".claude" / "skills").glob("*/SKILL.md"))
 
 
 def main():
@@ -500,7 +532,8 @@ def main():
         description="Mechanical audit for the HEADING OS documentation style (ASD-STE100 subset)."
     )
     parser.add_argument("file", nargs="?", help="File to audit")
-    parser.add_argument("--all", action="store_true", help="Audit every in-scope file")
+    parser.add_argument("--all", action="store_true", help=ALL_HELP)
+    parser.add_argument("--skills", action="store_true", help=SKILLS_HELP)
     parser.add_argument("--text", help="Inline text instead of a file")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings as well as errors")
     parser.add_argument("--json", action="store_true", help="Output JSON instead of a report")
@@ -511,8 +544,8 @@ def main():
                              "reader to skip the output that does matter.")
     args = parser.parse_args()
 
-    if not (args.file or args.text or args.all):
-        parser.error("a file, --text, or --all is required")
+    if not (args.file or args.text or args.all or args.skills):
+        parser.error("a file, --text, --all, or --skills is required")
 
     targets = []
     if args.text:
@@ -525,6 +558,9 @@ def main():
         targets.append((str(path), path.read_text(encoding="utf-8")))
     if args.all:
         for path in resolve_scope():
+            targets.append((str(path), path.read_text(encoding="utf-8")))
+    if args.skills:
+        for path in resolve_skill_scope():
             targets.append((str(path), path.read_text(encoding="utf-8")))
 
     results, passed = {}, True

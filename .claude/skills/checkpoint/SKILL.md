@@ -55,9 +55,9 @@ Save a manual session checkpoint without running `/compact` or clearing context.
 - Does NOT clear the session
 - Does NOT continue implementation after writing - wait for the user to direct next action
 
-Every path is keyed by session id. Several sessions run on this workspace at
-once, and a shared pointer is last-writer-wins: before 2026-08-16 a resumed
-session could be injected another session's handoff.
+The system keys every path by session id. Several sessions run on this workspace
+at once, and a shared pointer is last-writer-wins. Before 2026-08-16 the inject
+hook could hand a resumed session another session's handoff.
 
 ## When to use
 
@@ -81,12 +81,12 @@ python scripts/checkpoint-paths.py --auto status
 ```
 
 Report the command output in one line. For `auto on`, continue to Step 1 and
-write the checkpoint as well, because the operator asked at a threshold and
-expects this one to be saved.
+write the checkpoint as well. The operator asked at a threshold and expects this
+one on disk.
 
 The switch applies to this session only. It overrides `CLAUDE_HANDOFF_AUTO` in
-both directions. It needs no cleanup, because the state file is keyed by session
-and pruned with the session.
+both directions. It needs no cleanup. The state file carries a session key, and
+the pruner removes it with the session.
 
 ### Step 1 - Get this session's paths
 
@@ -102,9 +102,9 @@ It emits `key=value` lines: `stamp`, `archive`, `summary_pointer`,
 `@`-reference resolves. Use them verbatim - never rebuild a path by hand, and
 never write into another session's pointer directory.
 
-If the script is unavailable, fall back to `date -u +'%Y-%m-%d-%H%M%S'` for the
-stamp and `echo "$CLAUDE_CODE_SESSION_ID"` for the session id, then take the
-slug as the first 32 characters of that id.
+If the script is unavailable, get the stamp from `date -u +'%Y-%m-%d-%H%M%S'`.
+Get the session id from `echo "$CLAUDE_CODE_SESSION_ID"`. Take the slug as the
+first 32 characters of that id.
 
 ### Step 2 - Write the combined handoff file
 
@@ -178,15 +178,22 @@ If `$ARGUMENTS` is empty, omit the "User note" section.
 
 ### Step 3 - Update the pointer files
 
-Write the same two texts to two places each: the `summary_pointer` /
-`prompt_pointer` paths from Step 1 (this session's, the ones that get injected)
-and the `shared_summary_pointer` / `shared_prompt_pointer` paths (the workspace's
-newest, which `/next` reads). Four files.
+Write the same two texts to two places each. Four files in total.
 
-The pointer files almost always already exist from a prior checkpoint, and the `Write` tool refuses to overwrite a file that has not been `Read` first in the current session - skipping the read produces `Error writing file`. So for each pointer file below: first `Read` it (ignore a not-found result on a first-ever checkpoint), then `Write` it.
+- `summary_pointer` and `prompt_pointer` from Step 1 hold this session's pair.
+  The inject hook reads only these two.
+- `shared_summary_pointer` and `shared_prompt_pointer` hold the workspace's
+  newest handoff. `/next` reads these two.
 
-Keep the summary short. It is what gets injected on resume, and the inject hook
-truncates at 8000 characters, so anything past that is written and never read.
+A prior checkpoint almost always left these four files in place. The `Write`
+tool refuses to overwrite a file that you did not `Read` first in this session,
+and it answers with `Error writing file`.
+
+So for each pointer file below, `Read` it and then `Write` it. On a first-ever
+checkpoint, ignore the not-found result of the `Read`.
+
+Keep the summary short. The inject hook truncates at 8000 characters, so it
+writes anything past that and no session ever reads it.
 
 `Read` then `Write` the summary text to `summary_pointer` AND `shared_summary_pointer`:
 
@@ -223,9 +230,9 @@ Rules:
 After writing all five files, reply with:
 
 1. Full path of the archive file written
-2. Confirmation that this session's pointer pair and the shared pair were updated
+2. Confirmation that you updated this session's pointer pair and the shared pair
 3. One-line current state summary
-4. Recommendation: "Run `/compact` manually if you want to free context now. Otherwise nothing else happens - checkpoint is preserved for resume."
+4. Recommendation: "Run `/compact` manually if you want to free context now. Otherwise nothing else happens - the checkpoint stays on disk for resume."
 
 Do NOT continue implementation, do NOT call `/compact`, do NOT clear the session. Wait for the user's next instruction.
 
@@ -236,7 +243,7 @@ threshold. The SessionStart hook then resumes the task by itself. Auto mode is
 OFF by default.
 
 Nothing here triggers compaction. A hook cannot start a compaction, so Claude
-Code's own auto-compact still decides when the context is freed. Auto mode only
+Code's own auto-compact still decides when to free the context. Auto mode only
 guarantees that the checkpoint lands first.
 
 **For one session,** flip the switch while you work:

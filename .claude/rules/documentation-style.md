@@ -51,7 +51,9 @@ It does NOT apply to explanatory documentation, where the reasoning is the value
 
 ## The checker, and what it cannot see
 
-`python scripts/ste-check.py <file>` audits one file; `--all` audits the whole in-scope set; `--strict` fails on warnings as well as errors; `--json` emits machine output; `--quiet` prints only the files that carry an error.
+`python scripts/ste-check.py <file>` audits one file; `--all` audits the twelve gated pages; `--skills` audits the skill instruction bodies; `--strict` fails on warnings as well as errors; `--json` emits machine output; `--quiet` prints only the files that carry an error.
+
+**`--all` is narrower than this rule's scope, and the two flags exist to say so.** Until 2026-08-16 `--all` described itself as "every in-scope file" while resolving twelve pages out of a hundred and eight, so a clean `--all` read as a clean corpus. The first `--skills` measurement, the same day: **74 of 96 skills, 300 errors, 443 warnings.** Almost all of the errors are over-long sentences. They are not gated, and arming a gate on them would block every commit until the corpus is rewritten. Bring a skill down when you edit it, run `--skills --quiet` to see where the number stands, and do not read a green `--all` as a green corpus.
 
 **Errors gate; warnings stay advisory.** The first measurement, on 2026-08-11, reported 53 errors and 88 warnings across the twelve pages. The errors were 52 over-long sentences and one two-action step, all of them arithmetic on a word count with nothing to be wrong about, and the whole set was rewritten to zero the same day. So `--all --quiet` is now a pre-commit hook (`documentation-style`) and a step in the CI `sovereignty guards` job, and `tests/test_ste_check.py` holds the hook's file list to the checker's own scope so a page cannot fall out of the gate in silence.
 

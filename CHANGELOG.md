@@ -63,6 +63,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **A quarter of the documentation-style debt was the checker, not the prose.**
+  `scripts/ste-check.py --skills` reported 300 errors across the skill corpus on
+  2026-08-16. Bringing that number down surfaced three defects in the sentence
+  splitter, all of one shape: a markdown character sits between a sentence's
+  terminator and the next sentence's first letter, the pattern does not accept
+  it, and two clean sentences measure as one over-long one. Emphasis
+  (`**You decide.** No code reads them.`) accounted for 51 of the errors, the
+  blockquote continuation marker for 21, and a closing quote or bracket
+  (`... both work." If two variants ...`) for 11. Eighty-three sentences were
+  being rewritten to satisfy a broken measurement.
+
+  Enumerating the shapes is what produced rounds two and three, so the closer is
+  now a character class covering quotes, brackets and emphasis together, and the
+  blockquote marker is stripped in preparation like a list bullet. The
+  warning-before-the-step check reads the same prepared text and keeps working;
+  a test says so, because that is the one rule here with a physical cost when
+  it breaks.
+
+  The real debt was 217 errors across 74 skills, and the corpus now stands at
+  **1**: `.claude/skills/ast-grep/SKILL.md`, vendored from upstream and pinned by
+  content hash in `skills-lock.json`, so rewriting a sentence there would fork
+  upstream in silence. `--skills` is still not a gate — arming one needs an
+  explicit vendored-skill exemption, which is a decision, not a checker's call.
+  The twelve `--all` pages stayed at zero throughout.
+
 - **Three sessions on one workspace were treated as one session.** Every path
   below the workspace root was shared: one `.claude/state/checkpoint-state.json`
   and one `.latest/{summary,prompt}.md`. Measured on 2026-08-16 by replaying the

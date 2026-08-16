@@ -44,7 +44,9 @@ _CFG = CP.config()
 SOFT_THRESHOLD = _CFG["soft"]
 HARD_THRESHOLD = _CFG["hard"]
 REMIND_STEP = _CFG["step"]
-AUTO = _CFG["auto"]
+# Auto is deliberately NOT read at module scope. It is now a per-session
+# decision the operator can flip mid-work, so it is resolved in main() from the
+# session's own state file and passed down.
 
 
 # ANSI colors for the status line. Stripped to plain text on terminals
@@ -118,7 +120,9 @@ def progress_bar(used: float) -> str:
     return "[" + "█" * filled + "░" * empty + "]"
 
 
-def build_status_line(payload: dict, project: Path, used: float | None, level: str | None) -> str:
+def build_status_line(
+    payload: dict, project: Path, used: float | None, level: str | None, auto: bool
+) -> str:
     parts: list[str] = []
 
     workspace = payload.get("workspace") or {}
@@ -135,7 +139,7 @@ def build_status_line(payload: dict, project: Path, used: float | None, level: s
     else:
         # Auto mode is named in the bar, because a checkpoint that writes itself
         # with no prompt should never be a surprise to the operator watching.
-        auto_tag = "auto-" if AUTO else ""
+        auto_tag = "auto-" if auto else ""
         if level == "hard":
             color = C_RED
             tail = f" {C_RED}⛔ {auto_tag}checkpoint required{C_RESET}"
@@ -188,6 +192,12 @@ def main() -> int:
     state = CP.read_json(state_path)
     previous_last_offered = int(state.get("last_offered_bucket") or 0)
 
+    # Resolved from the session's own switch when it has one, from the workspace
+    # environment otherwise. `session_auto` is NOT in the update below and must
+    # never be: this dict is written after every turn, so listing the operator's
+    # choice here would erase it on the next render.
+    auto = CP.auto_mode(state)
+
     state.update(
         {
             "session_id": CP.session_id(payload),
@@ -195,7 +205,7 @@ def main() -> int:
             "soft_threshold": SOFT_THRESHOLD,
             "hard_threshold": HARD_THRESHOLD,
             "remind_step": REMIND_STEP,
-            "auto": AUTO,
+            "auto": auto,
             "used_percentage": used,
             "remaining_percentage": cw.get("remaining_percentage"),
             "current_bucket": bucket,
@@ -227,7 +237,7 @@ def main() -> int:
         # State write failure should not break the status line
         print(f"checkpoint-statusline: state write failed: {exc}", file=sys.stderr)
 
-    print(build_status_line(payload, project, used, level))
+    print(build_status_line(payload, project, used, level, auto))
     return 0
 
 

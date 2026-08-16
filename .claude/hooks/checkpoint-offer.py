@@ -11,11 +11,17 @@ The state file is per session. It was shared until 2026-08-16, and a shared file
 means a sibling session's context usage blocks this session's turns: measured
 with session A at 46% and session B idle, B got the offer and A got nothing.
 
-Two behaviours, selected by CLAUDE_HANDOFF_AUTO:
+Two behaviours, selected by CLAUDE_HANDOFF_AUTO for the workspace or by this
+session's own `session_auto` flag, which overrides it in both directions:
   - off (the default): surface the /checkpoint vs /compact vs continue choice
     and wait for the operator. Nothing is written automatically.
   - on: drive the assistant to save the checkpoint silently and resume the task.
     The capability ships; the operator switches it on.
+
+The prompt carries the switch itself (`/checkpoint auto on`) as a fourth option,
+because the operator is already reading the list at the moment they decide that
+the work is going to be long. A command they have to remember is one they will
+not use.
 
 Anti-loop: bails immediately if payload.stop_hook_active is true.
 
@@ -46,7 +52,8 @@ Consider checkpointing now so you can resume later with a fresh context.
 Options:
 1. `/checkpoint` - save a summary and continuation prompt under outputs/operations/handoff-archive/, no compact.
 2. `/compact` - run a manual compact now; the post-compact hook will save the compact summary.
-3. continue without compact - keep working as is."""
+3. continue without compact - keep working as is.
+4. `/checkpoint auto on` - save now, then keep saving silently for the rest of THIS session and stop asking."""
 
 
 HARD_BODY = """\
@@ -56,6 +63,7 @@ Strongly recommend a checkpoint or compact before continuing further.
 Recommended options:
 1. `/checkpoint` - save a summary and continuation prompt (preserves work; does not free context).
 2. `/compact` - run a manual compact now; the post-compact hook will save the compact summary and free context.
+3. `/checkpoint auto on` - save now, then keep saving silently for the rest of THIS session and stop asking.
 
 Do not offer "continue without compact"."""
 
@@ -198,7 +206,10 @@ def main() -> int:
     if remaining < 0:
         remaining = 0.0
 
-    build = build_auto_reason if CP.config()["auto"] else build_reason
+    # `state` is the copy read BEFORE the delivered-marker write above, and the
+    # marker write preserves every key it does not name, so the operator's
+    # `session_auto` is still in hand here.
+    build = build_auto_reason if CP.config(state)["auto"] else build_reason
     reason = build(level, used, remaining)
 
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))

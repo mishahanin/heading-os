@@ -12,8 +12,11 @@ The session id comes from CLAUDE_CODE_SESSION_ID, which Claude Code exports to
 child processes (verified on 2.1.228).
 
 Usage:
-  python scripts/checkpoint-paths.py           # key=value lines
-  python scripts/checkpoint-paths.py --json    # the same, as JSON
+  python scripts/checkpoint-paths.py                # key=value lines
+  python scripts/checkpoint-paths.py --json         # the same, as JSON
+  python scripts/checkpoint-paths.py --auto on      # stop asking, this session
+  python scripts/checkpoint-paths.py --auto off     # ask again, this session
+  python scripts/checkpoint-paths.py --auto status  # report, change nothing
 
 Archive paths are DATA-root-relative (`outputs/...`), which is the form the
 @-reference and the inject hook resolve. The state path is project-relative.
@@ -77,10 +80,64 @@ def collect() -> dict:
     }
 
 
+def auto_switch(value: str) -> int:
+    """Turn the hands-off mode on or off for THIS session, or report it.
+
+    The switch lives in the session's own state file rather than in the
+    environment, because the decision it records is a running one: the operator
+    is twenty minutes into a piece of work when they conclude it is going to be
+    long, and the conclusion is about one window, not about the workspace. Three
+    sessions on this tree routinely do three different sizes of work.
+
+    It is written under `session_auto`, never under `auto`. The statusline
+    rewrites `auto` after every turn as its echo of the resolved mode, so a
+    choice recorded there would last about one turn.
+
+    No cleanup is needed to end it. The state file is keyed by session and
+    pruned with the session, so the flag dies when the window does.
+    """
+    project = CP.project_root()
+    slug = CP.safe_slug(CP.session_id())
+    path = CP.state_path(project, slug)
+    state = CP.read_json(path)
+
+    if value == "status":
+        chosen = state.get("session_auto")
+        source = "this session" if chosen is not None else "the environment"
+        print(f"auto={'on' if CP.auto_mode(state) else 'off'} (set by {source})")
+        print(f"session_slug={slug}")
+        return 0
+
+    state["session_auto"] = value == "on"
+    state["session_auto_at"] = CP.utc_now().isoformat()
+    try:
+        CP.write_json_atomic(path, state)
+    except OSError as exc:
+        print(f"checkpoint-paths: could not write the switch: {exc}", file=sys.stderr)
+        return 1
+
+    if value == "on":
+        print(f"auto=on for this session ({slug}).")
+        print("Checkpoints now save silently at each threshold and you stop being asked.")
+        print("Compaction is unchanged: no hook can trigger it, so Claude Code's own")
+        print("auto-compact still decides when the context is freed.")
+    else:
+        print(f"auto=off for this session ({slug}). The threshold offer comes back.")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Print this session's checkpoint paths.")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of key=value")
+    ap.add_argument(
+        "--auto",
+        choices=("on", "off", "status"),
+        help="hands-off mode for THIS session only (overrides CLAUDE_HANDOFF_AUTO)",
+    )
     args = ap.parse_args(argv)
+
+    if args.auto:
+        return auto_switch(args.auto)
 
     paths = collect()
     if args.json:

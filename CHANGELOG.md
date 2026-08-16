@@ -38,6 +38,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   [Mahmoud Maatuq](https://github.com/mmaatuq), who packaged this system as a
   plugin independently and found the concurrent-session collision fixed below.
 
+- **Auto mode is now a per-session switch, offered from the prompt itself.**
+  `CLAUDE_HANDOFF_AUTO` is a launch-time decision for a whole workspace, and the
+  decision an operator actually makes is a running one, taken part-way into a
+  long piece of work and belonging to a single window: three sessions on this
+  tree routinely do three different sizes of work.
+  `python scripts/checkpoint-paths.py --auto on|off|status` writes the choice
+  into that session's own state file, and the threshold offer lists it as an
+  option, because the operator is already reading the list at the moment they
+  decide. It overrides the environment default in BOTH directions, so a window
+  can also ask for the question back while the workspace default is silence.
+
+  It is stored under `session_auto` rather than under `auto`, and the difference
+  is not cosmetic: `checkpoint-statusline.py` rewrites `auto` after every turn as
+  its echo of the resolved mode, so a choice recorded there would have survived
+  roughly one turn. No cleanup path was added, because none is needed: the state
+  file is keyed by session and already pruned with it. Eleven tests, including
+  the two that hold the flag against the statusline's rewrite and against the
+  post-compact reset.
+
+  Naming: the switch says what it does, which is to stop asking. It is NOT
+  called `compact-auto`, because no hook can start a compaction, and a name that
+  implies otherwise is the same defect this release fixed one paragraph above.
+
 ### Fixed
 
 - **Three sessions on one workspace were treated as one session.** Every path

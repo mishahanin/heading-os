@@ -94,15 +94,19 @@ def main() -> int:
         except Exception:
             payload = {}
 
-    auto = CP.config()["auto"]
+    # Resolved from THIS session's state file, so a switch the operator flipped
+    # mid-work is still in force on the other side of the compaction that ended
+    # the previous half of it.
+    project = CP.project_root(payload)
+    slug = CP.session_slug(payload)
+    state = CP.read_json(CP.state_path(project, slug))
+    auto = CP.config(state)["auto"]
 
     if (payload.get("source") or "").strip() == "compact":
         if auto:
             print(AUTO_AFTER_COMPACT)
         return 0
 
-    project = CP.project_root(payload)
-    slug = CP.session_slug(payload)
     latest = CP.latest_dir(CP.handoff_dir(project, _ROOT), slug)
 
     summary = read_limited(latest / "summary.md", MAX_SUMMARY_CHARS)

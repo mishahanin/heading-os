@@ -101,6 +101,21 @@ SessionStart hook tells the assistant to continue on its own. Keep your
 compaction point above the soft threshold, so the checkpoint always lands first.
 Nothing here triggers compaction; only Claude Code's own auto-compact does.
 
+The environment variable is the workspace default, decided before launch. The
+decision you actually make is a running one, taken part-way into a long piece of
+work, and it belongs to one window. So the switch also exists per session:
+
+```
+python scripts/checkpoint-paths.py --auto on      # stop asking, this session
+python scripts/checkpoint-paths.py --auto off     # ask again, this session
+python scripts/checkpoint-paths.py --auto status  # report, change nothing
+```
+
+The threshold offer lists this switch as one of its options, so you can pick it
+from the prompt instead of remembering it. It overrides the environment default
+in both directions. It needs no cleanup either. The state that holds it is keyed
+by session, and the pruner removes it with the session.
+
 **[Mahmoud Maatuq](https://github.com/mmaatuq)** contributed the proactive offer
 and the hands-off auto mode, and found the concurrent-session collision that the
 per-session keying fixes. Thank you.

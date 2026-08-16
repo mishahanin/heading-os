@@ -3,11 +3,11 @@ name: checkpoint
 description: "Сохранить manual checkpoint текущей сессии в outputs/operations/handoff-archive/ без выполнения /compact. Используй когда хочешь зафиксировать состояние работы и иметь возможность вернуться позже с чистым контекстом. NEVER auto-trigger - вызывается ТОЛЬКО явной командой /checkpoint."
 allowed-tools: "Write, Read, Bash(date:*), Bash(python scripts/checkpoint-paths.py:*), Bash(python3 scripts/checkpoint-paths.py:*)"
 disable-model-invocation: true
-argument-hint: "[опциональная заметка к checkpoint]"
+argument-hint: "[заметка] | auto on | auto off | auto status"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.1"
+  version: "1.2"
 x-heading-orchestration:
   parallel_safe: false
   shared_state: ["outputs/operations/handoff-archive/", ".claude/state/"]
@@ -67,6 +67,26 @@ session could be injected another session's handoff.
 - Long session approaching natural pause point
 
 ## Procedure
+
+### Step 0 - Handle the `auto` argument first
+
+If `$ARGUMENTS` starts with `auto`, this is a switch and not a checkpoint.
+
+Run one of these, then stop. Do not write any file.
+
+```bash
+python scripts/checkpoint-paths.py --auto on
+python scripts/checkpoint-paths.py --auto off
+python scripts/checkpoint-paths.py --auto status
+```
+
+Report the command output in one line. For `auto on`, continue to Step 1 and
+write the checkpoint as well, because the operator asked at a threshold and
+expects this one to be saved.
+
+The switch applies to this session only. It overrides `CLAUDE_HANDOFF_AUTO` in
+both directions. It needs no cleanup, because the state file is keyed by session
+and pruned with the session.
 
 ### Step 1 - Get this session's paths
 
@@ -211,10 +231,25 @@ Do NOT continue implementation, do NOT call `/compact`, do NOT clear the session
 
 ## Auto mode
 
-`CLAUDE_HANDOFF_AUTO=1` makes the Stop hook drive this skill's procedure with no
-prompt when the context threshold is crossed, and the SessionStart hook resume
-the task by itself afterwards. It is OFF by default and the operator turns it on
-in `.claude/settings.local.json`:
+Auto mode makes the Stop hook run this skill's procedure with no prompt at each
+threshold. The SessionStart hook then resumes the task by itself. Auto mode is
+OFF by default.
+
+Nothing here triggers compaction. A hook cannot start a compaction, so Claude
+Code's own auto-compact still decides when the context is freed. Auto mode only
+guarantees that the checkpoint lands first.
+
+**For one session,** flip the switch while you work:
+
+```bash
+python scripts/checkpoint-paths.py --auto on
+```
+
+The threshold offer names this switch as an option, so you can choose it from
+the list. The choice belongs to the current window and dies with it.
+
+**For the whole workspace,** set the environment default in
+`.claude/settings.local.json`:
 
 ```json
 "env": {
@@ -225,9 +260,8 @@ in `.claude/settings.local.json`:
 }
 ```
 
-The compaction percentage must stay ABOVE the soft threshold, so the checkpoint
-always lands before compaction frees the context. Nothing here triggers
-compaction; only the native auto-compact does.
+Keep the compaction percentage ABOVE the soft threshold. The checkpoint then
+always lands before compaction frees the context.
 
 ## NEVER
 

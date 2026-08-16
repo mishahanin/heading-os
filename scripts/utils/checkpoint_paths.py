@@ -197,11 +197,33 @@ def env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on", "auto")
 
 
-def config() -> dict:
+def auto_mode(state: dict | None = None) -> bool:
+    """Is the hands-off mode on for THIS session?
+
+    Two inputs, and the session's own flag wins in BOTH directions.
+    CLAUDE_HANDOFF_AUTO is a launch-time decision for the whole workspace;
+    `session_auto` is the running one, taken mid-work in a single window ("this
+    is going to be long, stop asking"). Symmetric on purpose: a window may also
+    want the question back while the workspace default is silence.
+
+    Read from `session_auto` and never from `auto`. The statusline rewrites
+    `auto` after every turn as its echo of the RESOLVED mode, so an operator
+    choice stored under that key would survive roughly one turn.
+    """
+    if state:
+        flag = state.get("session_auto")
+        if flag is not None:
+            return bool(flag)
+    return env_bool("CLAUDE_HANDOFF_AUTO", False)
+
+
+def config(state: dict | None = None) -> dict:
     """Thresholds and mode.
 
     `auto` is OFF unless the operator turns it on. The capability ships; the
-    activation is a switch they flip, never a default they discover.
+    activation is a switch they flip, never a default they discover. Pass the
+    session's state file to let its own switch answer instead of the workspace
+    default.
     """
     soft = env_int("CLAUDE_HANDOFF_SOFT_THRESHOLD", 25)
     hard = env_int("CLAUDE_HANDOFF_HARD_THRESHOLD", 30)
@@ -211,7 +233,7 @@ def config() -> dict:
         "soft": soft,
         "hard": hard,
         "step": env_int("CLAUDE_HANDOFF_REMIND_STEP", 5, minimum=1),
-        "auto": env_bool("CLAUDE_HANDOFF_AUTO", False),
+        "auto": auto_mode(state),
     }
 
 

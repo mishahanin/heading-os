@@ -335,3 +335,138 @@ def test_auto_mode_names_the_compaction_point_when_it_is_configured(env):
     _statusline(env, SESSION_A, 46)
     reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
     assert "50" in reason, f"the configured compaction point is not surfaced:\n{reason}"
+
+
+# --------------------------------------------------------------------------
+# Auto mode, flipped mid-session, for THIS session only
+#
+# CLAUDE_HANDOFF_AUTO is a launch-time decision for the whole workspace. The
+# decision the operator actually makes is a running one, taken twenty minutes
+# in ("this is going to be long, stop asking"), and it belongs to ONE window:
+# three sessions on this tree routinely do three different sizes of work.
+#
+# The per-session state file already existed for the collision fix, so the
+# session flag is one key in a file that is already written, already read, and
+# already pruned with the session. `session_auto` is a separate key from `auto`
+# on purpose: `auto` is the statusline's echo of the RESOLVED mode, rewritten on
+# every render, so storing the operator's choice there would erase it a second
+# later.
+# --------------------------------------------------------------------------
+
+CLI = ROOT / "scripts" / "checkpoint-paths.py"
+
+
+def _auto(env, session, value):
+    e = dict(env["env"])
+    e["CLAUDE_CODE_SESSION_ID"] = session
+    e["CLAUDE_PROJECT_DIR"] = str(env["project"])
+    return subprocess.run(
+        [sys.executable, str(CLI), "--auto", value],
+        capture_output=True, text=True, env=e,
+    )
+
+
+def _state_of(env, session) -> dict:
+    path = _state_dir(env) / f"checkpoint-{session[:32]}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def test_auto_on_writes_the_flag_for_this_session(env):
+    result = _auto(env, SESSION_A, "on")
+    assert result.returncode == 0, result.stderr
+    assert _state_of(env, SESSION_A).get("session_auto") is True
+
+
+def test_auto_off_writes_the_flag_for_this_session(env):
+    _auto(env, SESSION_A, "on")
+    _auto(env, SESSION_A, "off")
+    assert _state_of(env, SESSION_A).get("session_auto") is False
+
+
+def test_auto_status_reports_without_changing_anything(env):
+    _auto(env, SESSION_A, "on")
+    before = _state_of(env, SESSION_A)
+    result = _auto(env, SESSION_A, "status")
+    assert result.returncode == 0
+    assert "on" in result.stdout.lower()
+    assert _state_of(env, SESSION_A) == before, "status is not read-only"
+
+
+def test_the_session_flag_turns_auto_on_while_the_env_is_off(env):
+    env["env"].pop("CLAUDE_HANDOFF_AUTO", None)
+    _auto(env, SESSION_A, "on")
+    _statusline(env, SESSION_A, 46)
+    reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
+    assert "AUTO MODE" in reason, f"the session flag did not switch the offer:\n{reason}"
+
+
+def test_the_session_flag_turns_auto_off_while_the_env_is_on(env):
+    """Symmetric on purpose: one window may want the question even when the
+    workspace default is silence."""
+    env["env"]["CLAUDE_HANDOFF_AUTO"] = "1"
+    _auto(env, SESSION_A, "off")
+    _statusline(env, SESSION_A, 46)
+    reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
+    assert "Ask the user" in reason, f"the session flag could not override the env:\n{reason}"
+
+
+def test_the_session_flag_does_not_reach_a_sibling_session(env):
+    _auto(env, SESSION_A, "on")
+    _statusline(env, SESSION_B, 46)
+    reason = json.loads(_stop(env, SESSION_B).stdout)["reason"]
+    assert "Ask the user" in reason, (
+        f"one session's auto flag silenced another session's offer:\n{reason}"
+    )
+
+
+def test_the_statusline_does_not_clobber_the_session_flag(env):
+    """The statusline rewrites this file after every single turn."""
+    _auto(env, SESSION_A, "on")
+    _statusline(env, SESSION_A, 12)
+    _statusline(env, SESSION_A, 46)
+    assert _state_of(env, SESSION_A).get("session_auto") is True
+
+
+def test_the_session_flag_survives_a_compaction(env):
+    """The whole point is a long piece of work, which by definition compacts."""
+    _auto(env, SESSION_A, "on")
+    _statusline(env, SESSION_A, 46)
+    _compact(env, SESSION_A, "SESSION-A-WORK the long migration")
+    assert _state_of(env, SESSION_A).get("session_auto") is True, (
+        "the post-compact reset erased the operator's choice"
+    )
+
+
+def test_the_soft_offer_carries_the_session_switch(env):
+    """The operator is already looking at the list when they decide. A command
+    they have to remember is a command they will not use.
+
+    42 is deliberately between the fixture's soft (40) and hard (45): the two
+    bodies are separate strings, so an assertion at 46 would cover the hard one
+    twice and the soft one never.
+    """
+    _statusline(env, SESSION_A, 42)
+    reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
+    assert "continue without compact" in reason, "this is not the soft body"
+    assert "/checkpoint auto on" in reason, (
+        f"the soft offer does not name the way to stop being asked:\n{reason}"
+    )
+
+
+def test_the_hard_offer_also_carries_the_switch(env):
+    """The hard threshold is where a long piece of work spends most of its time."""
+    _statusline(env, SESSION_A, 46)
+    _stop(env, SESSION_A)
+    _statusline(env, SESSION_A, 52)
+    reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
+    assert "/checkpoint auto on" in reason, (
+        f"the hard offer drops the switch the soft one carries:\n{reason}"
+    )
+
+
+def test_inject_uses_the_auto_closing_for_a_flagged_session(env):
+    env["env"].pop("CLAUDE_HANDOFF_AUTO", None)
+    _auto(env, SESSION_A, "on")
+    _compact(env, SESSION_A, "SESSION-A-WORK the long migration")
+    out = _inject(env, SESSION_A).stdout
+    assert "AUTO MODE" in out, f"a flagged session was not resumed hands-off:\n{out}"

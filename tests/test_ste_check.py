@@ -125,6 +125,19 @@ def test_a_sentence_boundary_before_emphasis_still_splits(ste):
         assert len(ste.split_sentences(text)) == 2, f"{lead!r} blocks the split"
 
 
+def test_a_sentence_boundary_after_emphasis_still_splits(ste):
+    """The mirror half: the CLOSING marker sits between the period and the space.
+
+    `**You decide.** No code reads them.` put `.**` before the whitespace, so the
+    lookbehind never saw the terminator and the bolded sentence merged with the
+    one after it. Both halves of the bug had to go; fixing only the opener left
+    every bolded lead-in still joined to its successor.
+    """
+    assert len(ste.split_sentences("Alpha bravo. **Charlie delta.** Echo foxtrot.")) == 3
+    assert len(ste.split_sentences("Alpha bravo. *Charlie delta.* Echo foxtrot.")) == 3
+    assert len(ste.split_sentences("Alpha bravo. _Charlie delta._ Echo foxtrot.")) == 3
+
+
 def test_the_split_does_not_fire_on_an_abbreviation(ste):
     """The guard that was already there must survive the widened lookahead."""
     assert len(ste.split_sentences("Read the SKILL.md file for the spec.")) == 1

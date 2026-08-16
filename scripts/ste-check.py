@@ -145,13 +145,28 @@ NUMBERED_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 BULLET_ITEM_RE = re.compile(r"^\s*[-*+]\s+(.*)$")
 HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 
-# The lookahead lists what may OPEN the next sentence. `*` and `_` are in it
-# because markdown emphasis opens sentences constantly in this corpus, and
-# without them `... two. **You decide.** No code ...` measured as one sentence of
-# 54 words. That inflated the count against prose that was already correct, and
-# the fix belongs here rather than in the prose. The leading lookbehind still
-# holds the abbreviation guard, so `SKILL.md file` and `v1.2 of` stay unsplit.
-SENTENCE_SPLIT_RE = re.compile(r"(?<![A-Z0-9])(?<=[.!?])\s+(?=[A-Z(\[\"'`*_])")
+# Markdown emphasis sits on BOTH sides of a sentence boundary in this corpus, and
+# the original pattern saw neither side:
+#
+#   ... rather than two. **You decide.** No code reads them.
+#                       ^ opener: the lookahead wanted a capital or a bracket
+#                                    ^ closer: the lookbehind wanted the terminator
+#                                      immediately before the space, not `.**`
+#
+# So one boundary in every bolded lead-in silently merged two sentences, and the
+# joined pair then measured over the word limit. It reported 51 errors across the
+# skill corpus against prose that was already correct.
+#
+# The closer is handled by a fixed-width lookbehind per marker shape rather than
+# by consuming the markers: `re.split` drops what it matches, and consuming them
+# would strip the emphasis out of the text the checker then reports back.
+# `(?<![A-Z0-9])` keeps the abbreviation guard, so `SKILL.md file`, `v1.2 of` and
+# an enumerated `1. ` stay unsplit.
+SENTENCE_SPLIT_RE = re.compile(
+    r"(?<![A-Z0-9])"
+    r"(?:(?<=[.!?])|(?<=[.!?]\*)|(?<=[.!?]\*\*)|(?<=[.!?]_)|(?<=[.!?]__))"
+    r"\s+(?=[A-Z(\[\"'`*_])"
+)
 
 
 # ============================================================

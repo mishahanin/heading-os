@@ -145,7 +145,13 @@ NUMBERED_ITEM_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 BULLET_ITEM_RE = re.compile(r"^\s*[-*+]\s+(.*)$")
 HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 
-SENTENCE_SPLIT_RE = re.compile(r"(?<![A-Z0-9])(?<=[.!?])\s+(?=[A-Z(\[\"'`])")
+# The lookahead lists what may OPEN the next sentence. `*` and `_` are in it
+# because markdown emphasis opens sentences constantly in this corpus, and
+# without them `... two. **You decide.** No code ...` measured as one sentence of
+# 54 words. That inflated the count against prose that was already correct, and
+# the fix belongs here rather than in the prose. The leading lookbehind still
+# holds the abbreviation guard, so `SKILL.md file` and `v1.2 of` stay unsplit.
+SENTENCE_SPLIT_RE = re.compile(r"(?<![A-Z0-9])(?<=[.!?])\s+(?=[A-Z(\[\"'`*_])")
 
 
 # ============================================================

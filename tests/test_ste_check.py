@@ -104,6 +104,33 @@ def test_explanatory_docs_are_out_of_scope(ste):
         assert excluded not in ste.CHECKED_GLOBS
 
 
+def test_a_sentence_boundary_before_emphasis_still_splits(ste):
+    """A period followed by `**bold**` is a boundary like any other.
+
+    The splitter's lookahead accepted a capital, a bracket or a quote and not an
+    emphasis marker, so `... two. **You decide.** No code ...` measured as ONE
+    sentence of 54 words and reported an error against prose that was already
+    three clean sentences. Found 2026-08-17 while bringing the skill corpus
+    down: the corpus was being rewritten to satisfy a broken measurement.
+    """
+    joined = (
+        "Alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo "
+        "lima mike november. **Oscar papa quebec romeo sierra tango uniform "
+        "victor whiskey xray yankee zulu one two three.**"
+    )
+    assert len(ste.split_sentences(joined)) == 2, "bold after a period blocks the split"
+
+    for lead in ("*italic sentence here.*", "_underscored sentence here._"):
+        text = f"Alpha bravo charlie delta echo foxtrot golf. {lead}"
+        assert len(ste.split_sentences(text)) == 2, f"{lead!r} blocks the split"
+
+
+def test_the_split_does_not_fire_on_an_abbreviation(ste):
+    """The guard that was already there must survive the widened lookahead."""
+    assert len(ste.split_sentences("Read the SKILL.md file for the spec.")) == 1
+    assert len(ste.split_sentences("It runs on v1.2 of the API.")) == 1
+
+
 def test_all_does_not_claim_the_coverage_it_does_not_have(ste):
     """scope-claims, turned on this checker itself.
 

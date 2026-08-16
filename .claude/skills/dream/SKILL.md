@@ -136,7 +136,7 @@ Check workspace state for facts that might contradict or extend existing memorie
    - Use `tail -30` to limit output
    - Skip transcript search entirely if no specific signal warrants it
 
-5. **Shadow worklist:** read the latest `<data-root>/outputs/operations/dream/*_dream-shadow_report.md` if present - its dormancy list (informational only, never a removal candidate) and its salience-ranked merge candidates are additional signal, computed nightly by `scripts/dream-shadow.py` and never applied automatically.
+5. **Shadow worklist:** read the latest `<data-root>/outputs/operations/dream/*_dream-shadow_report.md` if present. Its dormancy list is informational only, never a removal candidate. Its salience-ranked merge candidates are additional signal. `scripts/dream-shadow.py` computes both nightly, and never applies them automatically.
 
 ### Phase 1B - Context7 Validation
 
@@ -213,13 +213,13 @@ Write or update memory files based on signals gathered in Phase 1. Every write m
 
 6. **Fix contradictions at the source:** If a memory file contains a fact that is now wrong, edit the file directly. Don't leave stale information.
 
-7. **Superseding a memory means editing it, not removing it.** When a fact is replaced, rewrite the file in place so the current fact stands and the record survives. Retiring a file outright happens ONLY on an explicit instruction from the operator ("delete this memory"), and only then via `python scripts/retire-memory.py <name.md>`, which removes it from the canonical store AND every native harness store. A plain `rm` on one store alone is resurrected at the next SessionStart, because `memory-reconcile.py` never propagates a delete.
+7. **Superseding a memory means editing it, not removing it.** When a fact is replaced, rewrite the file in place so the current fact stands and the record survives. Retiring a file outright happens ONLY on an explicit instruction from the operator ("delete this memory"). Use `python scripts/retire-memory.py <name.md>` for it, which removes the file from the canonical store AND every native harness store. A plain `rm` on one store alone is resurrected at the next SessionStart, because `memory-reconcile.py` never propagates a delete.
 
 8. **Do not stamp `expires:`.** Auto-memory is never retired on a clock. A fact whose relevance ends on a known date is rewritten to say so, not scheduled for deletion. The daily auto-retire timer is disabled; `scripts/memory-auto-retire.py` remains on disk, unused.
 
 ### Apply redundancy merge proposals (human-gated)
 
-Read the latest `<data-root>/outputs/operations/memory-hygiene/` report's "## Redundancy (advisory - not gated)" section. For each candidate pair, show Misha both files and ask for approval. On approval, merge the two facts into ONE survivor file (keeping genuinely distinct facts as SEPARATE files - respect one-fact-per-file), update the survivor's `MEMORY.md` pointer, then retire the other file with `python scripts/retire-memory.py <other.md>`. Never auto-merge; each pair needs explicit approval.
+Read the latest `<data-root>/outputs/operations/memory-hygiene/` report's "## Redundancy (advisory - not gated)" section. For each candidate pair, show Misha both files and ask for approval. On approval, merge the two facts into ONE survivor file. Keep genuinely distinct facts as SEPARATE files, and respect one-fact-per-file. Update the survivor's `MEMORY.md` pointer, then retire the other file with `python scripts/retire-memory.py <other.md>`. Never auto-merge; each pair needs explicit approval.
 
 ### Read the shadow worklist's dormancy list (informational)
 
@@ -240,7 +240,7 @@ Follow the exclusion rules from the auto-memory system:
 
 ### Step 1: Update MEMORY.md
 
-1. **Remove stale pointers:** Delete an index entry only when its memory file was actually retired via `scripts/retire-memory.py` on an explicit operator instruction. A superseded memory keeps its pointer - it was rewritten in place, not removed; update the hook text if the one-line summary changed.
+1. **Remove stale pointers:** Delete an index entry only when `scripts/retire-memory.py` retired its memory file, on an explicit operator instruction. A superseded memory keeps its pointer, because it was rewritten in place rather than removed. Update the hook text if the one-line summary changed.
 2. **Add new pointers:** Add entries for newly created memory files
 3. **Format:** Each entry must be one line, under 150 characters:
    ```

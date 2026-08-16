@@ -44,6 +44,7 @@ Generate a branded 31C Intelligence Briefing newsletter with live world intellig
 ## Variables
 
 focus: [Optional - specific topic or region to emphasize, e.g., "GCC cybersecurity", "Africa telecom", "global markets"]
+
 issue_number: [Optional - issue number, defaults to auto-detect from existing folders in outputs/intel/newsletters/]
 
 ---
@@ -103,7 +104,7 @@ After WebSearch returns article URLs, batch-scrape top articles via `python scri
 
 Write each section following `reference/newsletter-guide.md`:
 
-1. **Hero** - Dramatic 2-4 word title (with line breaks for stacking, one accent word), plus a 1-2 sentence deck summarizing the dominant narrative.
+1. **Hero** - a dramatic 2-4 word title, with line breaks for stacking and one accent word. Add a 1-2 sentence deck that summarizes the dominant narrative.
 2. **Indicators** - Select 5 key metrics with value, label, and style (up/danger/neutral). Examples: commodity prices, infrastructure status, incident counts, market sizes.
 3. **Sea State** - The dominant global events. Lead with what matters most. 2-4 paragraphs. Include `banner_title`, `banner_detail`, and `caption` for the radar banner.
 4. **The Cyber Front** - Specific incidents, threat actors, attack patterns. 2-3 paragraphs. Include `badge` (APT identity), `big_stat` (one standout statistic), `banner_title`, `banner_detail`, and `caption`.
@@ -118,7 +119,7 @@ Write each section following `reference/newsletter-guide.md`:
 
 ## Phase 2.5: Structural pass (optional)
 
-For a long deliverable, you may run the `/editorial-review` structural checklist over the assembled draft before finalizing, to verify the argument arc, claim-to-evidence linkage, and section hierarchy. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
+For a long deliverable, you may run the `/editorial-review` structural checklist over the assembled draft before you finalize it. It verifies the argument arc, claim-to-evidence linkage, and section hierarchy. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
 
 ---
 
@@ -141,7 +142,7 @@ If ANY confidential information is found, remove it and replace with generic lan
 ## Phase 4: Generate HTML
 
 **Resolve the DATA-overlay output dir first.** The newsletter folder, its `input.json`, the generated
-images, and the HTML/PDF are all DATA artifacts -- they must land in the data overlay, never the
+images, and the HTML/PDF are all DATA artifacts. They must land in the data overlay, never the
 engine tree. A bare `outputs/...` passed to a Bash script (or `mkdir`) resolves against the engine
 git root. Resolve once from the workspace root and reuse `$NEWS_DIR` for every path below:
 

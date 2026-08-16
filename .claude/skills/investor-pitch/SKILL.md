@@ -46,7 +46,9 @@ Produce full investor pitch deck content — narrative, slide structure, and spe
 ## Variables
 
 investor_type: strategic | venture | sovereign_fund | angel | corporate_vc
+
 round_context: [What stage, what amount, what use of funds]
+
 audience: [Specific investor or investor type — any known context]
 format: deck_outline | full_content | speaker_notes_only — default: full_content
 
@@ -93,9 +95,10 @@ For each slide provide: slide title, key message (one sentence), content bullets
 6. **Product** — Four modules (DataONE, ControlONE, OpsONE, AnalyticsONE) + use case library; API-first architecture; sovereignty by design
 7. **Traction** — flagship deployment (live), second deployment (in progress), AllianceCo alliance, PartnerCo, DistributorCo
 8. **Go-to-Market** — Phase 1 (home region) → Phase 2 (adjacent regions) → Phase 3 (expansion regions); channel-led
-9. **Competitive Landscape** — vs state-aligned vendors (Chinese-aligned), vs a state-aligned vendor (Russian-aligned), vs a competing vendor (pivoting away) — 31C: the only non-aligned sovereign choice
+9. **Competitive Landscape** — 31C against the Chinese-aligned and Russian-aligned state vendors, and against a competing vendor that is pivoting away.
+10. **The 31C position** — the only non-aligned sovereign choice
 10. **Business Model** — Perpetual [$ per Gb/s] license + recurring support; land-and-expand NRR; ARR path
-11. **The Milestones** — Year 1: [$X]M ARR / [$Y]M; Year 2: [$X]M / [$Y]M; Year 3: [$X]M / [$Y]B
+11. **The Milestones** — Year 1 is [$X]M ARR / [$Y]M. Year 2 is [$X]M / [$Y]M. Year 3 is [$X]M / [$Y]B
 12. **The Team** — founder/CEO, CTO, CSO, SVP Product, Research Lab (PhDs) — name the principals and tenure
 13. **The Ask** — Amount, use of funds, what this milestone achieves
 14. **Why Now, Why 31C** — Closing: the moment is now, the team is built, the product is live
@@ -104,7 +107,7 @@ For each slide provide: slide title, key message (one sentence), content bullets
 
 ## Phase 2.5: Structural pass (optional)
 
-For a long deliverable, you may run the `/editorial-review` structural checklist over the assembled narrative before finalizing, to verify the investor-narrative arc, claim-to-evidence linkage, and that the ask is set up rather than sprung. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
+For a long deliverable, you may run the `/editorial-review` structural checklist over the assembled narrative before you finalize it. It verifies the investor-narrative arc, claim-to-evidence linkage, and that the ask is set up rather than sprung. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
 
 ---
 

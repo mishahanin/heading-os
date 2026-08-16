@@ -51,12 +51,14 @@ x-heading-routing:
 ---
 # YT Pulse - YouTube Intelligence Scanner
 
-Scan YouTube for trending content in any domain, identify what creators are talking about, find the best video worth watching, and deliver an intelligence brief with 31C business relevance.
+Scan YouTube for trending content in any domain and identify what creators are talking about. Find the best video worth watching, and deliver an intelligence brief with 31C business relevance.
 
 ## Variables
 
 query: [required] Domain or topic to scan (e.g., "AI agents", "deep packet inspection", "sailing navigation", "cybersecurity threats 2026")
+
 timeframe: [optional] 24h | 72h (default) | 7d | 30d
+
 depth: [optional] quick (search + clustering only) | full (default, includes transcript analysis)
 
 ---
@@ -119,9 +121,9 @@ returned `IP_BLOCKED`.
 1. Parse the user's query and options. If no query provided, ask what domain to scan.
 2. Set defaults: timeframe = 72h, depth = full
 3. Create the output directory. The brief and its intermediates are DATA artifacts -- they must land
-   in the DATA overlay, never the engine tree. `pulse.py` and `pw.py` write their `--output`/`-o`
-   paths literally relative to cwd (the engine root after the `cd`), so resolve an absolute path under
-   the data outputs dir and reuse `$PULSE_DIR` everywhere below:
+   in the DATA overlay, never the engine tree. `pulse.py` and `pw.py` write their `--output` and `-o`
+   paths literally relative to cwd, which is the engine root after the `cd`. So resolve an absolute
+   path under the data outputs dir, and reuse `$PULSE_DIR` everywhere below:
    ```bash
    cd "$(git rev-parse --show-toplevel)"
    OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
@@ -222,7 +224,7 @@ From the transcript (or description fallback), produce:
 
 1. **Key Takeaways** - 4-5 bullet points. Each should be a standalone insight, not a summary sentence. A reader should understand the video's value from these bullets alone.
 
-2. **Content Summary** - 2-3 paragraphs covering: what the video argues or demonstrates, the evidence or examples used, and the creator's conclusions or predictions.
+2. **Content Summary** - 2-3 paragraphs. Cover what the video argues or demonstrates, the evidence or examples used, and the creator's conclusions or predictions.
 
 3. **Notable Quotes** - 2-3 direct quotes from the transcript that capture the most insightful or provocative statements.
 

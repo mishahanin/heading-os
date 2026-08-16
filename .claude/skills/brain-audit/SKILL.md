@@ -51,7 +51,7 @@ x-heading-routing:
 
 A small composable skill. Takes a list of source file paths and an optional entity name. Runs three checks against the sources. Returns a stable markdown footer that the composing skill pastes beneath its synthesis.
 
-The skill does not synthesize, does not query a workspace-wide index, does not write state. It reads the files passed in, scans canonical workspace locations for the named entity, runs one LLM call to detect source disagreements, and emits a three-section footer.
+The skill does not synthesize, does not query a workspace-wide index, does not write state. It reads the files passed in and scans canonical workspace locations for the named entity. It then runs one LLM call to detect source disagreements, and emits a three-section footer.
 
 CEO may also invoke directly for ad-hoc audits.
 
@@ -113,7 +113,7 @@ Read `references/modalities.md` to get the canonical modality list. For each mod
 
 1. Resolve the search location.
 2. If the location does not exist on the workspace, record "modality location unavailable."
-3. Glob and/or Grep for the entity slug or full name.
+3. Glob for the entity slug or full name, Grep for it, or do both.
 4. If at least one match -> "found." Render the file path and last-modified date.
 5. If zero matches -> "not found." Render the modality name only.
 

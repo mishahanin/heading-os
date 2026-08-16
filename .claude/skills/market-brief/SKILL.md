@@ -52,7 +52,9 @@ Produce an instant market intelligence brief on a region, country, sector, or co
 ## Variables
 
 topic: [Region / country / competitor / technology trend — e.g., "[target-region] telco market", "a competitor DPI position", "[region] sovereignty regulations", "5G security spending in [region]"]
+
 depth: surface | detailed — default: surface (3-5 key points); detailed (full analysis)
+
 purpose: [What decision or action this brief supports — optional]
 
 ---
@@ -67,7 +69,7 @@ Before drafting, read:
 - `context/current-data.md` — Current positioning and active markets
 
 When searching the web for market intelligence, apply domain filtering from `reference/search-domains.md`:
-- Use `allowed_domains` from the topic group(s) most relevant to the query (e.g., Telecom & DPI for the DPI market, the relevant regional group for regional telecom)
+- Use `allowed_domains` from the topic groups most relevant to the query. Telecom & DPI serves the DPI market, and the relevant regional group serves regional telecom
 - Always apply Blocked Domains as `blocked_domains`
 - For broad market overview queries, use `blocked_domains` only
 
@@ -93,9 +95,9 @@ Frame everything through 31C's lens: sovereign, non-aligned, DPI+ category leade
 
 ## Markets Are Pricing (conditional, Polymarket)
 
-If the topic matches the Polymarket coverage whitelist (AI / big tech / elections / geopolitics / crypto / macro / global sports / corporate events - see `reference/polymarket-coverage.md`), include a "Markets Are Pricing" section in the brief output.
+The Polymarket coverage whitelist is AI, big tech, elections, geopolitics, crypto, macro, global sports, and corporate events. See `reference/polymarket-coverage.md`. If the topic matches it, include a "Markets Are Pricing" section in the brief output.
 
-**Disambiguation rule (P4):** if the topic is one or two words and could match multiple entities (e.g., "Apple" could match Apple Inc OR apple-fruit markets), pass `--keywords` with 2-3 disambiguators.
+**Disambiguation rule (P4):** a topic of one or two words can match multiple entities. "Apple" could match Apple Inc or apple-fruit markets. In that case, pass `--keywords` with 2-3 disambiguators.
 
 ```bash
 python scripts/polymarket.py "$TOPIC" --output markdown

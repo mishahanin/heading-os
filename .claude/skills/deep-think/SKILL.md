@@ -84,7 +84,7 @@ Activate this skill WITHOUT being asked when you detect any of these conditions:
 
 4. **High-stakes reasoning** -- Being wrong is costly: investor positioning, partnership terms, competitive response, market entry timing. Example: "How much technical detail should we share with a potential investor who sits on a competitor's board?"
 
-5. **Complex skill chaining** -- Determining which skills to invoke and in what order for a novel, ambiguous request that could go multiple directions.
+5. **Complex skill chaining** -- decide which skills to invoke, and in what order, for a request that could go multiple ways.
 
 6. **Assumption surfacing** -- You catch yourself making an assumption that could meaningfully change the output. Stop. Engage deep-think. Surface it.
 
@@ -120,13 +120,13 @@ Use these stages in order. Not every stage is required for every depth level. Mu
 
 ## Elicitation Methods (optional)
 
-After Problem Definition, you may pull 2-5 named reasoning/critique methods from the shared catalog and run them as labelled Analysis paths -- useful when the default stages are not biting on a hard, multi-angle problem. This is optional; skip it when the standard flow already does the work.
+After Problem Definition, you may pull 2-5 named reasoning or critique methods from the shared catalog. Run them as labelled Analysis paths. This helps when the default stages are not biting on a hard, multi-angle problem. It is optional, so skip it when the standard flow already does the work.
 
 - `python scripts/elicit.py categories` -- the cheap map of method families
 - `python scripts/elicit.py list --category <c>` -- methods in a family (e.g. risk, framing, core)
 - `python scripts/elicit.py show "<Method Name>"` -- full gist + output pattern
 
-Pick methods matched to the problem (Pre-mortem Analysis and Inversion Analysis for a risky launch; First Principles Analysis and Reframe the Question when the framing feels wrong; Second-Order Thinking for cascading effects), name the ones you chose, then apply each as its own Analysis step. Catalog reference: `reference/elicitation-methods.md`.
+Pick methods matched to the problem. Pre-mortem Analysis and Inversion Analysis suit a risky launch. First Principles Analysis and Reframe the Question suit a framing that feels wrong, and Second-Order Thinking suits cascading effects. Name the ones you chose, then apply each as its own Analysis step. Catalog reference: `reference/elicitation-methods.md`.
 
 ---
 
@@ -259,4 +259,4 @@ Deep-think is a **thinking layer** that feeds downstream skills. Use it BEFORE g
 
 ## Knowledge Base
 
-After a thinking session with persistence, offer: "Want me to capture the conclusions? `/odin log` records them as an episode in Odin's brain (CEO-only); `/zk distill` extracts the strategic insights into the knowledge base."
+After a thinking session with persistence, offer this: "Want me to capture the conclusions? The `/odin log` command records them as an episode in Odin's brain (CEO-only). The `/zk distill` command extracts the strategic insights into the knowledge base."

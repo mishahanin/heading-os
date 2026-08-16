@@ -74,15 +74,16 @@ The full method (document arcs, operation vocabulary, defect checklist, the hard
 ## Phase 0: Load context
 
 1. Read `reference/editorial-review.md` (the document-model arcs, the operation vocabulary, the defect checklist, the boundary table).
-2. Read `.claude/rules/humanization.md` — confirm the boundary: this skill stops at the paragraph; everything below it (rhythm, specificity, banned vocabulary, the calibration gate) belongs to that rule.
+2. Read `.claude/rules/humanization.md` and confirm the boundary. This skill stops at the paragraph. Everything below it belongs to that rule: rhythm, specificity, banned vocabulary, and the calibration gate.
 3. Read the target document **in full** (the `file:<path>` argument, or the pasted text). Never review a draft you have only skimmed.
 
 ## Phase 1: Structural pass
 
-1. **Select one document model** from `reference/editorial-review.md` (proposal arc, intel-brief arc, investor-narrative arc, argument/decision-note arc, or a generic model). State the choice and its primary rule in one sentence: "This deliverable should follow the {model}; its primary rule is {rule}."
+1. **Select one document model** from `reference/editorial-review.md` (proposal arc, intel-brief arc, investor-narrative arc, argument/decision-note arc, or a generic model). State the choice and its primary rule in one sentence. The form is "This deliverable should follow the {model}; its primary rule is {rule}."
 2. **Map the structure** — list each major section with an approximate word count. This forces measurement before recommendation.
-3. **Walk the defect checklist** (orphan section, claim-without-evidence, evidence-without-claim, buried lede, flat hierarchy, redundant paragraphs, missing scaffolding, no document-level stance, scope violation).
-4. **Emit findings**, each tagged with exactly one operation (CUT / MERGE / MOVE / CONDENSE / SPLIT / ADD / PROMOTE / DEMOTE / PRESERVE / QUESTION), a one-sentence rationale, and a word-impact estimate. PRESERVE protects comprehension aids from over-cutting (summaries and examples are reinforcement, not redundancy). Close with the summary block: total recommendations, estimated reduction (and % of original), meets-length-target verdict, comprehension trade-offs.
+3. **Walk the defect checklist.** It covers the orphan section, claim-without-evidence, evidence-without-claim, the buried lede, and flat hierarchy. It also covers redundant paragraphs, missing scaffolding, no document-level stance, and scope violation.
+4. **Emit findings.** Tag each with exactly one operation, a one-sentence rationale, and a word-impact estimate. The operations are CUT, MERGE, MOVE, CONDENSE, SPLIT, ADD, PROMOTE, DEMOTE, PRESERVE, and QUESTION. PRESERVE protects comprehension aids from over-cutting, because summaries and examples are reinforcement, not redundancy.
+5. **Close with the summary block.** It carries total recommendations, estimated reduction with its percentage of the original, the meets-length-target verdict, and comprehension trade-offs.
 5. **Optional — pull a critique method.** For a hard restructure, you may run `python scripts/elicit.py show "Critique and Refine"` or `"Red Team vs Blue Team"` from the shared elicitation catalog and apply it to the argument arc. Skip it when the checklist already bites.
 6. **APPROVAL GATE.** Present the findings. Apply NO structural edit until the CEO approves (per `.claude/rules/voice.md`: no structural changes without approval). "No substantive changes recommended — the structure is sound" is a valid, explicit completion. On approval, apply only the approved operations, editing structure (move/cut/merge/condense), never wording.
 

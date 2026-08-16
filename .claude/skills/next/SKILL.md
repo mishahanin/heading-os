@@ -62,7 +62,7 @@ Tell the CEO the logical next move and the exact command — grounded in what ju
    ```bash
    python scripts/next-signal.py --json
    ```
-   It returns a ranked recent-actions list from four sources, newest first and handoff-weighted: the session handoff pointer (`outputs/operations/handoff-archive/.latest/summary.md`), the newest `outputs/` files (noise dirs excluded), recent `git log` subjects, and active `threads/business/` files. If it exits non-zero ("outputs unreadable" etc.), say so plainly and fall back to the handoff pointer alone.
+   It returns a ranked recent-actions list, newest first and handoff-weighted. The four sources are the session handoff pointer (`outputs/operations/handoff-archive/.latest/summary.md`), the newest `outputs/` files with noise dirs excluded, recent `git log` subjects, and active `threads/business/` files. If it exits non-zero ("outputs unreadable" and the like), say so plainly and fall back to the handoff pointer alone.
 2. Load the relationship catalog accessor (do not read the whole CSV into context):
    ```bash
    python scripts/skill_graph.py followers <skill>      # next steps after a skill
@@ -71,12 +71,13 @@ Tell the CEO the logical next move and the exact command — grounded in what ju
 
 ## Phase 1: Match
 
-1. For each recent action, map it to its producing skill — via `skill_graph.py by-output-dir` on the output's directory, or directly when the handoff/commit names the work.
+1. For each recent action, map it to its producing skill. Use `skill_graph.py by-output-dir` on the output's directory, or map directly when the handoff or commit names the work.
 2. Look up that skill's `followed_by` edges. The handoff pointer is the strongest signal (explicit human intent); outputs/git/threads are supporting inference.
 
 ## Phase 2: Recommend
 
-1. Emit **2–4 ranked recommendations**, each one line: `{what just happened} → run /{skill} ({one-line why}).` Order optional steps first, then any genuinely-gated next step, and say which is which.
+1. Emit **2–4 ranked recommendations**, each one line: `{what just happened} → run /{skill} ({one-line why}).`
+2. Order optional steps first and any genuinely-gated next step after them. Say which is which.
 2. **Honesty floor:** if no edge is strong enough, emit nothing rather than a weak guess. "Nothing obvious is queued — the last clear action (`{X}`) has no strong next step. Tell me the area and I'll point you." beats a fabricated recommendation.
 3. **Read-only.** Name the slash-command; never invoke it. The CEO decides and runs it (CEO sovereignty; `.claude/rules/prompt-refinement.md` Phase 3). Recommend running the chosen step in a fresh context where it is heavy.
 

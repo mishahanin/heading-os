@@ -111,7 +111,7 @@ After surfacing radar output, suggest: `Run /crm next to see the top 3 follow-up
 
 ### `next`
 
-Surface the top-3 priority follow-ups with checking-in drafts ready for manual review and send. v0 of this subcommand presents drafts; the CEO decides per-draft and sends manually via `send-email.py`. Auto-send-on-approval is a Phase 3 follow-up.
+Surface the top-3 priority follow-ups with checking-in drafts ready for manual review and send. Version 0 of this subcommand presents drafts only. The CEO decides per-draft and sends manually via `send-email.py`. Auto-send-on-approval is a Phase 3 follow-up.
 
 1. Run `python3 scripts/crm_next.py` to generate today's queue. (Note: filename is snake_case for Python importability — `crm_next.py`, not `crm-next.py`.)
 2. Read the output path printed by the script (e.g., `outputs/operations/crm/next-{TODAY}.md`).
@@ -132,7 +132,7 @@ Create a new contact. Two-tier model: address book entity (corporate) + relation
 2. Generate slug: `firstname-lastname` (kebab-case).
 3. **Check if entity exists.** Look for `crm/address-book/{slug}.md`.
    - If exists: skip address book creation, proceed to relationship record only.
-   - If not exists AND user is CEO (admin role): create the address book entry with YAML frontmatter (slug, name, canonical_email, employer, canonical_owner per type-tier table, created today) plus a Profile section.
+   - If not exists AND user is CEO (admin role): create the address book entry with a Profile section. Its YAML frontmatter carries slug, name, canonical_email, employer, canonical_owner per the type-tier table, and today's created date.
    - If not exists AND user is exec: append to `personal/.sync/pending-address-book.jsonl` for CEO promotion. Proceed with relationship record creation using the slug; entity will resolve once CEO promotes.
 4. **Canonical owner lookup** (only when creating an address book entry):
    - prospect, customer, partner, partner-active, reseller -> `alex-rivera`
@@ -142,10 +142,10 @@ Create a new contact. Two-tier model: address book entity (corporate) + relation
    - ecosystem, service-provider, vendor -> `lee-park`
 5. Create the relationship record at `crm/contacts/{slug}.md` (CEO) or `personal/crm/contacts/{slug}.md` (exec) with:
    - YAML frontmatter: `entity_ref: {slug}`, `relationship_type`, `last_touch: today`, `created: today`. Optional fields per user input: `cadence`, `source`, `pipeline_company`.
-   - **Relevant principles (CEO workspace only, brain-gated):** if on the CEO workspace AND `knowledge/odin-brain/` exists AND `relationship_type` is a deal-bearing/external type (NOT `tribe`/`tribe-leadership`/`inactive`), also stamp an optional `relevant_principles:` YAML list by running `python scripts/odin-principles.py --type {relationship_type} [--stage {stage}] --json` and taking the top slugs. Internal types and exec workspaces (no brain): skip silently, never write the field, never error.
+   - **Relevant principles (CEO workspace only, brain-gated):** three conditions must hold. You are on the CEO workspace, `knowledge/odin-brain/` exists, and `relationship_type` is a deal-bearing external type, NOT `tribe`, `tribe-leadership`, or `inactive`. Then stamp an optional `relevant_principles:` YAML list. Run `python scripts/odin-principles.py --type {relationship_type} [--stage {stage}] --json` and take the top slugs. For internal types and exec workspaces (no brain), skip silently, never write the field, and never error.
    - Empty Active Commitments + Interaction Log sections.
 6. **Tribe member case:** if `type` is `tribe` or `tribe-leadership`, also add a `corporate` rule for the file to `config/routing-map.yaml` (CEO only; execs surface a note).
-7. **@31c.io warning:** if `email` contains `@31c.io` AND type is NOT tribe/tribe-leadership, surface a warning: "This contact has a @31c.io email but is not classified as tribe. Update type to 'tribe' if they are a Tribe member."
+7. **@31c.io warning:** if `email` contains `@31c.io` AND type is NOT tribe or tribe-leadership, surface a warning. The text is "This contact has a @31c.io email but is not classified as tribe. Update type to 'tribe' if they are a Tribe member."
 8. Add to `context/people.md` radar table.
 9. Confirm creation with summary including the entity_ref slug.
 
@@ -189,7 +189,7 @@ Update a contact's profile information.
 2. Find the contact file (same fuzzy match as `log`)
 3. Update the specified field in the YAML frontmatter or profile section
 4. If updating `type`, recalculate cadence from `crm/config.md` defaults (unless cadence was manually set)
-5. **Relevant principles refresh (CEO workspace only, brain-gated):** if `relationship_type` or `pipeline_company` changed AND `knowledge/odin-brain/` exists AND the type is deal-bearing/external (NOT `tribe`/`tribe-leadership`/`inactive`), re-derive `relevant_principles` via `python scripts/odin-principles.py --type {relationship_type} [--stage {stage}] --json`. Skip silently on exec workspaces or internal types.
+5. **Relevant principles refresh (CEO workspace only, brain-gated):** three conditions must hold. `relationship_type` or `pipeline_company` changed, and `knowledge/odin-brain/` exists. The type is also deal-bearing and external, NOT `tribe`, `tribe-leadership`, or `inactive`. Then re-derive `relevant_principles` via `python scripts/odin-principles.py --type {relationship_type} [--stage {stage}] --json`. Skip silently on exec workspaces or internal types.
 6. Confirm the update
 
 ## Context Loading

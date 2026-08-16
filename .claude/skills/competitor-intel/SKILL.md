@@ -52,7 +52,9 @@ Deep competitive analysis on a specific company or vendor.
 ## Variables
 
 company: [Company name — e.g., "a competing vendor", "a state-aligned vendor", "a state-aligned vendor's DPI division"]
+
 trigger: [Why this analysis now — deal competition, market move, partnership evaluation, investor question]
+
 depth: quick | deep — default: deep
 
 ---
@@ -87,8 +89,8 @@ Search the web for the latest information on this company using two search passe
 
 Before writing the analysis, grade the evidence and maintain the competitor's persistent case file. Full spec: `reference/forensic-evidence-grading.md`.
 
-- **Grade each material claim** Confirmed (>=2 independent sources or an official filing) / Deduced (single source or defensible inference - show the chain) / Hypothesized (unconfirmed - state what would confirm or refute it). Surface the grade next to the claim, especially in Product Comparison, Their Weaknesses, and Financial health signals - a competitor weakness graded Hypothesized must not be sold as Confirmed.
-- **Case file** at `outputs/intel/cases/[competitor-slug].md` (ceo-only): if it exists, read it first and update hypothesis statuses (append-only, never delete a refuted theory - flip its `Status` to `Refuted` with a `Resolution`); else create it from `reference/templates/intel-case-file.md`. This protects the head-to-head from narrative lock-in across quarters.
+- **Grade each material claim** Confirmed, Deduced, or Hypothesized. Confirmed needs >=2 independent sources or an official filing. Deduced needs a single source or a defensible inference, with the chain shown. Hypothesized is unconfirmed: state what would confirm or refute it. Surface the grade next to the claim, especially in Product Comparison, Their Weaknesses, and Financial health signals. A competitor weakness graded Hypothesized must not be sold as Confirmed.
+- **Case file** at `outputs/intel/cases/[competitor-slug].md` (ceo-only). If it exists, read it first and update hypothesis statuses. That is append-only: never delete a refuted theory, flip its `Status` to `Refuted` with a `Resolution`. If it does not exist, create it from `reference/templates/intel-case-file.md`. This protects the head-to-head from narrative lock-in across quarters.
 
 ---
 
@@ -154,4 +156,4 @@ Before writing the analysis, grade the evidence and maintain the competitor's pe
 
 **Output:** Competitor intelligence brief. Actionable, honest, and specific to 31C's current situation.
 
-**Post-synthesis audit (required).** Per development-standards, this skill synthesizes over a source set, so after writing the brief run `/brain-audit --sources <the brief + any cited intel/datastore files> --entity "<competitor>"` and append the returned footer (newest-source dates, modality coverage, source disagreements).
+**Post-synthesis audit (required).** Per development-standards, this skill synthesizes over a source set. After writing the brief, run `/brain-audit --sources <the brief + any cited intel/datastore files> --entity "<competitor>"`. Append the returned footer, which carries newest-source dates, modality coverage, and source disagreements.

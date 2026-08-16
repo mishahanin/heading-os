@@ -41,7 +41,7 @@ x-heading-routing:
 ---
 # Viraid -- Virtual Assistant for Telegram Task Capture
 
-Reads new messages from the VIRAID Telegram channel (default **M's VIRAID**; set `VIRAID_CHANNEL_NAME` in `.env` to use your own), categorizes them, enriches with workspace context (CRM, calendar, pipeline), proposes structured actions, and executes after Misha's approval. Nothing falls through the cracks.
+Reads new messages from the VIRAID Telegram channel and categorizes them. The channel defaults to **M's VIRAID**; set `VIRAID_CHANNEL_NAME` in `.env` to use your own. It then enriches with workspace context (CRM, calendar, pipeline), proposes structured actions, and executes after Misha's approval. Nothing falls through the cracks.
 
 ## State Files
 
@@ -53,8 +53,8 @@ VIRAID_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils
 ```
 
 Then `state.json` = `$VIRAID_DIR/state.json`, `tasks.md` = `$VIRAID_DIR/tasks.md`. Read and write
-only there. Never write viraid state into the engine tree (`.heading-os/outputs/...` must not be
-created) -- a bare relative path resolves against the engine git root, where `outputs/` does not exist.
+only there. Never write viraid state into the engine tree: `.heading-os/outputs/...` must not be
+created. A bare relative path resolves against the engine git root, where `outputs/` does not exist.
 
 **Channel name is configurable.** The Telegram channel Viraid reads is NOT hardcoded. Resolve it
 once at run start; it comes from the `VIRAID_CHANNEL_NAME` env var (in `.env`), defaulting to
@@ -123,7 +123,7 @@ When generating Viraid output (summary, sweep results), always report:
 
 ## Execution Flow (Message Processing)
 
-Steps 1-9 of the default `/viraid` invocation -- load state, fetch new messages, filter, categorize, enrich, present proposed actions, await approval, execute, update ledger, summarize -- are catalogued in `references/message-processing.md`. The reference carries all the JSON shapes, fetch commands, enrichment rules, calendar-check protocol, decision semantics, and the Step 9 summary template. **Read `references/message-processing.md` DIRECTLY with the Read tool. Do NOT route it through a summarizing subagent -- the exact CLI invocations and JSON shapes must be used verbatim.**
+Steps 1-9 of the default `/viraid` invocation are catalogued in `references/message-processing.md`. They load state, fetch new messages, filter, categorize, and enrich. They then present proposed actions, await approval, execute, update the ledger, and summarize. The reference carries all the JSON shapes, fetch commands, enrichment rules, calendar-check protocol, decision semantics, and the Step 9 summary template. **Read `references/message-processing.md` DIRECTLY with the Read tool. Do NOT route it through a summarizing subagent -- the exact CLI invocations and JSON shapes must be used verbatim.**
 
 Critical guardrails that stay in this SKILL.md:
 
@@ -154,4 +154,4 @@ Critical guardrails that stay in this SKILL.md:
 
 ## Edge Cases
 
-Full edge-case catalogue (first run, no new messages, backlog draining, media-only, missing CRM contact, corrupted state, channel deletion failure, DB locked retries, legacy task priority assignment, gap detection) is in `references/edge-cases.md`. Read it when any non-happy-path condition is hit.
+The full edge-case catalogue is in `references/edge-cases.md`. It covers first run, no new messages, backlog draining, media-only, and a missing CRM contact. It also covers corrupted state, channel deletion failure, DB locked retries, legacy task priority assignment, and gap detection. Read it when any non-happy-path condition is hit.

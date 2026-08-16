@@ -53,12 +53,13 @@ x-heading-routing:
 ---
 # /pencil-export - Export a Pencil deck (WSL-safe)
 
-The Pencil MCP `export_nodes` tool (native PNG/PDF) is broken on this WSL setup:
-its bundled path translator prepends `\\wsl.localhost\<distro>\` inconsistently,
+The Pencil MCP `export_nodes` tool (native PNG/PDF) is broken on this WSL setup.
+Its bundled path translator prepends `\\wsl.localhost\<distro>\` inconsistently,
 so it cannot write per-slide images from a WSL-resident or C:\ `.pen`. The Pencil
-CLI would fix it but its headless loader chokes on relative image URLs and its
-shell is not pipe-scriptable, and `--app desktop` has no WSL socket. `export_html`
-in the same MCP resolves paths correctly, so this skill uses it as the seam.
+CLI would fix it, but its headless loader chokes on relative image URLs. Its
+shell is also not pipe-scriptable, and `--app desktop` has no WSL socket. The
+`export_html` tool in the same MCP resolves paths correctly, so this skill uses
+it as the seam.
 
 Background and full diagnosis: auto-memory `pencil-export-nodes-broken-wsl`.
 
@@ -111,10 +112,10 @@ Flags: `--width/--height` (default 1920x1080), `--scale` (default 2),
 
 **PPTX defaults to editable.** The `pptx` token now builds the editable twin
 `<stem>.pptx` (Phase 2b), because editability is the whole point of a PPTX. The
-locked-look image-per-slide deck is opt-in via `pptx-flat` (alias `pptx-image`) and
-is written as `<stem> (ready to be shared with the world).pptx` - byte-frozen and
-portable (needs no fonts installed). `editable` remains an accepted alias of `pptx`.
-`pdf` is always image-per-slide.
+locked-look image-per-slide deck is opt-in via `pptx-flat` (alias `pptx-image`).
+It is written as `<stem> (ready to be shared with the world).pptx`, byte-frozen
+and portable, and needs no fonts installed. The `editable` token remains an
+accepted alias of `pptx`. The `pdf` token is always image-per-slide.
 
 **Compression (no NXPowerLite needed).** Lossless PNG at 2x makes a heavy deck
 (45-slide PPTX ~29 MB, PDF ~45 MB). Add `--image-format jpeg` (with `--quality`,
@@ -127,10 +128,11 @@ for anything shared or emailed.
 
 ## Phase 2b - Editable PPTX (the default `pptx`)
 
-`pptx` builds the editable deck `<stem>.pptx`: each slide is the exact Pencil render
-used as a full-bleed **background image with the content text removed**, plus
-**native editable text boxes** laid on top at the same coordinates, with matching
-brand font, size, colour and alignment. Branding, graphics, images and table grids
+The `pptx` token builds the editable deck `<stem>.pptx`. Each slide is the exact
+Pencil render, used as a full-bleed **background image with the content text
+removed**. On top of it sit **native editable text boxes** at the same
+coordinates, with matching brand font, size, colour and alignment. Branding,
+graphics, images and table grids
 stay baked in the background. The brand typefaces used on the runs are **embedded
 into the file** so it renders identically on a machine without the fonts installed.
 
@@ -152,19 +154,20 @@ How it works and what to know:
   Add deck-specific branding names with `--keep-in-bg <Name>` (repeatable).
 - **Coordinate map.** The slide is 1920x1080 px == 13.333x7.5 in, so a text box
   position is `px * 12192000/width` EMU and its font size is `px * (12192000/width)/12700`
-  pt. Single-line boxes are set no-wrap (a renderer whose brand-font metrics run
-  wider must not break the last word onto a second line); multi-line boxes keep the
+  pt. Single-line boxes are set no-wrap, so a renderer whose brand-font metrics run
+  wider cannot break the last word onto a second line. Multi-line boxes keep the
   extracted line-height.
 - **Overlap-safe.** Each background is rendered with all other slide frames hidden,
   so off-grid / overlapping Pencil frames cannot bleed into a neighbour's background.
 - **Fonts embedded automatically.** When `--fonts-dir` is given, `embed_fonts()`
-  adds the used typefaces to the .pptx package (the PowerPoint "Embed fonts in the
-  file" structures: a fntdata content-type, one font part + relationship per
-  typeface, and a schema-ordered `<p:embeddedFontLst>` with `embedTrueTypeFonts`).
-  **Only TTF/OTF embed** - PowerPoint cannot use woff/woff2, so a typeface present in
-  the fonts dir only as woff is reported as "no TTF/OTF for typeface X" and falls
-  back on the opening machine. The script never round-trips through LibreOffice (that
-  would drift the layout); it edits the OPC package directly.
+  adds the used typefaces to the .pptx package. It writes the PowerPoint "Embed
+  fonts in the file" structures. Those are a fntdata content-type, one font part
+  and relationship per typeface, and a schema-ordered `<p:embeddedFontLst>` with
+  `embedTrueTypeFonts`. **Only TTF/OTF embed.** PowerPoint cannot use woff or
+  woff2. A typeface present in the fonts dir only as woff is reported as "no
+  TTF/OTF for typeface X". It then falls back on the opening machine. The script
+  never round-trips through LibreOffice, which would drift the layout; it edits
+  the OPC package directly.
 - **Locked-look flat deck is opt-in.** For a byte-frozen, portable, needs-no-fonts
   version, add `pptx-flat` (alias `pptx-image`); it writes `<stem> (ready to be
   shared with the world).pptx`, an image-per-slide deck (like the PDF, not editable).
@@ -180,8 +183,8 @@ How it works and what to know:
 - The self-contained HTML has **zero external refs** (`grep -c 'src="assets\|url(.\(assets\|images\)' <stem>.html` -> 0).
 - Spot-check the cover, the closing slide, and any dense/overlap-prone slide by
   reading the PNGs. If a slide shows two slides' content merged, that is the Pencil
-  canvas-overlap defect; the script's isolation already handles the export, and the
-  `.pen` can be fixed by moving one frame to a free canvas row (`Update` its x/y).
+  canvas-overlap defect. The script's isolation already handles the export. To fix
+  the `.pen`, move one frame to a free canvas row (`Update` its x/y).
 - Report: formats produced, slide count, any overlap warnings the script printed.
 
 ## NEVER

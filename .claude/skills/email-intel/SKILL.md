@@ -148,13 +148,13 @@ Every conversation gets a priority tag:
 
 Two parts, per `references/digest-format.md`:
 
-1. **Context blocks.** Group conversations by priority (P1 first, then P2, P3). Render each with the per-conversation context block (CRM/pipeline/Viraid enrichment + summary + commitments). Emit one "internal-skipped" block for all-hands distribution-list (e.g. all-@) threads. These blocks carry NO per-conversation action numbers.
+1. **Context blocks.** Group conversations by priority (P1, P2, P3, in that order). Render each with the per-conversation context block (CRM/pipeline/Viraid enrichment + summary + commitments). Emit one "internal-skipped" block for all-hands distribution-list (e.g. all-@) threads. These blocks carry NO per-conversation action numbers.
 2. **Numbered action list.** Pool EVERY proposed action across ALL conversations into one flat, sequentially-numbered list (1..N, single namespace -- no `P1-A`, no per-conversation `a,b`). Build it by writing the proposed actions to a JSON array and seeding the state machine:
    ```bash
    python scripts/email-sweep.py propose --file <proposed.json> --date YYYY-MM-DD
    python scripts/email-sweep.py list --date YYYY-MM-DD
    ```
-   Each action carries a tier tag: `[crm]`/`[task]`/`[contact]`/`[know]` (local write), `[notify]` (pipeline), `[send-gated]` (outbound send). Render the `list` output to the CEO **annotated with the recommendation layer** (`references/digest-format.md` Part 3): every action gets an explicit `[DO]`/`[SKIP]` stake plus a <=5-word reason, and a single `Recommendation: do X; skip Y` line sits above the list so the CEO can accept verbatim with one word. Never present an un-staked menu. Proposed-action JSON shape: `references/digest-format.md`.
+   Each action carries a tier tag: `[crm]`/`[task]`/`[contact]`/`[know]` (local write), `[notify]` (pipeline), `[send-gated]` (outbound send). Render the `list` output to the CEO **annotated with the recommendation layer** (`references/digest-format.md` Part 3). Every action gets an explicit `[DO]`/`[SKIP]` stake plus a <=5-word reason. A single `Recommendation: do X; skip Y` line sits above the list, so the CEO can accept verbatim with one word. Never present an un-staked menu. Proposed-action JSON shape: `references/digest-format.md`.
 
 ### Phase 3 -- Approval (MANDATORY)
 
@@ -162,7 +162,7 @@ Present the numbered list (with the Part 3 recommendation stakes + recommended-s
 
 **STOP HERE. Wait for Misha's explicit response before proceeding to Phase 4.**
 
-Translate his reply (`ok`/`да` = the recommended set | `1,3,5` | `all crm` | `2 edit: <change>` | `skip 4` | `rest skip` | `4 go`) into state-machine calls. `ok`/`да` approves the recommended `[DO]` set exactly, minus any `[send-gated]` action the CEO did not separately confirm (the send-gate is never defaulted):
+Translate his reply into state-machine calls. The reply grammar is `ok`/`да` (the recommended set), `1,3,5`, `all crm`, `2 edit: <change>`, `skip 4`, `rest skip`, or `4 go`. A bare `ok` or `да` approves the recommended `[DO]` set exactly, minus any `[send-gated]` action the CEO did not separately confirm (the send-gate is never defaulted):
 ```bash
 python scripts/email-sweep.py approve <ids> --date YYYY-MM-DD
 python scripts/email-sweep.py edit <id> --note "<change>" --date YYYY-MM-DD
@@ -182,16 +182,19 @@ python scripts/email-sweep.py set <id> --status done --note "<result>" --date YY
 By action type:
 - **crm_log / task / new_contact / knowledge** (`[crm]`/`[task]`/`[contact]`/`[know]`) -- local workspace writes. Exact formats: `references/execution-templates.md`.
 - **pipeline** (`[notify]`) -- deposit a `pipeline_update` notify card to the Action Queue AND write the new stage (see below).
-- **send_reply / send_reply_all / send_forward / send_new** (`[send-gated]`) -- send via `scripts/send-email.py`. Use the threaded flags for replies/forwards so the thread, signature, and original attachments are preserved: `--reply`/`--reply-all`/`--forward` with `--match-from`/`--match-subject` (or `--match-id`) to locate the original; `send_new` uses the plain `--to/--subject/--body` form. Apply any `edit` note to the body before sending. send-email.py auto-logs the send to CRM -- do not also write a duplicate crm_log for the same thread.
+- **send_reply / send_reply_all / send_forward / send_new** (`[send-gated]`) -- send via `scripts/send-email.py`. Use the threaded flags for replies and forwards, so the thread, signature, and original attachments survive. Pass `--reply`/`--reply-all`/`--forward` with `--match-from`/`--match-subject` (or `--match-id`) to locate the original. For `send_new`, use the plain `--to/--subject/--body` form. Apply any `edit` note to the body before sending. The send-email.py script auto-logs the send to CRM, so do not also write a duplicate crm_log for the same thread.
 
 Exact write formats for the local-write types: `references/execution-templates.md`.
 
 **Pipeline update** -- routed through the Action Queue as a `pipeline_update` **notify** card (R4), reusing the cold-sweep deposit path. Notify is reversible, not a second hard gate (the Phase 3 digest already approved the batch). Exact card schema + producer contract: `references/execution-templates.md` (Pipeline Update Card).
 
-- **Clear advance** (the email unambiguously signals a new stage): read the current stage + stage date from `context/pipeline.md`, then (a) stamp `prev_value={"stage": <current>, "stage_date": <current date>}` on the card BEFORE applying -- this is what `undo_card` restores; (b) edit `context/pipeline.md` to the new Stage + today's Stage Date (the producer writes pipeline state; the daemon never invents it); (c) deposit a `pipeline_update` notify card via `aq.append_cards(workspace_root, [card])` (in-process) or POST `/action-queue/deposit` (external) -- `source="email-intel"`, `priority="P1"`, `citations=[{source: email ref, excerpt: the stage signal}]`, `company=<name>`, `applied_value={"stage": <new>, "stage_date": today}`.
+- **Clear advance** (the email unambiguously signals a new stage). Read the current stage and stage date from `context/pipeline.md` first, then:
+  - Stamp `prev_value={"stage": <current>, "stage_date": <current date>}` on the card BEFORE you apply it. This is what `undo_card` restores.
+  - Edit `context/pipeline.md` to the new Stage and today's Stage Date. The producer writes pipeline state; the daemon never invents it.
+  - Deposit a `pipeline_update` notify card via `aq.append_cards(workspace_root, [card])` (in-process) or POST `/action-queue/deposit` (external). Set `source="email-intel"`, `priority="P1"`, `citations=[{source: email ref, excerpt: the stage signal}]`, `company=<name>`, and `applied_value={"stage": <new>, "stage_date": today}`.
 - **Ambiguous advance** (state genuinely unclear -- "28 days quiet, no clear next step"): do NOT auto-edit. Deposit a `note` card (or keep it inline in the digest) asking the CEO to decide -- e.g. "ExampleTelco: 28 days quiet, no clear next step. Stalled or closing?" No pipeline write until the CEO answers.
 
-Undo semantics (honest): `undo_card` restores the card's `prev_value` record and logs the undo; reverting `context/pipeline.md` itself is a one-line manual edit back to `prev_value` (the Action Queue is a proposal/audit surface, not a direct pipeline writer).
+Undo semantics (honest): `undo_card` restores the card's `prev_value` record and logs the undo. To revert `context/pipeline.md` itself, make a one-line manual edit back to `prev_value`. The Action Queue is a proposal and audit surface, not a direct pipeline writer.
 
 ### Phase 5 -- Save State & Report
 
@@ -201,9 +204,9 @@ Undo semantics (honest): `undo_card` restores the card's `prev_value` record and
    python scripts/email-intelligence.py --commit-state "$RUN"
    ```
 
-   This appends the processed message_ids (cap 500, oldest trimmed), records the conversation keys (cap 200), stamps `last_run` / `last_run_status` / `last_inbox_datetime` / `last_sent_datetime`, and bumps the run counters. **Run it only after Phase 4 has finished** -- committing earlier marks messages handled that the CEO has not decided on, and Phase 1's filter then hides them forever. That was a live defect until 2026-08-09, when the fetch itself did the commit; `tests/test_email_intel_state_commit.py` now holds the split.
+   This appends the processed message_ids (cap 500, oldest trimmed), records the conversation keys (cap 200), stamps `last_run` / `last_run_status` / `last_inbox_datetime` / `last_sent_datetime`, and bumps the run counters. **Run it only after Phase 4 has finished.** An earlier commit marks messages handled that the CEO has not decided on. Phase 1's filter then hides them forever. That was a live defect until 2026-08-09, when the fetch itself did the commit; `tests/test_email_intel_state_commit.py` now holds the split.
 
-   If the CEO asked to ignore a sender, add it to `learned_ignore_senders` in `state.json` by hand -- that is a preference, not run state, and the commit path does not touch it.
+   If the CEO asked to ignore a sender, add it to `learned_ignore_senders` in `state.json` by hand. That is a preference, not run state, and the commit path does not touch it.
 
 2. Save daily digest: `outputs/operations/email-intelligence/digest-YYYY-MM-DD.md`
    - Full record of conversations processed, actions proposed, decisions made, actions executed

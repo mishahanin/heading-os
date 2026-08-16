@@ -64,9 +64,13 @@ Master intelligence gathering skill. Produces executive-grade intelligence brief
 ## Variables
 
 target: [Name of the company, person, market/region, or technology to investigate]
+
 mode: company | person | market | technology - default: auto-detect from target
+
 depth: standard | deep | maximum - default: deep
+
 focus: [Optional - specific angle to emphasize, e.g., "financial health", "hiring signals", "regulatory exposure", "patent activity", "digital footprint"]
+
 context: [Optional - why this intelligence is needed now, e.g., "pre-meeting", "due diligence", "competitive encounter", "partnership evaluation"]
 
 ---
@@ -98,17 +102,17 @@ Read before any research:
 
 ## Phase 0.5: Entity Resolution
 
-Before Phase 1 fans out, run the deterministic resolver to convert the target string into a structured plan: canonical name, aliases, parent/subsidiary, key people, social handles (X / LinkedIn / GitHub), ticker, products, competitor handles, regulators. Phase 1 streams use the resolved fields as alternative search terms instead of just the literal target string.
+Before Phase 1 fans out, run the deterministic resolver to convert the target string into a structured plan. The plan holds canonical name, aliases, parent and subsidiary, key people, and social handles (X / LinkedIn / GitHub). It also holds ticker, products, competitor handles, and regulators. Phase 1 streams use the resolved fields as alternative search terms instead of the literal target string.
 
 ```bash
 RESOLUTION=$(timeout 60 python scripts/resolve_entity.py "$TARGET" --mode "$MODE" --output json 2>/dev/null)
 ```
 
-The helper takes 30-60s. It calls Tavily Search (primary) with Brave fallback for 2-3 targeted queries, then runs an Anthropic Haiku 4.5 tool-use call to extract the structured plan. Output is JSON with: `canonical`, `social`, mode-specific blocks (people/competitors/regulators for company; affiliations for person; key_players/regulators for market; vendors/communities for technology), plus `field_sources` (a `{field_path: source_index}` map), `resolution_status` (`high` / `partial` / `low`), `backend_used`, `model_used`, `search_queries_used`, `sources`.
+The helper takes 30-60s. It calls Tavily Search (primary) with Brave fallback for 2-3 targeted queries. It then runs an Anthropic Haiku 4.5 tool-use call to extract the structured plan. Output is JSON with: `canonical`, `social`, mode-specific blocks (people/competitors/regulators for company; affiliations for person; key_players/regulators for market; vendors/communities for technology), plus `field_sources` (a `{field_path: source_index}` map), `resolution_status` (`high` / `partial` / `low`), `backend_used`, `model_used`, `search_queries_used`, `sources`.
 
 **Use the resolved plan in Phase 1.** When a Phase 1 stream calls for `[company]` or `[person]` or `[target]`, substitute the canonical name AND aliases AND known handles. For example, if `canonical.aliases = ["e&", "Etihad ExampleTelco"]` and `social.x_handle = "@exampletelco"`, the Stream 1 query becomes `WebSearch: "ExampleTelco OR e& OR @exampletelco founded headquarters ownership"`.
 
-**Fallback behaviour.** If `$RESOLUTION` is empty (timeout fired), contains an `"error"` field (no backends configured, search failed, extraction failed), or `"resolution_status": "low"`, fall back to literal-target queries and note the gap in the brief's Intelligence Gaps section.
+**Fallback behaviour.** Fall back to literal-target queries in three cases. First, `$RESOLUTION` is empty because the timeout fired. Second, it carries an `"error"` field (no backends configured, search failed, extraction failed). Third, it reports `"resolution_status": "low"`. Note the gap in the brief's Intelligence Gaps section.
 
 **Surface in output.** The resolved plan renders as a `## Resolved Entities` block in Phase 2's brief output - see Output Format below.
 
@@ -154,7 +158,7 @@ Between research and synthesis, grade the evidence and reconcile it against the 
 
 After all research streams complete, synthesize into a structured brief.
 
-**Brief markdown template, per-mode section templates, and the HTML-report specification all live in `references/output-format.md`.** The brief carries: classification header, Executive Summary, Resolved Entities table (Phase 0.5 plan), confidence-tagged sections with inline source attribution, Intelligence Gaps, 31C Relevance Assessment, Recommended Actions, Skill Chain Recommendations, and a Source Registry. Section sets differ by mode (company / person / market / technology) — see the reference.
+**Brief markdown template, per-mode section templates, and the HTML-report specification all live in `references/output-format.md`.** The brief carries a classification header, an Executive Summary, and a Resolved Entities table (the Phase 0.5 plan). It then carries confidence-tagged sections with inline source attribution, Intelligence Gaps, and a 31C Relevance Assessment. It closes with Recommended Actions, Skill Chain Recommendations, and a Source Registry. Section sets differ by mode (company / person / market / technology) — see the reference.
 
 ---
 
@@ -186,7 +190,7 @@ Every factual claim must be tagged with its source. If a claim cannot be sourced
    - All raw search results, URLs, extracted data organized by stream
    - Evidence file that supports the brief
 
-4. **Write HTML report:** `outputs/intel/osint/YYYY-MM-DD-[target-slug]/report.html` — ALWAYS generate a professional, self-contained, dark executive-grade report ("CEO Eyes Only" banner, color-coded confidence badges, stats dashboard, all brief sections, responsive + print-friendly, all CSS inline, no external deps). Full element-by-element spec: `references/output-format.md` § "HTML report specification".
+4. **Write HTML report:** `outputs/intel/osint/YYYY-MM-DD-[target-slug]/report.html`. ALWAYS generate a self-contained, dark, executive-grade report. It carries a "CEO Eyes Only" banner, color-coded confidence badges, a stats dashboard, and all brief sections. It is responsive and print-friendly, with all CSS inline and no external deps. Full element-by-element spec: `references/output-format.md` § "HTML report specification".
 
 5. **CRM integration:**
    - PERSON mode, no CRM file: recommend `/crm add`
@@ -245,4 +249,4 @@ Every factual claim must be tagged with its source. If a claim cannot be sourced
 
 ## Knowledge Base
 
-After delivering the brief, offer: "Want me to capture the key signals? `/odin log` records them as an episode in Odin's brain (CEO-only); `/zk distill` extracts the durable signals and research fragments into the knowledge base."
+After delivering the brief, offer this: "Want me to capture the key signals? The `/odin log` command records them as an episode in Odin's brain (CEO-only). The `/zk distill` command extracts the durable signals and research fragments into the knowledge base."

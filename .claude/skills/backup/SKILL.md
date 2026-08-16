@@ -41,11 +41,11 @@ Backup the entire workspace to GitHub.
 
 ## CEO two-part topology (engine + data): use `push-all.py`
 
-The CEO workspace is split into two repos — the ENGINE clone (`.heading-os`,
-code only) and the DATA overlay (`.heading-os-data`, all data + every
-artifact), each with its own private `origin/main`. The single command that
-commits and pushes BOTH, with a pre-push secret scan and an ahead/behind
-`[0 0]` verification (a bare push can silently leave a ref behind), is:
+The CEO workspace is split into two repos, each with its own private
+`origin/main`. The ENGINE clone (`.heading-os`) holds code only. The DATA
+overlay (`.heading-os-data`) holds all data and every artifact. One command
+commits and pushes BOTH. It runs a pre-push secret scan and an ahead/behind
+`[0 0]` verification, because a bare push can silently leave a ref behind:
 
 ```
 python scripts/push-all.py            # commit working-tree changes + push both
@@ -57,8 +57,8 @@ python scripts/push-all.py --dry-run    # show what would happen, change nothing
 It reads `GH_TOKEN` from the engine `.env`, refuses to push any tracked
 secret-like file (`.env`, `.session`, `cookies.json`, `.sessions/`), and never
 pushes `.memory-index/` (gitignored, rebuildable). The DATA overlay is pushed
-FIRST, because the engine's pre-push hook runs the full suite inside the push and
-data is the only half that cannot be reconstructed. Prefer this over the manual
+FIRST. The engine's pre-push hook runs the full suite inside the push, and data
+is the only half that cannot be reconstructed. Prefer this over the manual
 git steps below whenever the data overlay exists (`get_data_root()` differs
 from the engine root). The manual steps remain the path for exec workspaces and
 the pre-cutover single-repo case.
@@ -76,41 +76,42 @@ code, because it has two shapes and they mean opposite things to the operator.**
 
 In both shapes every skipped repository is still committed locally, so nothing is
 lost. Tell the operator which repository was skipped, quote the reason, and give the
-remedy: usually merge the branch into `main` and run the command again, or
-`python scripts/install-git-hooks.py` for an unarmed engine test gate. Do NOT re-run
-the command hoping for a different answer.
+remedy. The remedy is usually to merge the branch into `main` and run the command
+again. For an unarmed engine test gate, it is
+`python scripts/install-git-hooks.py`. Do NOT re-run the command hoping for a
+different answer.
 
-Exit `1` and `2` are real failures that stopped the run (a security refusal, a
-remote a repository must not push to, an absent `GH_TOKEN`, a misconfigured data
-root, a push that ran and did not verify).
+Exit `1` and `2` are real failures that stopped the run. The causes are a security
+refusal, a remote a repository must not push to, or an absent `GH_TOKEN`. They are
+also a misconfigured data root, or a push that ran and did not verify.
 
 Exit `2` with "REFUSING TO PUSH" naming a remote is the newest of those and is
 different in kind from the others. It means a repository is aimed at a remote it
 must not push to: the engine's own remote, or a repository GitHub reports as
-public. Nothing was pushed, nothing was lost, and the whole run stops rather than
+public. Nothing was pushed and nothing was lost. The whole run stops rather than
 continuing with the other repositories, because a wrong remote makes all of them
 suspect. Report the remote it names to Misha and do not retry until it is
 corrected.
 
 Because the DATA overlay is pushed first, a failure at the ENGINE can still leave
-DATA pushed and verified — read the per-repository lines above the failure before
-telling the operator nothing was backed up. Exit `0` means everything went.
+DATA pushed and verified. Read the per-repository lines above the failure before
+you tell the operator nothing was backed up. Exit `0` means everything went.
 
 ## Exec workspaces: also `push-all.py`
 
-An executive workspace is the same two-repo topology from the exec's side: a
-READ-ONLY engine clone (`.heading-os`, consumed via `git pull`; its origin is the
-CEO's engine repo, so the exec cannot push it) and a WRITABLE data overlay
-(`heading-os-data-{slug}`). `push-all.py` is exec-aware — it reads
-`.workspace-identity.json`, detects the `exec-workspace` type, and pushes ONLY the
-data overlay, skipping the engine entirely:
+An executive workspace is the same two-repo topology from the exec's side. The
+engine clone (`.heading-os`) is READ-ONLY, consumed by `git pull`. Its origin is
+the CEO's engine repo, so the exec cannot push it. The data overlay
+(`heading-os-data-{slug}`) is WRITABLE. The `push-all.py` script is exec-aware.
+It reads `.workspace-identity.json`, detects the `exec-workspace` type, and pushes
+ONLY the data overlay, skipping the engine entirely:
 
 ```
 python scripts/push-all.py            # commit + push the data overlay
 python scripts/push-all.py --dry-run  # show what would happen, change nothing
 ```
 
-Do NOT `git add -A` / commit in the engine clone on an exec — it is read-only and
+Do NOT `git add -A` or commit in the engine clone on an exec. It is read-only, and
 all real artifacts already resolve into the data overlay via the `get_*_dir()`
 helpers. Machine-local config (`.zed/`, `.claude/settings.local.json`) stays local
 and uncommitted by design (gitignored). Corporate content lives in the gitignored

@@ -103,7 +103,7 @@ Check if `outputs/operations/handoff.md` exists. If it does:
 > Resume this work, or start fresh?
 
 - If user says **resume**: load the referenced plan file (from `plan` frontmatter field, if present) and pick up from the next action described in the handoff
-- If user says **fresh** or moves on to a different topic: move the handoff file to `outputs/operations/handoff-archive/YYYY-MM-DD-HHmm-{slug}.md` where slug is derived from `session_summary` (lowercase, spaces to hyphens, truncated to 40 chars). Create the `handoff-archive/` directory if it doesn't exist.
+- If user says **fresh** or moves on to a different topic: move the handoff file to `outputs/operations/handoff-archive/YYYY-MM-DD-HHmm-{slug}.md`. Derive the slug from `session_summary` (lowercase, spaces to hyphens, truncated to 40 chars). Create the `handoff-archive/` directory if it doesn't exist.
 - If the `urgency` field is `high`, flag the handoff prominently: "**URGENT handoff from previous session - review before starting new work.**"
 
 If `outputs/operations/handoff.md` does not exist, skip this section entirely (do not mention handoffs).
@@ -116,26 +116,19 @@ Run the seven health checks in parallel via one helper:
 python scripts/prime-health-parallel.py
 ```
 
-**Run it from the workspace you launched in — do not navigate away.** In the HEADING OS
-split layout, scripts live in the ENGINE clone (`.heading-os`, your launch directory) and
-all data is auto-resolved under the DATA root (`.heading-os-data`) by the scripts
-themselves. So run the helper straight from the current directory. Do NOT `cd` into the
-data overlay (`.heading-os-data` has no `scripts/`), and NEVER fall back to a different
-workspace such as `ceo-main` — that would report a DIFFERENT workspace's data and silently
-mislead the briefing. If the helper errors, debug it in place; the correct invocation is
-always the bare `python scripts/prime-health-parallel.py` from the launch directory.
+**Run it from the workspace you launched in — do not navigate away.** In the HEADING OS split layout, scripts live in the ENGINE clone (`.heading-os`, your launch directory). The scripts themselves auto-resolve all data under the DATA root (`.heading-os-data`). So run the helper straight from the current directory. Do NOT `cd` into the data overlay, which has no `scripts/`. NEVER fall back to a different workspace such as `ceo-main`, because that reports a DIFFERENT workspace's data and silently misleads the briefing. If the helper errors, debug it in place; the correct invocation is always the bare `python scripts/prime-health-parallel.py` from the launch directory.
 
-This single invocation dispatches CRM health, Knowledge health, Memory file scan, Email-Intel state check, Threads archive-scan, Fireside daemon health, and Sync-Exchange daemon health to a `ThreadPoolExecutor(max_workers=7)` and prints aggregated output in the order /prime expects:
+This single invocation dispatches seven checks to a `ThreadPoolExecutor(max_workers=7)` and prints the aggregated output in the order /prime expects. The checks are CRM health, Knowledge health, Memory file scan, Email-Intel state check, Threads archive-scan, Fireside daemon health, and Sync-Exchange daemon health:
 
 - **### 2.5 Relationship Radar** -- RED contacts (overdue), YELLOW contacts (approaching), Active commitments due in the next 7 days, Total contacts tracked / individual CRM files. CEO workspace also surfaces company-wide CRM from crm-central.
-- **### 2.7 Knowledge Base Health** -- total notes and status breakdown (seeds / growing / evergreen), stale seeds (>7 days old still seed status), orphan notes count, top 5 keywords.
-- **### 2.9 Memory Health** -- count of memory files, MEMORY.md N/200 line budget, files >45 days flagged for review, orphan files (in memory directory but not linked from MEMORY.md). All clean = "Memory: N files, M/200 lines. All healthy."
+- **### 2.7 Knowledge Base Health** -- total notes and status breakdown (seeds / growing / evergreen). Also stale seeds (>7 days old still seed status), orphan notes count, and top 5 keywords.
+- **### 2.9 Memory Health** -- count of memory files, MEMORY.md N/200 line budget, and files >45 days flagged for review. Also orphan files, which sit in the memory directory but are not linked from MEMORY.md. All clean = "Memory: N files, M/200 lines. All healthy."
 - **### 2.10 Email Intelligence Status** -- last_run age vs 20-hour threshold, pending P1 task count from tasks.md. "Never run" surfaced when state.json missing.
 - **### 2.11 Active Threads archive scan** -- dry-run results from `thread.py archive-scan`. Failure of this check never blocks /prime; the helper degrades the panel gracefully.
 - **### 2.12 Fireside Daemon** -- daemon liveness check via `.fireside/daemon.pid`. If daemon is dead, pulse spawns a detached `fireside-bot-daemon.py daemon` automatically using the isolated venv. If alive, reports `started M/N`, `last poll X min ago`, and the next scheduled job time. Failure of auto-spawn surfaces an inline error with the manual fallback command.
-- **### 2.13 Sync-Exchange Daemon** -- daemon liveness check via `.sync-exchange/daemon.pid`. If daemon is dead, pulse spawns a detached `sync-exchange-daemon.py daemon` cross-platform: `pythonw.exe` + `cmd /c start /B` on Windows, `start_new_session=True` on POSIX. If alive, reports pid + relative time of the last successful sync (parsed from `.sync-exchange/daemon.log`). The daemon runs `python scripts/sync-exchange.py --calendar --emails` every 2 hours; the first run fires immediately on daemon start. **Note:** on the always-on service host (Linux service VM, 2026-05-23+), this daemon runs as a systemd user unit, so the local PID file may be absent on the CEO machine even when Exchange sync is healthy — check the service host's heartbeat in that case.
+- **### 2.13 Sync-Exchange Daemon** -- daemon liveness check via `.sync-exchange/daemon.pid`. If daemon is dead, pulse spawns a detached `sync-exchange-daemon.py daemon` cross-platform: `pythonw.exe` + `cmd /c start /B` on Windows, `start_new_session=True` on POSIX. If alive, reports pid + relative time of the last successful sync (parsed from `.sync-exchange/daemon.log`). The daemon runs `python scripts/sync-exchange.py --calendar --emails` every 2 hours; the first run fires immediately on daemon start. **Note:** on the always-on service host (Linux service VM, 2026-05-23+), this daemon runs as a systemd user unit. The local PID file may therefore be absent on the CEO machine even when Exchange sync is healthy. Check the service host's heartbeat in that case.
 
-After the parallel block prints, render the **Active Threads panel** (this part is not part of the parallel script - it requires reading MEMORY.md and per-thread files):
+After the parallel block prints, render the **Active Threads panel**. This part is not in the parallel script, because it must read MEMORY.md and the per-thread files:
 
 1. Read `## Active Threads` from MEMORY.md.
    - If the `## Active Threads` section is absent from MEMORY.md (no threads have been opened yet), skip the panel silently and continue.
@@ -182,7 +175,7 @@ The canonical skill registry lives in `.claude/rules/skill-router.md` (already l
 2. Suggest the 2-3 most contextually relevant skills for today, drawing on the pipeline pulse and active threads loaded earlier.
 3. For a state-aware next-step recommendation mid-session, point the CEO at `/next` (reads what just happened and names the logical next command).
 
-This section deliberately defers to the router rather than duplicating the catalog inline - the router is the single source of truth and the only file that updates when a new skill is added. Drift between this catalog and the actual `.claude/skills/` directory is exactly the failure mode the workspace-deep-audit (2026-05-14) flagged; the registry tables are now generated from each skill's `x-heading-routing` frontmatter, and `scripts/generate-skill-router.py --check` enforces (in CI and pre-commit) that the router matches its source with no content drift.
+This section deliberately defers to the router rather than duplicating the catalog inline. The router is the single source of truth, and the only file that updates when a new skill is added. Drift between this catalog and the actual `.claude/skills/` directory is exactly the failure mode the workspace-deep-audit (2026-05-14) flagged. The registry tables are now generated from each skill's `x-heading-routing` frontmatter. In CI and pre-commit, `scripts/generate-skill-router.py --check` enforces that the router matches its source with no content drift.
 
 ### 7. Ready
 

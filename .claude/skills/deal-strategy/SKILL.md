@@ -49,9 +49,13 @@ Full deal strategy analysis for a specific prospect or opportunity.
 ## Variables
 
 prospect: [Company name, country, size/type]
+
 context: [What we know — how they came to us, what they're evaluating, current vendor, key contact]
+
 deal_size: [Estimated bandwidth requirements and deal value if known]
+
 timeline: [Decision timeline if known]
+
 competitive: [Known or suspected competitive consideration]
 
 ---
@@ -123,11 +127,14 @@ vs. other competing vendors:
 ## Phase 3: Positioning Strategy
 
 **Lead module:** [Which ODUN.ONE module leads based on their primary use case]
+
 **Expansion path:** [Essential (DataONE) → Professional (+ ControlONE + OpsONE) → Enterprise (+ AnalyticsONE) + use case activation]
+
 **Sovereignty angle:** [How to position the data sovereignty architecture for this prospect]
+
 **Category story:** ["From Deep Packet Inspection to Deep Packet Intelligence" — how to adapt for this audience]
 
-**Relevant Odin principles (CEO workspace only):** brain-gated - IF on the CEO workspace AND `knowledge/odin-brain/` exists, cite up to 3 positioning / partnership / channel principles for this prospect via the contact's `relevant_principles` and/or `python scripts/odin-principles.py --type <relationship_type> --stage <stage> --json` (use `--type partner` or `--type reseller` for channel/partner deals, `--type prospect` otherwise). Frame each against this deal. Fabrication floor: cite only what the helper returns, else "No Odin principle matched this relationship domain". On any exec workspace (no brain) SKIP silently. Single hyphens.
+**Relevant Odin principles (CEO workspace only):** brain-gated. IF on the CEO workspace AND `knowledge/odin-brain/` exists, cite up to 3 positioning, partnership, or channel principles for this prospect. Draw them from the contact's `relevant_principles`, from `python scripts/odin-principles.py --type <relationship_type> --stage <stage> --json`, or from both. Use `--type partner` or `--type reseller` for channel and partner deals, `--type prospect` otherwise. Frame each against this deal. Fabrication floor: cite only what the helper returns, else "No Odin principle matched this relationship domain". On any exec workspace (no brain) SKIP silently. Single hyphens.
 
 ---
 
@@ -156,7 +163,7 @@ Apply Voss per `.claude/rules/voss.md` (always-active rule) and `reference/voss-
 
 **Pricing:** If price negotiation is expected, structure via Ackerman Model (see `reference/voss-negotiation.md`) with precise non-round numbers per `.claude/rules/voss.md`.
 
-**Relevant Odin principles (CEO workspace only):** brain-gated - IF on the CEO workspace AND `knowledge/odin-brain/` exists, cite up to 3 negotiation / persuasion principles keyed off the deal stage (especially `Negotiation` / `Proposal`) via `python scripts/odin-principles.py --type prospect --stage <stage> --json` and/or the contact's `relevant_principles`. Same fabrication floor and same silent skip when the brain/helper is absent. Single hyphens.
+**Relevant Odin principles (CEO workspace only):** brain-gated. IF on the CEO workspace AND `knowledge/odin-brain/` exists, cite up to 3 negotiation or persuasion principles keyed off the deal stage (especially `Negotiation` and `Proposal`). Draw them from `python scripts/odin-principles.py --type prospect --stage <stage> --json`, from the contact's `relevant_principles`, or from both. Same fabrication floor and same silent skip when the brain or helper is absent. Single hyphens.
 
 ---
 
@@ -170,10 +177,10 @@ Apply Voss per `.claude/rules/voss.md` (always-active rule) and `reference/voss-
 
 After completing the deal strategy analysis (Phases 1-6), invoke `/brain-audit` with:
 
-- `--sources`: comma-separated list of every file consulted — the prospect's CRM contact, `context/pipeline.md` row, every thread entry referenced, every OSINT output referenced, every competitor-intel output referenced, the relevant Voss and DPI market reference files
+- `--sources`: comma-separated list of every file consulted. That means the prospect's CRM contact, the `context/pipeline.md` row, and every thread entry referenced. It also means every OSINT and competitor-intel output referenced, plus the relevant Voss and DPI market reference files
 - `--entity`: the prospect's company name (e.g., "ExampleTelco")
 
-Append the returned three-section footer to the deal strategy document. The audit reports newest-source dates, modality coverage for the prospect, and disagreements among cited sources. If it flags stale intel (OSINT older than 90 days, no recent CRM touch) or a contradiction (e.g., pipeline says one stage but a thread says another), surface those findings in the closing recommendation as risks to the strategy.
+Append the returned three-section footer to the deal strategy document. The audit reports newest-source dates, modality coverage for the prospect, and disagreements among cited sources. It may flag stale intel, such as OSINT older than 90 days or no recent CRM touch. It may also flag a contradiction, such as a pipeline stage that a thread contradicts. Surface those findings in the closing recommendation as risks to the strategy.
 
 ---
 
@@ -181,4 +188,4 @@ Append the returned three-section footer to the deal strategy document. The audi
 
 ## Knowledge Base
 
-After delivering the strategy, offer: "Want me to capture the positioning rationale? `/odin log` records it as an episode in Odin's brain (CEO-only); `/zk distill` extracts the durable decision insights into the knowledge base."
+After delivering the strategy, offer this: "Want me to capture the positioning rationale? The `/odin log` command records it as an episode in Odin's brain (CEO-only). The `/zk distill` command extracts the durable decision insights into the knowledge base."

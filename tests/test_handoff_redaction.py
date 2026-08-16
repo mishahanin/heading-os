@@ -522,10 +522,12 @@ def _load_hook_sandboxed(tmp_path, monkeypatch):
       - HANDOFF_DIR resolves through get_outputs_dir() -> get_data_root(), which
         reads HEADING_OS_DATA at call time and computes HANDOFF_DIR at module
         exec. So the env var must be set BEFORE exec_module, not after.
-      - STATE_PATH does NOT go through the data root. It is
-        WORKSPACE/.claude/state/checkpoint-state.json, an ENGINE path, and
-        main() writes it unconditionally at the end. A test that forgets this
-        overwrites the live session's checkpoint state.
+      - the state file does NOT go through the data root. It is
+        <project>/.claude/state/checkpoint-<session-slug>.json, resolved from
+        the payload at call time (state_dir_for), and main() writes it
+        unconditionally at the end. A test that forgets this overwrites the live
+        session's checkpoint state. CLAUDE_PROJECT_DIR is the redirect, because
+        these payloads carry no cwd.
 
     The assertion below is not decoration. If the redirect ever silently fails,
     the next line would write into the operator's real handoff archive.
@@ -533,12 +535,11 @@ def _load_hook_sandboxed(tmp_path, monkeypatch):
     import importlib.util
 
     monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     spec = importlib.util.spec_from_file_location(
         "checkpoint_save_under_test", ENGINE / ".claude" / "hooks" / "checkpoint-save.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-
-    monkeypatch.setattr(module, "STATE_PATH", tmp_path / "checkpoint-state.json")
 
     # Operand order is not style: ruff's SIM300 flags the natural spelling here
     # as a Yoda condition, and lint-ratchet turns that into a blocked commit.
@@ -552,6 +553,18 @@ def _load_hook_sandboxed(tmp_path, monkeypatch):
         f"the sandbox refusing to write outside tmp_path, which is correct: fix the "
         f"harness, never the assertion.")
     return module
+
+
+def _state_file(module, tmp_path):
+    """The state file the hook wrote for this run.
+
+    Keyed by session since 2026-08-16, so the name is not fixed: the quarantine
+    branch deliberately slugs to a literal rather than to a session id that
+    could not be redacted. Found rather than computed, for that reason.
+    """
+    written = sorted(module.state_dir_for({}).glob("checkpoint-*.json"))
+    assert len(written) == 1, f"expected one state file, found {written}"
+    return written[0]
 
 
 def _feed_payload(module, monkeypatch, payload: dict):
@@ -918,7 +931,7 @@ def test_the_quarantine_state_entry_records_no_dangling_path(tmp_path, monkeypat
 
     module = _quarantine_run(tmp_path, monkeypatch, "plain summary", _raise_exploded)
 
-    cs = json.loads(module.STATE_PATH.read_text(encoding="utf-8"))
+    cs = json.loads(_state_file(module, tmp_path).read_text(encoding="utf-8"))
     recorded = cs.get("last_compact_summary_path")
     if recorded is not None:
         assert (tmp_path / recorded).exists(), (
@@ -1123,7 +1136,7 @@ def test_a_lost_body_leaks_the_summary_nowhere(tmp_path, monkeypatch, capsys):
 
     for path in _all_written(module):
         assert _LOSS_MARKER not in path.read_text(encoding="utf-8"), f"{path} leaked it"
-    assert _LOSS_MARKER not in module.STATE_PATH.read_text(encoding="utf-8")
+    assert _LOSS_MARKER not in _state_file(module, tmp_path).read_text(encoding="utf-8")
 
     message, _err = _system_message(capsys)
     assert _LOSS_MARKER not in message

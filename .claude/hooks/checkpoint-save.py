@@ -7,11 +7,18 @@ outputs/operations/handoff-archive/ after a compact event - manual OR auto.
 Auto-compact remains enabled as last resort; this hook ensures a resume
 artifact is captured either way.
 
-Also updates pointer files at outputs/operations/handoff-archive/.latest/
-that the SessionStart inject hook reads on the next session.
+Also updates TWO pointer surfaces, because they answer different questions:
 
-Resets hysteresis state in .claude/state/checkpoint-state.json so the
-post-compact session starts fresh.
+  - .latest/<session-slug>/{summary,prompt}.md - THIS session's pointer, the
+    only one checkpoint-inject.py will inject. Shared until 2026-08-16, which
+    let a resumed session be handed another session's handoff.
+  - .latest/{summary,prompt}.md - the workspace's newest handoff, read by
+    scripts/next-signal.py for /next. Here last-writer-wins is the right
+    answer, not a race, so this pair stays.
+
+Resets hysteresis state in .claude/state/checkpoint-<session-slug>.json so the
+post-compact session starts fresh, and prunes the per-session artifacts of
+sessions that are long gone.
 """
 
 import json
@@ -26,8 +33,18 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-WORKSPACE = Path(__file__).resolve().parent.parent.parent
+# Walk to the tree that owns scripts/, rather than counting parents. This hook
+# sits at .claude/hooks/ in the monorepo and at hooks/ inside a built plugin
+# bundle, so a fixed parent count resolves wrongly in one of the two layouts -
+# and here a failed import costs a handoff nobody can regenerate.
+_BOOT = Path(__file__).resolve()
+WORKSPACE = _BOOT.parent.parent.parent
+for _candidate in [_BOOT.parent, *_BOOT.parents]:
+    if (_candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
+        WORKSPACE = _candidate
+        break
 sys.path.insert(0, str(WORKSPACE))
+from scripts.utils import checkpoint_paths as CP  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_outputs_dir  # noqa: E402
 
 # Guarded, and the guard is not defensive habit. This plan's own constraint says
@@ -61,10 +78,25 @@ except Exception as _exc:  # noqa: BLE001 - never lose the handoff
 # @-reference paths must therefore be data-root-relative (outputs/...), NOT
 # engine-relative: archive_path lives under the data sibling, so relative_to(WORKSPACE)
 # would raise ValueError. The data-path-redirect hook resolves the outputs/... ref.
-HANDOFF_DIR = get_outputs_dir() / "operations" / "handoff-archive"
+_ENGINE_TREE = CP.is_engine_tree(WORKSPACE)
+HANDOFF_DIR = (
+    get_outputs_dir() / "operations" / "handoff-archive"
+    if _ENGINE_TREE
+    else CP.handoff_dir(CP.project_root(), WORKSPACE)
+)
 LATEST_DIR = HANDOFF_DIR / ".latest"
 QUARANTINE_DIR = HANDOFF_DIR / ".quarantine"
-STATE_PATH = WORKSPACE / ".claude" / "state" / "checkpoint-state.json"
+
+
+def state_dir_for(payload: dict) -> Path:
+    """`.claude/state/` of the tree THIS session is working in.
+
+    Derived from the payload rather than from this file's location, for the same
+    reason the statusline does it: the two must agree on one directory, and in a
+    plugin bundle the hook's own location is the plugin cache, not the operator's
+    repository. Tests redirect it with CLAUDE_PROJECT_DIR.
+    """
+    return CP.project_root(payload) / ".claude" / "state"
 
 
 def safe_slug(value: str, max_len: int = 32) -> str:
@@ -211,8 +243,21 @@ def main() -> int:
         pointer_trigger = "(withheld: unredacted)"
 
     archive_name = f"{stamp}_handoff_compact-{trigger_slug}_{session_slug}.md"
-    archive_path = HANDOFF_DIR / archive_name
-    quarantine_path = QUARANTINE_DIR / archive_name
+    # Where this bundle actually writes. In the monorepo the module-level values
+    # are already right and the sandboxed tests read them. Inside a built plugin
+    # bundle the archive belongs to the CONSUMER's repository, which only the
+    # payload names: resolving it from this file's location would write the
+    # stranger's handoff into the plugin cache, or worse, into whatever data
+    # root the environment happened to carry. Measured on 2026-08-16 against the
+    # first built bundle, which wrote into the operator's own live archive.
+    hdir, latest_dir, quarantine_dir = HANDOFF_DIR, LATEST_DIR, QUARANTINE_DIR
+    if not _ENGINE_TREE:
+        hdir = CP.handoff_dir(CP.project_root(payload), WORKSPACE)
+        latest_dir = hdir / ".latest"
+        quarantine_dir = hdir / ".quarantine"
+
+    archive_path = hdir / archive_name
+    quarantine_path = quarantine_dir / archive_name
 
     # Refs. Every path any artifact NAMES is one of these three, so a channel
     # can only name something that was actually written.
@@ -223,7 +268,7 @@ def main() -> int:
     # and the absolute path is what a human recovering the file can paste into a
     # shell that knows nothing about the data root. Two spellings of one written
     # file, stated as such rather than left to be inferred.
-    data_root = get_data_root()
+    data_root = get_data_root() if _ENGINE_TREE else CP.project_root(payload)
 
     def _ref(path: Path) -> str:
         """Data-root-relative when it can be, absolute when it cannot. Total.
@@ -248,7 +293,7 @@ def main() -> int:
 
     archive_ref = _ref(archive_path)
     quarantine_ref = _ref(quarantine_path)
-    summary_ref = _ref(LATEST_DIR / "summary.md")
+    summary_ref = _ref(latest_dir / "summary.md")
 
     # The body names where IT actually landed. archive_md is built once and
     # written down one of two branches, so an unconditional archive_ref here
@@ -407,7 +452,7 @@ Resume the work this session was doing when it compacted. The full summary is un
 
 ## Summary
 
-{summary_text}
+{CP.bound_summary(summary_text, archive_ref)}
 """
 
         prompt_pointer = f"""Continue this Claude Code session from the saved handoff.
@@ -478,10 +523,25 @@ Rules:
 5. Never copy the quarantined text into a tracked file.
 """
 
+    # TWO surfaces, one text. The shared pair is what /next reads ("the newest
+    # handoff in this workspace"); the per-session dir is what the inject hook
+    # reads ("the handoff of THIS session"), and only the second one is safe to
+    # push into a resumed session's context.
+    #
+    # The dir is named with the SAME slug as the archive file, which on the
+    # success path is derived from the REDACTED session id. In the pathological
+    # case where the id itself carried a credential the two differ, the inject
+    # hook finds nothing, and that is the intended direction: a poisoned string
+    # must not become a tracked path just to make an injection convenient. The
+    # quarantine branch is louder still - it slugs to the fixed literal, so the
+    # alarm reaches the operator through the systemMessage and the shared
+    # pointer rather than through a path built from unredacted text.
     pointers_kind = None
     try:
-        write_text_atomic(LATEST_DIR / "summary.md", summary_pointer)
-        write_text_atomic(LATEST_DIR / "prompt.md", prompt_pointer)
+        write_text_atomic(latest_dir / "summary.md", summary_pointer)
+        write_text_atomic(latest_dir / "prompt.md", prompt_pointer)
+        write_text_atomic(latest_dir / session_slug / "summary.md", summary_pointer)
+        write_text_atomic(latest_dir / session_slug / "prompt.md", prompt_pointer)
     except Exception as exc:  # noqa: BLE001 - the systemMessage must still report
         # Generic systemMessage; full exception goes to stderr to avoid
         # leaking sensitive paths in Claude's surfaced output.
@@ -489,11 +549,15 @@ Rules:
         print(f"checkpoint-save: the .latest pointers could not be written "
               f"({pointers_kind}: {exc}); they are STALE", file=sys.stderr)
 
-    # Reset hysteresis state so the post-compact session starts clean
+    # Reset THIS session's hysteresis so the post-compact session starts clean.
+    # A shared state file here reset a sibling session's bucket too, which is
+    # half of why the offer landed in the wrong session.
+    state_dir = state_dir_for(payload)
+    state_path = state_dir / f"checkpoint-{session_slug}.json"
     try:
-        if STATE_PATH.exists():
+        if state_path.exists():
             try:
-                cs = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+                cs = json.loads(state_path.read_text(encoding="utf-8"))
             except Exception:
                 cs = {}
         else:
@@ -518,10 +582,20 @@ Rules:
                 ),
             }
         )
-        write_json_atomic(STATE_PATH, cs)
+        write_json_atomic(state_path, cs)
     except Exception as exc:
         # State reset failure is non-fatal
         print(f"checkpoint-save: state reset failed: {exc}", file=sys.stderr)
+
+    # One pointer dir and one state file per session, never revisited once that
+    # session ends. Pruning runs last and reports rather than raises: it is
+    # housekeeping, and nothing about it is worth costing a handoff. Only the
+    # disposable surfaces are touched - the dated archives are the record.
+    try:
+        CP.prune_pointer_dirs(hdir, session_slug)
+        CP.prune_state_dir(state_dir, state_path.name)
+    except Exception as exc:  # noqa: BLE001 - housekeeping never breaks the save
+        print(f"checkpoint-save: prune failed: {exc}", file=sys.stderr)
 
     # The one channel the operator and the assistant actually see. On the alarm
     # path it used to report a save and name a file that was never written,

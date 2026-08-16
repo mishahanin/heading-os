@@ -18,22 +18,25 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / ".claude" / "hooks" / "checkpoint-save.py"
-STATE_PATH = ROOT / ".claude" / "state" / "checkpoint-state.json"
+STATE_DIR = ROOT / ".claude" / "state"
 
 
 @pytest.fixture(autouse=True)
 def _isolate_engine_state():
-    """The hook resets the engine state file (.claude/state/checkpoint-state.json),
-    which is real runtime state, not env-redirected. Back it up and restore it so the
-    test suite never mutates the live session's checkpoint hysteresis."""
-    backup = STATE_PATH.read_text(encoding="utf-8") if STATE_PATH.exists() else None
+    """The hook resets a per-session state file under .claude/state/, which is
+    real runtime state. Record what was there and remove anything this run
+    added, so the suite never disturbs a live session's hysteresis.
+
+    The state is keyed by session id (2026-08-16); before that it was one shared
+    file, and this fixture guarded that single path."""
+    before = {p.name for p in STATE_DIR.glob("checkpoint-*.json")} if STATE_DIR.is_dir() else set()
     try:
         yield
     finally:
-        if backup is not None:
-            STATE_PATH.write_text(backup, encoding="utf-8")
-        elif STATE_PATH.exists():
-            STATE_PATH.unlink()
+        if STATE_DIR.is_dir():
+            for path in STATE_DIR.glob("checkpoint-*.json"):
+                if path.name not in before:
+                    path.unlink()
 
 
 def _run_hook(tmp_path, payload):
@@ -41,6 +44,11 @@ def _run_hook(tmp_path, payload):
     env = dict(os.environ)
     env["HEADING_OS_DATA"] = str(tmp_path)
     return _spawn(env, payload)
+
+
+def _state_file(project: Path, session_id: str) -> Path:
+    slug = "".join(c if c.isalnum() or c in ("-", "_") else "-" for c in session_id)[:32]
+    return project / ".claude" / "state" / f"checkpoint-{slug}.json"
 
 
 def _spawn(env, payload):
@@ -176,16 +184,21 @@ def test_exec_layout_refs_fall_back_to_the_absolute_path(tmp_path):
 
 
 def test_state_reset_records_data_root_relative_summary_path(tmp_path):
-    """The checkpoint-state.json summary-path pointer must also be data-root-relative.
+    """The state file's summary-path pointer must also be data-root-relative.
 
-    The engine state file is backed up / restored by the autouse _isolate_engine_state
-    fixture, so this test may freely run the hook and inspect the written state.
+    The state directory is restored by the autouse _isolate_engine_state
+    fixture, so this test may freely run the hook and inspect what it wrote.
     """
-    _run_hook(tmp_path, {
+    project = tmp_path / "project"
+    project.mkdir()
+    env = dict(os.environ)
+    env["HEADING_OS_DATA"] = str(tmp_path)
+    env["CLAUDE_PROJECT_DIR"] = str(project)
+    _spawn(env, {
         "session_id": "test-sess", "trigger": "manual",
         "compact_summary": "s", "transcript_path": "",
     })
-    cs = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    cs = json.loads(_state_file(project, "test-sess").read_text(encoding="utf-8"))
     p = cs.get("last_compact_summary_path", "")
     assert p.startswith("outputs/operations/handoff-archive/"), (
         f"state summary path is not data-root-relative: {p!r}"

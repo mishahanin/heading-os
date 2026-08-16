@@ -1,16 +1,16 @@
 ---
 name: checkpoint
 description: "Сохранить manual checkpoint текущей сессии в outputs/operations/handoff-archive/ без выполнения /compact. Используй когда хочешь зафиксировать состояние работы и иметь возможность вернуться позже с чистым контекстом. NEVER auto-trigger - вызывается ТОЛЬКО явной командой /checkpoint."
-allowed-tools: "Write, Read, Bash(date:*)"
+allowed-tools: "Write, Read, Bash(date:*), Bash(python scripts/checkpoint-paths.py:*), Bash(python3 scripts/checkpoint-paths.py:*)"
 disable-model-invocation: true
 argument-hint: "[опциональная заметка к checkpoint]"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.0"
+  version: "1.1"
 x-heading-orchestration:
   parallel_safe: false
-  shared_state: ["outputs/operations/handoff-archive/", ".claude/state/checkpoint-state.json"]
+  shared_state: ["outputs/operations/handoff-archive/", ".claude/state/"]
   triggers: []
 x-heading-capability:
   what: >
@@ -24,14 +24,14 @@ x-heading-capability:
     the session.
   when: >
     Use before switching tasks, before a risky action, or when the
-    checkpoint-offer hook fires at 25/30 percent context. For reflective
-    end-of-session capture use /calibrate; for cross-session memory consolidation
-    use /dream.
+    checkpoint-offer hook fires at the soft/hard context thresholds. For
+    reflective end-of-session capture use /calibrate; for cross-session memory
+    consolidation use /dream.
 x-heading-routing:
   category: Operations
   label: /checkpoint [note]
   triggers:
-    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/` without running /compact. Surfaces from the two-tier checkpoint-offer hook at 25%/30% used context.
+    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`).
   exclusions:
     - Auto-resume after /compact handled by checkpoint-save.py (PostCompact)
     - reflective end-of-session -> /calibrate
@@ -47,39 +47,44 @@ Save a manual session checkpoint without running `/compact` or clearing context.
 ## What this does
 
 - Writes ONE combined handoff file to `outputs/operations/handoff-archive/`
-- Updates pointer files at `outputs/operations/handoff-archive/.latest/{summary.md,prompt.md}` so the SessionStart inject hook picks them up next time
+- Updates FOUR pointer files: this session's pair under
+  `.latest/{session-slug}/{summary.md,prompt.md}`, which the SessionStart inject
+  hook reads, and the shared pair at `.latest/{summary.md,prompt.md}`, which
+  `/next` reads as "the newest handoff in this workspace"
 - Does NOT run `/compact`
 - Does NOT clear the session
 - Does NOT continue implementation after writing - wait for the user to direct next action
 
+Every path is keyed by session id. Several sessions run on this workspace at
+once, and a shared pointer is last-writer-wins: before 2026-08-16 a resumed
+session could be injected another session's handoff.
+
 ## When to use
 
-- Soft / hard checkpoint offer fired (`Stop` hook surfaced 25%/30% threshold)
+- Soft / hard checkpoint offer fired (`Stop` hook surfaced the context threshold)
 - About to switch to an unrelated task, want resume-ready snapshot
 - Mid-implementation, want to save state before risky action
 - Long session approaching natural pause point
 
 ## Procedure
 
-### Step 1 - Determine archive paths
+### Step 1 - Get this session's paths
 
-Use UTC timestamp `YYYY-MM-DD-HHMMSS`. Get it from:
+One command prints all of them:
 
 ```bash
-date -u +'%Y-%m-%d-%H%M%S'
+python scripts/checkpoint-paths.py
 ```
 
-Build the archive filename:
+It emits `key=value` lines: `stamp`, `archive`, `summary_pointer`,
+`prompt_pointer`, `shared_summary_pointer`, `shared_prompt_pointer`,
+`session_id`. Archive paths are data-root-relative, which is the form the
+`@`-reference resolves. Use them verbatim - never rebuild a path by hand, and
+never write into another session's pointer directory.
 
-```
-outputs/operations/handoff-archive/{stamp}_handoff_manual_{session-slug}.md
-```
-
-Where `session-slug` is a short safe slug from the current session id (or "session" if not derivable). Example:
-
-```
-outputs/operations/handoff-archive/2026-05-25-143052_handoff_manual_a4b2c1.md
-```
+If the script is unavailable, fall back to `date -u +'%Y-%m-%d-%H%M%S'` for the
+stamp and `echo "$CLAUDE_CODE_SESSION_ID"` for the session id, then take the
+slug as the first 32 characters of that id.
 
 ### Step 2 - Write the combined handoff file
 
@@ -151,11 +156,19 @@ $ARGUMENTS
 
 If `$ARGUMENTS` is empty, omit the "User note" section.
 
-### Step 3 - Update pointer files
+### Step 3 - Update the pointer files
+
+Write the same two texts to two places each: the `summary_pointer` /
+`prompt_pointer` paths from Step 1 (this session's, the ones that get injected)
+and the `shared_summary_pointer` / `shared_prompt_pointer` paths (the workspace's
+newest, which `/next` reads). Four files.
 
 The pointer files almost always already exist from a prior checkpoint, and the `Write` tool refuses to overwrite a file that has not been `Read` first in the current session - skipping the read produces `Error writing file`. So for each pointer file below: first `Read` it (ignore a not-found result on a first-ever checkpoint), then `Write` it.
 
-`Read` then `Write` `outputs/operations/handoff-archive/.latest/summary.md`:
+Keep the summary short. It is what gets injected on resume, and the inject hook
+truncates at 8000 characters, so anything past that is written and never read.
+
+`Read` then `Write` the summary text to `summary_pointer` AND `shared_summary_pointer`:
 
 ```markdown
 # Latest handoff summary
@@ -167,7 +180,7 @@ Trigger: manual-checkpoint
 {Copy the "Objective" + "Current state" + "Next steps" sections from the archive file. Keep it short - this is what gets injected on resume.}
 ```
 
-`Read` then `Write` `outputs/operations/handoff-archive/.latest/prompt.md`:
+`Read` then `Write` the continuation prompt to `prompt_pointer` AND `shared_prompt_pointer`:
 
 ```
 Continue this Claude Code session from the saved handoff.
@@ -187,14 +200,34 @@ Rules:
 
 ### Step 4 - Respond to the user
 
-After writing all three files, reply with:
+After writing all five files, reply with:
 
 1. Full path of the archive file written
-2. Confirmation that `.latest/summary.md` and `.latest/prompt.md` updated
+2. Confirmation that this session's pointer pair and the shared pair were updated
 3. One-line current state summary
 4. Recommendation: "Run `/compact` manually if you want to free context now. Otherwise nothing else happens - checkpoint is preserved for resume."
 
 Do NOT continue implementation, do NOT call `/compact`, do NOT clear the session. Wait for the user's next instruction.
+
+## Auto mode
+
+`CLAUDE_HANDOFF_AUTO=1` makes the Stop hook drive this skill's procedure with no
+prompt when the context threshold is crossed, and the SessionStart hook resume
+the task by itself afterwards. It is OFF by default and the operator turns it on
+in `.claude/settings.local.json`:
+
+```json
+"env": {
+  "CLAUDE_HANDOFF_AUTO": "1",
+  "CLAUDE_HANDOFF_SOFT_THRESHOLD": "40",
+  "CLAUDE_HANDOFF_HARD_THRESHOLD": "45",
+  "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+}
+```
+
+The compaction percentage must stay ABOVE the soft threshold, so the checkpoint
+always lands before compaction frees the context. Nothing here triggers
+compaction; only the native auto-compact does.
 
 ## NEVER
 
@@ -202,4 +235,5 @@ Do NOT continue implementation, do NOT call `/compact`, do NOT clear the session
 - Never clear context as part of this skill
 - Never proceed with the next task unless the user explicitly says so after seeing the checkpoint report
 - Never skip the pointer file updates - without them, the inject hook has nothing to surface
-- Never write to `outputs/operations/handoff-archive/.latest/` archive subdirectory anything OTHER than `summary.md` and `prompt.md`
+- Never write into another session's pointer directory
+- Never write anything into a pointer directory OTHER than `summary.md` and `prompt.md`

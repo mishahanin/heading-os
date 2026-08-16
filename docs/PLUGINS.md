@@ -3,7 +3,7 @@
 HEADING OS ships an installable plugin marketplace, so you can try the engine's
 core inside Claude Code with two commands, no clone and no toolchain.
 
-Last Updated: 2026-07-09
+Last Updated: 2026-08-16
 
 ## The marketplace
 
@@ -25,9 +25,9 @@ Inside Claude Code:
 
 (The CLI form works too: `claude plugin marketplace add mishahanin/heading-os-marketplace`.)
 
-That installs `heading-core`, the sovereignty and session bundle: the `prime`,
-`state-check`, and `checkpoint` skills, the standalone sovereignty guard hooks,
-and the scripts they need.
+That installs `heading-core`, the sovereignty and session bundle. It carries the
+`prime`, `state-check`, and `checkpoint` skills, the standalone sovereignty guard
+hooks, the session checkpoint hooks (see below), and the scripts they need.
 
 The marketplace also ships four curated capability bundles, each installed the
 same way (`/plugin install <bundle>@heading-os-marketplace`):
@@ -47,6 +47,63 @@ skills (crm, viraid, google-contacts) need a private CRM overlay or Google
 OAuth. Skills like email-intel, telegram, osint, and council need Exchange,
 a session, or third-party API keys. To run those, clone the engine
 ([DEPLOYMENT.md](DEPLOYMENT.md)).
+
+## The checkpoint system
+
+`heading-core` also carries the session checkpoint. It writes down what the next
+session needs before a long session fills its context. A handoff holds the
+objective, the decisions, the files touched, the next steps, and a continuation
+prompt. The work then survives the context wall.
+
+Four hooks and one skill. Three of the hooks wire themselves the moment the
+plugin is installed:
+
+| Piece | Event | What it does |
+|---|---|---|
+| `/checkpoint [note]` | you type it | Writes a handoff now. No compact, no clear. |
+| `checkpoint-save.py` | PostCompact | Saves a handoff from the compaction summary, redacted. |
+| `checkpoint-inject.py` | SessionStart | Puts this session's handoff into the first turn of the resumed session. |
+| `checkpoint-offer.py` | Stop | Offers the checkpoint when context crosses your threshold. |
+| `checkpoint-statusline.py` | statusLine | Reads context usage and drives the offer. **Wire this one yourself.** |
+
+Everything below your project root is keyed by session id, so several sessions
+open on one repository never overwrite each other's handoffs.
+
+### Wiring the status line
+
+Claude Code exposes context-window usage **only** to a `statusLine`, and a plugin
+manifest has no `statusLine` key, so this one line is yours to add. In your
+project's `.claude/settings.json` (or `~/.claude/settings.json` for every repo):
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "python3 \"$CLAUDE_PLUGIN_ROOT/hooks/checkpoint-statusline.py\""
+}
+```
+
+If `$CLAUDE_PLUGIN_ROOT` is not set in your shell, use the installed path under
+`~/.claude/plugins/cache/`. Without the status line you still get `/checkpoint`
+and the compact-and-resume flow, but no proactive offer.
+
+### Thresholds and auto mode
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CLAUDE_HANDOFF_SOFT_THRESHOLD` | 25 | % used where the offer first appears |
+| `CLAUDE_HANDOFF_HARD_THRESHOLD` | 30 | % used where it stops offering "keep going" |
+| `CLAUDE_HANDOFF_REMIND_STEP` | 5 | how far context must move before it asks again |
+| `CLAUDE_HANDOFF_AUTO` | off | save silently and resume, with no prompt |
+
+Auto mode is off until you turn it on. With it on, crossing the threshold saves
+the checkpoint without asking, and the session carries on. After a compaction the
+SessionStart hook tells the assistant to continue on its own. Keep your
+compaction point above the soft threshold, so the checkpoint always lands first.
+Nothing here triggers compaction; only Claude Code's own auto-compact does.
+
+**[Mahmoud Maatuq](https://github.com/mmaatuq)** contributed the proactive offer
+and the hands-off auto mode, and found the concurrent-session collision that the
+per-session keying fixes. Thank you.
 
 ## How updates work
 

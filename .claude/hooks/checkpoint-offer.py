@@ -2,10 +2,20 @@
 """
 checkpoint-offer.py - Claude Code Stop hook.
 
-Reads .claude/state/checkpoint-state.json (written by checkpoint-statusline.py).
-If the state indicates a checkpoint offer is due (soft or hard level, with
-hysteresis bucket not yet announced), emits {"decision": "block", "reason": ...}
-with bilingual RU+EN options. Otherwise exits silently.
+Reads THIS session's .claude/state/checkpoint-<session-slug>.json (written by
+checkpoint-statusline.py). If the state indicates a checkpoint offer is due
+(soft or hard level, with hysteresis bucket not yet announced), emits
+{"decision": "block", "reason": ...}. Otherwise exits silently.
+
+The state file is per session. It was shared until 2026-08-16, and a shared file
+means a sibling session's context usage blocks this session's turns: measured
+with session A at 46% and session B idle, B got the offer and A got nothing.
+
+Two behaviours, selected by CLAUDE_HANDOFF_AUTO:
+  - off (the default): surface the /checkpoint vs /compact vs continue choice
+    and wait for the operator. Nothing is written automatically.
+  - on: drive the assistant to save the checkpoint silently and resume the task.
+    The capability ships; the operator switches it on.
 
 Anti-loop: bails immediately if payload.stop_hook_active is true.
 
@@ -14,19 +24,19 @@ or invokes compact directly.
 """
 
 import json
-import os
 import sys
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+_BOOT = Path(__file__).resolve()
+for _candidate in [_BOOT.parent, *_BOOT.parents]:
+    if (_candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
+        sys.path.insert(0, str(_candidate))
+        break
+from scripts.utils import checkpoint_paths as CP  # noqa: E402
 
-WORKSPACE = Path(__file__).resolve().parent.parent.parent
-STATE_PATH = WORKSPACE / ".claude" / "state" / "checkpoint-state.json"
+CP.force_utf8()
+
+SKILL_REF = ".claude/skills/checkpoint/SKILL.md"
 
 
 SOFT_BODY = """\
@@ -63,6 +73,46 @@ Ask the user, briefly, with these options, in the language the user is speaking:
 Wait for the user's decision."""
 
 
+AUTO_WRAPPER = """\
+Context is about {used:.0f}% used (~{remaining:.0f}% remaining), which crossed the {level} checkpoint threshold. AUTO MODE is on.
+
+Do this now, without asking:
+1. Save a checkpoint silently, following @{skill} exactly: run `python scripts/checkpoint-paths.py` for this session's stamp and paths, write the archive it names, then update the two pointer files it names. Those paths are scoped to this session - never write into another session's pointer directory.
+2. Print ONE line naming the archive path written.
+3. If you were mid-task, resume it where you left off. If you had finished and were waiting for the user, stop after that line.
+
+Do NOT run /compact yourself. {compaction}"""
+
+
+def _compaction_sentence() -> str:
+    """What this hook actually knows about where compaction fires.
+
+    Nothing here can trigger compaction, and nothing here can observe the
+    harness default either. Naming a percentage the environment never set is an
+    assertion the method does not support, so an unconfigured environment gets
+    said so instead (.claude/rules/scope-claims.md).
+    """
+    point = CP.compact_point()
+    if point is None:
+        return (
+            "Native compaction is not configured here (neither "
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE nor CLAUDE_CODE_AUTO_COMPACT_WINDOW "
+            "is set), so this hook cannot say when it will fire; the checkpoint "
+            "on disk is what survives either way."
+        )
+    kind, value = point
+    if kind == "percent":
+        return (
+            f"Native auto-compact is configured to fire near {value}% used, and "
+            "its PostCompact hook saves and re-injects the handoff automatically."
+        )
+    return (
+        f"Native auto-compact is configured at {value} tokens (measured against "
+        "the smaller of that and the model's own window), and its PostCompact "
+        "hook saves and re-injects the handoff automatically."
+    )
+
+
 def build_reason(level: str, used: float, remaining: float) -> str:
     """Render the offer reason, in English only.
 
@@ -80,34 +130,21 @@ def build_reason(level: str, used: float, remaining: float) -> str:
     )
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def build_auto_reason(level: str, used: float, remaining: float) -> str:
+    """The hands-off variant: save, say where, carry on.
 
-
-def read_json(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def write_json_atomic(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+    It POINTS AT the skill rather than restating its section list. The nexi
+    plugin inlined the whole contract into the hook text, which is a second copy
+    of a format that only one file should define; the copy that stops being
+    updated is the one the model reads.
+    """
+    return AUTO_WRAPPER.format(
+        used=used,
+        remaining=remaining,
+        level=level,
+        skill=SKILL_REF,
+        compaction=_compaction_sentence(),
     )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def main() -> int:
@@ -120,7 +157,9 @@ def main() -> int:
     if payload.get("stop_hook_active"):
         return 0
 
-    state = read_json(STATE_PATH)
+    project = CP.project_root(payload)
+    state_path = CP.state_path(project, CP.session_slug(payload))
+    state = CP.read_json(state_path)
     if not state.get("needs_compact_offer"):
         return 0
 
@@ -142,9 +181,9 @@ def main() -> int:
     state["needs_compact_offer"] = False
     state["offer_level"] = None
     state["last_offered_bucket"] = bucket
-    state["last_offer_at"] = utc_now()
+    state["last_offer_at"] = CP.utc_now().isoformat()
     try:
-        write_json_atomic(STATE_PATH, state)
+        CP.write_json_atomic(state_path, state)
     except Exception as exc:
         # If state write fails, still deliver the offer this turn
         print(f"checkpoint-offer: state write failed: {exc}", file=sys.stderr)
@@ -159,7 +198,8 @@ def main() -> int:
     if remaining < 0:
         remaining = 0.0
 
-    reason = build_reason(level, used, remaining)
+    build = build_auto_reason if CP.config()["auto"] else build_reason
+    reason = build(level, used, remaining)
 
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0

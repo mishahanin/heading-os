@@ -25,8 +25,11 @@
 bundles:
   heading-core:
     description: >-
-      Sovereignty and session core: the prime/state-check/checkpoint skills plus
-      the standalone sovereignty guard hooks.
+      Sovereignty and session core: the prime/state-check/checkpoint skills, the
+      standalone sovereignty guard hooks, and the session checkpoint system -
+      a context-usage sensor, a threshold offer with an optional hands-off auto
+      mode, a redacted post-compact save, and a resume injector, all keyed by
+      session so concurrent sessions never overwrite each other.
     skills:
       - prime
       - state-check
@@ -39,18 +42,44 @@ bundles:
       # scope for the walking skeleton (F-10.1 / M1).
       - prompt-guard.py
       - post-write-sanitize.py
+      # The checkpoint system (2026-08-16). Self-contained: the four hooks reach
+      # only scripts/utils/, which is always bundled, and they find their root by
+      # walking for that directory rather than by counting parents, so the same
+      # files work at .claude/hooks/ in the monorepo and at hooks/ in a bundle.
+      # checkpoint-statusline.py ships but CANNOT be wired from here: Claude Code
+      # exposes context-window usage only to a statusLine, and a plugin manifest
+      # has no statusLine key. Installing it is one line in the consumer's
+      # settings.json - see docs/PLUGINS.md.
+      - checkpoint-statusline.py
+      - checkpoint-offer.py
+      - checkpoint-inject.py
+      - checkpoint-save.py
     hook_events:
       PostToolUse:
         - matcher: "Write|Edit|MultiEdit|NotebookEdit"
           hooks:
             - prompt-guard.py
             - post-write-sanitize.py
+      SessionStart:
+        - matcher: "compact|clear|resume"
+          hooks:
+            - checkpoint-inject.py
+      PostCompact:
+        - matcher: "manual|auto"
+          hooks:
+            - checkpoint-save.py
+      Stop:
+        - matcher: ""
+          hooks:
+            - checkpoint-offer.py
     session_start_env: true
     scripts:
       # Scripts referenced by the three skills' SKILL.md (enumerated, not
       # grep-discovered at build time). scripts/utils/ is always bundled.
       - apply-wizard-answers.py
+      - checkpoint-paths.py
       - generate-skill-router.py
+      - next-signal.py
       - prime-health-parallel.py
       - sync-exchange.py
       - thread.py

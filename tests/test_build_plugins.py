@@ -108,8 +108,30 @@ def test_hooks_json_registers_guards(built):
     cmds = " ".join(h["command"] for h in post)
     assert "${CLAUDE_PLUGIN_ROOT}/hooks/prompt-guard.py" in cmds
     assert "${CLAUDE_PLUGIN_ROOT}/hooks/post-write-sanitize.py" in cmds
-    session = hj["hooks"]["SessionStart"][0]["hooks"]
+    # Across ALL SessionStart blocks, not block 0. The generated env hook is
+    # APPENDED, so the moment a bundle declares a SessionStart of its own (the
+    # checkpoint inject hook did, 2026-08-16) the env hook stops being first and
+    # a positional assertion fails without anything being wrong.
+    session = [h for block in hj["hooks"]["SessionStart"] for h in block["hooks"]]
     assert any("session-env.py" in h["command"] for h in session)
+
+
+def test_hooks_json_registers_the_checkpoint_system(built):
+    """The four hooks a bundle CAN wire. The status line is not among them:
+    Claude Code exposes context usage only to a statusLine and a plugin manifest
+    has no statusLine key, so it ships as a script the consumer wires once."""
+    bundle, _ = built
+    hj = json.loads((bundle / "hooks" / "hooks.json").read_text())
+    everything = json.dumps(hj)
+    assert "checkpoint-inject.py" in everything
+    assert "checkpoint-save.py" in everything
+    assert "checkpoint-offer.py" in everything
+    assert (bundle / "hooks" / "checkpoint-statusline.py").is_file(), (
+        "the status line must still SHIP even though it cannot be auto-wired"
+    )
+    assert "checkpoint-statusline.py" not in everything, (
+        "a statusLine cannot be registered from a plugin; wiring it here is a lie"
+    )
 
 
 def test_skill_script_paths_rewritten(built):

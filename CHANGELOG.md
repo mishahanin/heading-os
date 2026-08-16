@@ -6,7 +6,68 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **The checkpoint can now save itself, and it ships as a plugin.** Auto mode
+  (`CLAUDE_HANDOFF_AUTO=1`, off by default) makes the Stop hook drive a silent
+  checkpoint the moment context crosses the threshold and lets the session carry
+  on; after a compaction the SessionStart hook tells the assistant to continue by
+  itself. The hook POINTS AT `.claude/skills/checkpoint/SKILL.md` rather than
+  restating its section list, because a format defined in two places drifts, and
+  the copy that stops being updated is the one the model reads. It also refuses
+  to name a compaction point unless one is actually configured
+  (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` or `CLAUDE_CODE_AUTO_COMPACT_WINDOW`), per
+  `.claude/rules/scope-claims.md`.
+
+  `scripts/checkpoint-paths.py` prints this session's stamp, archive path,
+  pointer paths and state path. `/checkpoint` used to build those paths itself,
+  with a documented fallback to the literal slug `session` when it could not
+  derive one, which is how a manual checkpoint lands in the wrong place once the
+  paths are keyed by session.
+
+  The four hooks now ship in the `heading-core` plugin bundle. They find their
+  root by walking for `scripts/utils/` instead of counting parent directories, so
+  the same files work at `.claude/hooks/` in this monorepo and at `hooks/` inside
+  a bundle, and the archive follows the CONSUMER's repository rather than the
+  operator's data overlay. `checkpoint-statusline.py` ships but cannot be wired
+  from a plugin: Claude Code exposes context usage only to a `statusLine` and a
+  plugin manifest has no `statusLine` key, so that stays one line the installer
+  adds ([docs/PLUGINS.md](docs/PLUGINS.md)).
+
+  Auto mode and the proactive threshold offer were contributed by
+  [Mahmoud Maatuq](https://github.com/mmaatuq), who packaged this system as a
+  plugin independently and found the concurrent-session collision fixed below.
+
 ### Fixed
+
+- **Three sessions on one workspace were treated as one session.** Every path
+  below the workspace root was shared: one `.claude/state/checkpoint-state.json`
+  and one `.latest/{summary,prompt}.md`. Measured on 2026-08-16 by replaying the
+  real hooks: with session A at 46% and session B idle, B's Stop hook consumed
+  A's offer, so the idle session was told to checkpoint and the session whose
+  context was actually filling was told nothing. The same shared pointer let a
+  resumed session be injected a DIFFERENT session's handoff, under a sentence
+  asserting a previous checkpoint had been found, which nothing in the hook had
+  established.
+
+  State and the injected pointer are now keyed by session id, from the hook
+  payload or from `CLAUDE_CODE_SESSION_ID` for the model-driven skill. The shared
+  `.latest/{summary,prompt}.md` pair deliberately STAYS, because it has a second
+  reader asking a different question: `scripts/next-signal.py` wants the newest
+  handoff in the workspace, where last-writer-wins is the right answer rather
+  than a race. Per-session pointer dirs and state files are pruned (14 days, 25
+  sessions); the dated archives are the record and are never pruned.
+
+  Two further defects surfaced while proving the plugin build. The archive was
+  resolved from the location of the imported module rather than from the tree the
+  hook actually runs in, and in a virtualenv where the engine is installed an
+  editable-install finder runs ahead of `sys.path`: a bundled hook imported the
+  ENGINE's copy of the helper, concluded it was in an engine tree, and wrote a
+  scratch repository's handoff into the operator's live archive. The caller now
+  passes the root it resolved. And the pointer was written unbounded at 32261
+  bytes against an 8000-character injection cap, so three quarters of it was
+  never read and the quarter that was arrived cut mid-sentence; it is bounded
+  where it is written, naming the archive that holds the rest.
 
 - **Two tools told the operator more than they had measured, and now a test says
   they may not.** Within hours of each other on 2026-08-12: `scripts/harness-audit.py`

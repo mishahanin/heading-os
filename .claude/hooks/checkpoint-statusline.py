@@ -4,13 +4,20 @@ checkpoint-statusline.py - Claude Code statusLine hook.
 
 Reads context_window from the statusLine payload, computes a soft/hard
 checkpoint level via hysteresis buckets, writes runtime state to
-.claude/state/checkpoint-state.json (consumed by checkpoint-offer.py on
+.claude/state/checkpoint-<session-slug>.json (consumed by checkpoint-offer.py on
 the Stop event), and prints a single-line status to stdout.
+
+The state file is keyed by SESSION. It was one shared file until 2026-08-16, and
+this workspace runs several sessions on one tree: session A's context usage went
+into the file session B's Stop hook read, so the idle session was offered the
+checkpoint and the full one was not. Reproduced before the fix; held by
+tests/test_checkpoint_session_scope.py.
 
 Thresholds (env-vars, optional):
   CLAUDE_HANDOFF_SOFT_THRESHOLD   default 25  (% used → soft offer)
   CLAUDE_HANDOFF_HARD_THRESHOLD   default 30  (% used → hard offer)
   CLAUDE_HANDOFF_REMIND_STEP      default 5   (bucket size for hysteresis)
+  CLAUDE_HANDOFF_AUTO             default off (hands-off save, no prompt)
 
 Auto-compact is NOT disabled (last-resort policy). This hook only signals
 the Stop hook to offer a checkpoint.
@@ -22,39 +29,22 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
-# Force UTF-8 stdout/stderr (Windows defaults to CP1252 which breaks box chars + Cyrillic)
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+_BOOT = Path(__file__).resolve()
+for _candidate in [_BOOT.parent, *_BOOT.parents]:
+    if (_candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
+        sys.path.insert(0, str(_candidate))
+        break
+from scripts.utils import checkpoint_paths as CP  # noqa: E402
 
-WORKSPACE = Path(__file__).resolve().parent.parent.parent
-STATE_DIR = WORKSPACE / ".claude" / "state"
-STATE_PATH = STATE_DIR / "checkpoint-state.json"
+CP.force_utf8()
 
-
-def _env_int(name: str, default: int, *, minimum: int = 0, maximum: int = 100) -> int:
-    raw = os.environ.get(name)
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if value < minimum or value > maximum:
-        return default
-    return value
-
-
-SOFT_THRESHOLD = _env_int("CLAUDE_HANDOFF_SOFT_THRESHOLD", 25)
-HARD_THRESHOLD = _env_int("CLAUDE_HANDOFF_HARD_THRESHOLD", 30)
-REMIND_STEP = _env_int("CLAUDE_HANDOFF_REMIND_STEP", 5, minimum=1)
-if SOFT_THRESHOLD >= HARD_THRESHOLD:
-    SOFT_THRESHOLD, HARD_THRESHOLD = 25, 30
+_CFG = CP.config()
+SOFT_THRESHOLD = _CFG["soft"]
+HARD_THRESHOLD = _CFG["hard"]
+REMIND_STEP = _CFG["step"]
+AUTO = _CFG["auto"]
 
 
 # ANSI colors for the status line. Stripped to plain text on terminals
@@ -89,36 +79,6 @@ C_YELLOW_B = "\033[1;33m" if _USE_ANSI else ""
 C_GREEN = "\033[32m" if _USE_ANSI else ""
 C_YELLOW = "\033[33m" if _USE_ANSI else ""
 C_RED = "\033[31m" if _USE_ANSI else ""
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def read_json(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def write_json_atomic(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def coerce_used(cw: dict) -> float | None:
@@ -158,12 +118,12 @@ def progress_bar(used: float) -> str:
     return "[" + "█" * filled + "░" * empty + "]"
 
 
-def build_status_line(payload: dict, used: float | None, level: str | None) -> str:
+def build_status_line(payload: dict, project: Path, used: float | None, level: str | None) -> str:
     parts: list[str] = []
 
     workspace = payload.get("workspace") or {}
-    cwd_str = workspace.get("current_dir") or payload.get("cwd") or str(WORKSPACE)
-    dir_name = Path(cwd_str).name or str(WORKSPACE)
+    cwd_str = workspace.get("current_dir") or payload.get("cwd") or str(project)
+    dir_name = Path(cwd_str).name or str(project)
     parts.append(f"{C_CYAN_B}{dir_name}{C_RESET}")
 
     branch = git_branch(Path(cwd_str))
@@ -173,12 +133,15 @@ def build_status_line(payload: dict, used: float | None, level: str | None) -> s
     if used is None:
         parts.append(f"{C_DIM}context: n/a{C_RESET}")
     else:
+        # Auto mode is named in the bar, because a checkpoint that writes itself
+        # with no prompt should never be a surprise to the operator watching.
+        auto_tag = "auto-" if AUTO else ""
         if level == "hard":
             color = C_RED
-            tail = f" {C_RED}⛔ checkpoint required{C_RESET}"
+            tail = f" {C_RED}⛔ {auto_tag}checkpoint required{C_RESET}"
         elif level == "soft":
             color = C_YELLOW
-            tail = f" {C_YELLOW}⚠ checkpoint suggested{C_RESET}"
+            tail = f" {C_YELLOW}⚠ {auto_tag}checkpoint suggested{C_RESET}"
         else:
             color = C_GREEN
             tail = ""
@@ -218,21 +181,25 @@ def main() -> int:
             level = None
         bucket = int(used // REMIND_STEP) * REMIND_STEP
 
-    # Update state file with hysteresis
-    state = read_json(STATE_PATH)
+    # Update THIS session's state file with hysteresis. A shared file here is
+    # what let one session's context usage block another session's turns.
+    project = CP.project_root(payload)
+    state_path = CP.state_path(project, CP.session_slug(payload))
+    state = CP.read_json(state_path)
     previous_last_offered = int(state.get("last_offered_bucket") or 0)
 
     state.update(
         {
-            "session_id": payload.get("session_id"),
+            "session_id": CP.session_id(payload),
             "transcript_path": payload.get("transcript_path"),
             "soft_threshold": SOFT_THRESHOLD,
             "hard_threshold": HARD_THRESHOLD,
             "remind_step": REMIND_STEP,
+            "auto": AUTO,
             "used_percentage": used,
             "remaining_percentage": cw.get("remaining_percentage"),
             "current_bucket": bucket,
-            "updated_at": utc_now(),
+            "updated_at": CP.utc_now().isoformat(),
         }
     )
 
@@ -255,12 +222,12 @@ def main() -> int:
         state["offer_bucket"] = None
 
     try:
-        write_json_atomic(STATE_PATH, state)
+        CP.write_json_atomic(state_path, state)
     except Exception as exc:
         # State write failure should not break the status line
         print(f"checkpoint-statusline: state write failed: {exc}", file=sys.stderr)
 
-    print(build_status_line(payload, used, level))
+    print(build_status_line(payload, project, used, level))
     return 0
 
 

@@ -80,7 +80,7 @@
   <p class="page-meta">HEADING OS ships an installable plugin marketplace, so you can try the engine&#x27;s</p>
   <p>HEADING OS ships an installable plugin marketplace, so you can try the engine&rsquo;s
 core inside Claude Code with two commands, no clone and no toolchain.</p>
-<p>Last Updated: 2026-07-09</p>
+<p>Last Updated: 2026-08-16</p>
 <h2 id="the-marketplace">The marketplace</h2>
 <p>The plugins live in their own public repository,
 <strong><a href="https://github.com/mishahanin/heading-os-marketplace">mishahanin/heading-os-marketplace</a></strong>.
@@ -94,9 +94,9 @@ source of truth), so you never install anything the engine did not produce.</p>
 /plugin install heading-core@heading-os-marketplace
 </code></pre></div>
 <p>(The CLI form works too: <code>claude plugin marketplace add mishahanin/heading-os-marketplace</code>.)</p>
-<p>That installs <code>heading-core</code>, the sovereignty and session bundle: the <code>prime</code>,
-<code>state-check</code>, and <code>checkpoint</code> skills, the standalone sovereignty guard hooks,
-and the scripts they need.</p>
+<p>That installs <code>heading-core</code>, the sovereignty and session bundle. It carries the
+<code>prime</code>, <code>state-check</code>, and <code>checkpoint</code> skills, the standalone sovereignty guard
+hooks, the session checkpoint hooks (see below), and the scripts they need.</p>
 <p>The marketplace also ships four curated capability bundles, each installed the
 same way (<code>/plugin install &lt;bundle&gt;@heading-os-marketplace</code>):</p>
 <ul>
@@ -115,6 +115,103 @@ skills (crm, viraid, google-contacts) need a private CRM overlay or Google
 OAuth. Skills like email-intel, telegram, osint, and council need Exchange,
 a session, or third-party API keys. To run those, clone the engine
 (<a href="DEPLOYMENT.md">DEPLOYMENT.md</a>).</p>
+<h2 id="the-checkpoint-system">The checkpoint system</h2>
+<p><code>heading-core</code> also carries the session checkpoint. It writes down what the next
+session needs before a long session fills its context. A handoff holds the
+objective, the decisions, the files touched, the next steps, and a continuation
+prompt. The work then survives the context wall.</p>
+<p>Four hooks and one skill. Three of the hooks wire themselves the moment the
+plugin is installed:</p>
+<table>
+<thead>
+<tr>
+<th>Piece</th>
+<th>Event</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/checkpoint [note]</code></td>
+<td>you type it</td>
+<td>Writes a handoff now. No compact, no clear.</td>
+</tr>
+<tr>
+<td><code>checkpoint-save.py</code></td>
+<td>PostCompact</td>
+<td>Saves a handoff from the compaction summary, redacted.</td>
+</tr>
+<tr>
+<td><code>checkpoint-inject.py</code></td>
+<td>SessionStart</td>
+<td>Puts this session&rsquo;s handoff into the first turn of the resumed session.</td>
+</tr>
+<tr>
+<td><code>checkpoint-offer.py</code></td>
+<td>Stop</td>
+<td>Offers the checkpoint when context crosses your threshold.</td>
+</tr>
+<tr>
+<td><code>checkpoint-statusline.py</code></td>
+<td>statusLine</td>
+<td>Reads context usage and drives the offer. <strong>Wire this one yourself.</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Everything below your project root is keyed by session id, so several sessions
+open on one repository never overwrite each other&rsquo;s handoffs.</p>
+<h3 id="wiring-the-status-line">Wiring the status line</h3>
+<p>Claude Code exposes context-window usage <strong>only</strong> to a <code>statusLine</code>, and a plugin
+manifest has no <code>statusLine</code> key, so this one line is yours to add. In your
+project&rsquo;s <code>.claude/settings.json</code> (or <code>~/.claude/settings.json</code> for every repo):</p>
+<div class="highlight"><pre><span></span><code><span class="nt">&quot;statusLine&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;command&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;python3 \&quot;$CLAUDE_PLUGIN_ROOT/hooks/checkpoint-statusline.py\&quot;&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>If <code>$CLAUDE_PLUGIN_ROOT</code> is not set in your shell, use the installed path under
+<code>~/.claude/plugins/cache/</code>. Without the status line you still get <code>/checkpoint</code>
+and the compact-and-resume flow, but no proactive offer.</p>
+<h3 id="thresholds-and-auto-mode">Thresholds and auto mode</h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CLAUDE_HANDOFF_SOFT_THRESHOLD</code></td>
+<td>25</td>
+<td>% used where the offer first appears</td>
+</tr>
+<tr>
+<td><code>CLAUDE_HANDOFF_HARD_THRESHOLD</code></td>
+<td>30</td>
+<td>% used where it stops offering &ldquo;keep going&rdquo;</td>
+</tr>
+<tr>
+<td><code>CLAUDE_HANDOFF_REMIND_STEP</code></td>
+<td>5</td>
+<td>how far context must move before it asks again</td>
+</tr>
+<tr>
+<td><code>CLAUDE_HANDOFF_AUTO</code></td>
+<td>off</td>
+<td>save silently and resume, with no prompt</td>
+</tr>
+</tbody>
+</table>
+<p>Auto mode is off until you turn it on. With it on, crossing the threshold saves
+the checkpoint without asking, and the session carries on. After a compaction the
+SessionStart hook tells the assistant to continue on its own. Keep your
+compaction point above the soft threshold, so the checkpoint always lands first.
+Nothing here triggers compaction; only Claude Code&rsquo;s own auto-compact does.</p>
+<p><strong><a href="https://github.com/mmaatuq">Mahmoud Maatuq</a></strong> contributed the proactive offer
+and the hands-off auto mode, and found the concurrent-session collision that the
+per-session keying fixes. Thank you.</p>
 <h2 id="how-updates-work">How updates work</h2>
 <p>The bundles carry no <code>version</code>, so every marketplace commit is a new version and
 your installed plugins update automatically. Skills reach their bundled scripts

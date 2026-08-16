@@ -47,6 +47,15 @@ DECLARED_CLAIMANTS = {
     "scripts/harness-audit.py": "active_install_paths",
     "scripts/turn-check.py": "session_scope",
     ".claude/hooks/turn-check.py": "transcript_path",
+    # The checkpoint system says "this session" a great deal, and until
+    # 2026-08-16 it was not entitled to: one shared pointer and one shared state
+    # file for the whole workspace meant the handoff it injected could belong to
+    # a sibling session. Every path it reads is now keyed by the session id from
+    # the hook payload (or CLAUDE_CODE_SESSION_ID for the model-driven skill), so
+    # the sentence and the lookup finally describe the same session.
+    ".claude/hooks/checkpoint-inject.py": "session_slug",
+    ".claude/hooks/checkpoint-offer.py": "session_slug",
+    "scripts/checkpoint-paths.py": "session_id",
 }
 
 # The detector is deliberately wide, because a defect of this shape is written

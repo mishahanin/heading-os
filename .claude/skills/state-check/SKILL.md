@@ -75,10 +75,15 @@ Course corrections are behaviors, not goals. "Do X daily" not "achieve Y."
 
 ---
 **Function:** [name]
+
 **Current State:** [one sentence assessment]
+
 **On Heading:** Yes / Slight drift / Significant drift
+
 **Sea State Summary:** [2-3 sentences]
+
 **Course Corrections:** [bulleted list, max 3]
+
 **Next State Check:** [recommended timing]
 
 ---

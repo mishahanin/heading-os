@@ -53,10 +53,10 @@ x-heading-routing:
 python scripts/rollback-corporate.py --dry-run
 ```
 
-Shows the current build and the target (`HEAD~1`) build. The rollback refuses
-(fail-closed) when `HEAD~1` still carries the current build -- that means the
-latest publish landed as multiple commits and a simple HEAD revert would not
-restore the previous build, so recover manually instead.
+Shows the current build and the target (`HEAD~1`) build. The rollback refuses,
+fail-closed, when `HEAD~1` still carries the current build. That means the latest
+publish landed as multiple commits, so a simple HEAD revert would not restore the
+previous build. Recover manually instead.
 
 ### Phase 2 - Execute (on CEO go-ahead)
 

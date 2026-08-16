@@ -124,7 +124,7 @@ For each requirement:
 
 ## Phase 6.5: Structural pass (optional)
 
-For a long deliverable, you may run the `/editorial-review` structural checklist over the assembled draft before finalizing, to verify the argument arc, claim-to-evidence linkage, and section hierarchy. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
+For a long deliverable, you may run the `/editorial-review` structural checklist over the assembled draft before you finalize it. It verifies the argument arc, claim-to-evidence linkage, and section hierarchy. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
 
 ---
 

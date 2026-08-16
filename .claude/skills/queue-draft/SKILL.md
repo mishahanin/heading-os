@@ -42,7 +42,7 @@ x-heading-routing:
 # Queue Draft
 
 Stage a short message as a **gated** draft in the Action Queue. This skill is the
-reference draft-tier skill: it demonstrates, end to end, that a headless run can
+reference draft-tier skill. It demonstrates, end to end, that a headless run can
 DRAFT and DEPOSIT but can never APPROVE or SEND. The deposited card floors to
 tier `gated` (an `email_send` draft), so it sits `pending` until a human runs the
 approve gate. Nothing here sends.
@@ -89,9 +89,9 @@ automatically - you do not set the tier, and you must not try to lower it.
 
 ## Phase 2 - Deposit (never send)
 
-Resolve the Action Queue directory from the data root (never hardcode a data
-path - the data-path-redirect hook does not rewrite Bash), write the one-card
-JSON array there with the Write tool, then deposit that file:
+Resolve the Action Queue directory from the data root. Never hardcode a data
+path, because the data-path-redirect hook does not rewrite Bash. Write the
+one-card JSON array there with the Write tool, then deposit that file:
 
 ```bash
 AQ_DIR=$(python3 -c "from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir() / 'operations' / 'action-queue')")

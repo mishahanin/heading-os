@@ -124,7 +124,7 @@ Once resolved:
 
 ## Variations
 
-- **No prior top-3 in context** (user says "connect 1" in a fresh session): re-run Phase 0–2 first, then Phase 3 on the newly generated list.
+- **No prior top-3 in context**, when the user says "connect 1" in a fresh session: re-run Phase 0–2 first. Then run Phase 3 on the newly generated list.
 - **User cancels after seeing the list**: do nothing. Leave the tunnel in whatever state Phase 0 left it.
 - **Benchmark returned zero reachable relays**: surface the error, suggest checking connectivity, stop.
 

@@ -42,8 +42,11 @@ Draft a LinkedIn post in Misha Hanin's authentic voice.
 ## Variables
 
 topic: [What is this post about?]
+
 angle: [What's the specific angle, insight, or counterintuitive point?]
+
 context: [Any specific details, data points, events, or recent observations to include]
+
 length: short (~150 words) | medium (~300 words) | long (~500 words) — default: medium
 
 ---

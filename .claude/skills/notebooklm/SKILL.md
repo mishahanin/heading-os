@@ -68,7 +68,7 @@ NLM="$(command -v nlm 2>/dev/null \
 NO_COLOR=1 PYTHONIOENCODING=utf-8 "$NLM" <subcommand> [flags]
 ```
 
-The `command -v nlm` lookup prefers `nlm` on PATH (Linux, macOS, future). The fallback is for the Windows CEO machine where pip installs to a user-scoped Scripts directory not on Git Bash PATH: it derives the per-user Roaming location from `$APPDATA` (or `$USERPROFILE/AppData/Roaming` if `$APPDATA` is unset) so no username or Python minor version is hardcoded, then globs the `Python*/Scripts/nlm.exe` install path. On Linux/macOS `$APPDATA` and `$USERPROFILE` are unset and the glob matches nothing, so `command -v nlm` is authoritative there. Always set `NLM` as a variable at the start of each Bash call, then use `"$NLM"` for the command. The `NO_COLOR=1 PYTHONIOENCODING=utf-8` prefix forces UTF-8 stdio across platforms (required on Windows console; harmless on Linux/macOS).
+The `command -v nlm` lookup prefers `nlm` on PATH (Linux, macOS, future). The fallback is for the Windows CEO machine, where pip installs to a user-scoped Scripts directory that is not on the Git Bash PATH. It derives the per-user Roaming location from `$APPDATA`, or from `$USERPROFILE/AppData/Roaming` when `$APPDATA` is unset. No username and no Python minor version is hardcoded. It then globs the `Python*/Scripts/nlm.exe` install path. On Linux/macOS `$APPDATA` and `$USERPROFILE` are unset and the glob matches nothing, so `command -v nlm` is authoritative there. Always set `NLM` as a variable at the start of each Bash call, then use `"$NLM"` for the command. The `NO_COLOR=1 PYTHONIOENCODING=utf-8` prefix forces UTF-8 stdio across platforms (required on Windows console; harmless on Linux/macOS).
 
 ---
 

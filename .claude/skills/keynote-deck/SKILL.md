@@ -46,9 +46,13 @@ Produce a presentation deck for an event, VIP meeting, or government engagement.
 ## Variables
 
 event: [Event name — MWC, regional expos, Black Hat, government meeting, investor presentation, etc.]
+
 audience: [Who is in the room — telco executives, government officials, investors, technical decision-makers]
+
 topic: [Core message or presentation theme]
+
 duration: [Presentation length in minutes — this determines slide count]
+
 context: [Any specific context, asks, or goals for this presentation]
 
 ---

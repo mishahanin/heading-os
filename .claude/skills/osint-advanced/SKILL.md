@@ -57,8 +57,11 @@ Complements `/osint` with purpose-built OSINT database queries. Where `/osint` u
 ## Variables
 
 target: [Name, company, email, username, domain, or region to investigate]
+
 mode: company | person | technology | market - default: auto-detect
+
 streams: all | comma-separated list - default: auto-select based on mode
+
 depth: quick | full - default: full
 
 ---

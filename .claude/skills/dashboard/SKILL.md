@@ -83,9 +83,9 @@ Format: concise 3-5 bullet summary with file paths.
 After "Hidden characters: clean", append a one-line branding confirmation:
 `Branding: 31C corporate (dark cover, GT Standard, orange corner, blue accents).`
 
-If GT Standard fonts or canonical brand logos failed to embed (e.g., missing
-files in `datastore/brand/`), surface that explicitly instead of silently
-falling back to Inter.
+The GT Standard fonts or the canonical brand logos can fail to embed, when a
+file is missing from `datastore/brand/`. Surface that explicitly instead of a
+silent fall back to Inter.
 
 ### Optional: Live Sea State Enrichment
 

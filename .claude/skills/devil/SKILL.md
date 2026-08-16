@@ -41,7 +41,7 @@ x-heading-routing:
 # /devil - Force N contrarian critique points
 
 Manual sycophancy-breaker. When the user invokes `/devil N` they are
-explicitly summoning a contrarian critic to produce exactly N
+explicitly summoning a contrarian critic. It produces exactly N
 severity-tagged adversarial points against a target position, from
 distinct angles, in committed prose. Cheap alternative to /council
 (external Gemini+Grok) and /scrutinize (multi-phase VIIA). Single-shot -
@@ -53,7 +53,7 @@ Design spec: `docs/superpowers/specs/2026-05-13-devil-skill-design.md` (data ove
 
 Three sub-steps, all silent on success.
 
-**Optional angle priming.** Before identifying the target, you may consult the shared method catalog to widen the attack surface beyond the default angle pool - draw from the `risk`, `competitive`, and `framing` families: `python scripts/elicit.py list --category risk` (e.g. Pre-mortem Analysis, Failure Mode Analysis, Assumption Audit). Use a method only to sharpen a real cut; never let it manufacture a point that violates the honesty floor. Skip this entirely when the angles are already obvious. Catalog: `reference/elicitation-methods.md`.
+**Optional angle priming.** Before you identify the target, you may consult the shared method catalog to widen the attack surface beyond the default angle pool. Draw from the `risk`, `competitive`, and `framing` families: `python scripts/elicit.py list --category risk` returns Pre-mortem Analysis, Failure Mode Analysis, and Assumption Audit. Use a method only to sharpen a real cut; never let it manufacture a point that violates the honesty floor. Skip this entirely when the angles are already obvious. Catalog: `reference/elicitation-methods.md`.
 
 ### 1.1 Parse N + detect inline form
 

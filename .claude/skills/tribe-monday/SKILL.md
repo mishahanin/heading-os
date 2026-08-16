@@ -43,9 +43,13 @@ Draft the weekly Monday message from Misha to the 31C Tribe.
 ## Variables
 
 week_theme: [What's the central theme or operational focus this week?]
+
 sea_state: [What are external conditions — market news, events, headwinds, tailwinds?]
+
 crunch: yes | no [Is this a Crunch Mode week? Default: no]
+
 highlights: [Any specific milestones, wins, or developments to acknowledge]
+
 principle: [Which of the Five Core Principles to connect to, if any]
 
 ---

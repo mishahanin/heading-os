@@ -118,9 +118,9 @@ the bridge spec, section 4) when called with `--gate`.
    - `Healthy.` if all fleet rows are `ok` and the local probe succeeded.
    - `Local daemon down.` if the liveness probe failed. Note that
      `--health` falls back to reading `.daemon-state/heartbeat.json`
-     when the HTTP probe fails, so the report distinguishes "daemon
-     reachable" (exit 0) from "daemon dead but on-disk state survives"
-     (exit 1) from "neither, daemon never started" (exit 2).
+     when the HTTP probe fails. The report therefore separates three
+     states: "daemon reachable" (exit 0), "daemon dead but on-disk state
+     survives" (exit 1), and "neither, daemon never started" (exit 2).
    - `Fleet drift: {workspace} {status}.` if any non-CEO row is stale,
      version-mismatched, config-drift, or error.
    - `Adoption gate {ALL PASS|NOT YET}.` appended when `--gate` was used.
@@ -157,7 +157,6 @@ the bridge spec, section 4) when called with `--gate`.
   with `.daemon-state/heartbeat.json`. Today (Phase 1) only the CEO
   workspace shows up; the grid grows as execs are provisioned.
 - The local liveness probe relies on `.daemon-state/port` being present
-  and containing a valid TCP port. If the daemon was killed without
-  cleaning up, the port file may be stale - in that case the probe
-  fails with "not reachable" and you should manually restart the
-  daemon via `python scripts/bridge-daemon.py --start`.
+  and containing a valid TCP port. A daemon killed without cleanup
+  leaves a stale port file. The probe then fails with "not reachable".
+  Restart the daemon manually via `python scripts/bridge-daemon.py --start`.

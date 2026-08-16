@@ -44,8 +44,11 @@ Produce an interview framework with position-specific questions and scoring rubr
 ## Variables
 
 position: [Job title and department]
+
 level: junior | mid | senior | leadership
+
 context: [What specifically this role needs to do; any team or project context]
+
 candidate: [Candidate name, background summary if pre-interview — optional]
 
 ---

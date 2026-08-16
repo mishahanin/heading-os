@@ -197,7 +197,7 @@ When a browser task hits a login page, 403, or CAPTCHA:
 
 1. **Check if `outputs/browser/cookies.json` exists** and contains cookies for the target domain
 2. **If no cookies:** prompt user to run `/setup-browser-cookies` to import from their real browser
-3. **If cookies exist but page still blocks:** try with `--cookies-json` pointing to a fresh export, or fall back to gstack browse directly (`$B navigate <url>`) which may succeed due to different browser fingerprint
+3. **If cookies exist but page still blocks:** try `--cookies-json` pointing to a fresh export. Or fall back to gstack browse directly (`$B navigate <url>`), which may succeed on a different browser fingerprint
 4. **If both fail:** report failure with diagnostics (page title, screenshot of what loaded)
 
 ### Manual cookie override

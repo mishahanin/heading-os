@@ -70,7 +70,7 @@ Parse the input for these details (ask only if truly critical info is missing):
 
 1. **Opening** - Reference the specific meeting/event and a memorable detail from the conversation. No "I hope this finds you well." No "It was a pleasure meeting you." Start with something real.
 
-2. **The Thread** - Briefly restate the most relevant point from the discussion using Voss-style labeling where appropriate (reference `reference/voss-negotiation.md`). Summarize their position or concern accurately to earn a "That's Right" moment - show you understood their world, not just their words. Connect to something concrete - a capability, a deployment, a market insight. Keep it to 2-3 sentences.
+2. **The Thread** - Briefly restate the most relevant point from the discussion using Voss-style labeling where appropriate (reference `reference/voss-negotiation.md`). Summarize their position or concern accurately to earn a "That's Right" moment. Show you understood their world, not only their words. Connect to something concrete - a capability, a deployment, a market insight. Keep it to 2-3 sentences.
 
 3. **Value Add** - Offer one piece of value they didn't ask for but would appreciate. This could be:
    - A relevant data point from 31C's market intelligence
@@ -103,7 +103,8 @@ Produce the email draft, then note:
 
 After drafting the follow-up email:
 1. Check if a CRM file exists for this contact in `crm/contacts/`
-2. If yes: add an interaction log entry (date, type: Email, brief summary of the follow-up) and update `last_touch` in the YAML frontmatter to today's date
+2. If yes: add an interaction log entry with the date, type Email, and a brief summary of the follow-up.
+3. Update `last_touch` in the YAML frontmatter to today's date
 3. If no file exists but the contact is significant: ask Misha if they want to create one with `/crm add`
 4. Update any active commitments in the CRM file if this follow-up addresses them
 

@@ -46,8 +46,11 @@ Post-event recap with leads, follow-ups, lessons learned, and action items.
 ## Variables
 
 event: [Event name — MWC, regional expos, launch events, partner summit, etc.]
+
 dates: [Event dates]
+
 notes: [Paste raw notes, business cards collected, conversations had, impressions — as messy as needed]
+
 outcome_assessment: strong | moderate | below-expectations — optional
 
 ---
@@ -135,4 +138,4 @@ After completing the event debrief:
 
 ## Knowledge Base
 
-After the debrief is complete, offer: "Want me to capture the key takeaways? `/odin log` records them as an episode in Odin's brain (CEO-only); `/zk distill` adds the durable takeaways to the knowledge base."
+After the debrief is complete, offer this: "Want me to capture the key takeaways? The `/odin log` command records them as an episode in Odin's brain (CEO-only). The `/zk distill` command adds the durable takeaways to the knowledge base."

@@ -44,9 +44,13 @@ Draft an outbound CEO email from Misha Hanin.
 ## Variables
 
 to: [Recipient name, title, company]
+
 purpose: [What this email is trying to accomplish]
+
 key_points: [Main points to cover — list them]
+
 tone: formal | warm | direct | urgent — default: warm-direct
+
 context: [Any specific relationship or situational context]
 
 ---

@@ -84,9 +84,9 @@ Before writing the plan, investigate:
 
 ## Plan Format
 
-Write the plan using the **exact structure in `references/plan-template.md`** — a fill-in template with these top-level sections in order: title + `Created`/`Status`/`Request` header; Overview (What This Plan Accomplishes + Why This Matters); **Spec Core** (Why, Capabilities, Constraints, Non-Goals, Success Signal — definitions in `reference/templates/spec-core.md`); Current State; Proposed Changes (with New/Modify/Delete file tables); Design Decisions (incl. Open Questions); Step-by-Step Tasks; Connections & Dependencies; Validation Checklist; Success Criteria; Notes.
+Write the plan using the **exact structure in `references/plan-template.md`**, a fill-in template. Its top-level sections come in this order. First the title with the `Created`/`Status`/`Request` header, then Overview (What This Plan Accomplishes and Why This Matters). Then **Spec Core**: Why, Capabilities, Constraints, Non-Goals, and Success Signal, defined in `reference/templates/spec-core.md`. Then Current State, then Proposed Changes with its New/Modify/Delete file tables. Then Design Decisions, which includes Open Questions, and Step-by-Step Tasks. It closes with Connections & Dependencies, Validation Checklist, Success Criteria, and Notes.
 
-The reference also carries the **wave-grouping rules** for parallel execution (`### Wave N (parallel)` vs `### Wave N`, `####` step headings, global step numbering, no mixing wave and bare-step formats) and a wave example. Read it before writing the plan and reproduce the structure verbatim, replacing every `<placeholder>` with specific content.
+The reference also carries the **wave-grouping rules** for parallel execution, plus a wave example. Those rules cover `### Wave N (parallel)` against `### Wave N`, `####` step headings, global step numbering, and the ban on mixing wave and bare-step formats. Read it before you write the plan. Reproduce the structure verbatim, and replace every `<placeholder>` with specific content.
 
 ---
 

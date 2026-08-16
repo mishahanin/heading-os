@@ -48,8 +48,11 @@ Prepare a situation-specific tactical playbook for any important conversation, u
 ## Variables
 
 counterpart: [Who - name, title, company, role in this conversation]
+
 situation: [What the conversation is about]
+
 goal: [What you want to achieve - primary and secondary outcomes]
+
 tension: [What makes this difficult or high-stakes - optional but valuable]
 
 ---

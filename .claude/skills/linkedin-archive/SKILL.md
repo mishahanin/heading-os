@@ -68,7 +68,7 @@ Ask the CEO via `AskUserQuestion`:
 - One image
 - More than one
 
-If "One image" or "More than one": send a follow-up plain-text turn ("Reply with the path(s) to the image(s)") and wait for the CEO's free-form reply with one path per line. `AskUserQuestion` is multiple-choice only; path collection always happens in a separate text turn.
+If "One image" or "More than one": send a follow-up plain-text turn, "Reply with the path(s) to the image(s)". Wait for the CEO's free-form reply, one path per line. `AskUserQuestion` is multiple-choice only, so path collection always happens in a separate text turn.
 
 Pass each image as a separate `--image <path>` argument. Default is no image.
 
@@ -113,7 +113,7 @@ The script does not provide an `--undo` flag. To revert a wrong move:
 - If `--commit` did NOT fire: `git mv` files back manually, then `rmdir` the empty destination folder.
 - If `--commit` fired and nothing else has been committed since: `git reset --hard HEAD~1`. Verify `git status` first; this is destructive.
 - If exit code 8 (`--commit` ran but auto-commit failed): files are moved and staged in the index, but no commit landed. Either inspect the failure (often a pre-commit hook), fix it, and run `git commit` manually; or `git restore --staged <paths>` to unstage and decide what to do next.
-- If exit code 9 (git command timed out): nothing on disk has been mutated when the timeout fires before any `git mv`; if the timeout fires mid-sequence, run `git status` to see what was already moved and `git mv` back as needed.
+- If exit code 9 (git command timed out): a timeout before any `git mv` leaves the disk untouched. If the timeout fires mid-sequence, run `git status` to see what was already moved, and `git mv` back as needed.
 
 ## Voice
 

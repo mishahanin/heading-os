@@ -58,11 +58,12 @@ x-heading-routing:
 python scripts/promote-corporate.py --dry-run
 ```
 
-This prints the gate report without merging: canary slug, staging tip, soak hours
-(need 4), and the per-gate pass/fail for **soak** (>=4h since the latest staging
-commit; resets on every new commit), **canary freshness** (the canary pulled the
-latest staging commit), **smoke** (`smoke_status == healthy`), and **eval status**
-(advisory WARNING only -- never blocks). Present this report to the CEO verbatim.
+This prints the gate report without merging. It carries the canary slug, the staging
+tip, the soak hours (4 needed), and the per-gate pass or fail. There are four gates. **Soak** needs >=4h
+since the latest staging commit, and resets on every new commit. **Canary freshness**
+needs the canary to have pulled the latest staging commit. **Smoke** needs
+`smoke_status == healthy`. **Eval status** is an advisory WARNING only, never a block. Present this report to the
+CEO verbatim.
 
 ### Phase 2 - Decision
 

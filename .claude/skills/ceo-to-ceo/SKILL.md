@@ -47,9 +47,13 @@ Draft CEO-level correspondence to a partner, peer executive, or key institutiona
 ## Variables
 
 to: [CEO/executive name, title, company]
+
 subject_area: [Core subject — e.g., "partnership expansion proposal", "post-MWC follow-up", "strategic alignment meeting"]
+
 objective: [What this communication should achieve]
+
 context: [Background on the relationship and situation]
+
 tone: formal | warm-peer | urgent — default: warm-peer
 
 ---

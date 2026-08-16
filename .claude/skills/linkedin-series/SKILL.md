@@ -41,8 +41,11 @@ Plan a multi-post LinkedIn content series in Misha's voice around a theme or str
 ## Variables
 
 theme: [Core theme or strategic narrative — e.g., "sovereignty vs. compliance", "the DPI category we're creating", "what MWC taught us"]
+
 posts: [Number of posts — default: 4]
+
 timeframe: [When to publish — e.g., "leading up to MWC", "during launch week", "over 4 weeks"]
+
 goal: [What this series should accomplish — e.g., "establish category leadership", "build investor intrigue", "Tribe culture signal"]
 
 ---

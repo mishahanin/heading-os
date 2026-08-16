@@ -45,7 +45,7 @@ Manage the Sentinel background daemon that monitors corporate email (Exchange) a
 
 ## Trigger
 
-Activate when the user says: "sentinel", "/sentinel", "start sentinel", "stop sentinel", "sentinel status", "check sentinel", "is sentinel running", "comms monitor", or asks about the background monitoring system.
+Activate when the user says "sentinel", "/sentinel", "start sentinel", or "stop sentinel". Also activate on "sentinel status", "check sentinel", "is sentinel running", and "comms monitor". Any question about the background monitoring system activates it too.
 
 ## Actions
 

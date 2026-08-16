@@ -261,4 +261,4 @@ Fulfils the Phase 3 awaiting-approval contract of `prompt-refinement.md`.
 
 ## Examples
 
-See [references/examples.md](references/examples.md) for two worked examples - Example A (all-lettered, `/align 3` on a TradeExpo launch email) and Example B (mixed open + lettered, `/align 2` on a meeting schedule). Both demonstrate the full Phase 2 four-block output with the canonical closer.
+See [references/examples.md](references/examples.md) for two worked examples. Example A is all-lettered, `/align 3` on a TradeExpo launch email. Example B mixes open and lettered, `/align 2` on a meeting schedule. Both demonstrate the full Phase 2 four-block output with the canonical closer.

@@ -93,7 +93,7 @@ This SENDS the card right now and prints `sent` or `send failed (reason)` in the
 python scripts/action-queue.py edit <id> --subject "..." --body-file <path>
 ```
 
-Rewrite the subject and/or body (flips `draft_status` to `ready_for_review`). For voice, follow `reference/misha-voice.md` and the humanisation rule; hyphens, never em-dashes. Write the body to a temp file and validate (`sanitize-text.py --scan`, `humanization-check.py`) before the edit.
+Rewrite the subject, the body, or both. That flips `draft_status` to `ready_for_review`. For voice, follow `reference/misha-voice.md` and the humanisation rule; hyphens, never em-dashes. Write the body to a temp file and validate (`sanitize-text.py --scan`, `humanization-check.py`) before the edit.
 
 ## Phase 5 - Dismiss / retry
 
@@ -104,7 +104,7 @@ python scripts/action-queue.py retry <id>                      # re-send a send_
 
 ## NEVER
 
-- NEVER send, edit a card to `sent`, or mark anything sent on the CEO's behalf - only `approve`/`retry` send, and only on the CEO's explicit instruction for that specific card.
+- NEVER send, edit a card to `sent`, or mark anything sent on the CEO's behalf. Only `approve` and `retry` send, and only on the CEO's explicit instruction for that specific card.
 - NEVER write `queue.json` directly - all mutations go through `scripts/action-queue.py` (which routes through the in-process helpers; the disposition-log audit depends on it).
 - NEVER approve/send a batch from one instruction - each card needs its own explicit go-ahead.
 - NEVER claim a card was sent when the command reported `send_failed` - surface the reason.

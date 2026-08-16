@@ -123,11 +123,11 @@ Confirm: proposal type, recipient, sponsor contact, and the specific asking. If 
 - Numbered list (1., 2., 3., ...).
 - Each step: action + owner + date.
 - No later than 90 days for the final step.
-- Name one testable **Success Signal**: the measurable observable that defines the PoV/engagement as succeeded (e.g. classification accuracy on N live flows by day 47), aligned to Principle 1 Proof of Value over PoC.
+- Name one testable **Success Signal**: the measurable observable that marks the PoV or engagement as succeeded. An example is classification accuracy on N live flows by day 47. Align it to Principle 1, Proof of Value over PoC.
 
 ## Phase 2.5: Structural pass (optional)
 
-For a long or high-stakes proposal, you may run the `/editorial-review` structural checklist over the assembled draft before approval — verify the proposal arc (opening -> opportunity -> solution -> proof -> commercial -> next steps), claim-to-evidence linkage, and that the lede is not buried. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
+For a long or high-stakes proposal, you may run the `/editorial-review` structural checklist over the assembled draft before approval. It verifies the proposal arc (opening -> opportunity -> solution -> proof -> commercial -> next steps), claim-to-evidence linkage, and that the lede is not buried. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
 
 ## Phase 3: Present for Approval
 

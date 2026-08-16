@@ -194,10 +194,10 @@ search/fetch for references), check session sensitivity:
 python3 -c "from scripts.utils.sensitive import is_sensitive, sanitize_prompt_guidance; print(sanitize_prompt_guidance()) if is_sensitive() else None"
 ```
 
-If it prints guidance (sensitivity not explicitly cleared — the fail-closed
-default), strip ALL project-identifying detail from the prompt/query before the
-call: no codenames, company names, people names, deal terms, or strategic
-specifics. Use abstract, generic descriptions. The asset stays local; only the
+It prints guidance when sensitivity is not explicitly cleared, which is the
+fail-closed default. In that case strip ALL project-identifying detail from the
+prompt and query before the call. Use no codenames, no company names, no people
+names, no deal terms, and no strategic specifics. Use abstract, generic descriptions. The asset stays local; only the
 query goes external. This replaces the removed `secure-design` vault wrapper.
 
 ## NEVER

@@ -60,7 +60,7 @@ Based on `$ARGUMENTS`, identify which files in ceo-main should be copied to the 
 
 **Classification-driven publishing:** classification resolves from `config/routing-map.yaml` (the single input; `classification.json` was removed in HEADING OS step 7). Post-cutover (step 8, 2026-06-14) publish ships ONLY files whose three-value routing destination is `corporate` — content, not code. Engine code is NOT published here; execs receive it by cloning the engine repo (`.heading-os`). The corporate set is content-only: `datastore/`, `knowledge/shared/`, the two `context/` carve-outs, `crm/` config/aliases/address-book, `corporate/` daemon config. Use `python scripts/classification-health.py --corporate-only` to list it.
 
-If `$ARGUMENTS` references a specific file currently classified as `ceo-only` (routed `private`), warn the CEO and ask if they want to reclassify it before publishing (add a rule to `config/routing-map.yaml`).
+A file named in `$ARGUMENTS` may be classified `ceo-only` today, which routes `private`. Warn the CEO, and ask whether to reclassify it before publishing by adding a rule to `config/routing-map.yaml`.
 
 **NEVER publish (safety check - overrides classification):**
 - `context/personal-info.md` (CEO personal)

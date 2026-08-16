@@ -71,10 +71,10 @@ Either:
 
 ### 2. Run the generation script
 
-Run from the workspace root (the script path is root-relative). The image is a DATA artifact -- it
+Run from the workspace root (the script path is root-relative). The image is a DATA artifact. It
 must land in the DATA overlay, never the engine tree. `generate_image.py` writes `--output` literally
-relative to the current directory (the engine root after the `cd`), so a bare `outputs/...` would
-create a stray image inside the engine. Resolve the data outputs dir first and pass an absolute path:
+relative to the current directory, which is the engine root after the `cd`. A bare `outputs/...`
+would create a stray image inside the engine. Resolve the data outputs dir first and pass an absolute path:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -122,9 +122,10 @@ Before sending any prompt to the Replicate API, check session sensitivity:
 python3 -c "from scripts.utils.sensitive import is_sensitive, sanitize_prompt_guidance; print(sanitize_prompt_guidance()) if is_sensitive() else None"
 ```
 
-If it prints guidance (sensitivity not explicitly cleared — the fail-closed
-default), strip ALL project-identifying detail from the prompt before the call:
-no codenames, company names, people names, deal terms, or strategic specifics.
+It prints guidance when sensitivity is not explicitly cleared, which is the
+fail-closed default. In that case strip ALL project-identifying detail from the
+prompt before the call: no codenames, company names, people names, deal terms,
+or strategic specifics.
 Use abstract, generic descriptions ("corporate acquisition integration diagram",
 not "Phoenix acquisition of CompanyX"). The image file stays local; only the
 prompt goes to Replicate, so the prompt must carry nothing identifying. This

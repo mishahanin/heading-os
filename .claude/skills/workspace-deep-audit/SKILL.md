@@ -160,7 +160,7 @@ Score the workspace against the 34-point 2026 best-practices rubric in `referenc
 
 Each point gets LEAD / MATCH / GAP / N/A. Compute total LEAD%, MATCH%, GAP%, N/A%. If `--vs` is set, also produce the v(prev)→v(current) delta column.
 
-**Refresh the rubric** if `references/best-practices-rubric.md` is older than 90 days by checking its `Last Updated` field. If stale, run a one-shot WebSearch sweep against the canonical Anthropic/OWASP/observability blog sources listed in the rubric to surface any new best practices, propose rubric additions inline, and proceed with the current rubric.
+**Refresh the rubric** if `references/best-practices-rubric.md` is older than 90 days by checking its `Last Updated` field. If stale, run a one-shot WebSearch sweep against the canonical Anthropic, OWASP, and observability blog sources listed in the rubric. Surface any new best practices, propose rubric additions inline, and proceed with the current rubric.
 
 ## Phase 5 — Competitive Mapping (skip on `--mode=quick`)
 

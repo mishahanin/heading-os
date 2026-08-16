@@ -213,4 +213,4 @@ This brief is the OPPOSITE of the public newsletter:
 
 ## Knowledge Base
 
-After delivering the brief, offer: "Want me to capture the lasting signals? `/odin log` records them as an episode in Odin's brain (CEO-only); `/zk distill` adds durable intelligence to the knowledge base."
+After delivering the brief, offer this: "Want me to capture the lasting signals? The `/odin log` command records them as an episode in Odin's brain (CEO-only). The `/zk distill` command adds durable intelligence to the knowledge base."

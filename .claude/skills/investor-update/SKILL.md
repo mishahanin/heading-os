@@ -45,9 +45,13 @@ Draft a progress update for existing investors — quarterly or milestone-trigge
 ## Variables
 
 period: [Q1 2026 / Q2 2026 / Post-MWC / Post-Milestone / etc.]
+
 investor: [Investor name or "all investors" — use people.md for context]
+
 highlights: [Key developments to feature]
+
 challenges: [Honest challenges to acknowledge — 31C operates with integrity]
+
 ask: [Any specific asks or decisions needed from investors — if none, leave blank]
 
 ---

@@ -48,8 +48,11 @@ Prepare structured documents for investor data rooms, respond to due diligence q
 ## Variables
 
 type: overview | financial-summary | market-analysis | team-overview | technology-brief | competitive-landscape | dd-response | full-room
+
 question: [For dd-response: paste the specific due diligence question or questionnaire]
+
 investor_type: strategic | vc | sovereign | pe — default: strategic
+
 stage: pre-meeting | diligence | term-sheet
 
 ---
@@ -141,7 +144,7 @@ For each section, produce the document or flag what additional input is needed.
 
 ## Structural pass (optional)
 
-For a long deliverable, you may run the `/editorial-review` structural checklist over the assembled draft before finalizing, to verify the argument arc, claim-to-evidence linkage, and section hierarchy. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
+For a long deliverable, you may run the `/editorial-review` structural checklist over the assembled draft before you finalize it. It verifies the argument arc, claim-to-evidence linkage, and section hierarchy. Reference: `reference/editorial-review.md`. The prose-level voice pass (`humanization.md`) runs as usual after. Skip when the draft is short or already tight.
 
 ---
 

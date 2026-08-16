@@ -57,13 +57,16 @@ x-heading-routing:
 
 # X Pulse - X.com Account-Monitoring Intelligence
 
-Scan a curated, categorised list of X.com accounts, surface what they posted in the last 72h (configurable), and deliver an intelligence brief with 31C relevance and concrete actions.
+Scan a curated, categorised list of X.com accounts and surface what they posted in the last 72h (configurable). Deliver an intelligence brief with 31C relevance and concrete actions.
 
 ## Variables
 
 window: [optional] 24h | 72h (default) | 7d
+
 bucket: [optional] one category from `config/x-pulse-accounts.yaml`; if omitted, all categories scanned
+
 max_per_account: [optional] tweets to fetch per handle (default 30, max 100)
+
 dry_run: [optional] print plan + estimated cost, exit without API call
 
 ## Pre-flight

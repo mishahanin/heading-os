@@ -157,14 +157,20 @@ HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 # joined pair then measured over the word limit. It reported 51 errors across the
 # skill corpus against prose that was already correct.
 #
-# The closer is handled by a fixed-width lookbehind per marker shape rather than
-# by consuming the markers: `re.split` drops what it matches, and consuming them
+# The closer is handled by a fixed-width lookbehind per shape rather than by
+# consuming the markers: `re.split` drops what it matches, and consuming them
 # would strip the emphasis out of the text the checker then reports back.
 # `(?<![A-Z0-9])` keeps the abbreviation guard, so `SKILL.md file`, `v1.2 of` and
 # an enumerated `1. ` stay unsplit.
+#
+# Emphasis was only the first closer found. A quote and a bracket sit in exactly
+# the same place -- `... both work." If two variants ...`, `(see below.) Next` --
+# so CLOSER is a character class, not a third enumerated shape. Enumerating cost
+# two rounds of this bug; a class covers the next closer somebody writes.
+CLOSER = r"[)\]\"'’”*_]"
 SENTENCE_SPLIT_RE = re.compile(
     r"(?<![A-Z0-9])"
-    r"(?:(?<=[.!?])|(?<=[.!?]\*)|(?<=[.!?]\*\*)|(?<=[.!?]_)|(?<=[.!?]__))"
+    rf"(?:(?<=[.!?])|(?<=[.!?]{CLOSER})|(?<=[.!?]{CLOSER}{CLOSER}))"
     r"\s+(?=[A-Z(\[\"'`*_])"
 )
 

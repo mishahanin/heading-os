@@ -49,7 +49,7 @@ Before starting, Claude MUST:
 
 ## Source of Truth
 
-**All question data (prompt, example, help, type, id) is returned by `--status` in each `rows` entry.** Use those fields directly. Do NOT `cat`, `Read`, or otherwise open `wizard-questions.yaml` yourself - the YAML lives in different paths depending on workspace layout (`config/` on CEO master, `corporate/config/` on exec) and the apply script already resolves the correct path via its internal resolver. Reading the YAML directly will fail on exec workspaces.
+**All question data (prompt, example, help, type, id) is returned by `--status` in each `rows` entry.** Use those fields directly. Do NOT `cat`, `Read`, or otherwise open `wizard-questions.yaml` yourself. The YAML lives in different paths depending on workspace layout: `config/` on CEO master, `corporate/config/` on exec. The apply script already resolves the correct path via its internal resolver. Reading the YAML directly will fail on exec workspaces.
 
 ## First-Run Flow (empty answers.json)
 
@@ -103,7 +103,8 @@ After the user's short answer:
 
 1. Announce: `Drafting your <doc name>...`
 2. Compose a full document inline (200-400 words for voice/personal/business; 100-200 for calendar).
-3. Display the draft in a visible block, then:
+3. Display the draft in a visible block.
+4. Offer the choices below:
 
 ```text
 Does this sound like you?

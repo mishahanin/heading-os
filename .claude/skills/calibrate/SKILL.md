@@ -57,7 +57,7 @@ x-heading-routing:
 ---
 # /calibrate - End-of-Session Self-Improvement
 
-Scans the current session for friction and successes, proposes numbered
+Scans the current session for friction and successes. Proposes numbered
 patches grouped by target (Memory / Settings / Skills / Rules), applies
 approved patches, and makes a single atomic git commit. Corporate files
 route to a separate review queue, never auto-applied.
@@ -194,9 +194,9 @@ needs an entry):
 If multiple threads were touched, list one candidate per thread. Skip
 entirely if no thread files were read or written.
 
-This is a CEO-only auto-include - threads/ is CEO-only per the workspace
-classification rule, and the auto-include logic itself never fires in
-exec workspaces because /calibrate is CEO-only.
+This is a CEO-only auto-include. The threads/ tree is CEO-only per the
+workspace classification rule, and the auto-include logic itself never
+fires in exec workspaces because /calibrate is CEO-only.
 
 ### Numbered candidate presentation
 
@@ -234,10 +234,11 @@ If any candidates routed to corporate review, write a single file:
 outputs/operations/calibrate/{YYYY-MM-DD}_corporate-review.md
 ```
 
-Format per `references/detection-prompts.md` section on corporate review queue
-patches: source quote, category, proposed target, proposed diff in fenced
-code block (read-only format, NOT git-applyable), rationale, "to apply: review
-the diff manually, edit the target file by hand, run /push-updates."
+Format per the `references/detection-prompts.md` section on corporate review
+queue patches. The fields are source quote, category, proposed target, and the
+proposed diff in a fenced code block (read-only format, NOT git-applyable). Then
+the rationale, then "to apply: review the diff manually, edit the target file by
+hand, run /push-updates."
 
 If no corporate candidates: skip this step. Do not write an empty file.
 

@@ -138,6 +138,23 @@ def test_a_sentence_boundary_after_emphasis_still_splits(ste):
     assert len(ste.split_sentences("Alpha bravo. _Charlie delta._ Echo foxtrot.")) == 3
 
 
+def test_a_sentence_that_ends_inside_a_closer_still_splits(ste):
+    """A quote or a bracket can sit between the terminator and the space.
+
+    The third instance of the same bug. The lookbehind enumerated the emphasis
+    markers and nothing else, so `... both work." If two variants ...` and
+    `(see below.) Next` each measured as one sentence. Found 2026-08-17 in
+    `.claude/skills/burst/SKILL.md`, reported as 42 words against four short
+    ones. The fix is a closer CLASS rather than another enumerated shape, so
+    the next closer somebody writes is already covered.
+    """
+    assert len(ste.split_sentences('Alpha bravo. "Charlie delta." Echo foxtrot.')) == 3
+    assert len(ste.split_sentences("Alpha bravo (charlie delta.) Echo foxtrot.")) == 2
+    assert len(ste.split_sentences("Alpha bravo [charlie delta.] Echo foxtrot.")) == 2
+    assert len(ste.split_sentences("Alpha bravo. 'Charlie delta.' Echo foxtrot.")) == 3
+    assert len(ste.split_sentences("Alpha bravo. **Charlie delta.** Echo foxtrot.")) == 3
+
+
 def test_a_blockquote_marker_is_not_read_as_prose(ste):
     """`>` at the start of a wrapped blockquote line is structure, not a word.
 

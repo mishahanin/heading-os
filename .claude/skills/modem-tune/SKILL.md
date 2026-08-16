@@ -41,10 +41,10 @@ x-heading-routing:
 # Modem Tune -- IMEI Reconfiguration
 
 Automates changing the reported IMEI on either of two personal GL.iNet travel routers,
-auto-detected from the live modem: the GL-XE300 (Quectel EG25-G, `gl_modem AT` over
-SSH) and the GL-E5800 "Mudi 7" (Quectel RG650V-EU, ubus `modem.CPU.AT` over SSH). All
-mechanics live in `scripts/modem-tune.py`; this skill is the conversational wrapper
-that owns the device-confirm gate and the reset-confirm gate.
+auto-detected from the live modem. The two are the GL-XE300 (Quectel EG25-G, `gl_modem
+AT` over SSH) and the GL-E5800 "Mudi 7" (Quectel RG650V-EU, ubus `modem.CPU.AT` over
+SSH). All mechanics live in `scripts/modem-tune.py`. This skill is the conversational
+wrapper that owns the device-confirm gate and the reset-confirm gate.
 
 Spec: `docs/superpowers/specs/2026-05-30-modem-tune-skill-design.md` (data overlay: `.heading-os-data/docs/superpowers/specs/2026-05-30-modem-tune-skill-design.md`).
 Device + procedure reference: `outputs/operations/reference/gl-inet-mobile-router-imei-reconfig.md`.
@@ -64,10 +64,10 @@ Every mode accepts an explicit `--device {xe300,e5800}`, which skips auto-detect
 
 Both routers are reached over SSH with credentials from `.env` (`MODEM_HOST`,
 `MODEM_USER`, `MODEM_SSH_PASSWORD` -- unchanged, shared across devices). No VPN
-pre-flight applies -- these are local authenticated devices, not public web services.
-`config/modem.json` is now per-device (one entry per router: transport, host, TAC,
-factory IMEI); an unconfigured device exits cleanly (exit 2) on `generate`/`apply`/
-`revert`, not on `detect`/`status`.
+pre-flight applies here. These are local authenticated devices, not public web
+services. `config/modem.json` is now per-device, one entry per router: transport,
+host, TAC, factory IMEI. An unconfigured device exits cleanly (exit 2) on `generate`,
+`apply` and `revert`, but not on `detect` or `status`.
 
 If `MODEM_SSH_PASSWORD` is missing the engine exits with a clear error; tell the CEO to
 add the `MODEM_*` block to `.env` and stop.
@@ -84,8 +84,8 @@ non-zero -- do not guess. Ask the CEO for an explicit `--device` and re-run.
 ## Phase 0.5 -- Confirm device (HARD STOP)
 
 Show the CEO the resolved device id and the modem model string the engine printed.
-Use AskUserQuestion to get an explicit "yes, that is the right device" before
-proceeding to any further phase -- wrong-device confirmation would stage an IMEI
+Use AskUserQuestion to get an explicit "yes, that is the right device" before you
+proceed to any further phase. A wrong-device confirmation would stage an IMEI
 change against the wrong hardware.
 
 Only an explicit yes proceeds. Silence or ambiguity means WAIT. From here on, pass

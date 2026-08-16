@@ -252,13 +252,13 @@ Want me to draft updates for these files?
 
 ## Phase 3.5 -- Odin Reflection Cadence (CEO workspace only)
 
-Existence guard FIRST: run the Bash test `test -d knowledge/odin-brain && test -f scripts/odin-cadence.py`. If it exits non-zero, silently skip this ENTIRE phase - say nothing about it. On an exec workspace both are absent, so this phase is a provable no-op. (This is a Bash test the model runs, NOT a Python code guard; the graceful-degradation precedent is `/odin` SKILL.md Rules 9 and 13 - degrade quietly, never fail the operation.)
+Existence guard FIRST: run the Bash test `test -d knowledge/odin-brain && test -f scripts/odin-cadence.py`. If it exits non-zero, silently skip this ENTIRE phase - say nothing about it. On an exec workspace both are absent, so this phase is a provable no-op. This is a Bash test the model runs, NOT a Python code guard. The graceful-degradation precedent is `/odin` SKILL.md Rules 9 and 13: degrade quietly, never fail the operation.
 
 If the guard passes:
 
 1. Run `python3 scripts/odin-cadence.py --json`. Treat any non-zero exit, empty output, or unparseable JSON as "no clusters - skip silently".
-2. Parse `reflect_clusters` from the JSON. If `reflect_clusters >= 1`, surface to the CEO: "N episode cluster(s) ready to mature - run `/odin reflect`?" Do NOT re-check `.last-reflect` here: since 2026-08-11 the detector reads that marker itself and counts only clusters holding an episode logged after the last confirmed pass, so a second check in this skill is a weaker duplicate of the same rule that can disagree with it. The JSON carries `last_reflect` if you want to show the date.
-3. ONLY on an explicit CEO go-ahead, invoke `/odin reflect` via the Skill tool. Reflect's own per-graduation CEO gate then applies - nothing enters the brain without per-candidate approval, and reflect advances `.last-reflect` on a confirmed pass.
+2. Parse `reflect_clusters` from the JSON. If `reflect_clusters >= 1`, surface to the CEO: "N episode cluster(s) ready to mature - run `/odin reflect`?" Do NOT re-check `.last-reflect` here. Since 2026-08-11 the detector reads that marker itself. It counts only clusters holding an episode logged after the last confirmed pass. A second check in this skill is a weaker duplicate of the same rule, and can disagree with it. The JSON carries `last_reflect` if you want to show the date.
+3. ONLY on an explicit CEO go-ahead, invoke `/odin reflect` via the Skill tool. Reflect's own per-graduation CEO gate then applies. Nothing enters the brain without per-candidate approval, and reflect advances `.last-reflect` on a confirmed pass.
 
 NEVER auto-invoke `/odin reflect` without an explicit CEO go-ahead. NEVER run this phase on a workspace that lacks the brain.
 

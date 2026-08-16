@@ -43,8 +43,8 @@ x-heading-routing:
 
 Manual variation lever. When the user invokes `/burst N` they are
 explicitly summoning N different versions of the latest content
-artifact, each attacking a distinct axis, with one mandatory
-"swing-the-other-way" variant inverting a defining property. Supports
+artifact, each attacking a distinct axis. One of the N is a mandatory
+"swing-the-other-way" variant that inverts a defining property. Supports
 the convergence pattern: pick a variant, /burst again, narrow to
 target faster than one long prompt. Single-shot - after Phase 2 the
 skill exits and normal posture resumes.
@@ -219,7 +219,7 @@ The recommendation is one specific variant, not a hedge. "Variant 2 - the
 operator-voice lens lands the deal pipeline angle harder" beats "Variants
 2 or 4 both work." If two variants are genuinely tied, pick the one
 closer to the original on the axis that matters most for the target use
-case; the swing variant rarely wins this tiebreak.
+case. The swing variant rarely wins this tiebreak.
 
 That is the full Phase 2 output. Nothing else - no preamble, no
 explanation of what /burst is, no commentary.
@@ -235,10 +235,9 @@ post, line-rewriting an opener, picking descriptors), expect repeated
 - Hook directions -> benefit phrasings -> CTA wording
 - Title options -> subtitle options -> tagline options
 
-Match the rhythm. When the user ran `/burst 5` four times in a row,
-they are likely to keep wanting N=5; do not silently drop to the N=3
-default. Treat each `/burst` as a fresh invocation - distinct variants,
-labelled, with a pick - but read the cadence and pace with it.
+Match the rhythm. The user who ran `/burst 5` four times in a row is
+likely to keep wanting N=5. Do not silently drop to the N=3 default. Treat each `/burst` as a fresh invocation, with distinct
+variants, labelled, and a pick. But read the cadence and pace with it.
 
 ## Post-output behaviour (non-Phase, by design)
 

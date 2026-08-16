@@ -41,7 +41,7 @@ x-heading-routing:
 
 Manually sync the workspace using plain git. This replaced the retired
 `workspace-sync.py` mechanism (see
-`plans/2026-06-26-retire-workspace-sync-disk-import.md`): there is no longer a
+`plans/2026-06-26-retire-workspace-sync-disk-import.md`). There is no longer a
 copy-and-orphan-delete engine, no scheduled sync task, and no risk of the old
 "delete the engine tree" failure. Sync is now two simple, non-destructive
 operations.
@@ -78,8 +78,9 @@ operations.
    (refreshes `.corporate-repo/` on execs; no-ops on the CEO workspace). Show each
    result.
 3. For **backup**: run `python scripts/push-all.py` and show its output.
-4. For bare `/sync`: pull first, then backup.
-5. If a step fails, explain plainly and suggest a fix:
+4. For bare `/sync`: run the pull sequence first.
+5. Then run the backup.
+6. If a step fails, explain plainly and suggest a fix:
    - `git pull` non-fast-forward: "Local history diverged - reconcile manually
      (`git -C <root> status`) before syncing; /sync will not force or merge."
    - push-all secret-scan refusal: "A tracked file looks like it holds a secret -

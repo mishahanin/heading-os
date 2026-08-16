@@ -48,9 +48,9 @@ no external binaries.
 ## How it works
 
 `scripts/utils/chromium_cookies.py` reads and decrypts cookies for a domain directly
-from the browser's profile DB (DPAPI on Windows, libsecret on Linux, Keychain on
-macOS), per profile, per browser. This skill drives it per domain and assembles a
-Playwright-compatible `outputs/browser/cookies.json`.
+from the browser's profile DB, per profile and per browser. The decryption backend is
+DPAPI on Windows, libsecret on Linux, and Keychain on macOS. This skill drives it per
+domain and assembles a Playwright-compatible `outputs/browser/cookies.json`.
 
 ## Steps
 
@@ -94,8 +94,8 @@ Write the merged array to `outputs/browser/cookies.json` with the Write tool.
 
 ### 4. Confirm
 
-Tell the user: **"Imported N cookie(s) for <domain> into `outputs/browser/cookies.json`
-— Playwright will auto-load them for future browser commands."** Report only domain
+Tell the user: **"Imported N cookie(s) for <domain> into `outputs/browser/cookies.json`.
+Playwright will auto-load them for future browser commands."** Report only domain
 names and counts, never cookie values.
 
 ## NEVER

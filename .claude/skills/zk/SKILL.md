@@ -99,7 +99,7 @@ Create a new note in the personal knowledge directory.
    - strategy -> `{knowledge_root}odin-brain/principles/` or `positions/` (ask user)
    - people -> Redirect: "People intel belongs in CRM. Use `/crm add`."
    - technology -> `{knowledge_root}odin-brain/reference/`
-7. **Classification:** Ask "CEO-only or Corporate-wide?" (default: CEO-only; suggest Corporate for notes tagged `#propose-shared`). If classified as corporate, add a `corporate` rule for the file path to `config/routing-map.yaml` and note it should be promoted to `knowledge/shared/` during the next `/push-updates`.
+7. **Classification:** Ask "CEO-only or Corporate-wide?" (default: CEO-only; suggest Corporate for notes tagged `#propose-shared`). If classified as corporate, add a `corporate` rule for the file path to `config/routing-map.yaml`. Note that the next `/push-updates` should promote it to `knowledge/shared/`.
 8. Create the note file `{knowledge_root}{subdir}/{ID}-{slug}.md` with this template:
 
 > **Shared knowledge:** Execs can propose notes for corporate shared knowledge by tagging with `#propose-shared` in keywords. These are reviewed during `/publish-corporate`.
@@ -157,7 +157,8 @@ Read a seed or growing note, research it, add connections, and upgrade its statu
    - **strategy/decision**: Read `context/strategy.md` and `context/pipeline.md`. Add strategic alignment notes.
    - **meeting**: Check for related CRM interactions. Add follow-up context.
    - **fleeting**: Determine if it should be reclassified to a more specific type. Suggest reclassification.
-4. Search all knowledge directories (personal AND corporate shared for exec workspaces) for related notes sharing 2+ keywords. Add `[[ID|Title]]` wiki-links under Connections.
+4. Search all knowledge directories for related notes sharing 2+ keywords. That means personal, plus corporate shared on exec workspaces.
+5. Add `[[ID|Title]]` wiki-links under Connections.
 5. Search workspace files (`context/`, `reference/`, `crm/contacts/`) for relevant cross-references. Add backtick paths under Connections.
 6. Update frontmatter:
    - `status`: seed -> growing (or growing -> evergreen if sufficiently enriched)
@@ -279,7 +280,7 @@ Regenerate INDEX.md with current knowledge base statistics.
 Synthesize all notes related to a topic into a narrative summary. Searches both personal and corporate shared knowledge.
 
 1. Parse the topic from arguments
-2. Search all knowledge directories (personal AND corporate shared for exec workspaces) for all notes matching the topic (by keyword, title, or content). ALSO search `knowledge/odin-brain/principles/` and `knowledge/odin-brain/positions/` for files matching the topic by `domain` field or content.
+2. Search all knowledge directories for notes matching the topic by keyword, title, or content. On exec workspaces that means personal and corporate shared. ALSO search `knowledge/odin-brain/principles/` and `knowledge/odin-brain/positions/` for files matching the topic by `domain` field or content.
 3. Read each matching note
 4. Synthesize into a narrative summary structured as:
    - **What we know** - confirmed insights (evergreen + high confidence). Include matching Odin principles/positions tagged with `[Odin]`.
@@ -306,7 +307,7 @@ Synthesize all notes related to a topic into a narrative summary. Searches both 
 2. **Status lifecycle**: seed -> growing -> evergreen -> archived. Never skip stages. Gardening surfaces stuck notes.
 3. **Anti-dumping**: The knowledge base is not a filing cabinet. Every note must have a clear reason to exist and be worth revisiting. If it's purely operational, it belongs in `context/` or `memory/`.
 4. **Keyword consistency**: Before adding a new keyword, check existing keywords in the knowledge base. Prefer existing terms over synonyms to maintain a coherent tag cloud.
-5. **Bidirectional linking**: When adding a link from note A to note B, also add a reciprocal link from B to A.
+5. **Bidirectional linking**: after a link goes from note A to note B, add the reciprocal link from B to A.
 6. **Source attribution**: Always fill the `source` field. Use URLs, meeting names, "observation", or skill names (e.g., "/osint", "/ceo-intel").
 7. **Confidence honesty**: Set confidence based on source quality, not conviction. Unverified signals stay `unverified` until corroborated.
 8. **Zettlr compatibility**: Use `keywords` (not `tags`) in frontmatter. Use `[[ID|Label]]` wiki-links. These are Zettlr conventions.

@@ -110,8 +110,8 @@ python ".claude/skills/telegram/scripts/telegram_client.py" search "project upda
 ### Files & Media
 
 Files sent and downloaded are DATA artifacts in the DATA overlay, not the engine tree. The send-file
-source path and the download `--output` dir are passed to the script verbatim (relative to cwd = the
-engine root), so resolve them under the data outputs dir first -- a bare `outputs/...` would point at
+source path and the download `--output` dir reach the script verbatim, relative to cwd, which is the
+engine root. So resolve them under the data outputs dir first. A bare `outputs/...` would point at
 the empty engine tree:
 
 ```bash
@@ -127,7 +127,7 @@ explicit `$OUTPUTS_DIR/...` keeps the destination obvious.
 
 ## Full Command Reference
 
-For detailed usage of all 15 commands (setup, verify, send, read, chats, unread, search, send-file, download, info, reply, forward, contacts, mark-read, delete), see [references/commands.md](references/commands.md) -- includes argument tables, examples, and chat identifier resolution logic.
+For detailed usage of all 15 commands, see [references/commands.md](references/commands.md). The commands are setup, verify, send, read, chats, unread, search, send-file, download, info, reply, forward, contacts, mark-read, and delete. The reference carries argument tables, examples, and chat identifier resolution logic.
 
 ## Output Modes
 

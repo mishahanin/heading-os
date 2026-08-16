@@ -6,7 +6,8 @@
       "source": "ast-grep/agent-skill",
       "sourceType": "github",
       "skillPath": ".claude/skills/ast-grep/SKILL.md",
-      "computedHash": "0a34084d2b0e62f9b5b823d653e08d23fd34ae464428a6a3d2509fd59d515776"
+      "computedHash": "819a0e0cccf1972995a07334deec63b271d9939a69c1d758f416ae4b1409432a",
+      "note": "In-repo copy carries a documentation-style adaptation (one 41-word sentence split in three, per .claude/rules/documentation-style.md). Re-apply it after any re-vendor from upstream, then --relock."
     },
     "frontend-design": {
       "source": "anthropics/skills",

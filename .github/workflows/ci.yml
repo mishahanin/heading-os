@@ -77,6 +77,13 @@ jobs:
         # in-scope set; the warnings are heuristics with no part-of-speech tagger
         # behind them, so --strict would gate on guesses.
         run: uv run python scripts/ste-check.py --all --quiet
+      - name: Documentation style - skill bodies (ASD-STE100 subset, errors only)
+        # The other half of the rule's scope, armed 2026-08-17. Until then `--all`
+        # covered twelve pages and the ninety-six skill bodies went unmeasured, so
+        # a green `--all` read as a green corpus. No vendored exemption: the one
+        # vendored skill was adapted and re-locked, because an exemption hides a
+        # file's debt permanently.
+        run: uv run python scripts/ste-check.py --skills --quiet
       - name: Canopus record check (reports, does not block a direct push)
         # The name is the honest limit, and it is not modesty. `enforce_admins`
         # is false on the only push path in use, so a required check cannot

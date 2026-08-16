@@ -9,6 +9,7 @@ Run: python3 -m pytest tests/test_ste_check.py
 """
 import fnmatch
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -59,13 +60,17 @@ def test_scope_resolves_to_existing_files(ste):
     assert all(p.exists() for p in resolved)
 
 
-def _documentation_style_hook():
+def _hook(hook_id):
     config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
     for repo in config["repos"]:
         for hook in repo.get("hooks", []):
-            if hook.get("id") == "documentation-style":
+            if hook.get("id") == hook_id:
                 return hook
     return None
+
+
+def _documentation_style_hook():
+    return _hook("documentation-style")
 
 
 def test_the_gate_is_armed_in_pre_commit_and_ci():
@@ -94,6 +99,62 @@ def test_the_hook_fires_on_exactly_the_files_the_checker_audits(ste):
     uncovered = [g for g in ste.CHECKED_GLOBS if not pattern.search(g)]
     assert not uncovered, (
         f"these audited pages do not trigger the pre-commit gate: {uncovered}"
+    )
+
+
+def test_the_skill_corpus_is_gated_too(ste):
+    """The other half of the rule's scope earned its gate on 2026-08-17.
+
+    `--all` covered twelve pages while the rule also governs ninety-six skill
+    bodies, so a green `--all` read as a green corpus for as long as the skill
+    half went unmeasured. It measured 300, of which 83 were splitter defects and
+    217 were real; the corpus is at zero, so the gate can hold it there.
+
+    Errors only, for the same reason `--all` is errors only: the warning checks
+    are heuristics without a part-of-speech tagger behind them.
+    """
+    hook = _hook("documentation-style-skills")
+    assert hook, "the skill-corpus pre-commit hook is gone"
+    assert "--skills" in hook["entry"] and "--strict" not in hook["entry"]
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "scripts/ste-check.py --skills" in ci, "the CI step is gone"
+
+
+def test_the_skills_hook_fires_on_every_skill_body(ste):
+    """A `files:` pattern narrower than the resolved corpus is an unguarded skill.
+
+    The hook runs `--skills` rather than the staged paths, so its pattern decides
+    only WHEN the gate runs. A skill outside the pattern can be edited and
+    committed without the gate firing once.
+    """
+    import re
+
+    pattern = re.compile(_hook("documentation-style-skills")["files"])
+    uncovered = [
+        p.relative_to(ROOT).as_posix()
+        for p in ste.resolve_skill_scope()
+        if not pattern.search(p.relative_to(ROOT).as_posix())
+    ]
+    assert not uncovered, f"these skills do not trigger the gate: {uncovered}"
+
+
+def test_the_vendored_skill_is_gated_like_any_other(ste):
+    """No exemption. The one vendored skill was fixed instead of carved out.
+
+    An exemption would have hidden a vendored skill's style debt forever, and
+    the whole point of arming this gate was that unmeasured is not clean. The
+    in-repo copy is what `skills-lock.json` pins -- the lock protects the copy
+    that ships, not upstream's bytes, and `--relock` is a supported operation --
+    so adapting it is a re-lock, not a fork. The lock's `note` field carries the
+    instruction to re-apply the adaptation after a re-vendor.
+    """
+    vendored = ROOT / ".claude" / "skills" / "ast-grep" / "SKILL.md"
+    assert vendored in ste.resolve_skill_scope(), "the vendored skill fell out of scope"
+
+    lock = json.loads((ROOT / "skills-lock.json").read_text(encoding="utf-8"))
+    note = lock["skills"]["ast-grep"].get("note", "")
+    assert "re-vendor" in note.lower(), (
+        "the lock must tell a re-vendor to re-apply the style adaptation"
     )
 
 

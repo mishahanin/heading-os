@@ -51,7 +51,7 @@ x-heading-routing:
 
 ## Overview
 
-This skill helps translate natural language queries into ast-grep rules for structural code search. ast-grep uses Abstract Syntax Tree (AST) patterns to match code based on its structure rather than just text, enabling powerful and precise code search across large codebases.
+This skill helps translate natural language queries into ast-grep rules for structural code search. The ast-grep tool uses Abstract Syntax Tree (AST) patterns to match code by its structure rather than its text. This makes code search precise across large codebases.
 
 ## When to Use This Skill
 

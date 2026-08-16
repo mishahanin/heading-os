@@ -320,6 +320,22 @@ repos:
         files: '^(docs/(QUICKSTART|DEPLOYMENT|INTEGRATIONS-SETUP|MODELS-SETUP|CONFIGURATION|TROUBLESHOOTING|EMERGENCY-PROCEDURES|MAKE-IT-YOURS|PLUGINS|HOOKS-REFERENCE|DOCS-PIPELINE|GLOSSARY)\.md|scripts/ste-check\.py)$'
         pass_filenames: false
 
+      # The other half of the rule's scope (2026-08-17). `--all` covered twelve
+      # pages while the rule also governs ninety-six skill bodies, so a green
+      # `--all` read as a green corpus for as long as the skill half went
+      # unmeasured. It measured 300 errors, of which 83 were defects in the
+      # checker's own sentence splitter and 217 were real. The corpus is at zero,
+      # so the gate can hold it there. No vendored exemption: the one vendored
+      # skill was adapted and re-locked instead, because an exemption hides a
+      # file's debt permanently and unmeasured is exactly what this gate exists
+      # to end. Errors only, like its sibling above.
+      - id: documentation-style-skills
+        name: Documentation style - skill bodies (ASD-STE100 subset, errors only)
+        entry: python3 scripts/ste-check.py --skills --quiet
+        language: system
+        files: '^(\.claude/skills/.+/SKILL\.md|scripts/ste-check\.py)$'
+        pass_filenames: false
+
   # README numbers guard (F-8.3) -- re-derives the security-test + guard-layer counts
   # and fails if README.md or docs/index.html "By the numbers" disagrees. Runs through
   # `uv run` so the pytest collection of tests/security sees the locked dependency set

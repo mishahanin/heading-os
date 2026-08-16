@@ -81,12 +81,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   a test says so, because that is the one rule here with a physical cost when
   it breaks.
 
-  The real debt was 217 errors across 74 skills, and the corpus now stands at
-  **1**: `.claude/skills/ast-grep/SKILL.md`, vendored from upstream and pinned by
-  content hash in `skills-lock.json`, so rewriting a sentence there would fork
-  upstream in silence. `--skills` is still not a gate — arming one needs an
-  explicit vendored-skill exemption, which is a decision, not a checker's call.
-  The twelve `--all` pages stayed at zero throughout.
+  The real debt was 217 errors across 74 skills, the corpus is now at **zero**,
+  and `--skills` is a gate: a `documentation-style-skills` pre-commit hook and a
+  CI step, errors only, like its `--all` sibling. The twelve `--all` pages stayed
+  at zero throughout.
+
+  No vendored exemption. The last error sat in the vendored
+  `.claude/skills/ast-grep/SKILL.md` and read as untouchable, which was wrong:
+  `skills-lock.json` hashes the copy that SHIPS here rather than upstream's
+  bytes, the in-repo copies are already lightly adapted, and `--relock` is a
+  supported operation. The sentence was split, the tree re-locked, and the lock's
+  `note` now tells a re-vendor to re-apply the adaptation. An exemption would
+  have hidden one file's debt permanently, which is the same
+  unmeasured-therefore-clean failure the gate exists to end.
 
 - **Three sessions on one workspace were treated as one session.** Every path
   below the workspace root was shared: one `.claude/state/checkpoint-state.json`

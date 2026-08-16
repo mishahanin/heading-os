@@ -51,8 +51,11 @@ Pre-meeting briefing with talking points, relationship context, and strategic ob
 ## Variables
 
 with: [Who — name, title, company]
+
 purpose: [Meeting purpose — partnership discussion, investor pitch, government meeting, customer demo, technical review]
+
 date: [When — for timeline context]
+
 format: in-person | video | phone — default: video
 context: [Any additional context — how did this meeting come about, what happened last time, what's at stake]
 
@@ -70,7 +73,7 @@ Before preparing, read:
 - `reference/search-domains.md` — Domain filtering for web searches
 - `outputs/intel/cases/[target-slug].md` — IF a forensic case file exists for this counterpart or their company (written by `/osint` or `/competitor-intel`). Read it to inherit prior hypotheses and their evidence grades. This skill is a **read-only consumer** of the case file — surface the top graded claims, never write or modify it. Grading spec: `reference/forensic-evidence-grading.md`.
 
-When you surface a claim drawn from the case file in "Their World Right Now" or "Competitive Context", carry its evidence grade so Misha knows what is Confirmed versus merely Hypothesized walking into the room.
+When you surface a claim drawn from the case file, carry its evidence grade with it. That applies in "Their World Right Now" and in "Competitive Context". Misha then knows what is Confirmed versus merely Hypothesized walking into the room.
 
 ---
 
@@ -140,8 +143,9 @@ All three files go in the same output directory (e.g., `outputs/operations/meeti
 
 Brain-gated. IF on the CEO workspace AND `knowledge/odin-brain/` exists, cite the Odin principles relevant to this counterpart against the live deal. Otherwise SKIP this phase entirely - no error, no mention (exec workspaces have no Odin brain, so the step is inert there).
 
-1. Read the contact's `relevant_principles` frontmatter (if present), and/or run `python scripts/odin-principles.py --type <relationship_type> --stage <stage> --json` (stage derived from the pipeline row matched via `pipeline_company`).
-2. Cite up to 3 of the returned principles inline by `title`, framed against the named counterpart: "For this <deal>, Odin's `<slug>` applies because ...". Place the block in `briefing.md` (and the HTML body) ahead of the Brain audit footer.
+1. Read the contact's `relevant_principles` frontmatter (if present), run `python scripts/odin-principles.py --type <relationship_type> --stage <stage> --json`, or do both. Derive the stage from the pipeline row matched via `pipeline_company`.
+2. Cite up to 3 of the returned principles inline by `title`, framed against the named counterpart. The form is "For this <deal>, Odin's `<slug>` applies because ...".
+3. Place the block in `briefing.md` (and the HTML body) ahead of the Brain audit footer.
 3. Fabrication floor: cite ONLY what the helper returns. If it returns nothing, write "No Odin principle matched this relationship domain" and move on - never invent a principle.
 
 Single hyphens; ODUN.ONE / DPI+ / Tribe terminology.
@@ -153,7 +157,7 @@ After producing the meeting briefing, invoke `/brain-audit` with:
 - `--sources`: comma-separated list of every file you read during prep (CRM contact, pipeline row, thread entries, OSINT outputs, etc.)
 - `--entity`: the counterpart's full name (and company if relevant, e.g., "Tamsin Okonkwo (Nimbus)")
 
-Append the returned three-section footer (`## Brain audit`) to the end of `briefing.md` and to the end of the HTML body. Do not duplicate the audit across the three output formats; the MD and HTML share the same audit block, and the PDF inherits it from the HTML render.
+Append the returned three-section footer (`## Brain audit`) to the end of `briefing.md` and to the end of the HTML body. Do not duplicate the audit across the three output formats. The MD and HTML share the same audit block, and the PDF inherits it from the HTML render.
 
 The audit reports newest-source dates, modality coverage for the counterpart, and disagreements among the cited sources. If it flags staleness or coverage gaps, mention them in the chat summary alongside the briefing file paths.
 
@@ -166,4 +170,4 @@ After preparing the meeting brief:
 
 ## Knowledge Base
 
-After meeting prep is complete, offer: "After the meeting, capture the key takeaways: `/odin log` records an episode in Odin's brain (CEO-only); `/zk distill` adds them to the knowledge base."
+After meeting prep is complete, offer this: "After the meeting, capture the key takeaways. The `/odin log` command records an episode in Odin's brain (CEO-only). The `/zk distill` command adds them to the knowledge base."

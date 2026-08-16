@@ -62,7 +62,7 @@ Independent second opinions dispatched in parallel. Use when:
 - The user wants fresh views on a hard call (independent mode)
 - The user wants a draft stress-tested before it ships (critique mode)
 
-This skill is distinct from `/deep-think` (Claude reasoning harder, alone) and `/odin` (Claude + the curated knowledge brain). The unique value is a model with a different training pedigree, different RLHF, and different failure modes reaching the question independently — agreement is stronger evidence, disagreement is itself information. `--all` restores the three-model roster when breadth matters more than latency.
+This skill is distinct from `/deep-think` (Claude reasoning harder, alone) and `/odin` (Claude + the curated knowledge brain). The unique value is a model with a different training pedigree, different RLHF, and different failure modes reaching the question independently. Agreement is stronger evidence, and disagreement is itself information. `--all` restores the three-model roster when breadth matters more than latency.
 
 ---
 
@@ -100,7 +100,7 @@ For CRITIQUE mode, prepare:
 Scan the user's invocation text for model-selection flags.
 
 **Default roster = Kimi (k3) only.** The council is therefore Opus 5 (Claude's own view,
-formed in-session) plus one deep external reasoner. Set by the CEO on 2026-07-25; Gemini
+formed in-session) plus one deep external reasoner. Set by the CEO on 2026-07-25. Gemini
 and Grok stay implemented and are one flag away, so restoring the wider roster is a
 one-word change, not a rebuild.
 
@@ -145,16 +145,16 @@ python scripts/kimi-consult.py   --mode critique --draft '...' --context '...' -
 ```
 
 **Kimi voice runs the deep model (k3), and ONLY k3.** Dispatch it with the explicit
-`--model k3` shown above, NOT `python scripts/council-models.py --get kimi` — that pin
-stays `kimi-for-coding` and is reserved for other callers' fast path. k3 always thinks and
-ignores `--temperature`; give it `--max-tokens` head-room (12000, as shown). Before
+`--model k3` shown above, NOT `python scripts/council-models.py --get kimi`. That pin
+stays `kimi-for-coding` and is reserved for other callers' fast path. The k3 model always
+thinks and ignores `--temperature`; give it `--max-tokens` head-room (12000, as shown). Before
 dispatch, check `cliproxy models` for `k3`.
 
-**If k3 is absent, SKIP the Kimi voice.** Do not silently fall back to `kimi-for-coding`
-(the 2.6/2.7 line): a shallower model answering in the deep model's name is a quality
-substitution nobody consented to, and on the default roster it would be the council's only
-external voice. Say plainly `kimi voice: k3 unavailable, skipped`, and since that empties
-the default roster, stop rather than presenting Claude's own view as a council.
+**If k3 is absent, SKIP the Kimi voice.** Do not silently fall back to `kimi-for-coding`,
+the 2.6/2.7 line. A shallower model answering in the deep model's name is a quality
+substitution nobody consented to. On the default roster it would also be the council's only
+external voice. Say plainly `kimi voice: k3 unavailable, skipped`. That empties the default
+roster, so stop rather than presenting Claude's own view as a council.
 
 Optional model overrides (these take **proxy** ids — check `cliproxy models` for valid values):
 - `--gemini-model gemini-2.5-flash` — passed to the Gemini call as `--model gemini-2.5-flash`
@@ -183,7 +183,7 @@ If at least one model SUCCEEDED, proceed to Phase 3.
 
 ## Phase 3 - Formulate Claude's view
 
-After reading the verbatim responses captured in Phase 2 (whichever models succeeded — could be Gemini, Grok, Kimi, or any subset of them), write Claude's own view on the question or draft. Reach a real position independently of what any outside model said — don't just react to them.
+Read the verbatim responses captured in Phase 2, from whichever models succeeded. That may be Gemini, Grok, Kimi, or any subset of them. Then write Claude's own view on the question or draft. Reach a real position independently of what any outside model said — don't just react to them.
 
 Claude's view should be 3-5 bullets covering: position, key reasons, main risk Claude sees. (Tightened from 3-7 in Phase 1 — three views in one output need shorter bullets to stay readable.)
 
@@ -293,7 +293,7 @@ The script prints `recorded: ... tally: N recorded - claude=X, gemini=Y, grok=Z,
 
 Then run `python scripts/council-aggregate.py` (no flags) to rebuild `outputs/operations/council/_aggregate.md` from the updated JSONL. This is the ONLY supported way verdicts enter the system - the CEO never opens the aggregate or the JSONL.
 
-If the CEO has not yet replied when you would otherwise close out (e.g., they went silent or moved to another task), do not record anything. The verdict stays pending until they answer or another /council run prompts them again. Pending verdicts are reflected in the aggregate as `_(pending CEO verdict)_`.
+The CEO may not have replied when you would otherwise close out, because they went silent or moved to another task. In that case, do not record anything. The verdict stays pending until they answer or another /council run prompts them again. Pending verdicts are reflected in the aggregate as `_(pending CEO verdict)_`.
 
 ---
 

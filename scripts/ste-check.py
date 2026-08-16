@@ -190,6 +190,11 @@ def strip_noise(text):
     text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", " ", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"https?://\S+", " ", text)
+    # A blockquote marker is structure, like a list bullet. Left in place it
+    # lands between a period and the next capital, where the sentence splitter's
+    # lookahead does not accept it, so every sentence ending at a wrapped
+    # blockquote line merged with the one below and measured over the limit.
+    text = re.sub(r"(?m)^[ \t]*>+[ \t]?", "", text)
     return text
 
 

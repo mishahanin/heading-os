@@ -86,9 +86,9 @@ CEO-only. Not synced to executives.
 
    This is incremental — it embeds only changed files and updates the gitignored
    `.memory-index/` cache. It is NOT a workspace write. **If ollama is down**, the
-   build prints an embedding error; do not fail — note "index not refreshed
-   (ollama down), recalling from the existing index" in one line and continue to
-   the query against whatever is already indexed.
+   build prints an embedding error. Do not fail. Note "index not refreshed
+   (ollama down), recalling from the existing index" in one line, then query
+   whatever is already indexed.
 
 2. **Query with JSON output:**
 
@@ -110,7 +110,7 @@ Parse the JSON. It is one object:
 - **Gap** (`{"hits": [], "gap": true, "best": <float>, "threshold": <float>}`):
   there is no match above the salience threshold. **Say so plainly** — e.g.
   "Not in memory: nothing above the recall threshold for that (closest match
-  scored {best} vs {threshold})." Do NOT pad, do NOT speculate, do NOT answer
+  scored {best} vs {threshold})." Do NOT pad and do NOT speculate. Do NOT answer
   from your own prior knowledge. Optionally name the nearest layer or suggest a
   rephrase or `--collection all`. Stop here.
 
@@ -120,9 +120,9 @@ Parse the JSON. It is one object:
   material anyway because it sat within the near-miss margin, not because it
   answers the question. Say so plainly — "No confident match in memory for
   that; nearest by similarity: <titles>, relevance not established." List the
-  `title`/`path` pairs as **possible leads only**. Do NOT read the files and do
-  NOT compose an answer from them unless the user explicitly asks to go deeper
-  ("check that anyway", "open it", "read it"). Stop here.
+  `title`/`path` pairs as **possible leads only**. Do NOT read the files, and do
+  NOT compose an answer from them. Read them only when the user explicitly asks
+  to go deeper ("check that anyway", "open it", "read it"). Stop here.
 
 - **Hits** (`{"hits": [ {path,title,layer,ntype,classification,collection,score,channels}, ... ], "gap": false}`,
   no `near_miss` key — confident matches):
@@ -176,8 +176,8 @@ python3 scripts/memory-index.py query "<the user's question>" --collection chron
 
 ## Phase 1.6 — Personal chronicle (EXPLICIT opt-in ONLY)
 
-Personal-life sessions are air-gapped: the `personal` path segment is a
-hard-coded deny, so personal chronicle is in NO persistent index and is NEVER
+Personal-life sessions are air-gapped. The `personal` path segment is a
+hard-coded deny, so personal chronicle is in NO persistent index. It is NEVER
 part of the default recall, Phase 1.5, `--collection all`, or auto-inject.
 
 Run a personal-chronicle search **only when the user explicitly asks for it** —
@@ -192,7 +192,7 @@ This reads `chronicle/personal/*.md` ON THE FLY, scores locally (bge-m3, lexical
 fallback), and persists NOTHING. Present the dated hits tagged `[Личное <date>]`,
 clearly historical, never as a current fact. If it returns no match, say so
 plainly. Do NOT run this pass in the same breath as an outbound draft unless the
-user asked for it — the whole point of the wall is to keep personal life out of
+user asked for it. The whole point of the wall is to keep personal life out of
 send-capable contexts unless summoned.
 
 ## Phase 2 — Source list

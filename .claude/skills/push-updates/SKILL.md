@@ -71,7 +71,7 @@ x-heading-routing:
    ```
    This LLM-judge tests only the skills whose `SKILL.md`/`triggers.json` changed since `origin/main` (a `skill-router.md` change widens to all). Handle the exit code:
    - **0** - proceed (no routing change, or all changed skills route correctly).
-   - **1** - below threshold, OR a changed skill the judge never returned a verdict for. Read which: `MISS` lines are routing regressions; `NO VERDICT` / `Unmeasured` lines mean the judge failed, not the router, and are a reason to re-run rather than to redraw a trigger. Surface either to the CEO and ask for an explicit "proceed anyway" before continuing. Do NOT auto-block - this is a soft gate.
+   - **1** - below threshold, OR a changed skill the judge never returned a verdict for. Read which. `MISS` lines are routing regressions. `NO VERDICT` and `Unmeasured` lines mean the judge failed, not the router. Re-run in that case, rather than redrawing a trigger. Surface either to the CEO and ask for an explicit "proceed anyway" before continuing. Do NOT auto-block - this is a soft gate.
    - **3** - no `ANTHROPIC_API_KEY`. Print a one-line warning that the routing check was skipped and proceed (never block publish on a missing key).
    - **2** - setup error. Surface it and pause.
 
@@ -96,7 +96,7 @@ x-heading-routing:
    python scripts/publish-corporate.py --preview
    ```
 
-   The script enumerates all git-tracked workspace files, resolves each per `config/routing-map.yaml` (most-specific rule wins, else the `engine` default), and publishes ONLY files whose three-value routing destination is `corporate` (content, not code — post-cutover, step 8, 2026-06-14). Engine code is NOT published; execs receive it by cloning the engine repo (`.heading-os`). It groups the corporate-routed files into NEW / MODIFIED / UNCHANGED / MISSING-IN-SOURCE buckets. Untracked corporate-routed files trigger a hard warning.
+   The script enumerates all git-tracked workspace files and resolves each per `config/routing-map.yaml`, where the most-specific rule wins, else the `engine` default. It publishes ONLY files whose three-value routing destination is `corporate` (content, not code — post-cutover, step 8, 2026-06-14). Engine code is NOT published; execs receive it by cloning the engine repo (`.heading-os`). It groups the corporate-routed files into NEW / MODIFIED / UNCHANGED / MISSING-IN-SOURCE buckets. Untracked corporate-routed files trigger a hard warning.
 
 2. **Show preview to CEO** in the standard format:
 
@@ -130,18 +130,18 @@ x-heading-routing:
    - Exits non-zero with diagnostic on any mismatch (exit 7).
    - Surfaces orphan files (corporate-classified files missing from ceo-main) as a warning - never auto-deletes from corporate.
 
-5. **NEVER hand-type the file list** or write ad-hoc Python inline. Use the script as the single source of truth. If the script's classification logic is wrong for a specific case, add a rule to `config/routing-map.yaml` rather than working around the script.
+5. **NEVER hand-type the file list** or write ad-hoc Python inline. Use the script as the single source of truth. If the script's classification logic is wrong for a specific case, add a rule to `config/routing-map.yaml`. Never work around the script.
 
 > **R16 Layer 2 (staged rollout) — current state.** Publish still targets `main`
 > directly (this Phase 3), so non-canary execs keep receiving updates unchanged.
-> The two-stage flow is built and additive: `scripts/publish-corporate.py --bump-build`
+> The two-stage flow is built and additive. `scripts/publish-corporate.py --bump-build`
 > increments BUILD.json without a manual edit, `/promote-corporate` gates a
 > `staging -> main` fast-forward after canary soak, and `/rollback-corporate` reverts
-> a bad build. The cutover (flip publish to push `staging`, bump-on-every-staging-push,
-> drop the manual bump here) is a human-gated step pending: GPG signing key + GitHub
-> branch protection on `heading-os-corporate/main` + canary activation on the canary exec
-> (`admin/provision/provision_exec.py --canary`). Until that cutover, keep bumping BUILD.json on `main`
-> as below.
+> a bad build. The cutover flips publish to push `staging`, bumps on every staging
+> push, and drops the manual bump here. It is a human-gated step, pending a GPG
+> signing key, GitHub branch protection on `heading-os-corporate/main`, and canary
+> activation on the canary exec (`admin/provision/provision_exec.py --canary`).
+> Until that cutover, keep bumping BUILD.json on `main` as below.
 
 ### Phase 3: Build & Release
 

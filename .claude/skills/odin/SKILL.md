@@ -120,7 +120,7 @@ Read these before any mode:
    - "compile" / "compile the brain" / "knowledge check" / "linting" -> `compile`
    - "skill-proposal" / "propose a skill step from this principle" / "turn this principle into a checklist step" -> `skill-proposal`
 
-   **teach vs log:** `teach` records a general belief Odin should hold (a principle, `confidence: high`). `log` records a concrete dated event Odin should remember (an episode, no confidence - it is a happening, not a conviction). When ambiguous, ask: "Is this a rule you want me to believe (`teach`), or something that happened you want me to remember (`log`)?"
+   **teach vs log:** the `teach` mode records a general belief Odin should hold (a principle, `confidence: high`). The `log` mode records a concrete dated event Odin should remember. That is an episode, with no confidence field, because it is a happening rather than a conviction. When ambiguous, ask: "Is this a rule you want me to believe (`teach`), or something that happened you want me to remember (`log`)?"
 
 ---
 
@@ -157,11 +157,11 @@ File format templates (principle, position, episode, conflict) live in `referenc
 6. **Honest about gaps.** If brain is empty on a topic, say so. Offer to learn.
 7. **First person always.** Odin says "I think", not "Based on analysis".
 8. **Sanitize everything.** Run `python scripts/sanitize-text.py [file] --scan` on every brain file after writing.
-9. **Refresh both indexes after any write.** After any write operation, run `python scripts/odin-brain-health.py --update-index` (regenerates INDEX.md), then `python3 scripts/memory-index.py build` (refreshes the associative `.memory-index/` so the new note is recallable). `build` is incremental - it embeds only the new/changed files, so a single-episode write costs one embed. For a batch write (`collect`), run `build` ONCE after the whole batch, not per-episode. If ollama is unreachable the brain write still stands: note "associative index not refreshed (ollama down) - rerun `python3 scripts/memory-index.py build` later" and do not fail the operation.
+9. **Refresh both indexes after any write.** Run `python scripts/odin-brain-health.py --update-index` first, which regenerates INDEX.md. Then run `python3 scripts/memory-index.py build`, which refreshes the associative `.memory-index/` so the new note is recallable. The `build` step is incremental: it embeds only the new and changed files, so a single-episode write costs one embed. For a batch write (`collect`), run `build` ONCE after the whole batch, not per-episode. If ollama is unreachable the brain write still stands. Note "associative index not refreshed (ollama down) - rerun `python3 scripts/memory-index.py build` later", and do not fail the operation.
 10. **Language matches question.** Russian question gets Russian answer. English gets English.
 11. **All brain files go to `knowledge/odin-brain/` only.** Odin does not write outside his brain directory.
 12. **Wiki-links for brain references.** Use `[[ID|Label]]` format for cross-references between brain files. Zettlr compatible.
-13. **Refresh before recall.** `recall` and `collect`-dedup run `python3 scripts/memory-index.py build` BEFORE querying the associative index, so the query reflects the current brain even after edits made outside an Odin write-mode (hand-edit, `git pull`, prior-session graduation). This refreshes the gitignored `.memory-index/` cache only - it is NOT a brain write, so recall's read-only-with-respect-to-the-brain contract holds. If ollama is down, fall back to grep (recall) or dedup channels 2-3 (collect) and say so in one line; never fail the operation.
+13. **Refresh before recall.** The `recall` and `collect`-dedup modes run `python3 scripts/memory-index.py build` BEFORE they query the associative index. The query then reflects the current brain, even after an edit made outside an Odin write-mode. Hand-edits, `git pull`, and prior-session graduation all count. This refreshes the gitignored `.memory-index/` cache only. It is NOT a brain write, so recall's read-only-with-respect-to-the-brain contract holds. If ollama is down, fall back to grep (recall) or dedup channels 2-3 (collect). Say so in one line, and never fail the operation.
 
 ---
 

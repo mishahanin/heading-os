@@ -138,6 +138,47 @@ def test_a_sentence_boundary_after_emphasis_still_splits(ste):
     assert len(ste.split_sentences("Alpha bravo. _Charlie delta._ Echo foxtrot.")) == 3
 
 
+def test_a_blockquote_marker_is_not_read_as_prose(ste):
+    """`>` at the start of a wrapped blockquote line is structure, not a word.
+
+    The splitter's lookahead accepts a capital, a bracket, a quote or an
+    emphasis marker, and `>` is none of them. So every sentence that ENDED at a
+    blockquote line break merged with the sentence on the next line, and the
+    joined pair measured over the limit. Found 2026-08-17 in
+    `.claude/skills/push-updates/SKILL.md`, where a four-sentence R16 callout
+    measured as two sentences of 39 and 31 words. Same family as the emphasis
+    boundary above: the corpus was being rewritten to satisfy a broken
+    measurement.
+    """
+    quoted = (
+        "> Alpha bravo charlie delta echo foxtrot golf hotel india.\n"
+        "> Juliett kilo lima mike november oscar papa quebec romeo.\n"
+        "> Sierra tango uniform victor whiskey xray yankee zulu.\n"
+    )
+    units = ste.parse_units(ste.strip_noise(quoted))
+    assert len(units) == 1, "the callout should still read as one paragraph"
+    assert len(ste.split_sentences(units[0]["text"])) == 3, (
+        "the blockquote marker blocks the sentence split"
+    )
+    assert not [f for f in ste.audit(quoted)["findings"] if f["severity"] == "error"]
+
+
+def test_the_warning_callout_check_survives_marker_stripping(ste):
+    """Stripping `>` must not disarm rule 8, the one with a physical cost.
+
+    `check_warning_at_end` reads the same prepared text, and its callout regex
+    matched on the `>` prefix among others. A warning that closes a procedure is
+    still a warning after the marker is gone.
+    """
+    text = (
+        "## Procedure\n\n"
+        "1. Open the valve.\n"
+        "2. Close the valve.\n"
+        "> **Warning:** the line is pressurised.\n"
+    )
+    assert "warning_at_end" in types_in(ste.audit(text))
+
+
 def test_the_split_does_not_fire_on_an_abbreviation(ste):
     """The guard that was already there must survive the widened lookahead."""
     assert len(ste.split_sentences("Read the SKILL.md file for the spec.")) == 1

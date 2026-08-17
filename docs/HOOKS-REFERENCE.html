@@ -204,7 +204,7 @@
 <tr>
 <td><code>checkpoint-precompact.py</code></td>
 <td><code>PreCompact</code></td>
-<td>Tells the summariser what to keep and what to drop, and appends facts read from the tree: the branch, the working tree, the files this session wrote, the plan&rsquo;s first unchecked item. Runs on an automatic compaction as well as a typed one. Writes nothing, and never blocks the compaction.</td>
+<td>Tells the summariser what to keep and what to drop, and appends six facts read from the tree: the branch, the working tree, the last five commits, the files this session wrote, this session&rsquo;s handoff pointer, and the most recently modified plan file. Runs on an automatic compaction as well as a typed one. Writes nothing, and never blocks the compaction.</td>
 </tr>
 <tr>
 <td><code>checkpoint-save.py</code></td>

@@ -402,6 +402,240 @@ def _unattended(env, session, value):
     )
 
 
+def _offer_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("offer_mod", OFFER)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["offer_mod"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _cp():
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from scripts.utils import checkpoint_paths as CP
+
+    return CP
+
+
+def _wrote(tmp_path: Path, files: list[Path]) -> Path:
+    """A transcript claiming this session wrote exactly these files."""
+    path = tmp_path / "written.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps({"message": {"content": [
+                {"type": "tool_use", "name": "Edit", "input": {"file_path": str(f)}}
+            ]}})
+            for f in files
+        ) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.parametrize("consumer", ["remove", "dequeue", "popAll"])
+def test_every_consuming_queue_operation_empties_the_queue(tmp_path, consumer):
+    """The harness has FOUR queue operations, and the first version knew two.
+
+    Counting `enqueue` against `remove` alone reads a phantom pending message in
+    any session where the harness consumed one by `dequeue`. Measured across all
+    44 transcripts for this project: 660 enqueue, 422 remove, 231 dequeue, 1
+    popAll - false-positive in 28 of the 44. A false positive here is not a
+    cosmetic defect: `_wait_out_the_grace` returns at once, the run halts at its
+    first pause, and it leaves no continuation, no stall record and no notice.
+    """
+    mod = _offer_module()
+    transcript = tmp_path / "queue.jsonl"
+    transcript.write_text("\n".join(json.dumps(entry) for entry in [
+        {"type": "queue-operation", "operation": "enqueue",
+         "sessionId": SESSION_A, "content": "wait, I am here"},
+        {"type": "queue-operation", "operation": consumer, "sessionId": SESSION_A},
+    ]) + "\n", encoding="utf-8")
+
+    assert mod._queue_pending(transcript, SESSION_A) is False, (
+        f"a queue consumed by {consumer!r} still reads as pending, which halts "
+        "the mode in the majority of real sessions"
+    )
+
+
+def test_an_unconsumed_message_still_reads_as_pending(tmp_path):
+    """The other direction: this must not become a way to ignore the operator."""
+    mod = _offer_module()
+    transcript = tmp_path / "queue.jsonl"
+    transcript.write_text(json.dumps(
+        {"type": "queue-operation", "operation": "enqueue",
+         "sessionId": SESSION_A, "content": "stop"}
+    ) + "\n", encoding="utf-8")
+
+    assert mod._queue_pending(transcript, SESSION_A) is True
+
+
+def test_a_sibling_write_does_not_reset_the_no_progress_fuse(tmp_path):
+    """The fuse must measure THIS session, or an overnight run never stalls.
+
+    Another session, a daemon, or a PostToolUse hook writing one file between two
+    pauses moved `git status --short`, so the fingerprint changed and the stall
+    counter went back to zero. A run with nothing left to do then reached the
+    100-continuation ceiling inventing work.
+    """
+    CP = _cp()
+    project = tmp_path / "p"
+    project.mkdir()
+    mine = project / "mine.py"
+    mine.write_text("A\n", encoding="utf-8")
+    payload = {"transcript_path": str(_wrote(tmp_path, [mine]))}
+
+    before = CP.progress_fingerprint(project, payload)
+    (project / "theirs.py").write_text("B\n", encoding="utf-8")
+
+    assert CP.progress_fingerprint(project, payload) == before, (
+        "a file this session never wrote moved this session's progress fuse"
+    )
+
+
+def test_a_second_edit_of_my_own_file_does_move_the_fuse(tmp_path):
+    """And the opposite failure: the count could not see it, so real work that
+    stayed inside files already written read as three dead continuations."""
+    CP = _cp()
+    project = tmp_path / "p"
+    project.mkdir()
+    mine = project / "mine.py"
+    mine.write_text("A\n", encoding="utf-8")
+    payload = {"transcript_path": str(_wrote(tmp_path, [mine]))}
+
+    before = CP.progress_fingerprint(project, payload)
+    mine.write_text("A much longer second version\n", encoding="utf-8")
+
+    assert CP.progress_fingerprint(project, payload) != before
+
+
+@pytest.mark.parametrize("configured", ["120", "600", "89", "90"])
+def test_the_grace_period_cannot_be_set_past_the_registered_timeout(
+    monkeypatch, configured
+):
+    """A wait above the hook's timeout is discarded output: the operator is told
+    the session will carry on, and it silently does not.
+
+    The bound is enforced by REFUSAL, not by clamping - `env_int` answers with
+    the default when the value is out of range - so an over-large setting lands
+    at 60 rather than at the ceiling. Either answer is safe; what matters is that
+    no reachable value crosses the registered 90-second timeout.
+    """
+    CP = _cp()
+    monkeypatch.setenv("CLAUDE_HANDOFF_UNATTENDED_WAIT", configured)
+    assert CP.wait_seconds() <= CP.UNATTENDED_WAIT_MAX
+    assert CP.UNATTENDED_WAIT_MAX < 90
+
+
+def test_a_grace_period_inside_the_bound_is_honoured(monkeypatch):
+    """The ceiling must not become a way to ignore the operator's setting."""
+    CP = _cp()
+    monkeypatch.setenv("CLAUDE_HANDOFF_UNATTENDED_WAIT", "75")
+    assert CP.wait_seconds() == 75
+
+
+def test_a_finished_background_task_does_not_claim_the_stop_event():
+    """Reading list non-emptiness let one completed task silence the checkpoint
+    system for the rest of the session."""
+    CP = _cp()
+    assert CP.continuation_claimant(
+        {"background_tasks": [{"task_id": "t-1", "status": "completed"}]}, None
+    ) == ""
+    assert CP.continuation_claimant(
+        {"background_tasks": [{"task_id": "t-1", "status": "running"}]}, None
+    ) == "background_tasks"
+    assert CP.continuation_claimant(
+        {"background_tasks": [{"task_id": "t-1"}]}, None
+    ) == "background_tasks", "an unknown state must still claim"
+
+
+def test_the_stall_record_is_written_once(tmp_path, monkeypatch):
+    """`--unattended status` presents this timestamp as the moment the run
+    stopped. Re-stamping it at every later pause turns a 03:00 stall into
+    whatever time the operator happens to look."""
+    monkeypatch.delenv("HEADING_OS_TELEGRAM_CHAT_ID", raising=False)
+    mod = _offer_module()
+    path = tmp_path / "state.json"
+
+    mod._stop_unattended({}, path, "no progress across 3 consecutive continuations")
+    first = json.loads(path.read_text(encoding="utf-8"))
+    mod._stop_unattended(first, path, "reached the ceiling of 100 continuations")
+    again = json.loads(path.read_text(encoding="utf-8"))
+
+    assert again["unattended_stalled_at"] == first["unattended_stalled_at"]
+    assert again["unattended_stop_reason"] == first["unattended_stop_reason"]
+
+
+def test_a_suppressed_offer_is_not_recorded_as_delivered(env):
+    """When something else drives the Stop event the offer is not shown, so it
+    must not be marked shown - the operator would lose that threshold for good."""
+    CP = _cp()
+    _statusline(env, SESSION_A, 46)
+    res = _run(OFFER, env, {
+        "session_id": SESSION_A,
+        "cwd": str(env["project"]),
+        "workspace": {"project_dir": str(env["project"])},
+        "stop_hook_active": False,
+        "background_tasks": [{"task_id": "t-1", "status": "running"}],
+    })
+
+    assert res.stdout.strip() == "", "the claimant guard did not suppress the offer"
+    state = json.loads(
+        (_state_dir(env) / f"checkpoint-{CP.safe_slug(SESSION_A)}.json")
+        .read_text(encoding="utf-8")
+    )
+    assert state.get("needs_compact_offer") is True, (
+        "an offer that was never delivered was recorded as delivered"
+    )
+
+
+def _unattended_stop(env, session, *, turn, active, state_turn):
+    CP = _cp()
+    path = _state_dir(env) / f"checkpoint-{CP.safe_slug(session)}.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["session_unattended"] = True
+    state["unattended_turn_id"] = state_turn
+    path.write_text(json.dumps(state), encoding="utf-8")
+    e = dict(env["env"])
+    e["CLAUDE_HANDOFF_UNATTENDED_WAIT"] = "1"
+    e["CLAUDE_HANDOFF_UNATTENDED_POLL"] = "1"
+    return subprocess.run(
+        [sys.executable, str(OFFER)],
+        input=json.dumps({
+            "session_id": session,
+            "cwd": str(env["project"]),
+            "workspace": {"project_dir": str(env["project"])},
+            "stop_hook_active": active,
+            "prompt_id": turn,
+            "transcript_path": str(env["project"] / "absent.jsonl"),
+        }),
+        capture_output=True, text=True, env=e,
+    )
+
+
+def test_the_mode_survives_stop_hook_active_on_a_turn_it_continued(env):
+    """The clause the whole mode rests on, and the half no test covered.
+
+    `stop_hook_active` stays true for the rest of a turn once anything blocked
+    it. Honouring it unconditionally would continue exactly once per operator
+    turn and then halt, which is the behaviour the mode exists to end.
+    """
+    _statusline(env, SESSION_A, 46)
+    (env["project"] / "absent.jsonl").write_text("", encoding="utf-8")
+
+    ours = _unattended_stop(env, SESSION_A, turn="p1", active=True, state_turn="p1")
+    assert ours.stdout.strip(), (
+        "the mode halted on a turn it had continued itself:\n" + ours.stderr
+    )
+
+    theirs = _unattended_stop(env, SESSION_A, turn="p2", active=True, state_turn="p1")
+    assert theirs.stdout.strip() == "", (
+        "the anti-loop guard was skipped on a turn this hook did not continue"
+    )
+
+
 def test_unattended_on_raises_auto_and_off_puts_it_back(env):
     """`--unattended off` undoes exactly what `on` did, and nothing more.
 

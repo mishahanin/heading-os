@@ -22,9 +22,13 @@ pause hands the turn back to the operator at all:
   - unattended on: ask nothing. Wait out a grace period, hand the turn back the
     moment the operator types, and otherwise tell the assistant to carry on.
 
-The offer prompt carries the `auto` switch itself as a fourth option, because the
-operator is already reading the list at the moment they decide the work is going
-to be long. A command they have to remember is one they will not use.
+The offer prompt names `unattended` as its second option and `auto` as a
+condition beside it, because the operator is already reading the list at the
+moment they decide the work is going to be long. A command they have to remember
+is one they will not use. Note what unattended does NOT do: it never writes a
+checkpoint from this hook. It turns `auto` on for the SessionStart hook's sake,
+which is what resumes the work after a compaction, and the handoff itself is
+written by the PostCompact hook whatever either switch says.
 
 Two guards stand ahead of all three. `stop_hook_active` is honoured, per 2.1.228's
 own warning to a hook that blocks eight consecutive times, EXCEPT on a turn this
@@ -62,9 +66,9 @@ Context is about {used:.0f}% used (~{remaining:.0f}% remaining).
 Consider checkpointing now so you can resume later with a fresh context.
 
 Options:
-1. `/checkpoint` - save a summary and continuation prompt under outputs/operations/handoff-archive/, no compact.
-2. `/checkpoint unattended on` - for work that runs past the time the operator is at the keyboard: saves silently, and at each pause waits for them and then carries on alone.
-   Name `/checkpoint auto on` as well ONLY if they want the question to stop while STAYING at the keyboard: it saves silently and still hands the turn straight back, with no wait.
+1. `/checkpoint` - save a summary and continuation prompt to this session's handoff archive, no compact.
+2. `/checkpoint unattended on` - for work that runs past the time the operator is at the keyboard: at each pause ABOVE this threshold it waits for them, then carries on alone. It writes no checkpoint itself; the compaction hooks do that.
+   Name `/checkpoint auto on` as well ONLY if they want the question to stop while STAYING at the keyboard: it saves a checkpoint silently at each threshold and hands the turn straight back, with no wait.
 3. `/compact` - run a manual compact now; the post-compact hook will save the compact summary.
 4. continue without compact - keep working as is.
 
@@ -77,8 +81,8 @@ Strongly recommend a checkpoint or compact before continuing further.
 
 Recommended options:
 1. `/checkpoint` - save a summary and continuation prompt (preserves work; does not free context).
-2. `/checkpoint unattended on` - if the operator is about to leave: saves silently, and at each pause waits for them and then carries on alone.
-   Name `/checkpoint auto on` as well ONLY if they want the question to stop while STAYING at the keyboard: it saves silently and still hands the turn straight back, with no wait.
+2. `/checkpoint unattended on` - if the operator is about to leave: at each pause above this threshold it waits for them, then carries on alone. It writes no checkpoint itself; the compaction hooks do that.
+   Name `/checkpoint auto on` as well ONLY if they want the question to stop while STAYING at the keyboard: it saves a checkpoint silently at each threshold and hands the turn straight back, with no wait.
 3. `/compact` - run a manual compact now; the post-compact hook will save the compact summary and free context.
 
 Tell them this too, because it decides how much any of it matters: {compaction}
@@ -113,7 +117,7 @@ def _compaction_sentence() -> str:
     """
     carry = (
         "Its PreCompact hook steers what that summary keeps and its PostCompact "
-        "hook saves a handoff, so the session carries on by itself. What crosses "
+        "hook saves a handoff. What crosses "
         "a compaction is the SUMMARY: the handoff on disk is not re-injected "
         "afterwards, and is what a NEW session resumes from instead."
     )
@@ -264,11 +268,22 @@ def _operator_spoke(fresh: str, session: str) -> bool:
 def _queue_pending(path: Path, session: str) -> bool:
     """Is a message already queued and not yet consumed?
 
-    Counted rather than matched by content, because the enqueue and its remove
-    are the only two records and a repeated message would defeat matching. The
-    case this catches is the expensive one: the operator typed twenty seconds
-    before the pause, the harness will hand that message over the moment the turn
-    ends, and continuing here would overwrite an instruction he has already sent.
+    Counted rather than matched by content, because a repeated message would
+    defeat matching. The case this catches is the expensive one: the operator
+    typed twenty seconds before the pause, the harness will hand that message over
+    the moment the turn ends, and continuing here would overwrite an instruction
+    he has already sent.
+
+    FOUR operations, not two. The first version counted `enqueue` against
+    `remove` alone, on the belief that those were the only two records. Measured
+    across all 44 transcripts for this project afterwards: 660 enqueue, 422
+    remove, 231 `dequeue`, 1 `popAll`. Ignoring the last two makes the balance
+    falsely positive in 28 of the 44 sessions - so in the MAJORITY of real
+    sessions the hook would read a phantom queued message, return early, and halt
+    the very run it was turned on to keep going, leaving no continuation, no
+    stall record and no notice. The contract test that covers this passed because
+    its fixture was captured from a session before that session's own first
+    dequeue.
     """
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
@@ -286,9 +301,12 @@ def _queue_pending(path: Path, session: str) -> bool:
             continue
         if session and entry.get("sessionId") not in (None, session):
             continue
-        if entry.get("operation") == "enqueue":
+        operation = entry.get("operation")
+        if operation == "enqueue":
             pending += 1
-        elif entry.get("operation") == "remove":
+        elif operation == "popAll":
+            pending = 0
+        elif operation in ("remove", "dequeue"):
             pending -= 1
     return pending > 0
 
@@ -309,7 +327,7 @@ def _wait_out_the_grace(payload: dict, session: str) -> bool:
     if _queue_pending(path, session):
         return True
 
-    wait = CP.env_int("CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=600)
+    wait = CP.wait_seconds()
     poll = CP.env_int("CLAUDE_HANDOFF_UNATTENDED_POLL", 2, minimum=1, maximum=60)
     try:
         offset = path.stat().st_size
@@ -382,15 +400,23 @@ def _persist(state_path: Path, **updates) -> None:
 
 
 def _stop_unattended(state: dict, state_path: Path, reason: str) -> int:
-    """End the mode's autonomy and leave a record that says why."""
-    first = not state.get("unattended_stalled_at")
+    """End the mode's autonomy and leave a record that says why.
+
+    The record is written ONCE. Every later pause in the window reaches this
+    function again, and re-stamping the time would move the one fact the operator
+    reads it for: `--unattended status` presents `unattended_stalled_at` as the
+    moment the run stopped, so a re-stamp turns a 03:00 stall into whatever time
+    he happens to look. The reason is pinned with it, because the first stop is
+    the true cause and a later one only repeats it.
+    """
+    if state.get("unattended_stalled_at"):
+        return 0
     _persist(
         state_path,
         unattended_stalled_at=CP.utc_now().isoformat(),
         unattended_stop_reason=reason,
     )
-    if first:
-        _notify_stall(reason)
+    _notify_stall(reason)
     return 0
 
 
@@ -432,11 +458,15 @@ def unattended_turn(
             f"no progress across {stall_limit} consecutive continuations",
         )
 
+    # Measured BEFORE the wait. The session is idle while the hook sleeps, so the
+    # reading is the same either way - but a git call and a transcript read AFTER
+    # a 60-second sleep push the total toward the registered 90-second timeout,
+    # and the harness discards the output of a hook that outruns it.
+    fingerprint = CP.progress_fingerprint(project, payload)
+
     session = CP.session_id(payload)
     if _wait_out_the_grace(payload, session):
         return 0
-
-    fingerprint = CP.progress_fingerprint(project, payload)
     moved = fingerprint != state.get("unattended_fingerprint")
     stall = 0 if moved else int(state.get("unattended_stall") or 0) + 1
 
@@ -462,7 +492,7 @@ def unattended_turn(
     reason = UNATTENDED_WRAPPER.format(
         used=used,
         remaining=_remaining_percentage(state, used),
-        wait=CP.env_int("CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=600),
+        wait=CP.wait_seconds(),
         done=done,
         maximum=maximum,
         compaction=_compaction_sentence(),
@@ -534,22 +564,23 @@ def main() -> int:
 
     bucket = int(state.get("offer_bucket") or state.get("current_bucket") or 0)
 
-    # Mark offer as delivered (hysteresis)
-    state["needs_compact_offer"] = False
-    state["offer_level"] = None
-    state["last_offered_bucket"] = bucket
-    state["last_offer_at"] = CP.utc_now().isoformat()
-    try:
-        CP.write_json_atomic(state_path, state)
-    except Exception as exc:
-        # If state write fails, still deliver the offer this turn
-        print(f"checkpoint-offer: state write failed: {exc}", file=sys.stderr)
+    # Mark the offer delivered (hysteresis), through the same read-modify-write
+    # every other write in this file uses. This path wrote back the whole copy it
+    # read at entry, which is precisely what `_persist` exists to stop: the
+    # statusline rewrites this file after every turn, so a whole-copy write can
+    # undo whatever it recorded in between.
+    _persist(
+        state_path,
+        needs_compact_offer=False,
+        offer_level=None,
+        last_offered_bucket=bucket,
+        last_offer_at=CP.utc_now().isoformat(),
+    )
 
     remaining = _remaining_percentage(state, used)
 
-    # `state` is the copy read BEFORE the delivered-marker write above, and the
-    # marker write preserves every key it does not name, so the operator's
-    # `session_auto` is still in hand here.
+    # `state` is the entry-time copy and is only READ from here on, so the
+    # operator's `session_auto` is still in hand.
     build = build_auto_reason if CP.config(state)["auto"] else build_reason
     reason = build(level, used, remaining)
 

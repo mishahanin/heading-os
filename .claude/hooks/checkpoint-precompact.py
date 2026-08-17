@@ -107,10 +107,12 @@ FACT_LABELS = (
     ("log", "Last commits (git log --oneline -5)"),
     ("written", "Files this session wrote"),
     ("handoff", "This session's handoff pointer"),
-    # "and its first unchecked item" promised a second line that a plan without
-    # checkboxes never has, and the plan in force at the first live run was one
-    # of those: its criteria are EARS statements, not a checklist.
-    ("plan", "Active plan, with its first unchecked item when it has one"),
+    # Two labels were wider than the method twice over. "and its first unchecked
+    # item" promised a second line that a plan without checkboxes never has, and
+    # "Active plan" asserted which plan is in force from a modification-time
+    # sort that cannot establish it.
+    ("plan", "Most recently modified file in plans/ (recency only, not the plan "
+             "necessarily in force), with its first unchecked item if it has one"),
 )
 
 
@@ -136,6 +138,43 @@ def _git(project: Path, *args: str) -> str:
     if proc.returncode != 0:
         return ""
     return proc.stdout.strip()
+
+
+def _data_root() -> Path | None:
+    """The private overlay root, when this tree has one."""
+    try:
+        from scripts.utils.workspace import get_data_root
+
+        return Path(get_data_root()).resolve()
+    except Exception as exc:  # noqa: BLE001 - no overlay is a normal answer
+        print(f"checkpoint-precompact: data root unresolved: {exc}", file=sys.stderr)
+        return None
+
+
+def _ref(path: Path, project: Path) -> str:
+    """Project-relative first, data-root-relative next, absolute only as a last
+    resort.
+
+    An absolute path here carries the operator's home directory and the name and
+    location of their private overlay into a compaction summary that a later hook
+    writes to a file. `redact()` cannot help: it removes credential-shaped spans
+    and has no concept of a private path. So the fix is at the source, and it is
+    the form the rest of the checkpoint system already uses - the same two-step
+    that `scripts/checkpoint-paths.py` prints for the skill. The pointer stays
+    resolvable either way, because the data-root-relative form is exactly what
+    `get_plans_dir()` and the @-reference resolve.
+    """
+    try:
+        return path.resolve().relative_to(project).as_posix()
+    except ValueError:
+        pass
+    root = _data_root()
+    if root is not None:
+        try:
+            return path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            pass
+    return path.as_posix()
 
 
 def _head(text: str, limit: int) -> str:
@@ -179,10 +218,7 @@ def _written(payload: dict, project: Path) -> str:
         if not path.exists():
             gone += 1
             continue
-        try:
-            shown.append(path.resolve().relative_to(project).as_posix())
-        except ValueError:
-            shown.append(path.as_posix())
+        shown.append(_ref(path, project))
     body = _head("\n".join(shown), MAX_WRITTEN) if shown else ""
     if gone:
         note = f"[{gone} more path(s) written earlier no longer exist: renamed or deleted.]"
@@ -201,15 +237,22 @@ def _handoff_pointer(payload: dict, project: Path) -> str:
         print(f"checkpoint-precompact: handoff path unresolved: {exc}",
               file=sys.stderr)
         return ""
-    return pointer.as_posix() if pointer.is_file() else ""
+    return _ref(pointer, project) if pointer.is_file() else ""
 
 
-def _plan() -> str:
-    """The newest plan file and its first unchecked box.
+def _plan(project: Path) -> str:
+    """The most recently MODIFIED file in the plans directory, and its first
+    unchecked box.
 
-    The plan is the workspace's own record of what remains, which makes it the
-    single highest-value pointer in this block: a summariser that keeps nothing
-    else can still be pointed at it.
+    The label says exactly that, and no longer says "active". The method is one
+    `st_mtime` sort, which establishes recency and nothing else, and the two come
+    apart routinely: a git pull or a checkout rewrites mtimes, and a plan that is
+    genuinely in force gets ARCHIVED out of this directory the moment its slice
+    lands. Measured on the tree that produced this hook - 42 files in plans/, the
+    newest four days stale and unrelated, and the plan actually in force absent
+    because it had just been archived. Calling that "the active plan" hands a
+    summariser a wrong fact under an instruction to preserve it verbatim
+    (.claude/rules/scope-claims.md).
     """
     try:
         from scripts.utils.workspace import get_plans_dir
@@ -233,7 +276,10 @@ def _plan() -> str:
                 break
     except OSError as exc:
         print(f"checkpoint-precompact: plan unreadable: {exc}", file=sys.stderr)
-    return f"{newest.as_posix()}\n{item}" if item else newest.as_posix()
+    ref = _ref(newest, project)
+    others = len(plans) - 1
+    tail = f"\n[{others} other plan file(s) not read.]" if others else ""
+    return (f"{ref}\n{item}{tail}" if item else f"{ref}{tail}")
 
 
 def collect_facts(payload: dict) -> dict[str, str]:
@@ -249,7 +295,7 @@ def collect_facts(payload: dict) -> dict[str, str]:
         "log": _git(project, "log", "--oneline", "-5"),
         "written": _written(payload, project),
         "handoff": _handoff_pointer(payload, project),
-        "plan": _plan(),
+        "plan": _plan(project),
     }
     return {key: value for key, value in facts.items() if value}
 
@@ -274,10 +320,17 @@ def render(facts: dict[str, str] | None) -> str:
         from scripts.utils.secret_patterns import redact
 
         body = redact(body)
-    except ImportError as exc:
+    except Exception as exc:  # noqa: BLE001
         # The fixed block carries nothing secret; the facts might. Losing the
         # redactor means shipping the block without them rather than shipping
         # them unredacted.
+        #
+        # Exception, not ImportError. A SyntaxError in the module this line
+        # imports is as fatal as its absence and is the likelier of the two here,
+        # because secret_patterns.py is edited and a compaction can fire mid-edit.
+        # The sibling hook checkpoint-save.py guards the identical import the same
+        # way; narrowing it here would have turned a broken module into a lost
+        # keep-set.
         print(f"checkpoint-precompact: redactor unavailable: {exc}", file=sys.stderr)
         body = KEEP_SET
 

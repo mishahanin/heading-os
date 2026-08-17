@@ -17,6 +17,9 @@ Usage:
   python scripts/checkpoint-paths.py --auto on      # stop asking, this session
   python scripts/checkpoint-paths.py --auto off     # ask again, this session
   python scripts/checkpoint-paths.py --auto status  # report, change nothing
+  python scripts/checkpoint-paths.py --unattended on      # continue at a pause
+  python scripts/checkpoint-paths.py --unattended off     # halt at a pause again
+  python scripts/checkpoint-paths.py --unattended status  # report, change nothing
 
 Archive paths are DATA-root-relative (`outputs/...`), which is the form the
 @-reference and the inject hook resolve. The state path is project-relative.
@@ -156,19 +159,19 @@ def unattended_switch(value: str) -> int:
         print(f"unattended={'on' if on else 'off'} (set by {source})")
         print(f"auto={'on' if cfg['auto'] else 'off'} · threshold {cfg['soft']}%")
         if on:
-            wait = CP.env_int(
-                "CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=600
-            )
+            wait = CP.wait_seconds()
             print(
                 f"at the threshold: wait {wait}s, continue on silence · "
                 f"continuations {int(state.get('unattended_continuations') or 0)}, "
                 f"stall {int(state.get('unattended_stall') or 0)}"
             )
         if state.get("unattended_stalled_at"):
-            print(
-                "STOPPED: no progress across consecutive continuations at "
-                f"{state['unattended_stalled_at']}"
-            )
+            # The recorded reason, not a hardcoded one. Two different fuses can
+            # stop the mode and the hook writes which; printing the stall wording
+            # for both made them indistinguishable to the operator.
+            why = state.get("unattended_stop_reason") or "no reason recorded"
+            print(f"STOPPED: {why}")
+            print(f"stopped at: {state['unattended_stalled_at']}")
         return 0
 
     state["session_unattended"] = value == "on"
@@ -197,7 +200,7 @@ def unattended_switch(value: str) -> int:
         return 1
 
     if value == "on":
-        wait = CP.env_int("CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=600)
+        wait = CP.wait_seconds()
         soft = CP.config(state)["soft"]
         print(f"unattended=on for this session ({slug}).")
         print(f"At {soft}% used: wait {wait}s for you, then continue without asking.")

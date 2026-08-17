@@ -6,6 +6,147 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-17
+
+The release about not halting for nothing, and about what a compaction keeps. No
+hook in Claude Code can start a compaction, so none of this automates one. It does
+three other things: it takes our own Stop hook out of the way when something else
+already drives the pause, it steers what the harness's own compaction PRESERVES,
+and it removes the reason a session stops dead at a pause nobody is there to
+answer. A session that halts at 23:40 never reaches the compaction threshold at
+all, because context does not grow while nobody works.
+
+Then a blinded review of the finished work found nine more defects, and the first
+of them meant the mode did not work in the majority of real sessions. That
+measurement, and the contract test that was green and useless, are the part of
+this release worth reading.
+
+### Added
+
+- **A PreCompact hook, `.claude/hooks/checkpoint-precompact.py`.** Every
+  compaction until now kept whatever the summariser happened to keep, including
+  the ones that fire overnight with nobody present. The hook now dictates what
+  survives verbatim: the objective in the operator's own words, every decision
+  WITH the reason it was taken, exact paths and commands, the next concrete
+  action, the last instruction given, any constraint still binding. And what to
+  drop: file contents already on disk, the output of exploratory commands,
+  discussion of finished work.
+
+  Below that fixed block it appends six facts read off the tree at compaction
+  time, so the summary does not have to carry them: branch, working tree, last
+  five commits, the files this session wrote, this session's handoff pointer, and
+  the most recently modified plan file. Three properties are load-bearing. It
+  exits 0 on every path, because exit 2 blocks the compaction it exists to
+  improve. It writes nothing, because PostCompact owns the write. And it redacts
+  BEFORE bounding the length, because truncating first can cut a credential into
+  a fragment the pattern no longer matches.
+
+- **Unattended mode: `/checkpoint unattended on`.** A separate switch from
+  `auto`, never a third value inside it. Above the soft threshold the Stop hook
+  stops asking and waits a grace period instead; type anything inside it and the
+  turn comes straight back, stay silent and the hook tells the assistant to carry
+  on. It is named after its precondition rather than after compaction, because
+  compaction happens either way and the only thing being chosen at a pause is who
+  decides.
+
+  Two bounds stop a run that goes nowhere, and they catch different failures. The
+  no-progress fuse hashes HEAD plus the size and mtime of every file THIS session
+  wrote; three consecutive evaluations that move none of it stop the mode. The
+  ceiling stops it after 100 continuations. A stopped run records which fuse
+  fired and when, readable with `--unattended status`, and sends one Telegram
+  notice when a target is configured.
+
+- **The Stop hook stands down when something else drives the pause.** A scheduled
+  `/loop` wakeup, in-flight background work, or a ralph-loop that names this
+  session each claim the Stop event; the offer used to fire regardless and cost
+  the loop's owner a wasted turn. The suppression happens BEFORE the
+  offer-delivered marker, so a suppressed offer is not recorded as delivered.
+  `/goal` is the one case no hook can see, because the harness holds that state
+  in memory; `stop_hook_active` bounds the cost instead.
+
+### Changed
+
+- **The threshold menu was rebuilt around one question.** `unattended` is now its
+  second option, beside the plain checkpoint; `auto` is named only as a
+  condition, for the operator who stays at the keyboard and wants the question to
+  stop. Options are grouped - checkpoints, then compact, then "continue" last -
+  because the operator reads them in the order the hook writes them. The
+  eleven-line wrapper is one line: the harness shows the operator the WHOLE
+  reason, so its opening restatement of the percentage cost him a line to read
+  twice. The menu now closes with where compaction actually comes from.
+
+- **`scripts/turn-check.py` no longer blocks a turn on a frozen contract.** A
+  Canopus contract is written red at step 3 and stays red until the
+  implementation lands at step 6; running it at the end of every turn of the
+  build leaves the operator two bad choices, and the one that happens is learning
+  to ignore the hook. Files under `tests/contract/` are matched, then skipped and
+  COUNTED, the same treatment a parallel session's edits already get.
+
+- **The PreCompact registration allows 20 seconds and the Stop registration 90.**
+  Claude Code discards the output of a hook that outruns its timeout, so a 60
+  second grace period inside a 60 second budget lands exactly on the boundary.
+
+### Fixed
+
+- **The queue counter knew two of the harness's four operations, and the mode did
+  not work because of it.** `_queue_pending` counted `enqueue` against `remove`
+  alone. Measured across all 44 transcripts for this project: 660 enqueue, 422
+  remove, 231 `dequeue`, 1 `popAll`. The formula is falsely positive in 28 of the
+  44, so in the MAJORITY of real sessions the hook read a phantom queued message,
+  returned early, and halted the very run it was turned on to keep going -
+  leaving no continuation, no stall record and no notice. The contract test
+  covering this passed because its fixture was captured from a session before
+  that session's own first dequeue.
+
+- **The no-progress fuse measured the wrong thing in both directions.**
+  `git status --short` reports that a file changed and never who changed it, so a
+  sibling session or a daemon writing between two pauses reset the counter and an
+  overnight run with nothing left to do would reach the ceiling inventing work.
+  And the COUNT of files written could not see a second edit of a file already in
+  the set, so real work read as three dead continuations. It now hashes HEAD plus
+  per-file size and mtime, scoped to this session. One residual limit is named in
+  the docstring rather than hidden: a sibling's commit still moves HEAD.
+
+- **The grace period accepted 120 seconds against a 90 second timeout** and
+  reported it back to the operator, while the harness discarded the output.
+  Bounded at 75 in one shared place, and the progress fingerprint now runs BEFORE
+  the wait rather than after it.
+
+- **A completed background task claimed the Stop event forever,** silencing every
+  threshold offer for the rest of the session. Terminal states no longer claim;
+  an unknown state still does.
+
+- **The stall record was re-stamped at every later pause,** so a 03:00 stall
+  reported whatever time the operator happened to look. It is written once, and
+  `--unattended status` now prints WHICH fuse stopped the run instead of
+  hardcoding one of the two.
+
+- **The offer path wrote back a whole stale state copy,** the exact defect the
+  shared read-modify-write helper exists to prevent.
+
+- **The PreCompact hook printed absolute paths** carrying the operator's home
+  directory and the name of their private overlay into a summary another hook
+  writes to a file. Project-relative first, data-root-relative next, absolute only
+  as a last resort.
+
+- **"Active plan" asserted which plan is in force from a modification-time sort
+  that cannot establish it.** On the tree that produced the hook it named a
+  four-day-old unrelated plan, because the plan actually in force had just been
+  archived. The label now says recency, and reports the count of plan files it did
+  not read.
+
+- **The redactor import caught `ImportError` only.** A SyntaxError in that module
+  is as fatal as its absence and likelier, since the module is actively edited and
+  a compaction can fire mid-edit; the unguarded `print` would then have lost the
+  whole keep-set. The sibling hook already guarded the identical import correctly.
+
+- **Five documentation claims were wrong by measurement** and are corrected: the
+  menu and SKILL.md said unattended mode "saves silently" when the Stop hook
+  writes no checkpoint in that mode, the fuse fires after two continuations rather
+  than three, the auto save is once per band rather than at every threshold, the
+  paths command emits eleven keys rather than seven, and the hooks reference named
+  four facts of six while restating a promise the same commit had removed.
+
 ## [0.9.0] - 2026-08-17
 
 The release about what a measurement is worth. A style checker reported 300 errors

@@ -1,12 +1,12 @@
 ---
 name: pencil-export
-description: "Export a Pencil (.pen) deck to PNG + PDF + a self-contained HTML on WSL, where the Pencil MCP export_nodes tool is broken. PPTX defaults to an EDITABLE twin (identical look, native editable text, brand fonts embedded); the image-per-slide locked-look PPTX is opt-in via pptx-flat. Two steps: the agent calls the export_html MCP tool to dump all frames to one HTML, then scripts/pencil-export.py renders each frame in isolation via chromium and assembles the formats. Use when asked to export/convert a Pencil deck to slides/PDF/PPTX, or to make an editable version of a Pencil deck. Do NOT use for MARP markdown decks (use /marp) or for a brand PPTX authored from scratch (use /pptx-generator)."
+description: "Export a Pencil (.pen) deck to PNG + PDF + PPTX + a self-contained HTML on WSL. PNG and PDF come from Pencil natively through the execute tool. PPTX defaults to an EDITABLE twin (identical look, native editable text, brand fonts embedded); the image-per-slide locked-look PPTX is opt-in via pptx-flat. The PPTX and self-contained HTML branches dump the frames to one HTML, then scripts/pencil-export.py renders each frame in isolation via chromium and assembles the formats. Pencil never receives a WSL path for writing: every export goes to a C: path and the result is collected from /mnt/c. Use when asked to export/convert a Pencil deck to slides/PDF/PPTX, or to make an editable version of a Pencil deck. Do NOT use for MARP markdown decks (use /marp) or for a brand PPTX authored from scratch (use /pptx-generator)."
 argument-hint: "<path-to.pen> [--formats png,pdf,html,pptx,pptx-flat]"
-allowed-tools: "Read, Write, Bash(python3:*), mcp__pencil__get_editor_state, mcp__pencil__export_html, mcp__pencil__snapshot_layout"
+allowed-tools: "Read, Write, Bash(python3:*), mcp__pencil__execute, mcp__pencil__get_app_state"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.1"
+  version: "1.2"
 x-heading-orchestration:
   parallel_safe: false
   shared_state: ["outputs/"]
@@ -21,14 +21,15 @@ x-heading-capability:
     Exports a Pencil .pen deck to per-slide PNG, a 16:9 PDF, an EDITABLE PPTX (the
     default: text-less background image plus native, editable text boxes at matching
     coordinates, with the brand fonts embedded so it renders identically anywhere),
-    and a portable self-contained HTML, working around the broken Pencil MCP
-    export_nodes tool on WSL. The locked-look image-per-slide PPTX is opt-in via
-    --formats pptx-flat.
+    and a portable self-contained HTML. PNG and PDF come from Pencil natively; PPTX
+    and the self-contained HTML are assembled from an HTML dump. The locked-look
+    image-per-slide PPTX is opt-in via --formats pptx-flat.
   how: >
-    Ensure the .pen is the active editor in the Pencil desktop app, then run the
-    skill. It calls export_html to dump all frames to one HTML and runs
-    scripts/pencil-export.py to render each frame in isolation and build the
-    formats into an export/ folder next to the deck.
+    Open the .pen as the active editor in the Pencil desktop app, then run the
+    skill. It calls the execute tool to run Export() into a C: staging directory,
+    and, for the PPTX and HTML branches, runs scripts/pencil-export.py to render
+    each frame in isolation and build the formats into an export/ folder next to
+    the deck.
   when: >
     Use to export or convert a Pencil .pen deck. For MARP markdown decks use
     /marp; for editable brand PPTX authored from scratch use /pptx-generator.
@@ -47,49 +48,86 @@ x-heading-routing:
     - MARP markdown deck -> /marp
     - editable brand PPTX authored from scratch -> /pptx-generator (a Pencil deck's PPTX is editable by default here, brand fonts embedded
     - the locked-look image deck is opt-in via `--formats pptx-flat`)
-    - native Pencil export_nodes on WSL is broken (this is the workaround)
+    - Pencil writes a WSL path to the wrong disk (this skill stages on C:)
   compound: 'No'
   router: auto
 ---
 # /pencil-export - Export a Pencil deck (WSL-safe)
 
-The Pencil MCP `export_nodes` tool (native PNG/PDF) is broken on this WSL setup.
-Its bundled path translator prepends `\\wsl.localhost\<distro>\` inconsistently,
-so it cannot write per-slide images from a WSL-resident or C:\ `.pen`. The Pencil
-CLI would fix it, but its headless loader chokes on relative image URLs. Its
-shell is also not pipe-scriptable, and `--app desktop` has no WSL socket. The
-`export_html` tool in the same MCP resolves paths correctly, so this skill uses
-it as the seam.
+Pencil writes an export to the wrong disk when it receives a WSL path. The app
+normalises `\\wsl.localhost\<distro>\...` to `/<distro>/...`, drops the prefix,
+and resolves the remainder from the root of `C:`. It then reports success. A
+requested write to `/Ubuntu-24.04/home/me/deck.html` lands at
+`C:\Ubuntu-24.04\home\me\deck.html`, and nothing warns you.
+
+So this skill stages every export on `C:` and collects the result from `/mnt/c`.
+Never pass Pencil a WSL path for writing.
+
+Pencil 42.5.0 exposes four MCP tools: `execute`, `get_app_state`, `browser`, and
+`get_guidelines`. Export runs inside `execute`:
+
+```js
+Export(nodeIds, "png"|"jpeg"|"webp"|"pdf"|"html-tailwind"|"html-css", outputPath, options)
+```
+
+Native PNG and PDF are correct at 2x. Use them. The chromium renderer stays for
+the editable PPTX and the self-contained HTML, which Pencil cannot produce.
 
 Background and full diagnosis: auto-memory `pencil-export-nodes-broken-wsl`.
 
 ## Phase 0 - Context
 
-- Confirm the target `.pen` is **open and active** in the Pencil desktop app
-  (`get_editor_state` returns it as the active editor). `export_html` only exports
-  the active editor's document.
+- Open the target `.pen` as the active editor in the Pencil desktop app. `execute`
+  fails with "wrong .pen file" when no document is active.
+- Read the registered path with `get_app_state({include_schema:false,
+  include_canvas_design:false, include_scripts_and_shaders:false})`. Pass that exact
+  string as `filePath` on every `execute` call.
+- The first `get_app_state` after a cold start can return no active editor. Retry
+  it before you report a failure.
 - Locate the deck directory. Output lands in `<deck-dir>/export/`.
 - Brand fonts: `datastore/brand/fonts/` on the CEO workspace (GT Standard + 31C
   Horizontal). Pass this via `--fonts-dir`.
 
-## Phase 1 - Dump frames to HTML (MCP)
+## Phase 1 - Select the slides and export
 
-1. `get_editor_state({include_schema:false})` - record the active editor's
-   **registered filePath** and the frame node IDs.
-2. Determine **deck order** of the slide frames. `get_editor_state` lists top-level
-   nodes but not in reading order; use `snapshot_layout({maxDepth:0})` and sort the
-   `Slide-*` frames by canvas `y` (then `x`) to recover reading order, or use a
-   known ordered ID list.
-3. Call `export_html` with the ordered node IDs, writing INTO the deck's `pencil/`
-   dir so relative image fills (`images/...`, `../assets/...`) resolve:
+1. Collect the top-level frames and their names:
 
+   ```js
+   Print(JSON.stringify(Get((n,c)=>c.depth===0 && n.type==="frame"
+     ? {id:n.id,name:n.name,x:n.x,y:n.y} : undefined)))
    ```
-   export_html(
-     filePath=<registered active path, e.g. /Ubuntu-24.04/home/.../deck.pen>,
-     outputPath=<deck-dir>/pencil/deck.html,
-     nodeIds=[<frames in deck order>],
-     format="html-css")
+
+2. Keep the `Slide-*` frames only. A deck also holds component frames such as
+   `Atom/Footer` and `Comp/StatCard`. Those are not slides and must not reach the
+   export.
+3. Sort the slide frames by canvas `y`, then `x`. This recovers reading order.
+4. Export to a staging directory on `C:`, never to a WSL path:
+
+   ```js
+   Export(ids, "pdf", "C:/Users/<user>/AppData/Local/Temp/pencil-export/<slug>/pdf")
+   Export(ids, "png", "C:/Users/<user>/AppData/Local/Temp/pencil-export/<slug>/png")
    ```
+
+   PDF writes one multi-page `export.pdf` in node order. PNG writes one
+   `<nodeId>.png` per frame at 2x.
+5. The renderer finds each slide by its `data-pencil-id` attribute. `Export` omits
+   that attribute unless you ask for it (`includeLayerIds` defaults to false), and
+   the renderer then fails with `'NoneType' object has no attribute 'screenshot'`.
+   Always pass `{includeLayerIds:true}` for the PPTX and HTML branches:
+
+   ```js
+   Export(ids, "html-css",
+     "C:/Users/<user>/AppData/Local/Temp/pencil-export/<slug>/deck.html",
+     {includeLayerIds:true})
+   ```
+
+6. Copy the exported HTML into the deck's `pencil/` dir so relative image fills
+   (`images/...`, `../assets/...`) resolve.
+
+   Pencil does not write the `assets/` directory that its HTML references. Supply
+   the brand fonts through `--fonts-dir` in Phase 2.
+7. Collect the staged files from `/mnt/c/...` and move them into
+   `<deck-dir>/export/` with WSL tooling.
 
 ## Phase 2 - Render + assemble (script)
 
@@ -179,6 +217,9 @@ How it works and what to know:
 
 ## Phase 3 - Verify
 
+- Confirm each exported file exists on disk before you report success. Pencil
+  reports "Exported <path>" even when it wrote the file to another disk. Treat the
+  reported path as a claim, not as evidence.
 - Slide count == frame count; PDF pages == slides; PPTX slides == slides.
 - The self-contained HTML has **zero external refs** (`grep -c 'src="assets\|url(.\(assets\|images\)' <stem>.html` -> 0).
 - Spot-check the cover, the closing slide, and any dense/overlap-prone slide by
@@ -189,7 +230,12 @@ How it works and what to know:
 
 ## NEVER
 
-- Never rely on Pencil MCP `export_nodes` on WSL - it is broken; use this flow.
+- Never give Pencil a WSL path to write to. It reports success and writes the file
+  to `C:\<distro>\...` instead. Stage on `C:` and collect from `/mnt/c`.
+- Never trust Pencil's "Exported <path>" line on its own. Check the disk.
+- Never send component frames (`Atom/*`, `Comp/*`) to the export. Slides only.
+- Never export the HTML branch without `{includeLayerIds:true}`. The renderer has
+  no other handle on a slide.
 - Never place the HTML outside the deck's `pencil/` dir before rendering, or the
   relative image fills will not resolve.
 - Never hardcode brand-font paths in the engine script - pass `--fonts-dir`.

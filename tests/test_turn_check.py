@@ -188,6 +188,44 @@ def test_the_render_names_what_the_scope_left_out():
     assert "3" in text and "another session" in text
 
 
+# ============================================================
+# The frozen contract, which is red on purpose
+# ============================================================
+
+def _a_contract_file() -> Path | None:
+    found = sorted((ROOT / "tests" / "contract").glob("*/test_*.py"))
+    return found[0] if found else None
+
+
+def test_a_frozen_contract_is_matched_then_skipped():
+    """Step 3 of a Canopus slice writes a contract that MUST fail until step 6.
+
+    A hook that blocks the turn on it teaches the operator to ignore the hook,
+    which costs more than the contract test was ever going to catch here. The
+    full suite still runs it; this lane does not.
+    """
+    contract = _a_contract_file()
+    if contract is None:
+        pytest.skip("no frozen contract in the tree to check the skip against")
+    assert tc.is_contract(contract), contract
+    failures, ran, skipped = tc.lane_tests([contract], timeout=30)
+    assert failures == [], failures
+    assert ran == 0, "a contract file was handed to pytest"
+    assert skipped == 1, "the skip was not counted"
+
+
+def test_an_ordinary_test_file_is_not_treated_as_a_contract():
+    """The skip is a prefix, and a prefix that grew would silence the lane."""
+    assert not tc.is_contract(ROOT / "tests" / "test_turn_check.py")
+    assert not tc.is_contract(ROOT / "tests" / "security" / "test_anything.py")
+
+
+def test_the_render_names_the_contracts_it_declined_to_judge():
+    text = tc.render({"status": "pass", "files": 1, "tests_run": 0,
+                      "skipped_foreign": 0, "skipped_contract": 2})
+    assert "2" in text and "contract" in text
+
+
 def test_the_hook_forwards_the_transcript_it_is_given():
     """The wrapper is the only place the session identity exists; a wrapper that
     drops it leaves the checker permanently un-scoped."""

@@ -33,7 +33,9 @@ Three lanes, cheapest first, each bounded:
   tests    the test files that name the changed modules, by stem. A changed
            `scripts/wizard-verify-key.py` maps to `tests/test_wizard_verify_key.py`
            (hyphens normalise to underscores, which is the mapping that would
-           have caught the rename above).
+           have caught the rename above). Files under `tests/contract/` are
+           matched, then skipped and counted: a frozen contract is red between
+           the approval commit and the implementation, on purpose.
 
 Usage:
     python scripts/turn-check.py                # human output, exit 1 on failure
@@ -71,6 +73,15 @@ IMPORT_SAFE_PREFIXES = (
 )
 
 WATCHED_PREFIXES = ("scripts/", "tests/", ".claude/hooks/")
+
+# A frozen Canopus contract is written RED at step 3 and stays red until the
+# implementation lands at step 6. That is the method, not a defect. Running it at
+# the end of every turn in between leaves the operator two bad choices: watch the
+# hook block on a test whose failure IS the plan, or learn to ignore the hook.
+# The second is worse and is the one that happens. Skipped by prefix, and counted
+# out loud, because a narrowed check that prints like a complete one is the
+# defect this script was already fixed for once (.claude/rules/scope-claims.md).
+CONTRACT_PREFIX = "tests/contract/"
 
 DEFAULT_TEST_TIMEOUT = 120
 
@@ -233,11 +244,21 @@ def matching_tests(paths: list[Path]) -> list[Path]:
     return sorted(picked)
 
 
-def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int]:
-    """Run the matched tests. Returns (failures, number of test files run)."""
-    targets = matching_tests(paths)
+def is_contract(path: Path) -> bool:
+    """A file under the frozen-contract tree, whose red state is the plan."""
+    return _rel(path).replace("\\", "/").startswith(CONTRACT_PREFIX)
+
+
+def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int]:
+    """Run the matched tests.
+
+    Returns (failures, test files run, contract files skipped).
+    """
+    picked = matching_tests(paths)
+    targets = [t for t in picked if not is_contract(t)]
+    skipped = len(picked) - len(targets)
     if not targets:
-        return [], 0
+        return [], 0, skipped
     args = [
         sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
         "--no-header", "-x", *[str(t) for t in targets],
@@ -250,14 +271,15 @@ def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int]:
         return [
             f"the matched tests did not finish in {timeout}s "
             f"({len(targets)} file(s)); run them yourself or raise --timeout"
-        ], len(targets)
+        ], len(targets), skipped
     except OSError as e:
-        return [f"pytest could not run: {e}"], len(targets)
+        return [f"pytest could not run: {e}"], len(targets), skipped
     if out.returncode != 0:
         body = (out.stdout or "") + (out.stderr or "")
         tail = [ln for ln in body.strip().splitlines() if ln.strip()][-12:]
-        return ["\n".join(tail) or f"pytest exited {out.returncode}"], len(targets)
-    return [], len(targets)
+        return (["\n".join(tail) or f"pytest exited {out.returncode}"],
+                len(targets), skipped)
+    return [], len(targets), skipped
 
 
 def run(timeout: int, use_cache: bool, transcript=None) -> dict:
@@ -281,18 +303,20 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
     if not failures:
         failures, lane = lane_import(paths), "import"
     tests_run = 0
+    skipped_contract = 0
     if not failures:
-        failures, tests_run = lane_tests(paths, timeout)
+        failures, tests_run, skipped_contract = lane_tests(paths, timeout)
         lane = "tests"
 
     if failures:
         return {"status": "fail", "lane": lane, "failures": failures,
                 "files": len(paths), "tests_run": tests_run,
-                "skipped_foreign": foreign}
+                "skipped_foreign": foreign,
+                "skipped_contract": skipped_contract}
 
     write_state({"last_pass": fp, "files": len(paths), "tests_run": tests_run})
     return {"status": "pass", "files": len(paths), "tests_run": tests_run,
-            "skipped_foreign": foreign}
+            "skipped_foreign": foreign, "skipped_contract": skipped_contract}
 
 
 def _foreign_note(result: dict) -> str:
@@ -304,15 +328,30 @@ def _foreign_note(result: dict) -> str:
     return f" {GRAY}[{count} changed file(s) written by another session, not checked]{RESET}"
 
 
+def _contract_note(result: dict) -> str:
+    """The frozen contracts this run declined to judge. Same reason as above:
+    the operator has to be able to see that the number of tests run is smaller
+    than the number of tests matched."""
+    count = result.get("skipped_contract") or 0
+    if not count:
+        return ""
+    return (f" {GRAY}[{count} frozen-contract file(s) not run: red by design "
+            f"until the slice implements them]{RESET}")
+
+
+def _notes(result: dict) -> str:
+    return _foreign_note(result) + _contract_note(result)
+
+
 def render(result: dict) -> str:
     status = result["status"]
     if status in ("idle", "cached"):
-        return f"{GRAY}turn-check: {result['reason']}{RESET}" + _foreign_note(result)
+        return f"{GRAY}turn-check: {result['reason']}{RESET}" + _notes(result)
     if status == "pass":
         return (f"{GREEN}turn-check: clean{RESET} "
                 f"{GRAY}({result['files']} changed file(s), "
-                f"{result['tests_run']} test file(s)){RESET}" + _foreign_note(result))
-    head = f"{RED}turn-check: {result['lane']} lane failed{RESET}" + _foreign_note(result)
+                f"{result['tests_run']} test file(s)){RESET}" + _notes(result))
+    head = f"{RED}turn-check: {result['lane']} lane failed{RESET}" + _notes(result)
     return head + "\n" + "\n".join(result["failures"])
 
 

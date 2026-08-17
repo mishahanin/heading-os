@@ -392,6 +392,47 @@ def test_auto_status_reports_without_changing_anything(env):
     assert _state_of(env, SESSION_A) == before, "status is not read-only"
 
 
+def _unattended(env, session, value):
+    e = dict(env["env"])
+    e["CLAUDE_CODE_SESSION_ID"] = session
+    e["CLAUDE_PROJECT_DIR"] = str(env["project"])
+    return subprocess.run(
+        [sys.executable, str(CLI), "--unattended", value],
+        capture_output=True, text=True, env=e,
+    )
+
+
+def test_unattended_on_raises_auto_and_off_puts_it_back(env):
+    """`--unattended off` undoes exactly what `on` did, and nothing more.
+
+    Found by a live run rather than by a test: the first version cleared only its
+    own key, so typing `--unattended on` and then `--unattended off` left the
+    operator with a silent `auto=on` he never chose.
+    """
+    assert _unattended(env, SESSION_A, "on").returncode == 0
+    assert _state_of(env, SESSION_A).get("session_auto") is True
+    assert _unattended(env, SESSION_A, "off").returncode == 0
+    state = _state_of(env, SESSION_A)
+    assert state.get("session_unattended") is False
+    assert state.get("session_auto") is False, (
+        "unattended off left an auto the operator never asked for"
+    )
+
+
+def test_unattended_off_leaves_a_deliberate_auto_alone(env):
+    """A separately chosen `--auto on` survives an unattended round trip.
+
+    The other half of the asymmetry. Undoing our own side effect must not reach
+    a decision the operator made on its own.
+    """
+    assert _auto(env, SESSION_A, "on").returncode == 0
+    _unattended(env, SESSION_A, "on")
+    _unattended(env, SESSION_A, "off")
+    assert _state_of(env, SESSION_A).get("session_auto") is True, (
+        "unattended off clobbered a deliberate auto on"
+    )
+
+
 def test_the_session_flag_turns_auto_on_while_the_env_is_off(env):
     env["env"].pop("CLAUDE_HANDOFF_AUTO", None)
     _auto(env, SESSION_A, "on")
@@ -448,20 +489,27 @@ def test_the_soft_offer_carries_the_session_switch(env):
     _statusline(env, SESSION_A, 42)
     reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
     assert "continue without compact" in reason, "this is not the soft body"
-    assert "/checkpoint auto on" in reason, (
-        f"the soft offer does not name the way to stop being asked:\n{reason}"
-    )
+    for switch in ("/checkpoint unattended on", "/checkpoint auto on"):
+        assert switch in reason, (
+            f"the soft offer does not name {switch}, one of the two ways to stop "
+            f"being asked:\n{reason}"
+        )
 
 
 def test_the_hard_offer_also_carries_the_switch(env):
-    """The hard threshold is where a long piece of work spends most of its time."""
+    """The hard threshold is where a long piece of work spends most of its time.
+
+    Both switches, because the two bodies are separate strings and the hard one
+    has already lost a line the soft one kept.
+    """
     _statusline(env, SESSION_A, 46)
     _stop(env, SESSION_A)
     _statusline(env, SESSION_A, 52)
     reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
-    assert "/checkpoint auto on" in reason, (
-        f"the hard offer drops the switch the soft one carries:\n{reason}"
-    )
+    for switch in ("/checkpoint unattended on", "/checkpoint auto on"):
+        assert switch in reason, (
+            f"the hard offer drops {switch}, which the soft one carries:\n{reason}"
+        )
 
 
 def test_inject_uses_the_auto_closing_for_a_flagged_session(env):

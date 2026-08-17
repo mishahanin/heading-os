@@ -11,26 +11,38 @@ The state file is per session. It was shared until 2026-08-16, and a shared file
 means a sibling session's context usage blocks this session's turns: measured
 with session A at 46% and session B idle, B got the offer and A got nothing.
 
-Two behaviours, selected by CLAUDE_HANDOFF_AUTO for the workspace or by this
-session's own `session_auto` flag, which overrides it in both directions:
-  - off (the default): surface the /checkpoint vs /compact vs continue choice
-    and wait for the operator. Nothing is written automatically.
-  - on: drive the assistant to save the checkpoint silently and resume the task.
-    The capability ships; the operator switches it on.
+THREE behaviours, chosen by two independent switches. `session_auto` (or
+CLAUDE_HANDOFF_AUTO for the workspace) decides whether a checkpoint saves without
+asking. `session_unattended` (or CLAUDE_HANDOFF_UNATTENDED) decides whether a
+pause hands the turn back to the operator at all:
 
-The prompt carries the switch itself (`/checkpoint auto on`) as a fourth option,
-because the operator is already reading the list at the moment they decide that
-the work is going to be long. A command they have to remember is one they will
-not use.
+  - auto off, unattended off (the default): surface the /checkpoint vs /compact
+    vs continue choice and wait for the operator. Nothing is written.
+  - auto on: drive the assistant to save the checkpoint silently and resume.
+  - unattended on: ask nothing. Wait out a grace period, hand the turn back the
+    moment the operator types, and otherwise tell the assistant to carry on.
 
-Anti-loop: bails immediately if payload.stop_hook_active is true.
+The offer prompt carries the `auto` switch itself as a fourth option, because the
+operator is already reading the list at the moment they decide the work is going
+to be long. A command they have to remember is one they will not use.
 
-Auto-compact is NOT touched - this hook only surfaces the offer, never blocks
-or invokes compact directly.
+Two guards stand ahead of all three. `stop_hook_active` is honoured, per 2.1.228's
+own warning to a hook that blocks eight consecutive times, EXCEPT on a turn this
+hook itself continued in unattended mode. And the hook stays silent whenever
+something else already drives the Stop event: a scheduled wakeup, in-flight
+background work, or a ralph-loop naming this session. See
+`checkpoint_paths.continuation_claimant`, including why /goal is not detectable.
+
+Compaction is NOT touched, here or anywhere: no hook in Claude Code can trigger
+one. What unattended mode changes is whether the session is still RUNNING when
+the harness's own auto-compact fires, which is the only reason a compaction lands
+mid-work rather than never.
 """
 
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 _BOOT = Path(__file__).resolve()
@@ -51,9 +63,12 @@ Consider checkpointing now so you can resume later with a fresh context.
 
 Options:
 1. `/checkpoint` - save a summary and continuation prompt under outputs/operations/handoff-archive/, no compact.
-2. `/compact` - run a manual compact now; the post-compact hook will save the compact summary.
-3. continue without compact - keep working as is.
-4. `/checkpoint auto on` - save now, then keep saving silently for the rest of THIS session and stop asking."""
+2. `/checkpoint unattended on` - for work that runs past the time the operator is at the keyboard: saves silently, and at each pause waits for them and then carries on alone.
+   Name `/checkpoint auto on` as well ONLY if they want the question to stop while STAYING at the keyboard: it saves silently and still hands the turn straight back, with no wait.
+3. `/compact` - run a manual compact now; the post-compact hook will save the compact summary.
+4. continue without compact - keep working as is.
+
+Tell them this too, because it decides how much any of it matters: {compaction}"""
 
 
 HARD_BODY = """\
@@ -62,23 +77,19 @@ Strongly recommend a checkpoint or compact before continuing further.
 
 Recommended options:
 1. `/checkpoint` - save a summary and continuation prompt (preserves work; does not free context).
-2. `/compact` - run a manual compact now; the post-compact hook will save the compact summary and free context.
-3. `/checkpoint auto on` - save now, then keep saving silently for the rest of THIS session and stop asking.
+2. `/checkpoint unattended on` - if the operator is about to leave: saves silently, and at each pause waits for them and then carries on alone.
+   Name `/checkpoint auto on` as well ONLY if they want the question to stop while STAYING at the keyboard: it saves silently and still hands the turn straight back, with no wait.
+3. `/compact` - run a manual compact now; the post-compact hook will save the compact summary and free context.
+
+Tell them this too, because it decides how much any of it matters: {compaction}
 
 Do not offer "continue without compact"."""
 
 
 REASON_WRAPPER = """\
-Context window usage is approximately {used:.0f}%, which crossed the project checkpoint threshold.
+Ask the user, briefly, in the language they are speaking, and wait for their decision. Do not act instead of asking: do not run /compact yourself, and write no file until they approve one.
 
-Do not run /compact automatically.
-Do not create files automatically unless the user approves.
-
-Ask the user, briefly, with these options, in the language the user is speaking:
-
-{body}
-
-Wait for the user's decision."""
+{body}"""
 
 
 AUTO_WRAPPER = """\
@@ -100,24 +111,25 @@ def _compaction_sentence() -> str:
     assertion the method does not support, so an unconfigured environment gets
     said so instead (.claude/rules/scope-claims.md).
     """
+    carry = (
+        "Its PreCompact hook steers what that summary keeps and its PostCompact "
+        "hook saves a handoff, so the session carries on by itself. What crosses "
+        "a compaction is the SUMMARY: the handoff on disk is not re-injected "
+        "afterwards, and is what a NEW session resumes from instead."
+    )
     point = CP.compact_point()
     if point is None:
         return (
             "Native compaction is not configured here (neither "
             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE nor CLAUDE_CODE_AUTO_COMPACT_WINDOW "
-            "is set), so this hook cannot say when it will fire; the checkpoint "
-            "on disk is what survives either way."
+            f"is set), so this hook cannot say when it will fire. {carry}"
         )
     kind, value = point
     if kind == "percent":
-        return (
-            f"Native auto-compact is configured to fire near {value}% used, and "
-            "its PostCompact hook saves and re-injects the handoff automatically."
-        )
+        return f"Native auto-compact is configured to fire near {value}% used. {carry}"
     return (
         f"Native auto-compact is configured at {value} tokens (measured against "
-        "the smaller of that and the model's own window), and its PostCompact "
-        "hook saves and re-injects the handoff automatically."
+        f"the smaller of that and the model's own window). {carry}"
     )
 
 
@@ -130,11 +142,21 @@ def build_reason(level: str, used: float, remaining: float) -> str:
     rendering of the same three lines. English alone is the right single
     language here: this hook ships in a public engine, and the wrapper asks for
     the reply in whatever language the operator is actually speaking.
+
+    The wrapper opened with the percentage and the threshold it crossed, one line
+    above a body that says both again. That is the same defect one layer up, and
+    the operator caught it by reading the expanded hook output: the harness shows
+    him the WHOLE reason, so a line addressed to the assistant costs him a line.
+    What is left of the wrapper is only what the body cannot carry - ask rather
+    than act, in their language - because the body is the text he reads.
     """
     body = HARD_BODY if level == "hard" else SOFT_BODY
     return REASON_WRAPPER.format(
-        used=used,
-        body=body.format(used=used, remaining=remaining),
+        body=body.format(
+            used=used,
+            remaining=remaining,
+            compaction=_compaction_sentence(),
+        )
     )
 
 
@@ -155,26 +177,353 @@ def build_auto_reason(level: str, used: float, remaining: float) -> str:
     )
 
 
+UNATTENDED_WRAPPER = """\
+Context is about {used:.0f}% used (~{remaining:.0f}% remaining). Unattended mode \
+is on for this window, and the {wait}-second grace period passed with no input, \
+so the turn continues rather than halting.
+
+Decide this yourself, and do not put the question to anyone:
+- If an unfinished task from the current objective remains, resume it now and \
+carry on working.
+- If the work is finished and verified, or you were waiting on a judgement only \
+the operator can make, stop here and say so in one line.
+
+A halted night is recoverable. Work invented to look busy is not, so stopping is \
+the right answer whenever there is no real next action.
+
+Do NOT run /compact. {compaction}
+
+Continuation {done} of {maximum} for this window. Nothing was written on your \
+behalf and the handoff on disk is unchanged."""
+
+
+def _used_percentage(state: dict) -> float | None:
+    raw = state.get("used_percentage")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _remaining_percentage(state: dict, used: float) -> float:
+    raw = state.get("remaining_percentage")
+    try:
+        remaining = float(raw) if raw is not None else 100.0 - used
+    except (TypeError, ValueError):
+        remaining = 100.0 - used
+    return max(remaining, 0.0)
+
+
+def _operator_spoke(fresh: str, session: str) -> bool:
+    """Does this slice of transcript carry something the operator typed?
+
+    The load-bearing signal is `queue-operation` / `enqueue`. Pressing Enter
+    during a turn queues the message and clears the input line, so the SCREEN
+    becomes indistinguishable from silence; the transcript does not. Measured on
+    this workspace's own transcript on 2026-08-17: the enqueue line was on disk
+    at 13:00:18 and the matching `remove` only at 13:01:12, so the signal existed
+    54 seconds before anything consumed it.
+
+    A `user` line carrying real text is accepted as a second, weaker signal. Note
+    that most `user` lines are tool results rather than the operator, so the
+    check is for a text block and never for the role alone.
+    """
+    for line in fresh.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") == "queue-operation":
+            if entry.get("operation") == "enqueue" and (
+                not session or entry.get("sessionId") in (None, session)
+            ):
+                return True
+            continue
+        if entry.get("type") != "user" or entry.get("isMeta"):
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, str) and content.strip():
+            return True
+        if isinstance(content, list) and any(
+            isinstance(block, dict)
+            and block.get("type") == "text"
+            and str(block.get("text") or "").strip()
+            for block in content
+        ):
+            return True
+    return False
+
+
+def _queue_pending(path: Path, session: str) -> bool:
+    """Is a message already queued and not yet consumed?
+
+    Counted rather than matched by content, because the enqueue and its remove
+    are the only two records and a repeated message would defeat matching. The
+    case this catches is the expensive one: the operator typed twenty seconds
+    before the pause, the harness will hand that message over the moment the turn
+    ends, and continuing here would overwrite an instruction he has already sent.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    pending = 0
+    for line in raw.splitlines():
+        if '"queue-operation"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "queue-operation":
+            continue
+        if session and entry.get("sessionId") not in (None, session):
+            continue
+        if entry.get("operation") == "enqueue":
+            pending += 1
+        elif entry.get("operation") == "remove":
+            pending -= 1
+    return pending > 0
+
+
+def _wait_out_the_grace(payload: dict, session: str) -> bool:
+    """True when the operator spoke, False when the window passed in silence.
+
+    Unknown counts as spoke. An absent or unreadable transcript means silence
+    cannot be told from a message, and the safe direction there is to hand the
+    turn back rather than to continue blind.
+    """
+    raw_path = payload.get("transcript_path")
+    if not raw_path:
+        return True
+    path = Path(raw_path)
+    if not path.is_file():
+        return True
+    if _queue_pending(path, session):
+        return True
+
+    wait = CP.env_int("CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=600)
+    poll = CP.env_int("CLAUDE_HANDOFF_UNATTENDED_POLL", 2, minimum=1, maximum=60)
+    try:
+        offset = path.stat().st_size
+    except OSError:
+        return True
+
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        time.sleep(min(poll, max(deadline - time.monotonic(), 0.1)))
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return True
+        if size <= offset:
+            continue
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(offset)
+                fresh = handle.read()
+        except OSError:
+            return True
+        offset = size
+        if _operator_spoke(fresh, session):
+            return True
+    return False
+
+
+def _notify_stall(reason: str) -> None:
+    """Tell the operator his unattended run stopped. Best effort, never fatal.
+
+    A notification to the operator's own bot, which is established practice in
+    this workspace; nothing here gains the ability to reach anyone else. The
+    import is deferred until a target is actually configured, so an engine with
+    no Telegram set up never pays for it.
+    """
+    target = ""
+    for var in (
+        "CHECKPOINT_TELEGRAM_TARGET",
+        "OPS_RADAR_TELEGRAM_TARGET",
+        "ODIN_CADENCE_TELEGRAM_TARGET",
+    ):
+        if os.environ.get(var, "").strip():
+            target = os.environ[var].strip()
+            break
+    if not target:
+        return
+    try:
+        from scripts.utils import telegram_notify
+
+        telegram_notify.notify(target, f"HEADING OS: unattended run stopped. {reason}")
+    except Exception as exc:  # noqa: BLE001 - a missed notice never blocks the stop
+        print(f"checkpoint-offer: stall notice failed: {exc}", file=sys.stderr)
+
+
+def _persist(state_path: Path, **updates) -> None:
+    """Apply our own keys to what is on disk NOW, never a whole stale copy.
+
+    The statusline rewrites this file after every turn. Writing back the copy this
+    hook read at entry would clobber whatever it recorded in between, and
+    unattended mode writes at every pause above the threshold rather than once per
+    5% bucket, so that window stopped being rare. Only the keys named by the caller
+    move.
+    """
+    fresh = CP.read_json(state_path)
+    fresh.update(updates)
+    try:
+        CP.write_json_atomic(state_path, fresh)
+    except Exception as exc:  # noqa: BLE001 - a lost note is not worth a broken turn
+        print(f"checkpoint-offer: state write failed: {exc}", file=sys.stderr)
+
+
+def _stop_unattended(state: dict, state_path: Path, reason: str) -> int:
+    """End the mode's autonomy and leave a record that says why."""
+    first = not state.get("unattended_stalled_at")
+    _persist(
+        state_path,
+        unattended_stalled_at=CP.utc_now().isoformat(),
+        unattended_stop_reason=reason,
+    )
+    if first:
+        _notify_stall(reason)
+    return 0
+
+
+def unattended_turn(
+    payload: dict,
+    state: dict,
+    state_path: Path,
+    project: Path,
+    used: float,
+    turn: str,
+) -> int:
+    """Wait for the operator, then either hand the turn back or continue it.
+
+    Two bounds stand between this and a run that never ends, and they catch
+    different failures. The no-progress fuse catches work that stopped moving
+    while still answering "yes, there is more to do". The ceiling catches work
+    that keeps moving and never converges, which is what the ralph-loop plugin
+    bounds with --max-iterations for the same reason.
+    """
+    stall_limit = CP.env_int(
+        "CLAUDE_HANDOFF_UNATTENDED_STALL", 3, minimum=1, maximum=100
+    )
+    maximum = CP.env_int(
+        "CLAUDE_HANDOFF_UNATTENDED_MAX", 100, minimum=1, maximum=10000
+    )
+    done = int(state.get("unattended_continuations") or 0)
+
+    # Both ceilings are checked BEFORE the wait. A window that has already spent
+    # its autonomy should hand the turn back at once, not hold it for a minute
+    # first.
+    if done >= maximum:
+        return _stop_unattended(
+            state, state_path, f"reached the ceiling of {maximum} continuations"
+        )
+    if int(state.get("unattended_stall") or 0) >= stall_limit:
+        return _stop_unattended(
+            state,
+            state_path,
+            f"no progress across {stall_limit} consecutive continuations",
+        )
+
+    session = CP.session_id(payload)
+    if _wait_out_the_grace(payload, session):
+        return 0
+
+    fingerprint = CP.progress_fingerprint(project, payload)
+    moved = fingerprint != state.get("unattended_fingerprint")
+    stall = 0 if moved else int(state.get("unattended_stall") or 0) + 1
+
+    if stall >= stall_limit:
+        _persist(state_path, unattended_stall=stall,
+                 unattended_fingerprint=fingerprint)
+        return _stop_unattended(
+            state,
+            state_path,
+            f"no progress across {stall_limit} consecutive continuations",
+        )
+
+    done += 1
+    _persist(
+        state_path,
+        unattended_stall=stall,
+        unattended_fingerprint=fingerprint,
+        unattended_continuations=done,
+        unattended_turn_id=turn,
+        unattended_last_at=CP.utc_now().isoformat(),
+    )
+
+    reason = UNATTENDED_WRAPPER.format(
+        used=used,
+        remaining=_remaining_percentage(state, used),
+        wait=CP.env_int("CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=600),
+        done=done,
+        maximum=maximum,
+        compaction=_compaction_sentence(),
+    )
+    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    return 0
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
 
-    # Anti-loop guard - mandatory for Stop hooks
-    if payload.get("stop_hook_active"):
-        return 0
-
     project = CP.project_root(payload)
     state_path = CP.state_path(project, CP.session_slug(payload))
     state = CP.read_json(state_path)
-    if not state.get("needs_compact_offer"):
+    unattended = CP.unattended_mode(state)
+
+    # Anti-loop guard, mandatory for Stop hooks, with ONE exception. 2.1.228
+    # warns a hook that blocks eight consecutive times and names this field as
+    # the thing to check, and `stop_hook_active` stays true for the remainder of
+    # a turn once anything blocked it. Unattended mode has to survive that or it
+    # would continue exactly once per operator turn and then halt, which is the
+    # behaviour it exists to end. So it ignores the flag ONLY on a turn this hook
+    # itself continued, identified by the payload's own prompt_id. An absent
+    # prompt_id is never a match: without it the comparison would be None
+    # against None, which is a fail-open into an unbounded loop.
+    turn = str(payload.get("prompt_id") or "")
+    ours = bool(turn) and state.get("unattended_turn_id") == turn
+    if payload.get("stop_hook_active") and not (unattended and ours):
         return 0
 
-    used_raw = state.get("used_percentage")
-    try:
-        used = float(used_raw) if used_raw is not None else 0.0
-    except (TypeError, ValueError):
+    # Something else already drives this Stop event: stay out of its way. Checked
+    # before either path, and before the hysteresis marker further down, because
+    # an offer that was never delivered must not be recorded as delivered - the
+    # operator would lose that threshold's notice for good. See
+    # `continuation_claimant` for the three signals, and for why /goal is not one.
+    claimant = CP.continuation_claimant(payload, project)
+    if claimant:
+        _persist(
+            state_path,
+            continuation_claimant=claimant,
+            continuation_seen_at=CP.utc_now().isoformat(),
+        )
+        return 0
+
+    used = _used_percentage(state)
+    if used is None:
+        return 0
+
+    if unattended:
+        # The threshold itself is the gate here, not the once-per-bucket flag.
+        # A bucket fires once per 5%, so a session would halt at the very next
+        # pause and sleep until morning; the purpose of this mode is not to
+        # announce a threshold once, it is to not halt.
+        if used < CP.config(state)["soft"]:
+            return 0
+        return unattended_turn(payload, state, state_path, project, used, turn)
+
+    if not state.get("needs_compact_offer"):
         return 0
 
     level = state.get("offer_level")
@@ -196,15 +545,7 @@ def main() -> int:
         # If state write fails, still deliver the offer this turn
         print(f"checkpoint-offer: state write failed: {exc}", file=sys.stderr)
 
-    raw_remaining = state.get("remaining_percentage")
-    try:
-        remaining = (
-            float(raw_remaining) if raw_remaining is not None else 100.0 - used
-        )
-    except (TypeError, ValueError):
-        remaining = 100.0 - used
-    if remaining < 0:
-        remaining = 0.0
+    remaining = _remaining_percentage(state, used)
 
     # `state` is the copy read BEFORE the delivered-marker write above, and the
     # marker write preserves every key it does not name, so the operator's

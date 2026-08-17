@@ -56,6 +56,13 @@ DECLARED_CLAIMANTS = {
     ".claude/hooks/checkpoint-inject.py": "session_slug",
     ".claude/hooks/checkpoint-offer.py": "session_slug",
     "scripts/checkpoint-paths.py": "session_id",
+    # "Files this session wrote" is an authorship claim, and it is the one this
+    # guard was written over: `git status` reports that a file changed and never
+    # who changed it, so on a tree with two sessions open it would put a
+    # sibling's edits into this session's compaction brief. The label is backed
+    # by `files_written`, which reads this session's own transcript, and the hook
+    # reports an empty set rather than narrowing anything by it.
+    ".claude/hooks/checkpoint-precompact.py": "files_written",
 }
 
 # The detector is deliberately wide, because a defect of this shape is written

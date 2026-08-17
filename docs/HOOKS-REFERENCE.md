@@ -13,7 +13,7 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 
 - **`PreToolUse`** runs before a tool call and can deny it. This is where blocking guards live (secret detection, the engine/data boundary, path redirection).
 - **`PostToolUse`** runs after a tool call. It cannot un-write a file, so its guards are advisory or corrective (hidden-character scan, injection detection).
-- **`SessionStart`**, **`Stop`**, **`PostCompact`**, and **`statusLine`** run around the session lifecycle: priming context, offering checkpoints, saving handoffs, rendering the status line.
+- **`SessionStart`**, **`Stop`**, **`PreCompact`**, **`PostCompact`**, and **`statusLine`** run around the session lifecycle: priming context, offering checkpoints, steering what a compaction keeps, saving handoffs, rendering the status line.
 - **`UserPromptSubmit`** runs on every prompt, before the model starts to think, and by protocol can block the prompt (exit code 2, or `{"decision": "block"}`). The hook wired here (`recall-inject.py`) never exercises that: it only adds context, and on any error it stays silent and exits 0.
 
 ## PreToolUse (can block)
@@ -54,7 +54,8 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 | Hook | Event | Purpose |
 |------|-------|---------|
 | `turn-check.py` | `Stop` | Runs `scripts/turn-check.py` over the uncommitted Python edits and blocks the end of the turn if a lane fails. Compile, then import, then the test files that name the changed modules; seconds, not the full suite. Silent when clean. |
-| `checkpoint-offer.py` | `Stop` | Offers to save a checkpoint at rising context-usage thresholds. |
+| `checkpoint-offer.py` | `Stop` | Offers to save a checkpoint at rising context-usage thresholds. Stays silent when something already drives the Stop event: a scheduled wakeup, in-flight background work, or a ralph-loop that names this session. In unattended mode it waits for the operator instead of asking, then continues the turn if the wait passes in silence. |
+| `checkpoint-precompact.py` | `PreCompact` | Tells the summariser what to keep and what to drop, and appends facts read from the tree: the branch, the working tree, the files this session wrote, the plan's first unchecked item. Runs on an automatic compaction as well as a typed one. Writes nothing, and never blocks the compaction. |
 | `checkpoint-save.py` | `PostCompact` | Saves a session handoff to the archive after a compaction, so the next window resumes cleanly. |
 | `checkpoint-statusline.py` | `statusLine` | Renders the status line, including context-usage and checkpoint state. |
 | `bridge-hook.py` | (router) | Feeds session events to the optional bridge dashboard daemon. Present only when the bridge is in use; harmless when it is not. |

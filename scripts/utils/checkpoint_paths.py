@@ -28,8 +28,10 @@ handoff nobody can regenerate.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
+import subprocess  # nosec B404 - fixed argv, never shell=True
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -217,6 +219,72 @@ def auto_mode(state: dict | None = None) -> bool:
     return env_bool("CLAUDE_HANDOFF_AUTO", False)
 
 
+def unattended_mode(state: dict | None = None) -> bool:
+    """Is this session allowed to continue on its own at a pause?
+
+    A SEPARATE switch from `auto_mode`, never a third value inside it, because
+    the two answer different questions: `auto` decides whether a checkpoint saves
+    without asking, this decides whether a pause hands the turn back to the
+    operator at all. Folding them together would put `auto_mode` in the path of
+    every later change to either, and `auto_mode` is what the statusline and both
+    older modes read.
+
+    Read from `session_unattended`. Same reason `auto_mode` reads
+    `session_auto`: the statusline rewrites its own echo keys every turn, so an
+    operator choice stored in one of those would survive about one turn.
+    """
+    if state:
+        flag = state.get("session_unattended")
+        if flag is not None:
+            return bool(flag)
+    return env_bool("CLAUDE_HANDOFF_UNATTENDED", False)
+
+
+def progress_fingerprint(project: Path, payload: dict | None = None) -> str:
+    """A digest of "has anything actually moved", for the no-progress fuse.
+
+    Three inputs, chosen because each catches a kind of progress the others
+    miss: the committed head, the state of the working tree, and how many files
+    this session has written. A continuation that changed none of the three did
+    nothing, whatever it said about itself.
+
+    Deliberately NOT a timestamp and NOT a turn counter. Both advance whether or
+    not work happened, which is exactly the failure the fuse exists to catch.
+
+    Total: a tree without git, or an unreadable transcript, contributes an empty
+    component rather than raising. That degrades the fuse toward "everything
+    looks unchanged", which stops an unattended run early. Stopping early is the
+    safe direction here; continuing blind is not.
+    """
+    payload = payload or {}
+    parts: list[str] = []
+    for args in (("rev-parse", "HEAD"), ("status", "--short")):
+        try:
+            proc = subprocess.run(  # nosec B603 B607 - fixed argv, no shell
+                ["git", *args],
+                cwd=str(project),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            parts.append(proc.stdout.strip() if proc.returncode == 0 else "")
+        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+            print(f"checkpoint: git {args[0]} unavailable: {exc}", file=sys.stderr)
+            parts.append("")
+
+    written = ""
+    try:
+        from scripts.utils.session_scope import files_written
+
+        mine = files_written(payload.get("transcript_path"))
+        written = "" if mine is None else str(len(mine))
+    except Exception as exc:  # noqa: BLE001 - a missing count is a component, not a failure
+        print(f"checkpoint: write count unavailable: {exc}", file=sys.stderr)
+
+    joined = "\x00".join([*parts, written])
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+
+
 def config(state: dict | None = None) -> dict:
     """Thresholds and mode.
 
@@ -235,6 +303,78 @@ def config(state: dict | None = None) -> dict:
         "step": env_int("CLAUDE_HANDOFF_REMIND_STEP", 5, minimum=1),
         "auto": auto_mode(state),
     }
+
+
+def _ralph_owner(project: Path) -> str | None:
+    """The session id written in the ralph-loop plugin's state file.
+
+    None means nothing claims the loop here. An EMPTY string means the file
+    exists without a `session_id:` line, and that is not the same answer: the
+    plugin's own hook falls through in that case and drives the loop for
+    whichever session reaches the Stop event, so a missing id claims every
+    session on the tree rather than none of them.
+
+    Presence of the file is taken as a LIVE loop rather than as evidence one ran
+    once, because the plugin removes it on every terminal path it has: the
+    completion promise detected, the iteration ceiling reached, and a state file
+    it cannot parse. Read off `hooks/stop-hook.sh` in the installed plugin on
+    2026-08-17 rather than assumed.
+    """
+    path = project / ".claude" / "ralph-loop.local.md"
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        # Not the plugin's shape. Its own hook cannot read an iteration out of
+        # this either, and deletes the file when it tries, so claim nothing.
+        return None
+    for line in lines[1:]:
+        stripped = line.strip()
+        if stripped == "---":
+            break
+        if stripped.startswith("session_id:"):
+            return stripped.split(":", 1)[1].strip()
+    return ""
+
+
+def continuation_claimant(
+    payload: dict | None = None, project: Path | None = None
+) -> str:
+    """The name of whatever already drives this Stop event, or "" if nothing does.
+
+    A Stop event can carry more than one hook, and a second voice on an event
+    something else is already driving costs that driver a turn: the offer's
+    question is answered by a model instead of by the operator who is not there
+    to read it. So the offer stays quiet whenever any of three signals fires.
+
+    Two of the three are Claude Code's own payload fields, not heuristics.
+    `session_crons` carries the tasks that will wake the session later, which is
+    what `/loop`, `CronCreate` and `ScheduleWakeup` register. `background_tasks`
+    carries in-flight work, and its own description draws exactly the
+    distinction that matters here, between a finished session and one paused
+    waiting to be woken. The third is the ralph-loop plugin's state file.
+
+    **`/goal` is NOT among them, and cannot be.** It is itself a Stop hook of
+    type `prompt` registered into the session, and its state lives in the
+    harness's memory: it reaches neither the disk nor this payload, so no hook
+    written in Python can see it. What limits the damage is the harness rather
+    than anything here. Once the goal's own hook blocks a turn,
+    `stop_hook_active` is true for the remainder of that turn and the caller
+    bails on it, so the offer can reach a goal run at most once per operator
+    turn, and a blocked offer does not end the run.
+    """
+    payload = payload or {}
+    for field in ("session_crons", "background_tasks"):
+        value = payload.get(field)
+        if isinstance(value, list) and value:
+            return field
+    if project is not None:
+        owner = _ralph_owner(project)
+        if owner is not None and owner in ("", session_id(payload)):
+            return "ralph-loop"
+    return ""
 
 
 def compact_point() -> tuple[str, str] | None:

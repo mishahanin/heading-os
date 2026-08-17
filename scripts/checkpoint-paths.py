@@ -126,6 +126,89 @@ def auto_switch(value: str) -> int:
     return 0
 
 
+def unattended_switch(value: str) -> int:
+    """Decide whether a pause hands the turn back, for THIS session.
+
+    A second switch beside `--auto`, never a third value inside it. Two
+    independent decisions live here: whether a checkpoint saves silently, and
+    whether the session halts when it pauses and nobody answers. One field
+    holding both would put `auto_mode()` in the path of every later change to
+    either, and `auto_mode()` is what the statusline and both older modes read.
+
+    Turning it ON also turns `--auto` on, because a run nobody is watching wants
+    its handoff on disk. Turning it OFF undoes that, and ONLY that: it restores
+    `--auto` to off when this switch is what turned it on, and leaves a
+    separately chosen `--auto on` alone. The asymmetry is deliberate, and the
+    first version got it wrong in a way a live run exposed at once: clearing only
+    its own key left the operator with an `auto` he never asked for, silently,
+    after typing `--unattended on` and then `--unattended off`.
+    """
+    project = CP.project_root()
+    slug = CP.safe_slug(CP.session_id())
+    path = CP.state_path(project, slug)
+    state = CP.read_json(path)
+
+    if value == "status":
+        chosen = state.get("session_unattended")
+        source = "this session" if chosen is not None else "the environment"
+        on = CP.unattended_mode(state)
+        cfg = CP.config(state)
+        print(f"unattended={'on' if on else 'off'} (set by {source})")
+        print(f"auto={'on' if cfg['auto'] else 'off'} · threshold {cfg['soft']}%")
+        if on:
+            wait = CP.env_int(
+                "CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=600
+            )
+            print(
+                f"at the threshold: wait {wait}s, continue on silence · "
+                f"continuations {int(state.get('unattended_continuations') or 0)}, "
+                f"stall {int(state.get('unattended_stall') or 0)}"
+            )
+        if state.get("unattended_stalled_at"):
+            print(
+                "STOPPED: no progress across consecutive continuations at "
+                f"{state['unattended_stalled_at']}"
+            )
+        return 0
+
+    state["session_unattended"] = value == "on"
+    state["session_unattended_at"] = CP.utc_now().isoformat()
+    if value == "on":
+        # Record whether WE are the reason auto is on, so `off` can undo exactly
+        # what `on` did and nothing more.
+        state["unattended_raised_auto"] = state.get("session_auto") is not True
+        state["session_auto"] = True
+        # A fresh run starts its counters from zero, or yesterday's stall would
+        # stop tonight's work before it began.
+        for key in (
+            "unattended_continuations",
+            "unattended_stall",
+            "unattended_fingerprint",
+            "unattended_stalled_at",
+            "unattended_turn_id",
+        ):
+            state.pop(key, None)
+    elif state.pop("unattended_raised_auto", False):
+        state["session_auto"] = False
+    try:
+        CP.write_json_atomic(path, state)
+    except OSError as exc:
+        print(f"checkpoint-paths: could not write the switch: {exc}", file=sys.stderr)
+        return 1
+
+    if value == "on":
+        wait = CP.env_int("CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=600)
+        soft = CP.config(state)["soft"]
+        print(f"unattended=on for this session ({slug}).")
+        print(f"At {soft}% used: wait {wait}s for you, then continue without asking.")
+        print("Type anything inside that window and the turn goes back to you.")
+        print("Checkpoints also save silently now (auto=on).")
+        print("Turn it off: python scripts/checkpoint-paths.py --unattended off")
+    else:
+        print(f"unattended=off for this session ({slug}). A pause waits for you again.")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Print this session's checkpoint paths.")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of key=value")
@@ -134,10 +217,19 @@ def main(argv=None) -> int:
         choices=("on", "off", "status"),
         help="hands-off mode for THIS session only (overrides CLAUDE_HANDOFF_AUTO)",
     )
+    ap.add_argument(
+        "--unattended",
+        choices=("on", "off", "status"),
+        help="continue at a pause after a silent grace period, THIS session only "
+             "(overrides CLAUDE_HANDOFF_UNATTENDED); `on` implies --auto on",
+    )
     args = ap.parse_args(argv)
 
     if args.auto:
         return auto_switch(args.auto)
+
+    if args.unattended:
+        return unattended_switch(args.unattended)
 
     paths = collect()
     if args.json:

@@ -523,32 +523,33 @@ def print_report(result, source):
 
 
 ALL_HELP = (
-    "Audit the 12 gated documentation pages (CHECKED_GLOBS). This is NOT the "
-    "whole scope the rule governs: skill instruction bodies are in scope too "
-    "and are NOT gated - use --skills for those."
+    "Audit the 12 gated documentation pages (CHECKED_GLOBS). This is one half of "
+    "the rule's scope: skill instruction bodies are the other half, and they have "
+    "their own gate - use --skills for those."
 )
 
 SKILLS_HELP = (
-    "Audit every .claude/skills/*/SKILL.md. In scope per the rule, ungated on "
-    "purpose: 74 of 96 carried 300 errors when first measured (2026-08-16), and "
-    "a gate armed on that would block every commit until the corpus is rewritten."
+    "Audit every .claude/skills/*/SKILL.md. Gated since 2026-08-17, errors only, "
+    "like --all: the corpus measured 300 errors on 2026-08-16, of which 83 were "
+    "defects in this checker's own sentence splitter and 217 were real, and it "
+    "now stands at zero."
 )
 
 
 def resolve_scope():
-    """Return the twelve GATED pages that exist on disk.
+    """Return the twelve documentation pages that exist on disk.
 
     Deliberately narrower than the rule's scope. The rule also governs skill
-    instruction bodies, which `resolve_skill_scope` answers for; keeping them
-    out of this list is what lets the pre-commit gate stay armed at zero errors
-    while the skill corpus is still being brought down.
+    instruction bodies, which `resolve_skill_scope` answers for. Both halves
+    carry their own gate since 2026-08-17; the split stays because the two
+    scopes resolve from different roots and report separate totals.
     """
     root = get_workspace_root()
     return [root / g for g in CHECKED_GLOBS if (root / g).exists()]
 
 
 def resolve_skill_scope():
-    """Return every skill instruction body, the ungated half of the rule's scope.
+    """Return every skill instruction body, the other half of the rule's scope.
 
     Separate from `resolve_scope` so the gap has a number instead of an
     assumption. Before this existed, `--all` called itself "every in-scope

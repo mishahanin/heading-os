@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HEADING OS v0.8</title>
-<meta name="description" content="The engine grows a memory, a method, and ears.">
+<title>HEADING OS v0.9</title>
+<meta name="description" content="What a measurement is worth.">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -76,12 +76,12 @@
   </div>
 </aside>
 <main class="content">
-  <h1>HEADING OS v0.8</h1>
-  <p class="page-meta">The engine grows a memory, a method, and ears.</p>
-  <!-- version: 1.0.0 | last-updated: 2026-08-09 -->
+  <h1>HEADING OS v0.9</h1>
+  <p class="page-meta">What a measurement is worth.</p>
+  <!-- version: 2.0.0 | last-updated: 2026-08-17 -->
 
-<p><strong>The engine grows a memory, a method, and ears.</strong></p>
-<p>Three months ago HEADING OS was a very good assistant that forgot things, built things by instinct, and could only read text. This release changes all three. It remembers by meaning instead of by date. It builds new capability through one repeatable engineering standard called Canopus. And it can now listen to a recorded meeting on your own machine and turn it into the follow-ups, the CRM entries, and the drafts that meeting should have produced.</p>
+<p><strong>What a measurement is worth.</strong></p>
+<p>A tool that reports on your work is a tool you stop questioning. This release is what happened when the engine began questioning its own instruments. A style checker was wrong about a quarter of the errors it reported. A visual gate read source text and called the result a rendered page. Two tools told the operator more than their method had established. Each one was fixed. Then the shape of the mistake was written down as a rule with a test behind it. The third occurrence is the one you do not get to find by hand.</p>
 <table>
 <thead>
 <tr>
@@ -91,20 +91,20 @@
 </thead>
 <tbody>
 <tr>
-<td><strong>398</strong></td>
-<td>commits since v0.7.0</td>
+<td><strong>51</strong></td>
+<td>commits since v0.8.0</td>
 </tr>
 <tr>
-<td><strong>4,085</strong></td>
-<td>automated tests across 325 test files</td>
+<td><strong>5,443</strong></td>
+<td>automated tests across 361 test files</td>
 </tr>
 <tr>
-<td><strong>538</strong></td>
+<td><strong>554</strong></td>
 <td>security tests, run on every commit</td>
 </tr>
 <tr>
-<td><strong>7</strong></td>
-<td>steps in the build standard</td>
+<td><strong>83</strong></td>
+<td>of 300 reported style errors were the checker&rsquo;s own defect</td>
 </tr>
 <tr>
 <td><strong>0</strong></td>
@@ -112,334 +112,159 @@
 </tr>
 </tbody>
 </table>
-<p>Released 9 August 2026. Every figure on this page comes from the engine&rsquo;s own records, measurements, and test suite; none are estimates. The full commit-level record is in <a href="https://github.com/mishahanin/heading-os/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
+<p>Released 17 August 2026. Every figure on this page comes from the engine&rsquo;s own records, measurements, and test suite. None are estimates. The full commit-level record is in <a href="https://github.com/mishahanin/heading-os/blob/main/CHANGELOG.md">CHANGELOG.md</a>.</p>
 <hr />
-<h2 id="1-memory-that-finds-itself">1. Memory that finds itself</h2>
-<p><em>From &ldquo;here is what happened recently&rdquo; to &ldquo;here is what matters to what you just asked&rdquo;</em></p>
-<p>Every assistant claims to have memory. What that usually means is a list of notes somebody has to remember to go and read. HEADING OS now behaves differently: the moment you type a question, the engine quietly searches everything it knows and puts the relevant pointers on the table before it starts thinking.</p>
+<h2 id="1-the-checker-that-was-wrong-about-the-prose">1. The checker that was wrong about the prose</h2>
+<p><em>An instrument reported 300 errors, and 83 of them were the instrument</em></p>
+<p>The engine&rsquo;s documentation is read by people whose first language is not English. They read it on a bad day, while something is broken. So a written standard governs it: a subset of the writing rules from ASD-STE100. That is the controlled-language specification the aerospace industry uses for maintenance documentation. Short sentences. Active voice. One action per step. The warning before the step it guards, never after it.</p>
+<p>A checker measures compliance mechanically. This release pointed it at the instruction bodies that skills execute, 96 files, for the first time. It reported 300 errors across 74 of them.</p>
 <div class="admonition warning">
-<p class="admonition-title">The failure that forced this</p>
-<p>A one line summary in an index said one thing. The full record underneath it said another, because the record had moved on and the summary had not. The assistant answered from the summary, confidently, about a live commitment. It was wrong. Everything in this section exists so that class of mistake becomes structurally impossible rather than a matter of luck.</p>
+<p class="admonition-title">What the number turned out to mean</p>
+<p>Bringing 300 down to zero surfaced three defects in the checker itself. All three are one shape. A markdown character sits between the end of one sentence and the start of the next. The pattern that splits sentences does not accept it. So two clean sentences are measured as one over-long sentence.</p>
+<p>Emphasis around a short sentence accounted for <strong>51</strong> of the errors. The continuation marker on a quoted block accounted for <strong>21</strong>. A closing quote or bracket accounted for <strong>11</strong>. Eighty-three sentences were being rewritten by hand to satisfy a broken measurement.</p>
 </div>
-<h3 id="six-places-memory-lives-one-map">Six places memory lives, one map</h3>
-<p>Memory used to be a loose collection of habits. It is now a documented lifecycle with one map, one console command, and a named owner for every movement of data. The full lifecycle is documented in <a href="memory-lifecycle.html">memory lifecycle</a>.</p>
-<table>
-<thead>
-<tr>
-<th>Store</th>
-<th>What it holds</th>
-<th>How it is kept honest</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Auto memory</strong></td>
-<td>Durable facts about you and the business: preferences, decisions, standing constraints.</td>
-<td>Written on demand, retired only deliberately</td>
-</tr>
-<tr>
-<td><strong>Threads</strong></td>
-<td>Live situations: a deal, a partnership, a deployment, each with its own running log.</td>
-<td>Logged as events happen</td>
-</tr>
-<tr>
-<td><strong>ODIN brain</strong></td>
-<td>Curated principles and positions, distilled from books, articles, and lived episodes.</td>
-<td>Compiled and linted</td>
-</tr>
-<tr>
-<td><strong>Knowledge base</strong></td>
-<td>Notes, research, reference material.</td>
-<td>Promoted to shared only on purpose</td>
-</tr>
-<tr>
-<td><strong>Conversation chronicle</strong></td>
-<td>A short dated entry per past conversation: on this day we discussed this.</td>
-<td>Built nightly by a local model, ranked below the belief stores</td>
-</tr>
-<tr>
-<td><strong>Semantic index</strong></td>
-<td>The search layer over all of the above, holding every store as passages rather than whole files.</td>
-<td>Rebuilt nightly, incrementally</td>
-</tr>
-</tbody>
-</table>
-<ul>
-<li><strong>100% of search runs on your own machine.</strong> No passage of your memory is sent to any external service to be indexed or searched.</li>
-<li><strong>RU ⇄ EN.</strong> A question in Russian finds an English note, and the reverse. The search matches meaning, not spelling.</li>
-<li><strong>$0 marginal cost per search.</strong> The embedding model is local, so recall is free to use as often as you like.</li>
-</ul>
-<h3 id="what-actually-changed">What actually changed</h3>
-<h4 id="relevance-on-every-prompt-not-a-snapshot-at-login">Relevance on every prompt, not a snapshot at login</h4>
-<p>The old behaviour injected the four most recently touched threads at the start of a session, regardless of subject. It was noise on a good day and a miss on a bad one. The new behaviour reads what you just typed and surfaces pointers ranked by relevance to it.</p>
-<p>Three deliberate constraints keep it from becoming a nuisance. It emits <strong>pointers only</strong>, never file contents, so the entry to a record is cheap and the record itself is read on demand. It has a <strong>hard timeout</strong>, so a cold search never makes you wait. And it <strong>fails silent</strong>: any error, any timeout, any absence of a good match produces nothing at all rather than an apology.</p>
-<h4 id="the-engine-says-i-do-not-know-and-means-it">The engine says &ldquo;I do not know&rdquo; and means it</h4>
-<p>Recall now has three distinct answers instead of two, and the difference matters when a decision hangs on it.</p>
-<table>
-<thead>
-<tr>
-<th>Answer</th>
-<th>What it means</th>
-<th>What you should do</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Confident hit</strong></td>
-<td>Material cleared the relevance threshold. The answer is composed from those sources, each cited by file path.</td>
-<td>Trust it, and open the cited record before acting on anything consequential.</td>
-</tr>
-<tr>
-<td><strong>Near miss</strong></td>
-<td>Nothing cleared the threshold, but something sat just below it. The engine says so plainly and offers the titles as leads.</td>
-<td>Treat them as leads, not as an answer.</td>
-</tr>
-<tr>
-<td><strong>Gap</strong></td>
-<td>Nothing relevant exists in memory. The engine reports the gap with the score it fell short by.</td>
-<td>Take it at face value. It is not going to invent a plausible answer to fill the silence.</td>
-</tr>
-</tbody>
-</table>
-<h4 id="the-pointer-is-never-allowed-to-hold-a-live-number">The pointer is never allowed to hold a live number</h4>
-<p>This is the small rule that fixes the failure at the top of this section. A one line index entry may name a topic and point at a record. It may not quote anything that drifts: a price, a ceiling, an offer, a live count, a current deadline. Those live in the record body and are read fresh. A pointer that never quotes a live number cannot go stale into a wrong number. An automated check flags violations weekly; it advises, it does not block.</p>
-<h4 id="a-memory-is-never-pruned">A memory is never pruned</h4>
-<p>A fact that goes unused sinks in ranking. It is never deleted for going quiet. Retrieval now reinforces what it surfaces, so the ranking signal that was previously written by nothing at all finally exists, and every path that turned a low count into a deletion proposal is gone with it. What used to be a prune list is now a dormancy report: informational, oldest first, and it proposes nothing. Removal happens on one trigger only, which is the operator explicitly asking for it.</p>
-<h4 id="a-conversation-history-that-respects-the-line-between-work-and-life">A conversation history that respects the line between work and life</h4>
-<p>Every past conversation is summarised nightly into one dated entry by a small model running locally. Business entries join the search index, ranked below your curated knowledge so that a passing remark never outweighs a considered position. Personal entries are never indexed at all. They are reachable only when you explicitly ask for them, which means private life cannot surface by accident into a working context or a draft about to be sent.</p>
-<h3 id="what-it-looks-like-in-practice">What it looks like in practice</h3>
-<p><strong>You type:</strong> <em>&ldquo;What did we finally agree with Northwind Telecom on the pilot pricing, and who pushed back?&rdquo;</em></p>
-<p><strong>Before you finish reading your own sentence,</strong> the engine has surfaced four pointers: the Northwind thread, the CRM record for their commercial lead, the pricing note from the March review, and a chronicle entry from the call two weeks ago.</p>
-<p><strong>Then it opens the records</strong>, not the pointers, and answers with the figure that is in the thread today, citing the file it came from. If the thread and the older note disagree, it says which is newer and flags the contradiction instead of quietly picking one.</p>
+<p>The general lesson landed in the code rather than in a comment. Enumerating the three shapes one at a time produced rounds two and three. So the fix now covers quotes, brackets and emphasis as one character class. The quoted-block marker is stripped in preparation, like a list bullet.</p>
+<h3 id="what-the-corpus-was-actually-carrying">What the corpus was actually carrying</h3>
+<p>The real debt was 217 errors across 74 files. Every one is fixed, and the corpus stands at zero. Both halves of the standard now carry a gate. The twelve documentation pages were already gated. The 96 skill bodies were not, and are now. Each half is refused at commit time and again in continuous integration, on errors only.</p>
 <div class="admonition note">
-<p class="admonition-title">One place to drive all of it</p>
-<p>Status, search, promotion, retirement, reconciliation, and the health check all run from a single command line entry point. There is no dashboard you have to open and no browser you have to keep alive. That is a standing rule of the engine, not an accident of this release.</p>
+<p class="admonition-title">Why the warnings are deliberately not gated</p>
+<p>The checker also emits 423 warnings across the corpus. Most of them say &ldquo;this looks like passive voice&rdquo;. A pattern with no grammatical analysis behind it makes that judgement. Gating on it would block commits over sentences the checker cannot parse. So warnings advise, and errors gate. An error is arithmetic on a word count, and arithmetic has nothing to be wrong about. A tool that blocks work on a guess teaches people to bypass it.</p>
 </div>
+<h3 id="the-file-that-read-as-untouchable-and-was-not">The file that read as untouchable, and was not</h3>
+<p>The last error sat in a skill vendored from an outside project. It looked exempt, because a lock file holds a hash of it. Editing the file would break the lock. That reading was wrong, and it is worth correcting in public. The lock hashes the copy that <strong>ships here</strong>, not the upstream author&rsquo;s bytes. The local copies are already lightly adapted. Re-locking is a supported operation with a documented command.</p>
+<p>So the sentence was split, and the tree was re-locked. The lock now carries a note. It tells the next re-vendor to re-apply the adaptation. An exemption would have hidden one file&rsquo;s debt permanently. That is the same unmeasured-therefore-clean failure the gate exists to end.</p>
 <hr />
-<h2 id="2-canopus-how-anything-new-gets-built">2. Canopus: how anything new gets built</h2>
-<p><em>The engineering standard, in seven steps, two of which are yours</em></p>
-<p>Canopus is the answer to a simple governance question: <strong>how do you let an AI build real capability into a system you depend on, without ever having to take its word for it?</strong> It is a named, numbered, repeatable procedure. Every non trivial change to HEADING OS goes through it. Typo fixes and configuration edits do not, deliberately, because a process everybody skips is worse than no process.</p>
+<h2 id="2-tools-that-stopped-overstating-what-they-measured">2. Tools that stopped overstating what they measured</h2>
+<p><em>Four instruments claimed coverage their method never established</em></p>
+<p>On 12 August two tools misled their operator within hours of each other. Neither did so through a logic bug.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What its method did</th>
+<th>What its sentence said</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Extension audit</td>
+<td>Listed a directory of installed versions</td>
+<td>&ldquo;Running in this session&rdquo;</td>
+</tr>
+<tr>
+<td>End-of-turn check</td>
+<td>Read the working tree for changed files</td>
+<td>&ldquo;The edits made in this turn&rdquo;</td>
+</tr>
+</tbody>
+</table>
+<p>The first reported a superseded extension version as a live hook. The cache keeps every version ever fetched, and the loader reads one. The second blocked a turn over a deliberately failing test. A <strong>parallel session</strong> had written that test a minute earlier. Version control reports that a file changed, and never who changed it.</p>
+<div class="admonition note">
+<p class="admonition-title">Why this class of defect survives review</p>
+<p>Both sentences were written by someone who believed them. Both read as obviously true. A wrong number gets challenged. A measurement that over-claims gets trusted, acted on, and quoted back later as fact. That is the more expensive failure.</p>
+</div>
+<p>Both are resolved rather than reworded. Authorship comes from the session&rsquo;s own transcript. Live-versus-installed comes from the loader&rsquo;s record. Where the evidence is unavailable, both widen back to everything and report the state as unknown. Hiding something that executes is worse than listing something that does not.</p>
+<p>Then the shape itself was written down. A new rule states the obligation in one line: <strong>state the coverage your method establishes, and no more.</strong> A test scans every user-facing message in the engine. It looks for phrases that assert session membership or live execution. Each match must name what resolves it, or say why it is not a coverage claim. A new claim fails the suite until its author answers one question: what establishes this?</p>
+<h3 id="the-same-correction-twice-more">The same correction, twice more</h3>
+<ul>
+<li><strong>The visual gate read source text and called the result a render.</strong> It had enforced the design rule since June by matching patterns against file contents. That answers one question: is a forbidden font written down here. It could not answer what a colour resolved to against the surface behind it. A second engine now parses the page and resolves the cascade. It ran on this project&rsquo;s own tree and found <strong>252</strong> pieces of text below the accessibility contrast floor, all from one colour token. It also found <strong>49</strong> heading-hierarchy breaks in the branded document templates. None of it was quietly fixed. 399 findings across 38 files are frozen, the way lint debt is frozen. Existing work is left alone, and new work is held to the standard. Each frozen finding surfaces the moment its file is next edited.</li>
+<li><strong>A review tool stopped asking a model to remember its own paperwork.</strong> Across 75 saved review reports, one mandated section header appeared in 8 and another in 12. Those were instructions written in prose, addressed to a model that can omit them silently. The tool writes the record now, one row per judged event. It validates in both directions, so a report claiming a review pass the rows do not show fails. It cannot make omission impossible, because the reviewing model is the running session. So it says it makes omission visible, and claims nothing more.</li>
+</ul>
+<hr />
+<h2 id="3-counting-what-no-single-file-can-answer">3. Counting what no single file can answer</h2>
+<p><em>A new primitive for questions whose answer lives nowhere</em></p>
+<p>&ldquo;How many active situations have not moved in thirty days.&rdquo; &ldquo;Which pipeline rows have no contact record behind them.&rdquo; &ldquo;Which relationships have not been touched since May.&rdquo; These are ordinary management questions. The engine was quietly bad at them.</p>
 <div class="admonition warning">
-<p class="admonition-title">The one thing Canopus exists to prevent</p>
-<p>A test too weak to decide anything, passing as a test that decided something. Across 62 recorded pieces of work, a test was never once weakened after the fact to make a failure go away. It was born too weak thirty times. The green light to distrust is the one that no wrong version of the code was ever made to fail.</p>
+<p class="admonition-title">The measurement that forced a new approach</p>
+<p>Search retrieval was measured against code-computed truth over this workspace on 13 August. Over the seven questions of this class it scored a ceiling of <strong>0.000</strong>. All seven at exactly zero.</p>
+<p>That is not a tuning problem. Retrieval returns the most relevant passages, and the answer to &ldquo;how many&rdquo; exists in no passage. It has to be counted.</p>
 </div>
-<h3 id="the-seven-steps">The seven steps</h3>
-<p>Steps 4 and 7 belong to you. They are the two moments where a human commits, and the assistant is forbidden from taking either of them on your behalf. A standard whose approvals the assistant can grant itself is a standard with zero approvals.</p>
-<p><strong>1. Define the value</strong> — <em>Act 1, nothing is built yet</em></p>
-<p>One sentence saying what would be worth having, in business terms. Not &ldquo;add a module&rdquo;, but &ldquo;a weekly digest that tells me which suppliers slipped this week, so I stop finding out at the quarterly review&rdquo;.</p>
-<blockquote>
-<p><strong>What it buys:</strong> a stated purpose you can hold the finished thing against. Half the failures later in this list turn out to be a good build of the wrong idea.</p>
-</blockquote>
-<p><strong>2. Brainstorm into a scope document</strong> — <em>Act 1, exploration</em></p>
-<p>A structured back and forth that turns the sentence into a scope: what is in, what is deliberately out, what the alternatives were, and why they were rejected. The rejected options are written down, not discarded, so nobody re litigates them in three months.</p>
-<blockquote>
-<p><strong>What it buys:</strong> the argument happens while changing your mind is still free.</p>
-</blockquote>
-<p><strong>3. Write the plan and the test contract</strong> — <em>Act 1, where the value is</em></p>
-<p>This is where most of the value is. The plan states three to five success criteria, each written so that a single test can decide it, in the form <em>when this happens, the system shall do that</em>. The criteria are not brainstormed from what came to mind: they are derived from a table that divides all possible inputs into classes, including the awkward edges, with one row per class and the name of the test that decides it.</p>
-<p>The criteria then become <strong>real test files</strong>, written before a single line of the actual code exists. Those files are the contract. They fail, correctly, because there is nothing yet to make them pass.</p>
-<blockquote>
-<p><strong>What it buys:</strong> the definition of &ldquo;done&rdquo; is fixed in writing, in executable form, before anybody is invested in the work. The plan also carries a size budget, roughly 24 KB, because a plan nobody finishes reading is a plan whose decisive paragraph nobody read.</p>
-</blockquote>
-<p><strong>4. You review the plan and commit it</strong> — <em>Yours, approval moment one</em></p>
-<p>An adversarial review runs against the plan first, and every finding is applied rather than triaged. Then you read it and commit. That commit <strong>is</strong> the approval: it captures the plan and the failing contract together, at one point in time, and the record of it cannot be edited afterwards without leaving a trace.</p>
-<blockquote>
-<p><strong>What it buys:</strong> a fixed reference point. Anyone can later ask, mechanically, whether the delivered work matches what you approved, because the approved state is a permanent snapshot rather than a memory of a conversation.</p>
-</blockquote>
-<p><strong>5. Build it, with the builder separated from the planner</strong> — <em>Act 2</em></p>
-<p>The work is dispatched to a fresh agent per task, plus a reviewer who did not write the code. The session that wrote the plan does not implement it. This is not ceremony: an author reviewing their own work reproduces their own assumptions with the same weights and reaches the same conclusions.</p>
-<blockquote>
-<p><strong>What it buys:</strong> the entity that decides what &ldquo;done&rdquo; means is never the entity that declares it done.</p>
-</blockquote>
-<p><strong>6. Review the built thing relentlessly, and name where each problem came from</strong> — <em>Act 3, green is not the same as right</em></p>
-<p>A hard review runs against the finished work, for a bounded three rounds, and every finding is applied. Anything still open at the end is handed to you rather than quietly closed. Each finding is labelled with its origin, and the origin decides where it goes:</p>
-<ul>
-<li><strong>Code origin.</strong> The build is wrong. Fix it against the existing contract.</li>
-<li><strong>Contract origin.</strong> The test was too weak. Go back to step 3 and write a new contract with a new approval. Never patch the code and leave the weak test showing green.</li>
-<li><strong>Value origin.</strong> The finished thing reveals that step 1 was wrong. That is <strong>your</strong> call, not the assistant&rsquo;s, because step 1 is where you said what would be worth having.</li>
-</ul>
-<p>One extra reviewer is added who sees only the change itself, blind to the plan and the stated goal, so that at least one pair of eyes is not primed to agree.</p>
-<blockquote>
-<p><strong>What it buys:</strong> a weak test cannot survive its own project. Naming the origin is what forces it back to step 3 instead of being smoothed over.</p>
-</blockquote>
-<p><strong>7. Production, the record, and the undo</strong> — <em>Yours, approval moment two</em></p>
-<p>You ship it. Then a record is written: what the value was, which approval it descends from, what the reviews found, what was fixed, and, in plain words, <strong>how to undo it</strong>. The undo is written down before it is needed, not improvised at the moment something is on fire.</p>
-<p>The temporary contract is then retired into the permanent test suite, and both the retirement and its new home are recorded, so a finished piece of work is never mistaken for a broken one.</p>
-<blockquote>
-<p><strong>What it buys:</strong> an audit trail per change, and a rollback path that exists before the emergency.</p>
-</blockquote>
-<h3 id="three-instruments-and-what-each-of-them-answers">Three instruments, and what each of them answers</h3>
-<table>
-<thead>
-<tr>
-<th>Instrument</th>
-<th>The question it answers</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>probe</strong></td>
-<td><em>Is this test worth anything?</em> It runs the contract against three deliberately wrong versions of the not yet written code, and reports what each one got past. A test that stays green against all three is not testing behaviour, it is matching a word. The result goes in front of you before you approve.</td>
-</tr>
-<tr>
-<td><strong>check</strong></td>
-<td><em>Did the work honour the approval?</em> Four mechanical questions. Did the contract move after you approved it? Does the delivered work descend from your approval? Was the contract genuinely failing at the moment of approval? Is it genuinely passing now, with real runs rather than collected file names?</td>
-</tr>
-<tr>
-<td><strong>note</strong></td>
-<td><em>What actually happened here?</em> One committed record per piece of work. The tool refuses an incomplete record rather than writing a half formed one, so the archive cannot fill up with entries that look complete and say nothing.</td>
-</tr>
-</tbody>
-</table>
-<h3 id="the-standard-got-smaller-on-purpose">The standard got smaller, on purpose</h3>
-<p>An earlier version of Canopus had thirteen numbered moments and a large amount of custom machinery to enforce them: file locks, freeze manifests, approval gates written in code. Measurement retired most of it. <strong>93 percent of that hand built prevention surface could be defeated by a single shell command</strong>, which meant it stopped the careless hand and not the determined one, while charging every honest change a heavy toll.</p>
-<p>Thirteen moments became seven. The enforcement is now built out of tools that already exist and are already trusted: version control for the freeze, a separate reviewer for the separation, and the ordinary test suite for the verdict. Less code to maintain, less ceremony per change, and the guarantees that were real are still there.</p>
+<p>So the engine gained a counting primitive. A small program walks the files on disk and answers the question. Only the question, a description of the corpus, and a structured result travel back. <strong>The corpus never enters the model&rsquo;s context window.</strong> That is what makes counting across thousands of files affordable. It also keeps a private corpus from being loaded wholesale to answer a question about its size.</p>
+<p>It is deliberately narrow. Questions that compare two dense documents scored 0.667 on ordinary retrieval. Those are refused by design and sent to the existing recall path. Published research reports that a traversal tool hurts on a corpus that already fits in context. There was no reason to rediscover that here.</p>
 <div class="admonition note">
-<p class="admonition-title">Four rules the measurements paid for</p>
-<p><strong>1. Order comes from lineage, never from clocks.</strong> A timestamp is an environment variable anyone can set. In a live demonstration, two variables put a piece of work nine hours before the approval it descends from; lineage got it right and the clock did not.</p>
-<p><strong>2. The verdict is the suite actually run, not a shortcut.</strong> A deletion experiment produced 586 failing tests across 28 files while all three fast shortcuts reported success.</p>
-<p><strong>3. Every check is broken on purpose before it is trusted.</strong> An uncalibrated check is worse than no check, because it manufactures confidence.</p>
-<p><strong>4. Prove a safeguard is alive, never infer it from silence.</strong> 24 broad error handlers were found wrapped around calls into this system, 10 of them invisibly. Silence is not evidence.</p>
+<p class="admonition-title">Model-written code runs here, which the engine otherwise forbids</p>
+<p>The model writes the traversal program, and this project bans executing model-written code. The carve-out is not built on trust. The program runs with no network, no environment, and a read-only view of the corpus. It has one writable output file. What it returns must satisfy a schema of counts, paths and pairs. That last control protects the parent process. The parent holds the credentials and the network access an injected instruction would need. The four conditions that void the carve-out are written down in the rule, not left to judgement.</p>
 </div>
-<h3 id="a-worked-example-end-to-end">A worked example, end to end</h3>
-<p><strong>The ask:</strong> &ldquo;I want a Monday morning digest of which suppliers slipped last week.&rdquo;</p>
-<p><strong>Step 1.</strong> Value: <em>a weekly supplier slippage digest, delivered before the Monday leadership call, so a slip is discussed in the week it happens rather than at quarter end.</em></p>
-<p><strong>Step 2.</strong> Scope: reads the supplier records and the delivery log. Sends to one channel. Explicitly out of scope: chasing the supplier, changing any record, forecasting.</p>
-<p><strong>Step 3.</strong> Criteria, one test each. When a delivery date passes with no receipt logged, the digest shall name that supplier. When nothing slipped, the digest shall say so in one line rather than staying silent. When the delivery log cannot be read, the digest shall report the failure and shall not send an empty all clear. The input table covers the awkward cases: a supplier with no deliveries at all, a delivery logged late but on time, a date exactly on the boundary.</p>
-<p><strong>Step 4.</strong> You read the plan, see that the third criterion is the one that saves you from a false all clear, and commit.</p>
-<p><strong>Step 5.</strong> A separate builder implements it. A separate reviewer checks it.</p>
-<p><strong>Step 6.</strong> The review finds that an unreadable log produced an empty digest that read as good news. That is a code origin finding against a criterion that already existed, so it is fixed, and the test that always covered it now genuinely bites.</p>
-<p><strong>Step 7.</strong> Ships. The record names the undo in one line: turn off the schedule, restore the previous version, run the test suite.</p>
-<h3 id="why-an-executive-should-care">Why an executive should care</h3>
-<table>
-<thead>
-<tr>
-<th>Canopus property</th>
-<th>What it means for the business</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Two human approvals, never delegated</td>
-<td>Nothing enters the system you depend on without you agreeing twice, once to the intent and once to the result.</td>
-</tr>
-<tr>
-<td>Definition of done fixed in advance</td>
-<td>No moving goalposts, in either direction. You cannot be sold a smaller success than the one you approved.</td>
-</tr>
-<tr>
-<td>Builder separated from planner</td>
-<td>The self assessment problem is removed by construction rather than by good intentions.</td>
-</tr>
-<tr>
-<td>Test strength measured, not assumed</td>
-<td>A green light means something. That is the entire point of the standard.</td>
-</tr>
-<tr>
-<td>Undo written before it is needed</td>
-<td>Recovery is a one line instruction on file, not an improvisation under pressure.</td>
-</tr>
-<tr>
-<td>One record per change</td>
-<td>A complete, readable audit trail of every meaningful change, with the reasoning attached.</td>
-</tr>
-</tbody>
-</table>
+<p><strong>How it was accepted, and what that cost.</strong> The primitive passed 6 of 7 on the questions it exists for. It passed 5 of 5 on the questions it must refuse. The threshold was registered before the first run and never moved. There were zero confidently-wrong answers, at a median of 0.05 seconds against 0.92. Five acceptance runs were needed. <strong>Every re-run was forced by a defect in the measuring instrument, not in the thing measured.</strong> Two reference answers were wrong. The guard meant to make runs comparable pinned a value that moved whenever the corpus was edited. One question class is withheld from the score by name, rather than dropped from the report. Its questions disagree about how to count a table, and the question never states that rule. So the zero measured the wording, not the tool.</p>
 <hr />
-<h2 id="3-hearing-recordings-reading-documents">3. Hearing recordings, reading documents</h2>
-<p><em>A recorded call becomes the follow ups it should have produced</em></p>
-<p>The most expensive thing about a good meeting is what happens after it. Someone has to watch it back, or nobody does, and the commitments made in minute 47 quietly evaporate. HEADING OS can now take a recording, hear it, and drive the work that should follow from it.</p>
-<h3 id="hearing-speech-to-text-that-never-leaves-the-building">Hearing: speech to text that never leaves the building</h3>
+<h2 id="4-three-sessions-one-workspace">4. Three sessions, one workspace</h2>
+<p><em>The session handoff learns that it is not alone</em></p>
+<p>Long work outgrows a single context window. The engine handles that by writing a handoff. It records the objective, the decisions taken, and the next action. A fresh window then resumes instead of restarting. Several of those windows routinely run on the same workspace at once.</p>
+<p>Every path involved was shared between them. The real hooks were replayed on 16 August, with one session at 46 percent of its window and another idle. The <strong>idle</strong> session was told to save a checkpoint. The session whose context was filling was told nothing. The same shared pointer could hand a resuming session a different session&rsquo;s handoff. It arrived under a sentence asserting that its own previous checkpoint had been found.</p>
+<p>Both are keyed by session now. One shared pointer deliberately stays, because it has a second reader. That reader asks a different question: what is the newest handoff in this workspace. There, last-writer-wins is the correct answer rather than a race.</p>
 <ul>
-<li><strong>Nothing is uploaded.</strong> The audio, the model, and the transcript all stay on your machine. There is no cloud transcription service in this path, which means a confidential negotiation recording never becomes a third party&rsquo;s training data or a third party&rsquo;s breach.</li>
-<li><strong>Video files, directly.</strong> Meeting recordings in the usual formats are read as they are, with no conversion step. Audio only recordings, voice notes, and dictated memos work the same way.</li>
-<li><strong>Languages auto detected, including Russian.</strong> The language is detected automatically and reported with a confidence figure, or you can force it. A Russian call and an English call go through the same command.</li>
-<li><strong>Plain text, subtitles, or structured data.</strong> Readable prose for a summary, timestamped subtitles for review, or structured output with per segment and per word timings when something needs to be quoted precisely.</li>
+<li><strong>It can save itself.</strong> An optional mode, off by default, writes the checkpoint when context crosses a threshold. The session then carries on working. It refuses to name a compaction point unless one is configured, per the rule in section 2. It is not named after compaction. No hook can start one, and a name that implies otherwise is the same defect.</li>
+<li><strong>The choice belongs to a window, not to a machine.</strong> An environment variable is a decision made at launch for a whole workspace. The decision an operator makes is a running one, taken part-way into a long piece of work. Three windows on this tree do three different sizes of work. The switch is per session now. It is offered as an option in the prompt the operator is already reading.</li>
+<li><strong>It ships as an installable bundle.</strong> The hooks find their own root instead of counting directory levels. So the same files work inside this repository, and inside a bundle installed elsewhere. The archive follows the consumer&rsquo;s project rather than the author&rsquo;s.</li>
 </ul>
 <div class="admonition note">
-<p class="admonition-title">Built by measurement, not by picking the biggest model</p>
-<p>The default is deliberately not the largest available model. Over two minutes of real speech, the largest model returned the transcript with <strong>zero commas, periods, or capital letters</strong>, and ran slower. The mid sized model punctuated it properly and was faster. An unreadable wall of lowercase is not the higher quality answer.</p>
-<p>Short recordings take the slower, higher quality path and long ones take the fast path, because the quality difference costs seconds on a voice note and hours on a two hour workshop. And one tempting shortcut was tested and rejected outright: feeding the model a sample sentence to teach it punctuation caused it, on a longer file, to <strong>echo the sample back in place of real speech and delete about 40 percent of the recording</strong>. Losing content is far worse than losing commas, so that option is off by default and carries a warning when switched on.</p>
-</div>
-<h3 id="reading-documents-screens-and-where-exactly-something-was-said">Reading: documents, screens, and where exactly something was said</h3>
-<p>Alongside hearing, the engine reads what it is shown. Contracts, decks, spreadsheets, and scanned documents are parsed with their spatial layout intact, so an answer can point at the exact location on the exact page where a claim comes from, rather than paraphrasing and hoping. A screenshot on your clipboard is read directly. A web page that only renders in a real browser is captured and read the same way.</p>
-<p>The practical effect: when the engine tells you a supplier&rsquo;s liability cap is a specific figure, it can show you the box on the page it read that from.</p>
-<h3 id="from-a-recording-to-real-business-action">From a recording to real business action</h3>
-<p>Transcription on its own is a commodity. The value is what the rest of the engine does with the words, because it already holds the deal history, the CRM, the thread for that relationship, and your voice.</p>
-<ol>
-<li><strong>Drop the file.</strong> You hand the engine the recording of the call.</li>
-<li><strong>Hear it.</strong> A local transcript with timings, in the language spoken.</li>
-<li><strong>Place it.</strong> Matched against the relationship it belongs to and everything already known about it.</li>
-<li><strong>Extract.</strong> Decisions, commitments, dates, owners, and open questions, each traceable to a moment in the recording.</li>
-<li><strong>Draft.</strong> Thread log, CRM entries, and outbound follow ups, queued for your approval.</li>
-</ol>
-<p><strong>Worked example.</strong> A 62 minute technical workshop with Northwind Telecom is recorded. You hand the file to the engine and say: log it and prepare the follow ups.</p>
-<p><strong>What comes back, in one pass:</strong> a summary of what was agreed; three commitments with owners and dates, each with the timestamp in the recording where it was said, so a disputed detail is settled by playback rather than by memory; two open technical questions nobody answered; an updated entry on the Northwind thread; a CRM interaction logged against the two people who attended; and a follow up email drafted in your voice, restating the commitments and asking the two open questions.</p>
-<p><strong>What does not happen:</strong> the email is not sent. It waits in the approval queue, where you read it, edit it if you want, and approve it. That is a hard rule and section 4 explains why it will not be softened.</p>
-<div class="admonition warning">
-<p class="admonition-title">Being precise about "seeing"</p>
-<p>The engine hears recordings and reads documents, screenshots, and web pages. It does not watch the moving picture of a video: a slide shown on screen and never spoken aloud is not captured by the audio path. If that slide matters, hand over the deck and it will be read properly, with citations to the page. Ingestion is also something you start: you hand over the file. There is no automatic connector that reaches into a meeting platform and pulls recordings by itself, which is a deliberate boundary rather than a missing feature.</p>
+<p class="admonition-title">Contributed, not internal</p>
+<p>Auto mode and the threshold prompt were contributed by <a href="https://github.com/mmaatuq">Mahmoud Maatuq</a>. He had packaged this system as a plugin independently, and he found the concurrent-session collision described above. The fix for it is in this release because an outside user hit it first.</p>
 </div>
 <hr />
-<h2 id="4-nothing-sends-itself">4. Nothing sends itself</h2>
-<p><em>The one control everything else inherits, and the new habit of measuring whether the controls work</em></p>
-<p>An AI assistant becomes dangerous to the person it serves when three things are true at once: it can reach private data, it reads content written by outsiders, and it can send messages to the outside world. The first two cannot be removed without removing the point of the assistant. So the third is permanently held by a human.</p>
-<div class="admonition note">
-<p class="admonition-title">The rule, stated plainly</p>
-<p>Every outbound message is drafted, queued, and waits. A human approves each one, individually. Approving one does not approve the next. This is enforced in code, not in policy prose: a message type that could send anything outbound is forced into the gated tier even if a configuration file claims otherwise, and an unrecognised message type is gated too, so forgetting also fails safe.</p>
-</div>
-<h3 id="new-in-this-release-we-now-measure-whether-our-own-guardrails-do-anything">New in this release: we now measure whether our own guardrails do anything</h3>
-<p>Until recently, a guardrail that was quietly catching real mistakes and a guardrail that had never fired once in its life looked identical from the outside. Both were simply present. Now every refusal is counted, and a report answers a question nobody could previously answer:</p>
+<h2 id="5-records-that-say-why">5. Records that say why</h2>
+<p><em>Four places where the engine recorded that something happened, and not what it meant</em></p>
 <ul>
-<li><strong>Catching</strong>: this guard has refused real things recently, and here is what they were.</li>
-<li><strong>Holding</strong>: this guard has been watched long enough to say it is not firing, which may be fine.</li>
-<li><strong>Too early</strong>: this guard has not been observed long enough to judge. The report says so rather than implying a clean bill of health.</li>
+<li><strong>A closed situation now says why it closed.</strong> One operator action moved nineteen live situations to closed at once. The record kept two fields: the new status and a timestamp. Afterwards a resolved situation and one that merely went quiet are indistinguishable on disk. Six of the nineteen closed over open loops the deal pipeline still showed as live. Closing and holding now require a reason. The reason lands in the record as a dated entry. Reopening is deliberately exempt: demanding a justification to resume work is friction with nothing behind it.</li>
+<li><strong>A quiet situation can be quiet on purpose.</strong> One situation carried a &ldquo;do not remind me&rdquo; note in its own metadata. Nothing mechanical read it, and every summary listed it as ordinary live work. Two forms are first-class now. One is dated and expires by itself. The other is indefinite, and lifts when the operator raises the matter. Both are visible on the index line loaded into every session. A freeze that expires reports itself, which stops it outliving its reason.</li>
+<li><strong>A partner summary stopped being a second copy of a list.</strong> A hand-written block held 6 partners against 23 rows in the pipeline. It described a signed worldwide agreement as &ldquo;in discussion&rdquo; for eighty days after signature. Four skills read that file as fact. The block is generated from the pipeline now, between two markers. Everything a human wrote outside them survives untouched. The judgement-carrying profiles below stay hand-written, because those are not a list.</li>
+<li><strong>Mail is no longer recorded as handled before anyone decided anything.</strong> The inbox pass marked every fetched message processed at the end of the <strong>fetch</strong>. That happens before the approval step. A skipped digest, or a session that died in between, left those messages recorded as handled. The filter then dropped them from every later run. Silently, and unrecoverably without hand-editing a state file. Fetching and committing are two separate acts now.</li>
 </ul>
-<p>That last distinction is the point. &ldquo;We have seen nothing&rdquo; and &ldquo;there is nothing&rdquo; are different statements, and a control that cannot tell them apart is a control that flatters itself. The refused content itself is never recorded, only the fact of the refusal, so the audit log cannot become the leak.</p>
-<h3 id="other-hardening-in-this-release">Other hardening in this release</h3>
+<hr />
+<h2 id="6-the-unglamorous-fixes-that-mattered-most">6. The unglamorous fixes that mattered most</h2>
+<p><em>Five failures whose only symptom was a report of success</em></p>
+<h3 id="a-watchman-that-went-blind-when-you-opened-your-phone">A watchman that went blind when you opened your phone</h3>
+<p>The background reader watches direct messages for commitments. It opened with one condition: skip this conversation if it has no unread badge. So the badge decided what it could see, rather than its own position marker. Two consequences followed, and neither produced a log line. A message read on the phone before the next fifteen-minute cycle was never seen again. And a conversation where <strong>the operator himself wrote last</strong> has no unread badge by construction. Those were dropped whole. The reader could not see the operator&rsquo;s own commitments at all. That is precisely the class of message a watchman exists to remember.</p>
+<h3 id="a-backup-email-that-had-never-once-been-sent">A backup email that had never once been sent</h3>
+<p>One path is the last resort for a participant who never answered the bot. It asked the host for an interpreter the host does not have. So every attempt failed from the first run onward. Nothing outside an error log could tell that apart from a quiet week. The failure was caught and logged. Each recipient was written to the log as not delivered. The job reported zero sent, and its health check was pinged green.</p>
+<h3 id="a-reminder-that-arrived-a-week-before-its-date">A reminder that arrived a week before its date</h3>
+<p>A reminder dated to take a matter off the operator&rsquo;s mind came back every session for a week first. The session summary listed a seven-day lookahead beside what was actually due. The lookahead is gone, along with the helper it was the only caller of. Re-adding an early announcement now has to be a deliberate act.</p>
+<h3 id="timers-running-on-the-wrong-clock-from-the-other-side">Timers running on the wrong clock, from the other side</h3>
+<p>The configured timezone reached the shell and did not reach the code. The same checkout printed the correct zone from one entry point, and universal time from another, minutes apart. The configuration file was correct throughout. 61 of the 83 files that ask for the timezone never loaded the file that holds it. Background services did load it, so scheduled work was unaffected. The damage was confined to command-line tools. It surfaced when a situation opened at 00:45 local time was filed under the previous day. The fix sits in the resolver, not in the caller that exposed it. A resolver that answers correctly only when the caller remembers a second call has silence as its failure mode.</p>
+<h3 id="an-outside-clone-found-three-defects-this-project-already-had-rules-against">An outside clone found three defects this project already had rules against</h3>
+<p>A fleet operator running their own copy reported three failures, and asked where to file them. Two were things this repository already stated as a rule and enforced nowhere. Twelve places spawned a bare <code>python</code>. That fails outright on hosts that carry only <code>python3</code>. Where the name does resolve, it does something quieter. The work runs outside the pinned dependency set, and a green test run attests an environment the tests never ran in. The reporter could see four of the twelve. The other eight were production paths. They include a secret scanner, and two that degrade to &ldquo;nothing due&rdquo; in silence when the child process fails.</p>
+<div class="admonition note">
+<p class="admonition-title">The theme, stated plainly</p>
+<p>Every failure in this section reported success while failing. That is why this release spends so much of itself on measuring the measurers. It is also why the rule in section 2 exists as a test rather than as advice.</p>
+</div>
+<hr />
+<h2 id="7-nothing-sends-itself">7. Nothing sends itself</h2>
+<p><em>The control that has not changed, and the layers added around it</em></p>
+<p>An assistant becomes dangerous to the person it serves when three things are true at once. It can reach private data. It reads content written by outsiders. And it can send messages to the outside world. The first two cannot be removed without removing the point of the assistant. So the third is permanently held by a human.</p>
+<div class="admonition note">
+<p class="admonition-title">The rule, unchanged in this release</p>
+<p>Every outbound message is drafted, queued, and waits. A human approves each one, individually. Approving one does not approve the next. Code enforces this, not policy prose. A message type that could send anything outbound is forced into the gated tier, even if a configuration file claims otherwise. An unrecognised type is gated too, so forgetting also fails safe.</p>
+</div>
+<p>Added around it in this release:</p>
 <ul>
-<li><strong>We now audit what we install, not only what we write.</strong> Every guard used to watch what this system writes. None watched what it installs and then runs. A new audit enumerates third party extensions and their hooks, compares the installed surface against a reviewed baseline so an upgrade reads as a diff, and scans that content for injected instructions. It reports rather than blocks, on purpose, until its first real measurement earns it the right to block.</li>
-<li><strong>A wall on where code can be pushed.</strong> The engine is public and the data is private, permanently. Pushing now refuses a misconfigured destination before anything leaves the machine, refuses a repository aimed at the wrong remote, and scans the actual content of everything about to leave. That scan sits on the only sanctioned path and has no override flag.</li>
-<li><strong>Secrets redacted at the moment of writing.</strong> Session summaries are scrubbed of credential shaped text before being written to disk, so a session that merely discusses a password pattern cannot produce a file that blocks its own backup. Several ways past the write time scanner were found and closed, including one where a large enough file simply walked past the check.</li>
-<li><strong>Personal life stays out of working context.</strong> Personal threads and personal conversation history are held behind a hard boundary that the search index will not cross. They surface only when explicitly summoned. The boundary is enforced in several independent layers rather than by one flag.</li>
+<li><strong>Refusals exist.</strong> The permission configuration carried 51 allow rules and no refusals at all. Ten refusals now cover the raw credential files the assistant never needs to open, force-pushing, and the flag that skips the commit-time checks. This layer does not depend on a hook having run. The content scan on the publishing path remains the actual wall.</li>
+<li><strong>A turn cannot end quietly on a broken tree.</strong> Three fast checks run over uncommitted code at the end of every turn. Compile what changed. Import what changed. Run the tests whose names match it. Seconds rather than minutes: a check at the end of every turn only helps if nobody is tempted to skip it.</li>
+<li><strong>Roles are files, and the tool list is the enforcement.</strong> Four reusable agent roles ship as definitions. The drafting role has no shell access. So it cannot reach the send command, whatever a prompt tells it. That makes the control above a capability boundary rather than a request.</li>
+<li><strong>A dependency vulnerability was closed in a transitive pin.</strong> It reaches the engine through the mail authentication path and two other libraries. So it ships in every clone without appearing in the project&rsquo;s own dependency list. The audit gate fires only when the exported list is itself being changed. Bumped, with a lock delta of exactly one package.</li>
 </ul>
 <p>The complete control set is documented in the <a href="SECURITY-MODEL.html">security model</a> and the <a href="THREAT-MODEL.html">threat model</a>.</p>
 <hr />
-<h2 id="5-the-unglamorous-fixes-that-mattered-most">5. The unglamorous fixes that mattered most</h2>
-<p><em>Four problems that were invisible precisely because everything reported healthy</em></p>
-<h3 id="scheduled-work-was-being-silently-thrown-away">Scheduled work was being silently thrown away</h3>
-<p>The scheduler inside the always on service discarded any job that was more than one second late, leaving a line in a log nobody reads. Measured over 24 hours on one machine: a one minute heartbeat <strong>lost 1,059 of its 1,440 runs</strong>, and the two hourly mail and calendar sync <strong>ran twice instead of twelve times</strong>. Every health surface reported the service as running normally, because the heartbeat that would have accused it was itself three quarters missing.</p>
-<p>Fixed by making late jobs run late instead of vanishing, set once where every current and future job inherits it rather than on each job individually. An automated guard now refuses any new scheduler built without that setting. The visible consequence: that sync now completes twelve times a day rather than twice, which is a sixfold increase in real work on a path that had been quietly failing.</p>
-<h3 id="timers-were-running-on-the-wrong-clock">Timers were running on the wrong clock</h3>
-<p>Scheduled work had no single source of truth for your timezone and defaulted to universal time in silence, which put jobs hours away from where their own schedule said they should be. One resolver now answers the question for the whole fleet, per machine, and a job that would silently drift is caught by a test instead.</p>
-<h3 id="backup-was-declining-to-back-up-the-irreplaceable-half">Backup was declining to back up the irreplaceable half</h3>
-<p>The backup command treated one repository&rsquo;s refusal as a reason to stop entirely. Because the code side sits on a working branch during every piece of work by construction, the process died there and <strong>the private data was never pushed at all</strong>, for the whole duration of every project. Now the data goes first, because it is the half that cannot be rebuilt; a repository that genuinely cannot be pushed is skipped, committed locally, and named with its reason; and a partial backup reports itself as partial instead of as success. The refusals that genuinely should stop everything, such as a secret found in content, still stop everything.</p>
-<h3 id="a-daemon-that-could-not-produce-anything-deleted">A daemon that could not produce anything, deleted</h3>
-<p>One background service, a thousand lines of it, was found to be structurally incapable of producing the output it existed to produce. It was removed rather than repaired, along with its schedule and its monitoring entry. Subtraction is a legitimate release note item, and this release also retired a large amount of the older engineering machinery described in section 2.</p>
-<div class="admonition note">
-<p class="admonition-title">A theme worth naming</p>
-<p>All four of these were invisible for the same reason: the thing that would have raised the alarm was the thing that was broken. That is why this release invests so heavily in measuring the measurers, from probing test strength, to counting guard refusals, to proving that a safeguard is alive rather than inferring it from silence.</p>
-</div>
-<hr />
-<h2 id="6-what-this-means-for-you">6. What this means for you</h2>
-<p><em>Three changes in how the system behaves day to day</em></p>
+<h2 id="8-what-this-means-for-you">8. What this means for you</h2>
 <ul>
-<li><strong>It brings the file to you.</strong> You stop being the index. Ask a question and the relevant history is already on the table, ranked by relevance to what you actually asked, with the record opened rather than the summary quoted.</li>
-<li><strong>The follow ups write themselves, and still wait for you.</strong> A recording becomes a logged thread, updated relationship records, and drafted follow ups in one pass, entirely on your own machine. Nothing goes out until you approve it, one message at a time.</li>
-<li><strong>New capability arrives through one known door.</strong> Every meaningful change carries a stated purpose, a fixed definition of done, an independent review, a written undo, and a record. You approve twice and can audit afterwards.</li>
+<li><strong>Instructions you can follow on a bad day.</strong> One written standard now governs every page a reader executes, and every instruction body a skill executes. A gate holds it, rather than good intentions. Short sentences, one action per step, and the warning before the step it guards.</li>
+<li><strong>Answers to questions that have to be counted.</strong> &ldquo;How many, which ones, what has not moved&rdquo; are answerable now. The count runs over the whole corpus, without loading the corpus.</li>
+<li><strong>Long work resumes instead of restarting, even with several windows open.</strong> The handoff belongs to the session that wrote it. It can also write itself at the threshold, if you want it to.</li>
+<li><strong>A record that says why.</strong> A closed matter carries its reason. A quiet matter says it is quiet on purpose, and says so again when the reason expires.</li>
 </ul>
 <hr />
-<h2 id="7-honest-limits">7. Honest limits</h2>
+<h2 id="9-honest-limits">9. Honest limits</h2>
 <p><em>What this release does not do, stated here rather than discovered later</em></p>
 <ul>
-<li><strong>No automatic meeting connector.</strong> Recordings are handed over by you. Nothing reaches into a meeting platform and collects them on its own.</li>
-<li><strong>The visual track of a video is not analysed.</strong> The engine hears a recording and reads documents. Content that appears on screen and is never spoken is not captured from the recording; give it the deck instead.</li>
-<li><strong>Recall reflects what has been written down.</strong> A decision made verbally and never logged is not in memory, and the engine will honestly report the gap rather than reconstruct it.</li>
-<li><strong>The build standard is measured on itself, and it is not finished.</strong> One of its newer instruments is explicitly uncalibrated and therefore reports rather than blocks. It stays that way until it earns more.</li>
-<li><strong>Some engine safeguards report rather than enforce.</strong> Where that is true, this note says so. A control that cannot enforce is never described as if it can.</li>
+<li><strong>The style gate covers errors, not judgement.</strong> It measures sentence length, banned padding, one action per step, and warning placement. It does not measure whether the sentence is any good. 423 advisory warnings stay advisory, because a pattern rather than a parser produces them.</li>
+<li><strong>The style standard is a subset, not conformance.</strong> The writing rules are adopted. The controlled dictionary is not, because it was chosen for aircraft maintenance and holds no word for a repository or a daemon. The rule itself states this, and the project never describes itself as conformant.</li>
+<li><strong>This page is not inside the style gate.</strong> The gate covers the twelve pages a reader executes, plus the skill bodies. A release narrative is neither. Sections 1 to 9 were measured with the same checker anyway and carry no error. The notice in section 10 is approved legal wording and stays verbatim, long sentences included.</li>
+<li><strong>The counting primitive is bounded on purpose.</strong> It does not recurse. It refuses questions a normal search answers better. It will not answer a question whose corpus fits in context, because a published measurement says a traversal tool hurts there.</li>
+<li><strong>A review tool cannot force a model to file its own paperwork.</strong> It makes an omission visible after the fact. It cannot make one impossible, because the reviewing model is the running session. The code says so rather than claiming more.</li>
+<li><strong>The visual gate has 399 findings frozen.</strong> Existing work is deliberately left alone. A page inside that baseline is not asserted to be clean. It is asserted to be unchanged.</li>
+<li><strong>Some safeguards report rather than enforce.</strong> Where that is true, this note says so. A control that cannot enforce is never described as if it can.</li>
 </ul>
 <hr />
-<h2 id="8-notice-on-names-and-examples">8. Notice on names and examples</h2>
+<h2 id="10-notice-on-names-and-examples">10. Notice on names and examples</h2>
 <p>Official. Applies to this document and to everything else the project publishes. The full notice is <a href="https://github.com/mishahanin/heading-os/blob/main/DISCLAIMER.md">DISCLAIMER.md</a> in the repository root.</p>
 <p><strong>Every name, company, contact detail, figure, and scenario used as an example in this document, in the HEADING OS engine repository, in its documentation, and in any artifact generated from it is invented.</strong> Each exists for one purpose only: to show how the software behaves. No example is a record of a real person, a real organisation, or a real transaction, and no example is derived from, based on, or modelled after any real party.</p>
 <p>Placeholder names are drawn deliberately from conventional stand-in vocabulary, so that it is plain on sight that no real party is being described: <code>Acme</code>, <code>ExampleTelco</code>, <code>ExampleCorp</code>, <code>Northwind</code>, <code>Contoso</code>, <code>Globex</code>, <code>Initech</code>, <code>Jane Doe</code>, <code>John Smith</code>, and similar.</p>

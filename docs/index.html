@@ -140,7 +140,7 @@
   <p>Routing between the two is declared in <code>config/routing-map.yaml</code> and resolved at runtime by the data-root seam in <code>scripts/utils/workspace.py</code>. A mechanical guard refuses to commit data-class files into the engine, so the split cannot drift. On a public clone the data overlay is simply absent and the engine runs on its defaults and <code>*.example.*</code> templates.</p>
 
   <h2>By the numbers</h2>
-  <p>Every figure here is produced by CI, not asserted by hand. Counts as of <code>v0.8.0</code>.</p>
+  <p>Every figure here is produced by CI, not asserted by hand. Counts as of <code>v0.9.0</code>.</p>
   <ul>
     <li><strong>554 security tests</strong>, run on every commit by the security suite over <code>tests/security/</code>. This is the suite that proves the guarantee above.</li>
     <li><strong>6 enforcement layers</strong> hold the engine and data apart: a bypass guard, a leak guard, a data-path redirect, a build partition, a runtime tree-clean check, and an unbypassable push-time wall.</li>
@@ -154,7 +154,7 @@
 
   <div class="callout note">
     <span class="ttl">Names and examples</span>
-    Every name, company, contact detail, figure, and scenario used as an example in this project is fictional and exists only to show how the software behaves; any resemblance to a real person or organisation is coincidental and unintended. If an example resembles you, write to <code>misha.hanin@odinix.com</code> with the subject <code>HEADING OS naming</code> and it will be changed. Full notice: <a href="https://github.com/mishahanin/heading-os/blob/main/DISCLAIMER.md">DISCLAIMER.md</a>. What changed in v0.8.0: <a href="RELEASE-NOTES.html">release notes</a>.
+    Every name, company, contact detail, figure, and scenario used as an example in this project is fictional and exists only to show how the software behaves; any resemblance to a real person or organisation is coincidental and unintended. If an example resembles you, write to <code>misha.hanin@odinix.com</code> with the subject <code>HEADING OS naming</code> and it will be changed. Full notice: <a href="https://github.com/mishahanin/heading-os/blob/main/DISCLAIMER.md">DISCLAIMER.md</a>. What changed in v0.9.0: <a href="RELEASE-NOTES.html">release notes</a>.
   </div>
 
   <footer class="foot">

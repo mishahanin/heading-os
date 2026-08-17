@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-17
+
+The release about what a measurement is worth. A style checker reported 300 errors
+across the skill corpus and 83 of them were its own sentence splitter, so correct
+prose was being rewritten to satisfy a broken instrument; the real 217 were fixed,
+the corpus stands at zero, and both halves of the rule now carry a gate. Two tools
+were caught telling the operator more than their method established, which produced
+a rule and a test that refuse the shape rather than the two instances. A new
+aggregation primitive answers the counting questions retrieval scored 0.000 on, by
+walking the corpus on disk instead of loading it. Three sessions on one workspace
+stopped being treated as one session. And a Telegram watchman that went blind the
+moment the operator opened his phone, a backup email that had never once been sent,
+and a reminder that arrived a week before its date were all found the same way:
+by measuring something that had only ever reported success.
+
 ### Added
 
 - **The checkpoint can now save itself, and it ships as a plugin.** Auto mode
@@ -444,6 +459,265 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   file list off the record instead of having it assembled by hand. The run that
   prompted this scanned 11 files for a run that had touched 22. Nothing had
   escaped, but the evidence covered half the surface it claimed to.
+
+### Added
+
+- **`/census` answers a counting question by walking the corpus instead of
+  loading it.** The technique is Recursive Language Models (RLM,
+  arXiv:2512.24601) at recursion depth exactly 1: the session writes a traversal
+  program, `scripts/census.py` runs it, and only the question, the corpus
+  metadata and a schema-validated result travel back. The corpus never enters the
+  context window. This exists because of one measurement on 2026-08-13: over
+  seven questions whose answer sits in no single file, the incumbent retrieval
+  path scored a ceiling of 0.000, all seven at exactly 0.00. That is not a tuning
+  problem, since top-K cannot return an answer that lives in no chunk. Questions
+  comparing two dense files scored 0.667, so `/census` is deliberately NOT built
+  for those and the engine refuses them by design (SRLM, arXiv:2603.15653,
+  reports a traversal primitive on an in-window corpus actively hurts).
+
+  Model-written code executes here, which the workspace otherwise forbids. What
+  makes the carve-out acceptable is not trust: `scripts/utils/sandbox.py` gives
+  the traversal an empty network namespace, an empty environment and a read-only
+  corpus mount, and `scripts/utils/census_schema.py` validates what comes back.
+  The fourth control protects the PARENT, which holds the credentials and the
+  network an injected instruction would need. The four conditions that VOID the
+  carve-out are written in `.claude/rules/generated-code-execution.md`.
+
+  Accepted at 6 of 7 on the traversal class and 5 of 5 on the control class,
+  against a threshold registered before the first run and never moved, with zero
+  confidently-wrong answers and a median of 0.05s against 0.92s. Five acceptance
+  runs were needed and every re-run was forced by a defect in the INSTRUMENT
+  rather than in the primitive: two oracles were wrong (a substring match read
+  the language "Russian" as the country; a predicate was constant-true across its
+  whole population, so it measured the population), and the comparability guard
+  pinned `git rev-parse HEAD` on a perpetually-dirty tree, so a corpus edit moved
+  a truth while the pin held. It pins `corpus_content_sha256` now. One question
+  class is withheld from grading BY NAME rather than dropped, because its three
+  questions disagree on how to enumerate a table, a rule the question never
+  states, so the zero measured the wording.
+
+- **The visual gate resolves the cascade instead of matching words.**
+  `scripts/visual-discipline-check.py` had enforced the visual-design rule since
+  2026-06-26 with regexes over file contents, which answers "is a forbidden font
+  written down here" and almost nothing else. It could not answer what a colour
+  resolved to against the surface behind it, or whether the heading hierarchy
+  holds. A second engine now sits behind the same facade: the impeccable CLI
+  (pbakaus/impeccable, Apache 2.0), pinned at 3.5.0 and invoked through npx
+  exactly as marp-cli already is. The fifteen skills the rule obliges to run this
+  command inherit it with no skill file changing.
+
+  Measured on this tree the first time it ran: 252 findings on the public
+  documentation site are text below the WCAG AA contrast floor, all from one
+  colour token, plus 49 heading-hierarchy breaks across the branded doctypes and
+  a `font-family: Inter` sitting in the brand stylesheet while the rule declares
+  GT Standard as the locked face. None of it is fixed in that change, by
+  instruction: `.visual-baseline.json` freezes 399 findings across 38 files the
+  way `.lint-baseline.json` freezes lint debt, so the gate fires on what appears
+  above the line and each frozen finding surfaces the moment its file is next
+  edited. Every calibration entry in `config/visual-check-profiles.json` carries
+  the reason it exists, because a silent suppression is indistinguishable from a
+  missing rule.
+
+- **The `/scrutinize` judge record is written by the harness, not by prose.**
+  Across 75 saved scrutiny reports the mandated `Refutation:` header appears in 8
+  and the mandated `## Judge layer` heading in 12, while two NEVER clauses require
+  cross-family judging that 17 merely name. Every one of those was a prose mandate
+  addressed to a model that can omit it silently. So authorship moves:
+  `scripts/utils/scrutinize_record.py` writes one row per judged event, and
+  `scripts/scrutinize-dispatch.py` owns the third-party judge call, the family
+  assignment, the sensitivity gate and the reproduction commands. `--validate`
+  fails in both directions, including a header claiming a pass the rows do not
+  show. It cannot make omission impossible, because the Claude judge IS the
+  running session, so the code says it makes omission visible and claims no more.
+  `REPRODUCED` and `FALSIFIED` are first-class verdicts only the harness may
+  write, after four earlier passes had already invented them by hand.
+
+- **Callers ask for a model FAMILY, because no model literal stays correct.**
+  Every Claude model id is a pinned snapshot, including the dateless ones, so
+  there is no literal anyone can type that stays right. Eight files under
+  `scripts/` proved it: `skill-trigger-test.py`, the judge that decides whether a
+  skill routes correctly, was judging on a five-month-old model, and
+  `draft_critique.py`, which reviews an outbound email before a human sends it,
+  was a major version behind. Nothing failed loudly. The work just happened on
+  older models. `scripts/utils/claude_models.py` resolves a family to the newest
+  release in it through the Models API, in a fixed order: config override, 24-hour
+  cache, live API, stale cache, then a baseline floor that is the one version
+  literal left. It never raises, so a public clone with no key resolves too, and
+  it memoizes a FAILED fetch as well as a successful one, because without that a
+  degraded API cost 21.9 seconds over three calls inside a five-minute tick.
+
+  The first cut was a code change two YAML files quietly undid: a daemon config
+  set the model by name, `config.get` is always truthy, and the resolver never
+  ran. The guard could not see it, because it globbed `*.py` only. Both are fixed,
+  and the widened guard immediately caught a literal in a comment written minutes
+  earlier.
+
+- **A thread can be quiet on purpose, and the index says so.** A thread carried
+  `do_not_remind: true` in its frontmatter, nothing mechanical read it, and every
+  rollup listed the thread as ordinary live work. `quiet_until` (dated, expires by
+  itself) and `do_not_remind` (indefinite, lifts when the operator raises it) are
+  first-class `ThreadFile` fields now, with `is_quiet()` behind them, a
+  `thread.py quiet` subcommand, and a `[quiet until <date>]` marker regenerated
+  onto the memory index line on every write, so the index loaded into every
+  session carries it. The hygiene scan skips a quiet thread instead of nagging it
+  as stale, and reports the dated form once it expires, which is what stops a
+  freeze from outliving its reason.
+
+- **`thread.py close` and `hold` require `--reason`, and the reason lands in the
+  body.** One operator run flipped nineteen threads from active to closed at once.
+  `_set_status` wrote two fields, `status` and `last_touched`, so afterwards a
+  thread that was genuinely resolved and a thread that merely went quiet look
+  identical on disk. Six of the nineteen closed over a loop the deal pipeline
+  still showed as live. The reason is now a dated log entry in the thread body
+  rather than a memory the operator has to keep. `reopen` is deliberately exempt,
+  since it ADDS a thread back to the index and demanding a justification to resume
+  work is friction with nothing behind it. The refusal happens before any
+  mutation, and a test asserts that, because a guard that half-applies is worse
+  than no guard.
+
+- **The partner scorecard is generated from the pipeline.** A hand-written summary
+  block held 6 partners against 23 partnership rows, and carried an executed
+  worldwide OEM agreement as "In Discussion" for eighty days after signature.
+  Four skills read that file as fact. The defect is not the six wrong rows: it is
+  that a list was written down twice. `scripts/partner-scorecard.py` now generates
+  the block between two markers, the way `pipeline-summary.py` already generates
+  the stage counts, and everything a human wrote outside the markers survives
+  verbatim. The detailed per-partner profiles stay hand-written on purpose,
+  because those are judgement rather than a list. Deliberately NOT gated in CI: it
+  reads the private data overlay, which a public clone and a CI runner do not
+  have, so a gate there would fail on absence rather than on drift.
+
+### Fixed
+
+- **A Telegram watchman went blind the moment the operator opened his phone.**
+  The personal-DM path in `scripts/sentinel.py` opened with
+  `if dialog.unread_count == 0: continue`, so the unread badge decided what the
+  watchman could see, rather than its own cursor. Neither consequence produced a
+  log line. A message read on the phone before the next fifteen-minute cycle was
+  never seen again, because the following cycle no longer counted it as unread. A
+  conversation where the operator himself wrote last has a zero unread count by
+  construction, so it was dropped whole, which means the reader could not see the
+  operator's own commitments at all: precisely the class of message a watchman
+  exists to remember. Newness is now the dialog's top message id against the
+  stored cursor. `iter_dialogs` already carries that id, so the test costs no
+  extra API call and the flood-wait budget is unchanged.
+
+- **A dated reminder arrived a week early.** The `/prime` backstop listed
+  everything inside a 7-day lookahead beside what was actually due, so a reminder
+  dated to take a matter off the operator's mind came back every session for a
+  week first. The lookahead is removed, along with the `upcoming()` helper it was
+  the only caller of, so re-adding an early announcement is a deliberate act. The
+  Telegram path was always due-only; the backstop matches it now. A third defect
+  surfaced only because the fix triggered it: `write_thread_file` rebuilt
+  frontmatter from a fixed field list, so the first `quiet` command DELETED the
+  very keys it was meant to honour. Unmodelled keys are preserved now.
+
+- **The operator's timezone reached the shell but not the callers.**
+  `python -m scripts.utils.paths tz` printed the configured zone while
+  `get_default_tz()` returned UTC in the same checkout minutes later, with the
+  `.env` line present and correct throughout. `HEADING_OS_TZ` reaches
+  `os.environ` only through `load_env()` reading the gitignored `.env`, and
+  nothing exports it into a shell, so the helper read an environment nobody had
+  filled and fell through to its UTC default on a correctly configured host. 61 of
+  the 83 files importing the helper never call `load_env`. The daemons do, so
+  scheduled work was unaffected and the damage was confined to standalone CLI
+  scripts. It surfaced when a thread opened at 00:45 local time was filed under
+  the previous day. Fixed at the layer rather than in the caller that exposed it:
+  the helper loads the `.env` itself, once per process, and precedence is
+  unchanged, because `load_env` uses `setdefault`.
+
+- **Twelve subprocess calls spawned a bare `python`, and this repository already
+  had a rule against it.** A fleet operator running their own clone reported three
+  failures at v0.8.0 (issues #96, #97, #98). On a python3-only host a bare
+  `python` raises `FileNotFoundError` before anything is asserted, and the quieter
+  half is worse: where the name does resolve it is the ambient system
+  interpreter, so the child runs outside the pinned set and a green run attests an
+  environment the suite never ran in. An AST sweep found 12 sites rather than the
+  4 the reporter could see. The eight invisible ones are production scripts:
+  the secret scanner in `push-all.py`, the memory-index build in `ops-radar.py`,
+  three in `ops_signals.py`, one in `crm_next.py`, two in a CRM migration. The
+  radar sites degrade to "not due" when the child fails, so a host whose ambient
+  interpreter lacks the dependencies got a radar that under-reported in silence.
+  All 12 use `sys.executable` now, and
+  `tests/test_subprocess_interpreter_guard.py` refuses the pattern across
+  `tests/`, `scripts/` and `.claude/`, pinning its own detector against both the
+  broken shape and the fixed one so it cannot decay into a check that matches
+  nothing.
+
+- **A fireside backup email had never once been sent.** The last-resort path for a
+  speaker who never answered the bot's messages shelled out to a bare `python`,
+  and the service host has no such binary, so every attempt raised
+  `FileNotFoundError` from the first run onward. Nothing outside `errors.log`
+  could tell that apart from a quiet week: the exception was caught and logged,
+  each recipient was written to the log with `ok=False`, the job printed `sent=0`,
+  and its healthcheck was pinged green. It spawns `sys.executable` now, and the
+  test asserts the interpreter at the call site.
+
+- **A member who joined mid-cycle was in the roster, in no week, and reported
+  nowhere.** `scripts/fireside-bot.py` gained the speaker-side coverage guard,
+  the twin of the earlier helmsman guard, with
+  `tests/test_fireside_speaker_gaps.py` holding it.
+
+- **CI was red for three refusals that only ever fired where nobody ran them.**
+  Each was invisible on an operator machine and each was exposed by a bare runner.
+  A test module imported an optional extra at module level, which is a COLLECTION
+  error rather than a skip, and one collection error aborts the whole run.
+  `scripts/utils/sandbox.py` judged the HOST before it judged the REQUEST, so with
+  bubblewrap absent every argument refusal came back as "bwrap is not on PATH",
+  and the five tests asserting those refusals are deliberately not marked as
+  needing bubblewrap, because their point is that no process is needed. And the
+  census overlay guard was rehearsed against an EMPTY tree, which is not the shape
+  a bare clone has: `get_data_root()` falls back to the engine's bundled
+  `examples/`, one demo thread satisfied "any populated directory", and both
+  guarded tests then ran against the engine's own demo files.
+
+- **An exit code arrived with its reason thrown away.** The bridge mail refresher
+  logged `producer exited 2; stderr=` and nothing else. Exit 2 is the producer's
+  one expected failure, and it reports itself as a JSON object carrying the detail
+  and a thread pointer on STDOUT, so the explanation was captured and discarded
+  one stream away from where anyone looked. It prefers the structured error now
+  and falls back through stderr, stdout, and an explicit "no output on either
+  stream". The same call then bumped the inbox freshness clock unconditionally,
+  which makes an inbox nobody fetched render as refreshed seconds ago. The version
+  still advances on failure, because the browser must re-read to see it, but the
+  freshness clock does not, because a run that fetched nothing has established
+  nothing about how old the data is.
+
+- **A documented smoke test did not run outside a pre-seeded virtualenv.**
+  `scripts/utils/draft_critique.py` offers itself as a smoke test in its own
+  docstring and exited `No module named 'scripts'` anywhere the repository root
+  was not already on the path, which is every plain venv including the service
+  host's. Thirty sibling modules in that package insert the root; this one never
+  did.
+
+- **The version-pin guard could not see the file the pin actually survived in.**
+  It scanned the skill directory and the dispatcher, and the operator's tool index
+  is in neither, while describing the same judge layer in prose: so it carried a
+  stale model literal straight through the change whose subject was removing that
+  literal, four lines under the entry recording the removal. The guard reads that
+  file too now, scoped to lines that mention the skill, because the same file
+  legitimately names model versions when describing other tools. It skips rather
+  than fails when the data overlay is absent, since a public clone has no operator
+  index and a guard that fails on its absence teaches people to delete it.
+
+- **The roadmap told the public the project was six releases younger than it is.**
+  `ROADMAP.md` opened with "HEADING OS is `v0.3.0`", on the landing path a new
+  reader takes for direction. The version-sync guard existed and did not read that
+  file: it held `pyproject.toml`, the README status line and the newest changelog
+  heading in agreement, and the fourth surface drifted through six releases
+  unwatched. The guard reads the roadmap preamble now, its pre-commit pattern
+  fires when that file is edited, and `tests/test_version_sync_guard.py` holds
+  both, including the property the widening was for: every guarded surface must
+  appear in the hook's `files:` pattern. The guard had no test of any kind before
+  this, which is the more useful half of the finding.
+
+- **The style checker's own help text said the skill corpus was ungated, one day
+  after it was gated.** `--all` described the skill half as "NOT gated" and
+  `--skills` described itself as "ungated on purpose", both written when that was
+  true and both false the moment the `documentation-style-skills` hook and its CI
+  step landed. A tool that misreports its own coverage is the defect
+  `.claude/rules/scope-claims.md` exists for, whichever direction the error runs
+  in.
 
 ## [0.8.0] - 2026-08-09
 
@@ -1580,7 +1854,8 @@ Initial public release.
 - **Memory and ODIN**: a local associative-memory index behind `/recall` and a persistent knowledge brain.
 - The published documentation site at [mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/), the deployment guide, and the focused setup guides for models, integrations, and personalization.
 
-[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/mishahanin/heading-os/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mishahanin/heading-os/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mishahanin/heading-os/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mishahanin/heading-os/compare/v0.5.0...v0.6.0

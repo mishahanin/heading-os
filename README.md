@@ -67,7 +67,7 @@ You clone the engine; you create your own private data repository ([one command]
 
 ## By the numbers
 
-Every figure here is produced by CI, not asserted by hand. Counts as of `v0.8.0`, kept honest by `scripts/dev/check-readme-numbers.py`.
+Every figure here is produced by CI, not asserted by hand. Counts as of `v0.9.0`, kept honest by `scripts/dev/check-readme-numbers.py`.
 
 - **554 security tests**, run on every commit by the [`security-tests`](.github/workflows/ci.yml) job over [`tests/security/`](tests/security). This is the suite that proves the guarantees below.
 - **6 enforcement layers** hold the engine and data apart: a [bypass guard](tests/test_data_root_no_bypass.py), a [leak guard](scripts/leak-guard.py), a data-path redirect hook, a build partition, a [runtime tree-clean check](tests/test_engine_tree_clean.py), and an [unbypassable push-time wall](scripts/push-all.py).
@@ -138,9 +138,9 @@ If you find a vulnerability, please report it privately (see SECURITY.md) rather
 ## Status
 
 <!-- version: keep in sync with pyproject.toml; checked by scripts/check-version-sync.py -->
-`v0.8.0`. The architecture, the security model, and the data seam are stable and load-bearing. Skills and daemons evolve. Interfaces may change between minor versions while the project is pre-1.0. See **[ROADMAP.md](ROADMAP.md)** for direction and **[CHANGELOG.md](CHANGELOG.md)** for what has changed.
+`v0.9.0`. The architecture, the security model, and the data seam are stable and load-bearing. Skills and daemons evolve. Interfaces may change between minor versions while the project is pre-1.0. See **[ROADMAP.md](ROADMAP.md)** for direction and **[CHANGELOG.md](CHANGELOG.md)** for what has changed.
 
-What v0.8.0 changed, written for a reader rather than for a diff: **[docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md)** ([published page](https://mishahanin.github.io/heading-os/RELEASE-NOTES.html)).
+What v0.9.0 changed, written for a reader rather than for a diff: **[docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md)** ([published page](https://mishahanin.github.io/heading-os/RELEASE-NOTES.html)).
 
 ## Contributing
 

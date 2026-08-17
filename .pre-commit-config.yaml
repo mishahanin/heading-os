@@ -118,10 +118,10 @@ repos:
   - repo: local
     hooks:
       - id: version-sync
-        name: Verify README/CHANGELOG version matches pyproject.toml
+        name: Verify README/CHANGELOG/ROADMAP version matches pyproject.toml
         entry: python3 scripts/check-version-sync.py --quiet
         language: system
-        files: '^(README\.md|CHANGELOG\.md|pyproject\.toml)$'
+        files: '^(README\.md|CHANGELOG\.md|ROADMAP\.md|pyproject\.toml)$'
         pass_filenames: false
 
   # Vendored-skill integrity (F-9.5). Recompute the sha256-tree-v1 hashes in

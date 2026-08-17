@@ -2,15 +2,17 @@
 """Version-sync guard (F-1.1).
 
 `pyproject.toml` is the single source of truth for the engine version. This
-check asserts the two human-facing surfaces agree with it:
+check asserts the three human-facing surfaces agree with it:
 
   * README.md § Status — the `vX.Y.Z` token under the "## Status" heading.
   * CHANGELOG.md      — the newest real release heading `## [X.Y.Z]`
                         (the `## [Unreleased]` section is ignored).
+  * ROADMAP.md        — the `vX.Y.Z` token in the "HEADING OS is" preamble.
 
 Exit 0 when all agree; exit 1 with a diff-style message otherwise. Wired into
-`.pre-commit-config.yaml` (files: README.md|CHANGELOG.md|pyproject.toml) and the
-CI `guards` job so version drift across the three files can never re-appear.
+`.pre-commit-config.yaml` (files: README.md|CHANGELOG.md|ROADMAP.md|
+pyproject.toml) and the CI `guards` job, so version drift across the four files
+can never re-appear.
 
 Usage:
     python scripts/check-version-sync.py [--quiet]
@@ -51,6 +53,18 @@ def _changelog_latest_version(root: Path) -> str | None:
     return None
 
 
+def _roadmap_version(root: Path) -> str | None:
+    """The `vX.Y.Z` token in the ROADMAP preamble.
+
+    Added after the sentence "HEADING OS is `v0.3.0`" survived six releases on
+    the public landing path. Nothing checked it, and a reader who takes the
+    roadmap at its word reads a project two quarters behind the code.
+    """
+    text = (root / "ROADMAP.md").read_text(encoding="utf-8")
+    m = re.search(rf"HEADING OS is `v({_SEMVER})`", text)
+    return m.group(1) if m else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Assert version parity across README/CHANGELOG/pyproject.")
     parser.add_argument("--quiet", action="store_true", help="print only on failure")
@@ -60,21 +74,27 @@ def main() -> int:
     truth = _pyproject_version(root)
     readme = _readme_status_version(root)
     changelog = _changelog_latest_version(root)
+    roadmap = _roadmap_version(root)
 
     problems = []
     if readme != truth:
         problems.append(f"  README.md § Status : {readme!r:>10}  != pyproject {truth!r}")
     if changelog != truth:
         problems.append(f"  CHANGELOG.md latest: {changelog!r:>10}  != pyproject {truth!r}")
+    if roadmap != truth:
+        problems.append(f"  ROADMAP.md preamble: {roadmap!r:>10}  != pyproject {truth!r}")
 
     if problems:
         print(f"{RED}Version drift (source of truth = pyproject.toml {truth}):{RESET}")
         print("\n".join(problems))
-        print(f"{YELLOW}Fix: align README § Status and the newest CHANGELOG heading to {truth}.{RESET}")
+        print(
+            f"{YELLOW}Fix: align README § Status, the newest CHANGELOG heading, and the "
+            f"ROADMAP preamble to {truth}.{RESET}"
+        )
         return 1
 
     if not args.quiet:
-        print(f"{GREEN}Version in sync:{RESET} {truth} (README, CHANGELOG, pyproject agree)")
+        print(f"{GREEN}Version in sync:{RESET} {truth} (README, CHANGELOG, ROADMAP, pyproject agree)")
     return 0
 
 

@@ -27,9 +27,13 @@ bundles:
     description: >-
       Sovereignty and session core: the prime/state-check/checkpoint skills, the
       standalone sovereignty guard hooks, and the session checkpoint system -
-      a context-usage sensor, a threshold offer with an optional hands-off auto
-      mode, a redacted post-compact save, and a resume injector, all keyed by
-      session so concurrent sessions never overwrite each other.
+      a context-usage sensor, a threshold offer, a pre-compaction brief that
+      states what the summary must keep verbatim, a redacted post-compact save,
+      and a resume injector, all keyed by session so concurrent sessions never
+      overwrite each other. Two optional switches: a hands-off auto mode that
+      saves without asking, and an unattended mode that waits out a grace period
+      at a pause and carries on when nobody answers, bounded by a no-progress
+      fuse and a continuation ceiling.
     skills:
       - prime
       - state-check

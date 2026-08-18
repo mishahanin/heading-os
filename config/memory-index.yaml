@@ -11,7 +11,14 @@
 # Local embedder (ollama). bge-m3 is multilingual (RU/EN), 1024-dim.
 # Локальный эмбеддер. host вынесен сюда => будущий VM-офлоад = смена строки.
 model: bge-m3
-host: "http://localhost:11434"
+# `auto:<port>` resolves the current default gateway at run time, so this
+# follows the WSL NAT address instead of pinning one that changes on the next
+# WSL restart. It points at the Windows-side ollama, whose iGPU embeds ~1.9x
+# faster than the WSL CPU daemon (median 18.2 vs 9.5 vectors/s, measured
+# 2026-08-18). Unreachable - Windows rebooted, tray not up - degrades to
+# http://localhost:11434 with one stderr line, never a failed refresh.
+# A plain URL still works here; see scripts/utils/ollama_host.py.
+host: "auto:11436"
 
 # Salience threshold: hits cluster 0.56-0.61, empty 0.49-0.53 (tested on Odin).
 # Порог релевантности (тест на мозге Один: попадания 0.56-0.61, пустота 0.49-0.53).

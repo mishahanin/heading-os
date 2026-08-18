@@ -129,3 +129,67 @@ def test_personal_chronicle_is_air_gapped_from_the_index():
     assert is_denied("chronicle/personal/session-2026-05-01-abc.md", (), [])
     # business chronicle is NOT denied (it is indexed, ranked below the brain).
     assert not is_denied("chronicle/business/session-2026-05-01-abc.md", (), [])
+
+
+# --- ollama host override: generation moves, embeddings do not ------------
+
+def _reload_chronicle(monkeypatch, *, reachable=True, **env):
+    """Re-import chronicle with a patched environment.
+
+    The endpoints are module-level constants resolved at import time, so the
+    only way to observe an override is a reload under the wanted environment.
+    `reachable` stands in for the probe, so no test touches the network.
+    """
+    import importlib
+
+    import scripts.chronicle as mod
+    from scripts.utils import ollama_host
+
+    monkeypatch.setattr(ollama_host, "probe", lambda host, **kw: reachable)
+    for key in ("HEADING_OS_OLLAMA_HOST", "HEADING_OS_OLLAMA_EMBED_HOST"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    return importlib.reload(mod)
+
+
+def test_ollama_endpoints_default_to_the_local_daemon(monkeypatch):
+    mod = _reload_chronicle(monkeypatch)
+    assert mod.OLLAMA_URL == "http://localhost:11434/api/generate"
+    assert mod.EMBED_HOST == "http://localhost:11434"
+
+
+def test_generation_host_is_overridable(monkeypatch):
+    mod = _reload_chronicle(monkeypatch, HEADING_OS_OLLAMA_HOST="http://172.30.48.1:11436")
+    assert mod.OLLAMA_URL == "http://172.30.48.1:11436/api/generate"
+
+
+def test_generation_override_does_not_move_embeddings(monkeypatch):
+    # Embeddings must stay put unless their own variable says otherwise. A
+    # shared variable would silently ship every indexed text to whatever host
+    # generation points at, and would couple the always-on indexing path to a
+    # host chosen for a nightly summarizer.
+    mod = _reload_chronicle(monkeypatch, HEADING_OS_OLLAMA_HOST="http://172.30.48.1:11436")
+    assert mod.EMBED_HOST == "http://localhost:11434"
+
+
+def test_embedding_host_has_its_own_override(monkeypatch):
+    mod = _reload_chronicle(monkeypatch, HEADING_OS_OLLAMA_EMBED_HOST="http://10.0.0.5:11434/")
+    assert mod.EMBED_HOST == "http://10.0.0.5:11434"      # trailing slash trimmed
+    assert mod.OLLAMA_URL == "http://localhost:11434/api/generate"
+
+
+def test_unreachable_override_degrades_to_the_local_daemon(monkeypatch):
+    # The nightly run must still happen when the GPU-side host is down, which
+    # on this laptop means whenever Windows rebooted and the tray did not start.
+    mod = _reload_chronicle(
+        monkeypatch, reachable=False, HEADING_OS_OLLAMA_HOST="http://172.30.48.1:11436"
+    )
+    assert mod.OLLAMA_URL == "http://localhost:11434/api/generate"
+
+
+def test_reload_leaves_the_module_on_defaults(monkeypatch):
+    # Guard for the other tests in this file: a stale override would leak into
+    # every later import of scripts.chronicle in the same session.
+    mod = _reload_chronicle(monkeypatch)
+    assert mod.OLLAMA_URL.startswith("http://localhost:11434")

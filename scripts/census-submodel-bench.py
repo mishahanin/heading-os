@@ -55,6 +55,7 @@ from scripts.utils.api import load_api_key
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.claude_models import latest
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from scripts.utils.ollama_host import resolve_ollama_host
 from scripts.utils.sensitive import is_sensitive, sensitivity_is_declared
 from scripts.utils.workspace import (
     get_default_tz,
@@ -67,7 +68,13 @@ from scripts.utils.workspace import (
 # Configuration
 # ============================================================
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+# Same override as chronicle.py: HEADING_OS_OLLAMA_HOST (a literal URL or
+# `auto:<port>`) moves generation to a faster ollama instance without editing
+# code, and degrades to the local daemon when that host is not up. Benchmark
+# numbers are only comparable across runs that used the same host, so the
+# resolved value is recorded with the results.
+OLLAMA_HOST = resolve_ollama_host(env_var="HEADING_OS_OLLAMA_HOST")
+OLLAMA_URL = f"{OLLAMA_HOST}/api/chat"
 PROXY_URL = "http://localhost:8317/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 

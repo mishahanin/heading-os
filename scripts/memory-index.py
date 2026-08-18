@@ -58,6 +58,7 @@ from scripts.utils import salience
 from scripts.utils.air_gap import is_denied
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.embeddings import EmbeddingError, embed
+from scripts.utils.ollama_host import resolve_ollama_host
 from scripts.utils.workspace import get_classification, get_data_root, get_workspace_root, load_env
 
 # ============================================================
@@ -107,7 +108,15 @@ def load_config(root: Path) -> dict:
         sys.stderr.write(f"Cannot parse {path}: {e}\n")
         sys.exit(1)
     cfg.setdefault("model", "bge-m3")
-    cfg.setdefault("host", "http://localhost:11434")
+    # Resolved, not merely defaulted. `host` may read `auto:<port>`, which
+    # follows the CURRENT WSL gateway - a literal gateway address would work
+    # until the next WSL restart and then break every scheduled refresh
+    # silently. An unreachable host degrades to the local daemon, because a
+    # slower index beats a stale one. HEADING_OS_OLLAMA_EMBED_HOST overrides
+    # for a one-off run without editing config.
+    cfg["host"] = resolve_ollama_host(
+        cfg.get("host"), env_var="HEADING_OS_OLLAMA_EMBED_HOST"
+    )
     cfg.setdefault("threshold", 0.55)
     cfg.setdefault("near_miss_margin", 0.12)
     cfg.setdefault("top_k", 8)

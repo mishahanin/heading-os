@@ -44,6 +44,7 @@ from scripts.calibrate import (  # noqa: E402
     parse_jsonl,
 )
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
+from scripts.utils.ollama_host import resolve_ollama_host  # noqa: E402
 from scripts.utils.paths import load_env  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_default_tz  # noqa: E402
 
@@ -51,12 +52,23 @@ from scripts.utils.workspace import get_data_root, get_default_tz  # noqa: E402
 # Configuration
 # ============================================================
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+# Where generation runs. Unset means the local daemon. HEADING_OS_OLLAMA_HOST
+# takes a literal URL or `auto:<port>`, which follows the current WSL gateway -
+# on the CEO laptop `auto:11436` reaches a Windows-side instance that serves the
+# same models off the iGPU and ingests long prompts ~3.5x faster (measured
+# 2026-08-18, see
+# outputs/operations/workspace/2026-08-18_benchmark_ollama-wsl-cpu-vs-windows-igpu.md).
+# An unreachable preference degrades to the local daemon rather than failing the
+# nightly run.
+OLLAMA_HOST = resolve_ollama_host(env_var="HEADING_OS_OLLAMA_HOST")
+OLLAMA_URL = f"{OLLAMA_HOST}/api/generate"
 MODEL = "gemma3:4b"
 
-# Prefill is the CPU bottleneck (~65 tok/s). Trim each transcript to this many
-# characters of conversation before the model reads it - enough to summarize,
-# cheap enough to keep a session near ~50s on this hardware.
+# Prefill is the bottleneck. On the CPU daemon it runs ~65-70 tok/s, so each
+# transcript is trimmed to this many characters of conversation before the model
+# reads it - enough to summarize, cheap enough to keep a session near ~50s.
+# A GPU-backed HEADING_OS_OLLAMA_HOST lifts prefill to ~220 tok/s, which is what
+# this budget would have to be re-tuned against before raising it.
 BODY_CHAR_BUDGET = 9000
 ENVELOPE_MAX_BYTES = 120_000
 
@@ -511,7 +523,13 @@ def cmd_query(args: argparse.Namespace) -> int:
 # persists NOTHING. Personal life cannot surface unless the CEO summons it here.
 
 EMBED_MODEL = "bge-m3"
-EMBED_HOST = "http://localhost:11434"
+# Separate from HEADING_OS_OLLAMA_HOST on purpose. Not because the two want the
+# same host - on 2026-08-18 the iGPU measured ~1.9x faster at embeddings too
+# (median 18.2 vs 9.5 vectors/s over 5 runs) - but because they carry different
+# risk: chronicle summarizes on a schedule and can wait for a remote host, while
+# embeddings feed the index every session. Moving one must not silently move the
+# other, and either can fall back to the local daemon on its own.
+EMBED_HOST = resolve_ollama_host(env_var="HEADING_OS_OLLAMA_EMBED_HOST")
 _FRONT_RE = __import__("re").compile(r"^(\w[\w-]*):\s*(.*)$")
 
 

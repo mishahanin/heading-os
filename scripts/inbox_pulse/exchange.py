@@ -16,6 +16,7 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 import os
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -28,7 +29,20 @@ if TYPE_CHECKING:
 
 __all__ = ["EWSConnection"]
 
+_logger = logging.getLogger(__name__)
+
 # local timezone resolved per-instance via get_default_tz()
+
+# The only three fields poll_inbox reads off an item. Asking for exactly these
+# is not an optimisation -- it is the difference between a poll that works and
+# one that cannot run at all. Without .only(), exchangelib requests every field,
+# so EWS serialises the full body of every message in the window into one
+# FindItem response; a single oversized message makes the server refuse the
+# WHOLE response with ErrorMessageSizeExceeded. Measured 2026-08-18 on the
+# Steward host: 61 messages had accumulated behind one such message since
+# 2026-08-17 06:29 UTC, and the same query with these three fields returned all
+# 61 with no error.
+_POLL_FIELDS = ("id", "parent_folder_id", "datetime_received")
 
 
 def _now_local_iso() -> str:
@@ -113,6 +127,9 @@ class EWSConnection:
             folder_name: Folder to poll (default Inbox).
             max_items: Hard cap on items yielded per poll cycle.
 
+        An item EWS refuses to return is logged at WARNING and skipped, so the
+        yielded stream covers every READABLE item in the window, not every item.
+
         Yields one dict per item, sorted oldest-first (so consumers process in order):
             - event_type: "NewMail" (synthetic -- matches the old streaming event_type)
             - timestamp: ISO-8601 string in local timezone at the moment of poll
@@ -124,13 +141,30 @@ class EWSConnection:
         """
         folder = self._resolve_folder(folder_name)
         if since is not None:
-            items = folder.filter(datetime_received__gt=since).order_by("datetime_received")[:max_items]
+            items = (
+                folder.filter(datetime_received__gt=since)
+                .only(*_POLL_FIELDS)
+                .order_by("datetime_received")[:max_items]
+            )
         else:
-            items = folder.all().order_by("-datetime_received")[:max_items]
+            items = folder.all().only(*_POLL_FIELDS).order_by("-datetime_received")[:max_items]
             items = list(reversed(items))  # oldest-first for processing order
 
         now_local = _now_local_iso()
         for item in items:
+            # exchangelib reports a per-item EWS failure by YIELDING the
+            # exception object into the result stream instead of raising it, so
+            # `item` here is not guaranteed to be an Item. Attribute access on
+            # one of those aborts the caller's whole poll cycle, and because the
+            # caller only advances its cursor on a completed cycle, one bad
+            # message then blocks every message behind it indefinitely -- which
+            # is exactly what happened for 33 hours on 2026-08-17/18. Skipping
+            # the bad item costs that one message and lets the rest through.
+            if isinstance(item, Exception):
+                _logger.warning(
+                    "Skipping unreadable inbox item: %s: %s", type(item).__name__, item
+                )
+                continue
             yield {
                 "event_type": "NewMail",
                 "timestamp": now_local,

@@ -176,7 +176,7 @@ def test_poll_inbox_filters_by_since(monkeypatch):
 
     mock_account = MagicMock()
     # filter().order_by()[:200] chain returns fake_items
-    mock_account.inbox.filter.return_value.order_by.return_value.__getitem__.return_value = fake_items
+    mock_account.inbox.filter.return_value.only.return_value.order_by.return_value.__getitem__.return_value = fake_items
 
     mod = _import_exchange()
     conn = mod.EWSConnection()
@@ -207,7 +207,7 @@ def test_poll_inbox_yields_dicts_with_correct_keys(monkeypatch):
     item.datetime_received = datetime(2026, 5, 26, 10, 0, 0, tzinfo=timezone.utc)
 
     mock_account = MagicMock()
-    mock_account.inbox.filter.return_value.order_by.return_value.__getitem__.return_value = [item]
+    mock_account.inbox.filter.return_value.only.return_value.order_by.return_value.__getitem__.return_value = [item]
 
     mod = _import_exchange()
     conn = mod.EWSConnection()
@@ -249,7 +249,7 @@ def test_poll_inbox_without_since_returns_recent_max_items(monkeypatch):
     fake_items = [_make_item(2), _make_item(1)]
 
     mock_account = MagicMock()
-    mock_account.inbox.all.return_value.order_by.return_value.__getitem__.return_value = fake_items
+    mock_account.inbox.all.return_value.only.return_value.order_by.return_value.__getitem__.return_value = fake_items
 
     mod = _import_exchange()
     conn = mod.EWSConnection()
@@ -260,7 +260,7 @@ def test_poll_inbox_without_since_returns_recent_max_items(monkeypatch):
     mock_account.inbox.all.assert_called_once()
     mock_account.inbox.filter.assert_not_called()
     # order_by called with "-datetime_received"
-    mock_account.inbox.all.return_value.order_by.assert_called_once_with("-datetime_received")
+    mock_account.inbox.all.return_value.only.return_value.order_by.assert_called_once_with("-datetime_received")
     # Results reversed to oldest-first
     assert results[0]["item_id"] == "item-1"
     assert results[1]["item_id"] == "item-2"
@@ -280,7 +280,7 @@ def test_poll_inbox_respects_max_items_cap(monkeypatch):
     since_dt = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
 
     mock_account = MagicMock()
-    mock_account.inbox.filter.return_value.order_by.return_value.__getitem__.return_value = []
+    mock_account.inbox.filter.return_value.only.return_value.order_by.return_value.__getitem__.return_value = []
 
     mod = _import_exchange()
     conn = mod.EWSConnection()
@@ -289,7 +289,7 @@ def test_poll_inbox_respects_max_items_cap(monkeypatch):
     list(conn.poll_inbox(since=since_dt, max_items=10))
 
     # Verify the slice [:10] was applied
-    mock_account.inbox.filter.return_value.order_by.return_value.__getitem__.assert_called_once_with(
+    mock_account.inbox.filter.return_value.only.return_value.order_by.return_value.__getitem__.assert_called_once_with(
         slice(None, 10)
     )
 
@@ -318,7 +318,7 @@ def test_poll_inbox_yields_oldest_first_when_since_provided(monkeypatch):
     fake_items = [_make_item(10), _make_item(11), _make_item(12)]
 
     mock_account = MagicMock()
-    mock_account.inbox.filter.return_value.order_by.return_value.__getitem__.return_value = fake_items
+    mock_account.inbox.filter.return_value.only.return_value.order_by.return_value.__getitem__.return_value = fake_items
 
     mod = _import_exchange()
     conn = mod.EWSConnection()
@@ -327,8 +327,86 @@ def test_poll_inbox_yields_oldest_first_when_since_provided(monkeypatch):
     results = list(conn.poll_inbox(since=since_dt))
 
     # order_by must use ascending datetime_received (no leading '-')
-    mock_account.inbox.filter.return_value.order_by.assert_called_once_with("datetime_received")
+    mock_account.inbox.filter.return_value.only.return_value.order_by.assert_called_once_with("datetime_received")
     # Oldest first
     assert results[0]["item_id"] == "item-hour-10"
     assert results[1]["item_id"] == "item-hour-11"
     assert results[2]["item_id"] == "item-hour-12"
+
+
+# ---------------------------------------------------------------------------
+# Test 11: poll_inbox requests only the three fields it reads
+# ---------------------------------------------------------------------------
+
+
+def test_poll_inbox_requests_only_the_fields_it_reads(monkeypatch):
+    """Without .only(), EWS serialises every message body into one response.
+
+    On 2026-08-17 06:53 UTC that made the Steward poll loop fail outright with
+    ErrorMessageSizeExceeded -- one oversized message in the window is enough --
+    and it kept failing for 33 hours, because the caller advances its cursor only
+    on a completed cycle. Measured the same day: the identical query restricted
+    to these three fields returned all 61 backlogged messages with no error.
+    """
+    monkeypatch.setenv("EXCHANGE_EMAIL", "ceo@31c.io")
+    monkeypatch.setenv("EXCHANGE_PASSWORD", "secret")  # pragma: allowlist secret
+    monkeypatch.setenv("EXCHANGE_SERVER", "mail.31c.io")
+
+    since_dt = datetime(2026, 8, 17, 6, 29, 2, tzinfo=timezone.utc)
+
+    mock_account = MagicMock()
+    mock_account.inbox.filter.return_value.only.return_value.order_by.return_value.__getitem__.return_value = []
+
+    mod = _import_exchange()
+    conn = mod.EWSConnection()
+    conn._account = mock_account
+
+    list(conn.poll_inbox(since=since_dt))
+
+    mock_account.inbox.filter.return_value.only.assert_called_once_with(
+        "id", "parent_folder_id", "datetime_received"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 12: a yielded EWS exception is skipped, not fatal
+# ---------------------------------------------------------------------------
+
+
+def test_poll_inbox_skips_yielded_exception_and_keeps_going(monkeypatch, caplog):
+    """exchangelib reports a per-item failure by yielding the exception object.
+
+    Attribute access on one of those raised AttributeError out of the generator
+    and aborted the whole cycle, so a single unreadable message blocked every
+    message behind it forever. The bad item is now skipped and logged; the
+    readable ones still arrive.
+    """
+    monkeypatch.setenv("EXCHANGE_EMAIL", "ceo@31c.io")
+    monkeypatch.setenv("EXCHANGE_PASSWORD", "secret")  # pragma: allowlist secret
+    monkeypatch.setenv("EXCHANGE_SERVER", "mail.31c.io")
+
+    since_dt = datetime(2026, 8, 17, 6, 29, 2, tzinfo=timezone.utc)
+
+    good = MagicMock()
+    good.id = "good-item"
+    good.parent_folder_id = "inbox-folder"
+    good.datetime_received = datetime(2026, 8, 17, 7, 0, 0, tzinfo=timezone.utc)
+
+    from exchangelib.errors import ErrorMessageSizeExceeded
+    poison = ErrorMessageSizeExceeded("The message exceeds the maximum supported size.")
+
+    mock_account = MagicMock()
+    mock_account.inbox.filter.return_value.only.return_value.order_by.return_value.__getitem__.return_value = [
+        poison,
+        good,
+    ]
+
+    mod = _import_exchange()
+    conn = mod.EWSConnection()
+    conn._account = mock_account
+
+    with caplog.at_level("WARNING"):
+        results = list(conn.poll_inbox(since=since_dt))
+
+    assert [r["item_id"] for r in results] == ["good-item"]
+    assert "ErrorMessageSizeExceeded" in caplog.text

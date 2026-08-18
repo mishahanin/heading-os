@@ -91,6 +91,37 @@ if _OWNS_RATE_STATE:
         print(f"[conftest] could not reset the test rate-limit state: {exc}")
 
 
+# The same isolation, applied to the one instrument the suite could falsify from
+# the outside. A Healthchecks deadman answers "is that daemon alive?", and this
+# repository was answering for it. `_main_loop` in scripts/inbox_pulse/daemon.py
+# pings STEWARD_HC_EMAIL_TRIAGE at the end of a clean cycle, eleven tests in
+# tests/inbox_pulse/test_daemon.py drive that loop to completion, and any earlier
+# test that calls the real load_env() puts the production ping URL in os.environ
+# for the rest of the session. Measured 2026-08-18: one run of that one file sent
+# 14 real success pings to the live check. The daemon behind it had been wedged
+# since 2026-08-17 06:53 UTC and had not completed a single cycle in 33 hours,
+# yet the operator saw the alert clear and re-fire nine times, because every push
+# ran the suite and the suite pinged. The outage was found by reading a traceback,
+# not by the monitor built to find it.
+#
+# Blanked, not deleted, and that distinction is the whole guard: load_env() uses
+# os.environ.setdefault, so a name it finds already present is left alone, while a
+# deleted one is restored the moment any test loads the environment. An empty
+# value is also the documented no-op for ping(), which returns False on a falsy
+# URL without opening a socket.
+#
+# Matched on the VALUE rather than the name, because the invariant is "this
+# string is a live deadman", not "this key happens to be spelled _HC_". A ping URL
+# added tomorrow under any name is contained on the day it is added.
+# tests/test_deadman_ping_containment.py fails without these four lines.
+_ENV_FILE = _ENGINE_ROOT / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        _key, _, _value = _line.partition("=")
+        if _ and "hc-ping.com" in _value:
+            os.environ[_key.strip()] = ""
+
+
 @pytest.fixture(autouse=True)
 def _isolate_runtime_logs():
     """Re-arm the redirection before every test.

@@ -62,6 +62,11 @@ AUTO MODE: continue the latest unfinished task from the compaction summary
 above, without asking for confirmation. Briefly restate the objective and the
 next concrete action, then proceed. Repository state is authoritative.
 
+The summary may close with a next step that tells you to stop and wait for the
+operator. That step describes the end of the turn the harness compacted, so it
+is already done. Do not read it as a current instruction. Go on to the next
+step that is still open.
+
 This session's saved handoffs are under the handoff archive; the compaction
 summary already in context is the fresher of the two, so none is re-injected.
 """

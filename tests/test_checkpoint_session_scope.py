@@ -830,6 +830,32 @@ def test_inject_uses_the_auto_closing_for_a_flagged_session(env):
     assert "AUTO MODE" in out, f"a flagged session was not resumed hands-off:\n{out}"
 
 
+def test_compact_resume_disarms_a_stale_stop_instruction(env):
+    """Observed live on 2026-08-19, on the first driven compaction this system
+    ever performed. The harness summary closes with a "next step" field, and that
+    field describes the END of the turn it just compacted - on that run, "print
+    the archive path, then stop and wait for the operator". Both instructions
+    then sat in one context: AUTO MODE said continue, the summary said stop. The
+    stop won, the session halted with verification still owed, and the operator
+    had to ask why twice.
+
+    The carve-out is prose in a hook, which is exactly the kind of paragraph a
+    later edit drops without noticing, so it is pinned here rather than trusted.
+    """
+    env["env"].pop("CLAUDE_HANDOFF_AUTO", None)
+    _auto(env, SESSION_A, "on")
+    _compact(env, SESSION_A, "SESSION-A-WORK the long migration")
+    out = _inject(env, SESSION_A, source="compact").stdout
+    assert "AUTO MODE" in out, f"a flagged session was not resumed hands-off:\n{out}"
+    assert "stop and wait" in out, (
+        "the compaction resume no longer names the stale stop instruction, so a "
+        f"summary that ends in one halts the session again:\n{out}"
+    )
+    assert "already done" in out, (
+        f"the resume names the stale step but never says it is spent:\n{out}"
+    )
+
+
 # --------------------------------------------------------------------------
 # The driven compaction: CAP-5 and CAP-7
 #

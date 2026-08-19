@@ -45,6 +45,14 @@ dependencies = [
     # onnxruntime / pandas in the heavy set), so F-7.1's split made it an explicit
     # core dep rather than silently lose recall on a core clone.
     "numpy==2.4.6",
+    # jsonschema backs scripts/validate-crm-schema.py, which is the gate behind
+    # the `validate-crm-schema` pre-commit hook, scripts/canary-smoke.py, and
+    # scripts/aggregate-crm.py. It was never declared anywhere and is not
+    # installed, so the validator took its "skip when absent" branch and exited 0
+    # on every one of those callers. Measured 2026-08-20: four surfaces had been
+    # reporting a green CRM schema gate that ran zero validations. Core, not dev,
+    # because aggregate-crm and canary-smoke are operational paths.
+    "jsonschema==4.26.0",
 ]
 
 # Optional-dependency extras (F-7.1). Extra NAMES match the `optdeps.require(...,

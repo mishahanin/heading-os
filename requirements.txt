@@ -24,7 +24,10 @@ apify-client==3.1.0
 apscheduler==3.11.3
     # via heading-os-engine
 attrs==26.1.0
-    # via aiohttp
+    # via
+    #   aiohttp
+    #   jsonschema
+    #   referencing
 av==18.0.0
     # via faster-whisper
 backoff==2.2.1
@@ -174,6 +177,10 @@ jiter==0.16.0
     # via
     #   anthropic
     #   openai
+jsonschema==4.26.0
+    # via heading-os-engine
+jsonschema-specifications==2025.9.1
+    # via jsonschema
 langfuse==4.14.1
     # via heading-os-engine
 liteparse==2.9.0
@@ -338,6 +345,10 @@ pyyaml==6.0.3
     #   huggingface-hub
     #   pymdown-extensions
     #   uvicorn
+referencing==0.37.0
+    # via
+    #   jsonschema
+    #   jsonschema-specifications
 requests==2.34.2
     # via
     #   exchangelib
@@ -355,6 +366,10 @@ requests-oauthlib==2.0.0
     # via
     #   exchangelib
     #   google-auth-oauthlib
+rpds-py==2026.6.3
+    # via
+    #   jsonschema
+    #   referencing
 rsa==4.9.1
     # via telethon
 setuptools==83.0.0
@@ -403,6 +418,7 @@ typing-extensions==4.16.0
     #   pyee
     #   python-docx
     #   python-pptx
+    #   referencing
     #   starlette
     #   typing-inspection
 typing-inspection==0.4.2

@@ -83,6 +83,7 @@ Manages running state of business and personal life situations across sessions. 
 | Lookup by keyword | `find <query>` |
 | Read full thread | `show <id>` |
 | /prime archive scan | `archive-scan --apply` |
+| MEMORY.md index lines look wrong or hand-edited | `reindex` |
 
 ## When NOT to use
 
@@ -113,6 +114,7 @@ python3 scripts/thread.py find "<query>"
 python3 scripts/thread.py show <thread-id>
 python3 scripts/thread.py quiet <thread-id> [--until YYYY-MM-DD | --indefinite | --clear]
 python3 scripts/thread.py archive-scan [--apply]
+python3 scripts/thread.py reindex [--dry-run]
 ```
 
 ## Quiet periods
@@ -127,6 +129,21 @@ Two forms. `--until <date>` is a dated pause and it expires on its own.
 subject. Both forms write the state into the thread's frontmatter. Both also stamp a
 `[quiet until <date>]` marker on the thread's line in the MEMORY.md index. That
 index loads every session, so it tells me the thread is quiet.
+
+## What the index line says
+
+A thread's line in MEMORY.md carries the title, the path, and a hook. The hook is
+DERIVED state — `active, last 2026-08-15` — plus the `[quiet until …]` marker when
+one applies. It does not retell the newest event.
+
+The index loads every session. A hook that quoted live prose therefore went stale
+into a wrong answer, which `.claude/rules/memory-discipline.md` forbids. Thirty
+such hooks at 120 characters also made the block 8 KB. What happened lives in the
+thread file instead, one `show` away.
+
+`reindex` rebuilds every hook from frontmatter, so a drifted or hand-edited index
+is repairable. It rewrites hooks ONLY. It never adds or drops a line, because
+membership is a status decision that belongs to `close`, `hold`, and `reopen`.
 
 `archive-scan` reports a dated quiet period once it expires, and it never
 proposes on-hold for a thread that is still quiet.

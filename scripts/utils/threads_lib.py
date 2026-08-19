@@ -251,6 +251,23 @@ def _split_at_subheader(block: str, sub_header: str) -> tuple[str, str]:
     return block[: m.end()], block[m.end():]
 
 
+def compose_thread_hook(status: str, last_touched: str) -> str:
+    """Build the MEMORY.md hook for a thread from its own state.
+
+    The index is always loaded, so a hook must be a POINTER, not a record --
+    `.claude/rules/memory-discipline.md` forbids a hook that quotes a live
+    value, because a pointer that goes stale is read as a fact. Until
+    2026-08-18 `thread.py log` wrote `event[:120]`, i.e. a retelling of the
+    newest event, which is a live value by construction and drifted the moment
+    the thread moved on.
+
+    Status and last-activity date are re-derived from frontmatter on every
+    write, so they cannot disagree with the record they point at, and they are
+    bounded, which is what keeps the block off the index budget.
+    """
+    return f"{status}, last {last_touched}"
+
+
 def add_thread_to_index(memory_md: Path, *, type_: str, title: str, path: str, hook: str,
                         quiet_until: str | None = None) -> None:
     """Append a thread line under ### Business or ### Personal (CEO-ONLY)."""

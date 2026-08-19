@@ -15,7 +15,7 @@ from scripts.utils.threads_lib import (  # noqa: E402
     ThreadFile, write_thread_file, new_thread_path,
     ensure_active_threads_section, add_thread_to_index,
     parse_thread_file, update_thread_hook, remove_thread_from_index,
-    read_thread_hook, scan_for_archive, is_quiet,
+    scan_for_archive, is_quiet, compose_thread_hook, read_thread_hook,
 )
 
 
@@ -152,7 +152,7 @@ def cmd_open(args: argparse.Namespace) -> int:
     ensure_active_threads_section(memory_md)
     rel_path = f"threads/{args.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
     add_thread_to_index(memory_md, type_=args.type, title=args.title, path=rel_path,
-                        hook="just opened")
+                        hook=compose_thread_hook(thread.status, thread.last_touched))
     print(f"opened: {path}")
     return 0
 
@@ -194,15 +194,17 @@ def cmd_log(args: argparse.Namespace) -> int:
     thread.last_touched = today
     write_thread_file(path, thread)
     rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
-    # MEMORY hook is a short summary; full event is preserved in the thread body above.
+    # The MEMORY hook points AT the thread; the event itself lives only in the
+    # body written above. See compose_thread_hook for why it carries no prose.
+    hook = compose_thread_hook(thread.status, thread.last_touched)
     try:
-        update_thread_hook(memory_md, path=rel_path, hook=event[:120],
+        update_thread_hook(memory_md, path=rel_path, hook=hook,
                            quiet_until=thread.quiet_until)
     except ValueError:
         # Section missing or hand-edited: repair and re-add the index line.
         ensure_active_threads_section(memory_md)
         add_thread_to_index(memory_md, type_=thread.type, title=thread.title,
-                            path=rel_path, hook=event[:120],
+                            path=rel_path, hook=hook,
                             quiet_until=thread.quiet_until)
     print(f"logged to {path}")
     return 0
@@ -249,7 +251,8 @@ def _set_status(thread_id: str, new_status: str, index_action: str,
     elif index_action == "add":
         ensure_active_threads_section(memory_md)
         add_thread_to_index(memory_md, type_=thread.type, title=thread.title,
-                            path=rel_path, hook="reopened")
+                            path=rel_path,
+                            hook=compose_thread_hook(thread.status, thread.last_touched))
     print(f"{thread_id}: status={new_status}")
     return 0
 
@@ -284,8 +287,10 @@ def cmd_quiet(args: argparse.Namespace) -> int:
     rel_path = f"threads/{thread.type}/{path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
     memory_md = _memory_md()
     try:
-        hook = read_thread_hook(memory_md, path=rel_path)
-        update_thread_hook(memory_md, path=rel_path, hook=hook,
+        # Recomposed, not carried over: the hook is derived state, so there is
+        # nothing in the old line worth preserving across a quiet change.
+        update_thread_hook(memory_md, path=rel_path,
+                           hook=compose_thread_hook(thread.status, thread.last_touched),
                            quiet_until=thread.quiet_until)
     except (ValueError, FileNotFoundError) as exc:
         # The frontmatter -- which every reader consults -- is already correct;
@@ -315,6 +320,40 @@ def _all_threads(threads_root: Path) -> list[ThreadFile]:
                 # broken threads disappear from list/find with no signal.
                 print(f"warning: skipping {f}: {exc}", file=sys.stderr)
     return threads
+
+
+def cmd_reindex(args: argparse.Namespace) -> int:
+    """Rewrite every index hook from the thread's own frontmatter.
+
+    Repairs drift between MEMORY.md and the threads it points at. It rewrites
+    HOOKS only -- it never adds or drops a line, because membership of the
+    index is a status decision (`close`/`hold`/`reopen`) and silently
+    reconciling it here would let a rebuild retire a thread nobody closed.
+    """
+    memory_md = _memory_md()
+    if not memory_md.exists():
+        print(f"MEMORY.md does not exist at {memory_md}", file=sys.stderr)
+        return 1
+    changed = missing = 0
+    for t in _all_threads(_threads_root()):
+        rel_path = f"threads/{t.type}/{t.path.name}"  # leak-guard: ok (relative reference string, not a filesystem path)
+        hook = compose_thread_hook(t.status, t.last_touched)
+        try:
+            before = read_thread_hook(memory_md, path=rel_path)
+        except (ValueError, FileNotFoundError):
+            missing += 1
+            continue
+        if before == hook:
+            continue
+        if args.dry_run:
+            print(f"would rewrite {t.id}\n  - {before}\n  + {hook}")
+        else:
+            update_thread_hook(memory_md, path=rel_path, hook=hook,
+                               quiet_until=t.quiet_until)
+        changed += 1
+    verb = "would rewrite" if args.dry_run else "rewrote"
+    print(f"{verb} {changed} hook(s); {missing} thread(s) not in the index (expected for closed/on-hold)")
+    return 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -416,6 +455,11 @@ def main(argv: list[str] | None = None) -> int:
                          help="Quiet with no end date; lifts only when you raise it")
     p_quiet.add_argument("--clear", action="store_true", help="Lift the quiet period")
     p_quiet.set_defaults(func=cmd_quiet)
+    p_reindex = sub.add_parser(
+        "reindex", help="Rewrite every MEMORY.md hook from thread frontmatter")
+    p_reindex.add_argument("--dry-run", action="store_true",
+                           help="Show what would change without writing")
+    p_reindex.set_defaults(func=cmd_reindex)
     p_list = sub.add_parser("list", help="List threads")
     p_list.add_argument("--type", choices=["business", "personal"])
     p_list.add_argument("--status", choices=["active", "on-hold", "closed"])

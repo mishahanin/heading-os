@@ -50,7 +50,9 @@ def test_thread_log_appends_entry_and_updates_hook(tmp_path: Path, monkeypatch) 
     assert "Sent reply to abuse desk" in parsed.body
     assert "outputs/email-drafts/2026-04-29_email-draft_porkbun-abuse-reply.md" in parsed.links["outputs"]
     mem = memory_md.read_text(encoding="utf-8")
-    assert "Sent reply to abuse desk" in mem
+    # The hook reports state, not the event: see compose_thread_hook. The event
+    # text is asserted against the thread body above, which is where it lives.
+    assert f"- active, last {parsed.last_touched}" in mem
 
 
 def test_thread_close_removes_from_index_keeps_file(tmp_path: Path, monkeypatch) -> None:
@@ -277,7 +279,13 @@ def test_log_done_indexes_remain_stable_after_multiple_adds(tmp_path: Path, monk
 
 
 def test_log_collapses_whitespace_in_event_hook(tmp_path: Path, monkeypatch) -> None:
-    """L1 regression: multi-paragraph event must not leave double-spaced hook in MEMORY.md."""
+    """L1 regression: a multi-paragraph event must not keep its line breaks.
+
+    Retargeted 2026-08-18. The collapse originally protected the MEMORY.md hook,
+    which no longer carries event text at all; but the sanitising step it guards
+    still runs, and its output now lands in the thread body, so the guard moved
+    there rather than being deleted with the hook it used to watch.
+    """
     threads_root = tmp_path / "threads"
     memory_md = tmp_path / "MEMORY.md"
     memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
@@ -290,9 +298,9 @@ def test_log_collapses_whitespace_in_event_hook(tmp_path: Path, monkeypatch) -> 
         [sys.executable, "scripts/thread.py", "log", thread_id, "line one\nline two\n\nline three"],
         check=True,
     )
-    mem = memory_md.read_text(encoding="utf-8")
-    assert "line one line two line three" in mem
-    assert "line one  line two" not in mem  # no double spaces
+    body = parse_thread_file(list((threads_root / "business").glob("*.md"))[0]).body
+    assert "line one line two line three" in body
+    assert "line one  line two" not in body  # no double spaces
 
 
 def test_open_rejects_empty_slug_with_clean_error(tmp_path: Path, monkeypatch) -> None:
@@ -512,3 +520,64 @@ def test_reopen_needs_no_reason(tmp_path: Path, monkeypatch) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert parse_thread_file(path).status == "active"
+
+
+def test_index_hook_is_derived_state_not_the_event_text(tmp_path: Path, monkeypatch) -> None:
+    """The MEMORY.md hook is a pointer, not a record.
+
+    Until 2026-08-18 `log` wrote `event[:120]` into the index, so the
+    always-loaded index carried a 120-character retelling of the newest event --
+    a live value, which `.claude/rules/memory-discipline.md` forbids in a hook
+    precisely because it goes stale into a wrong answer. Thirty threads at that
+    width made the Active Threads block 8 KB of a 20.6 KB index. The hook now
+    reports the thread's STATUS and last-activity DATE, both of which are
+    re-derived from frontmatter on every write and cannot drift from it.
+    """
+    threads_root = tmp_path / "threads"
+    memory_md = tmp_path / "MEMORY.md"
+    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
+    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
+    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+
+    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Hook shape"], check=True)
+    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
+    event_text = "Vu Nguyen answered at 08:00 UTC and the answer is a commercial objection"
+    subprocess.run(
+        [sys.executable, "scripts/thread.py", "log", thread_id, event_text], check=True)
+
+    mem = memory_md.read_text(encoding="utf-8")
+    parsed = parse_thread_file(list((threads_root / "business").glob("*.md"))[0])
+
+    # The event text belongs in the thread body, and ONLY there.
+    assert event_text in parsed.body
+    assert "Vu Nguyen" not in mem
+
+    line = next(ln for ln in mem.splitlines() if "Hook shape" in ln)
+    assert line.endswith(f"- active, last {parsed.last_touched}")
+
+
+def test_index_lines_stay_within_the_budget(tmp_path: Path, monkeypatch) -> None:
+    """A thread line must fit the index budget even with a long title.
+
+    The old writer added a 120-char hook on top of an already-long title and
+    path, so the worst real line reached 344 characters against a 150-char
+    budget. The derived hook is bounded, so the only unbounded inputs left are
+    the title and its slug -- both of which the operator sees when opening.
+    """
+    threads_root = tmp_path / "threads"
+    memory_md = tmp_path / "MEMORY.md"
+    memory_md.write_text("# Persistent Memory\n", encoding="utf-8")
+    monkeypatch.setenv("THREADS_ROOT", str(threads_root))
+    monkeypatch.setenv("MEMORY_MD", str(memory_md))
+
+    title = "Ivory Coast tender evaluation round and the four item file request"
+    subprocess.run([sys.executable, "scripts/thread.py", "open", "business", title], check=True)
+    thread_id = list((threads_root / "business").glob("*.md"))[0].stem
+    subprocess.run(
+        [sys.executable, "scripts/thread.py", "log", thread_id,
+         "A very long operational event " * 20], check=True)
+
+    line = next(ln for ln in memory_md.read_text(encoding="utf-8").splitlines()
+                if title in ln)
+    hook = line.split(") - ", 1)[1]
+    assert len(hook) <= 40, f"hook grew unbounded: {hook!r}"

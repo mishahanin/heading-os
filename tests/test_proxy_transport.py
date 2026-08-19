@@ -72,13 +72,65 @@ def test_empty_content_filter_raises_safety_error():
         pt.call_model("gemini-3-flash", "q")
 
 
-def test_empty_stop_raises_empty_answer():
+def test_empty_stop_raises_empty_answer_after_one_retry():
+    """Still raises, but not on the first empty completion.
+
+    `stop` with no content used to be terminal immediately. On 2026-08-19 the
+    Kimi voice returned it twice during one `/scrutinize`; the skill noted the
+    drop and carried on, so the refutation layer silently ran at half roster.
+    A deterministic emptiness still raises - one call later, which is what the
+    second `_resp` here stands for.
+    """
     client = mock.MagicMock()
-    client.chat.completions.create.return_value = _resp("", "stop")
+    client.chat.completions.create.side_effect = [_resp("", "stop"), _resp("", "stop")]
     with mock.patch.object(pt, "_make_client", return_value=client), \
          mock.patch.object(pt, "load_api_key", return_value="cpx-test"), \
          pytest.raises(RuntimeError, match="finish_reason=stop"):
         pt.call_model("gemini-3-flash", "q")
+    assert client.chat.completions.create.call_count == 2, (
+        "an empty answer is terminal again, so one transient blank drops a voice"
+    )
+
+
+def test_a_transient_empty_stop_recovers():
+    """The case the retry exists for: blank once, answers on the retry."""
+    client = mock.MagicMock()
+    client.chat.completions.create.side_effect = [
+        _resp("", "stop"),
+        _resp("the critique", "stop"),
+    ]
+    with mock.patch.object(pt, "_make_client", return_value=client), \
+         mock.patch.object(pt, "load_api_key", return_value="cpx-test"):
+        out = pt.call_model("k3", "q")
+    assert out == "the critique"
+    assert client.chat.completions.create.call_count == 2
+
+
+def test_the_empty_retry_is_bounded_to_one():
+    """A retry loop against a model that always returns blank would burn the
+    subscription quota the proxy exists to protect."""
+    client = mock.MagicMock()
+    client.chat.completions.create.return_value = _resp("", "stop")
+    with mock.patch.object(pt, "_make_client", return_value=client), \
+         mock.patch.object(pt, "load_api_key", return_value="cpx-test"), \
+         pytest.raises(RuntimeError):
+        pt.call_model("k3", "q")
+    assert client.chat.completions.create.call_count == 2, (
+        f"expected exactly one retry, made "
+        f"{client.chat.completions.create.call_count} calls"
+    )
+
+
+def test_a_content_filter_block_is_never_retried():
+    """A safety block is a decision, not a hiccup. Retrying it wastes a call and
+    would let a genuine block read as a transient blank."""
+    client = mock.MagicMock()
+    client.chat.completions.create.return_value = _resp("", "content_filter")
+    with mock.patch.object(pt, "_make_client", return_value=client), \
+         mock.patch.object(pt, "load_api_key", return_value="cpx-test"), \
+         pytest.raises(RuntimeError, match="content_filter"):
+        pt.call_model("gemini-3-flash", "q")
+    assert client.chat.completions.create.call_count == 1
 
 
 def test_forwards_timeout_to_client():

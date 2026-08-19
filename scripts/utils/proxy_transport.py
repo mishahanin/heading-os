@@ -143,6 +143,28 @@ def call_model(model, prompt, *, temperature=0.7, max_tokens=8192, timeout=DEFAU
         raise RuntimeError(
             f"{model} returned empty: blocked by safety filters (content_filter)."
         )
+
+    # `stop` with no content is a NORMAL termination that produced nothing, and
+    # until 2026-08-19 it raised on the first occurrence with zero retries. On
+    # that day the Kimi voice returned it twice during one `/scrutinize`, the
+    # skill noted the drop and carried on as designed, and the refutation layer
+    # ran at half its roster - a quiet degradation of a review, which is the
+    # worst place to have one.
+    #
+    # The CAUSE is unreproduced and this retry does not claim to fix it. Prompt
+    # size was ruled out afterwards (k3 answered a 361 864-character prompt), and
+    # the proxy was updated from 7.2.129 to 7.2.136 in the same pass, so the
+    # original conditions no longer exist to test against. What is defensible
+    # without a diagnosis is that one empty completion should not be terminal:
+    # `length` already earns a retry, and this case is strictly less informative
+    # than that one. If the emptiness is deterministic for a given prompt, the
+    # second call returns empty too and the error is raised exactly as before,
+    # one call later.
+    if finish_reason == "stop":
+        content, finish_reason = _call(max_tokens)
+        if content.strip():
+            return content
+
     raise RuntimeError(
         f"{model} returned an empty answer (finish_reason={finish_reason})."
     )

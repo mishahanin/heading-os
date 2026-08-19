@@ -142,3 +142,29 @@ def test_modes_produce_rankings(brain):
         rows = pr.recall_by_graph("negotiation", bdir, root, top_k=5, mode=mode)
         assert rows, f"mode {mode} returned nothing"
         assert all(r["rank_source"] == mode for r in rows)
+
+
+def test_unparseable_frontmatter_degrades_to_empty_not_crash(tmp_path):
+    """A malformed note yields ``{}`` and never aborts the whole graph build.
+
+    Regression for the 2026-08-20 dedup swap to
+    ``scripts.utils.markdown.parse_frontmatter``: the shared util catches only
+    ``yaml.YAMLError``, so ``created: 2026-02-30`` raised ValueError straight
+    out of ``build_graph`` (``!!bool maybe`` -> KeyError, deep nesting ->
+    RecursionError), killing recall over all 521 real brain nodes because of one
+    bad date. The wrapper's catch-all restores the pre-swap degrade.
+    """
+    for text in (
+        "---\ncreated: 2026-02-30\n---\nbody\n",
+        "---\nflag: !!bool maybe\n---\nbody\n",
+        "---\na: " + "[" * 2000 + "]" * 2000 + "\n---\nbody\n",
+    ):
+        assert pr.parse_frontmatter(text) == {}
+
+    bdir = tmp_path / "knowledge" / "odin-brain" / "principles"
+    bdir.mkdir(parents=True)
+    _note(bdir, "2001", "Good note", ["good"], [])
+    (bdir / "bad.md").write_text("---\nid: bad\ncreated: 2026-02-30\n---\nbody\n", encoding="utf-8")
+    g = pr.build_graph(tmp_path / "knowledge" / "odin-brain", tmp_path)
+    # The bad note still becomes a node, keyed by its filename stem as before.
+    assert sorted(g.nodes) == ["2001", "bad"]

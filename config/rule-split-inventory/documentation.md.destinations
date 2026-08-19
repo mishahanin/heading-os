@@ -1,0 +1,8 @@
+# Files outside .claude/rules/ that documentation.md offloaded directives into.
+# One repo-relative path per line. Read by scripts/rule_split_check.py so a
+# directive that MOVED is not reported as a directive that was LOST.
+#
+# 2026-08-20: documentation.md was path-scoped and its propagation chain plus its
+# distribution list moved here. Both are still binding; they just load with a
+# docs/ path match instead of on every session.
+docs/DOCS-PIPELINE.md

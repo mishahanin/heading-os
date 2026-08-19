@@ -1,6 +1,6 @@
 ---
 name: validate
-description: "Fact-check any draft against DataStore source documents"
+description: "Fact-check a draft against the DataStore source documents and flag every claim that has no backing source. Use before anything external ships. For structure and argument order use /editorial-review."
 argument-hint: "[content or file path]"
 allowed-tools: "Read, Glob"
 model: sonnet

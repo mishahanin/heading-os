@@ -193,6 +193,13 @@ asyncio_mode = "auto"
 # whole run with "import file mismatch". The convention guarantees the collision;
 # importlib removes the class rather than renaming one file per slice forever.
 addopts = "--strict-markers --import-mode=importlib"
+# A test that RETURNS a value instead of asserting one PASSES. Pytest warns and
+# moves on. Three files here were standalone scripts before they were renamed
+# test_*.py, kept their `ok &= check(...)` / `return ok` shape, and so carried 25
+# test functions and 78 conditions that could not fail the suite. Nothing said
+# so for as long as they sat in the tree. Promoting the warning is the only
+# guard that covers a file nobody has written yet.
+filterwarnings = ["error::pytest.PytestReturnNotNoneWarning"]
 markers = [
     "integration: integration tests (mocked external services)",
     "slow: tests that take >5 seconds",

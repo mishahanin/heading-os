@@ -35,6 +35,7 @@ from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
 from scripts.utils import dead_letter, tool_risk, tracing
+from scripts.utils.timeparse import parse_iso
 
 QUEUE_FILE = "outputs/operations/action-queue/queue.json"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
 DISPOSITION_LOG = "outputs/operations/action-queue/disposition-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
@@ -103,18 +104,6 @@ def _log_event(workspace_root: Path, event: dict) -> None:
         pass  # audit trail is best-effort; never fail a mutation on log write
 
 
-def _parse_iso(s: str | None) -> datetime | None:
-    if not s or not isinstance(s, str):
-        return None
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
 def _dedup_key(card: dict) -> str | None:
     """Identity used for dedup: contact_file, else recipient, else title."""
     for k in ("contact_file", "to", "title"):
@@ -171,7 +160,7 @@ def append_cards(workspace_root: Path, cards: list[dict]) -> dict:
                 in_cooldown = False
                 for c in existing:
                     if c.get("status") == "dismissed":
-                        dt = _parse_iso(c.get("dismissed_at"))
+                        dt = parse_iso(c.get("dismissed_at"))
                         if dt and (now - dt).days < COOLDOWN_DAYS:
                             in_cooldown = True
                             break
@@ -197,7 +186,7 @@ def append_cards(workspace_root: Path, cards: list[dict]) -> dict:
         kept = []
         for c in actions:
             if c.get("status") in ("sent", "dismissed"):
-                stamp = _parse_iso(c.get("sent_at") or c.get("dismissed_at") or c.get("created_at"))
+                stamp = parse_iso(c.get("sent_at") or c.get("dismissed_at") or c.get("created_at"))
                 if stamp and (cutoff - stamp).days > PRUNE_TERMINAL_DAYS:
                     continue
             kept.append(c)

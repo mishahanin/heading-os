@@ -360,17 +360,6 @@ def pick_tab(ctx, url_substring: str, bring_to_front: bool = True):
     )
 
 
-def safe_goto(page, url: str, wait_until: str = "domcontentloaded", timeout_ms: int = 45000) -> bool:
-    """Navigate with a soft-fail and settle pause. Returns True on success."""
-    try:
-        page.goto(url, wait_until=wait_until, timeout=timeout_ms)
-        time.sleep(2)
-        return True
-    except Exception as e:
-        _log(f"goto soft-fail for {url}: {e}", YELLOW)
-        return False
-
-
 def _pid_cmdline(pid: int) -> str:
     """Full command line of a PID, or "" if it cannot be read.
 

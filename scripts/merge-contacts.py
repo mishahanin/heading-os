@@ -32,6 +32,54 @@ from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
+
+class _BlockList(list):
+    """A list that was written as `- item` lines, and goes back as those lines.
+
+    Carries the indent of its items, because YAML accepts a block list at the
+    same column as its key and 1 of the 326 live records uses that form. The
+    style is all this carries; every other consumer sees an ordinary list.
+    """
+
+    indent = "  "
+
+    def __init__(self, items, indent: str = "  "):
+        super().__init__(items)
+        self.indent = indent
+
+
+class _Quoted(str):
+    """A scalar that was written in quotes, and goes back in the same quotes.
+
+    The parser strips the quotes so callers compare against a plain string. The
+    serializer used to write the stripped value back, which is not the same
+    document: `freeze_until: "2026-10-01"` is a string and `freeze_until:
+    2026-10-01` is a date, to every reader downstream. Measured 2026-08-20 on
+    the live overlay: 981 quoted values across 175 records, all of which a merge
+    rewrote.
+    """
+
+    quote = '"'
+
+    def __new__(cls, value: str, quote: str):
+        obj = super().__new__(cls, value)
+        obj.quote = quote
+        return obj
+
+
+def _scalar(raw: str):
+    """Strip one layer of matching quotes, remembering that they were there."""
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        return _Quoted(raw[1:-1], raw[0])
+    return raw
+
+
+def _emit(value) -> str:
+    """Write a scalar back in the quotes it arrived in."""
+    if isinstance(value, _Quoted):
+        return f"{value.quote}{value}{value.quote}"
+    return str(value)
+
 # Cadence labels ranked from most frequent (shortest interval) to least
 CADENCE_RANK = {
     "daily": 0,
@@ -59,6 +107,15 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     booleans, and ints into native Python types (e.g. ``datetime.date``) that the
     serializer cannot stringify safely - corrupting the merged CRM file. Keep
     the paired parser/serializer until both sides migrate together.
+
+    Measured 2026-08-20, feeding both parsers through ``serialize_frontmatter``
+    over the live 326-record corpus (165 contacts + 161 address-book entities):
+    48 of 326 files would be written back with different bytes under
+    ``parse_frontmatter_str`` - ``tags: [a, b]`` becomes ``tags: ['a', 'b']``,
+    ``tribe_email_ok: true`` becomes ``True``, and ``yaml.safe_load`` truncates
+    an unquoted value at a ``#`` (one record's ``source`` loses its trailing
+    "#"-prefixed reference). A
+    list-preserving str variant narrows that to 12 files but not to 0.
     """
     m = FRONTMATTER_RE.match(text)
     if not m:
@@ -67,29 +124,60 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     raw_yaml = m.group(1)
     body = text[m.end():]
     fm: dict = {}
-    for line in raw_yaml.splitlines():
+    lines = raw_yaml.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
         if ":" not in line:
             continue
         key, _, value = line.partition(":")
         key = key.strip()
         value = value.strip()
-        # Handle simple lists on a single line like "[a, b]"
         if value.startswith("[") and value.endswith("]"):
-            value = [v.strip().strip('"').strip("'") for v in value[1:-1].split(",") if v.strip()]
-        elif value.startswith('"') and value.endswith('"') or value.startswith("'") and value.endswith("'"):
-            value = value[1:-1]
+            # A flow list on one line: "tags: [a, b]".
+            value = [_scalar(v.strip()) for v in value[1:-1].split(",") if v.strip()]
+        elif not value:
+            # A key with nothing after the colon may own a block list on the
+            # lines below it. Those lines carry no colon, so the loop used to
+            # skip them and write the key back empty - deleting the list from
+            # a real CRM record. Consume them here instead. The item indent may
+            # be zero: YAML allows a block list at its key's own column.
+            items, indent = [], "  "
+            while i < len(lines):
+                item = lines[i]
+                stripped = item.lstrip()
+                if not stripped.startswith("- "):
+                    break
+                if not items:
+                    indent = item[: len(item) - len(stripped)]
+                items.append(_scalar(stripped[2:].strip()))
+                i += 1
+            if items:
+                value = _BlockList(items, indent)
+        else:
+            value = _scalar(value)
         fm[key] = value
     return fm, body
 
 
 def serialize_frontmatter(fm: dict) -> str:
-    """Serialize a dict back to YAML frontmatter block."""
+    """Serialize a dict back to a YAML frontmatter block.
+
+    A list keeps the style it was read in. `_BlockList` writes back as indented
+    `- item` lines, every other list writes back as `[a, b]`. A merge changes
+    the fields it was asked to change; restyling a field it only passed through
+    is a diff the operator did not ask for and has to read anyway.
+    """
     lines = ["---"]
     for key, value in fm.items():
-        if isinstance(value, list):
-            lines.append(f"{key}: [{', '.join(str(v) for v in value)}]")
+        if isinstance(value, _BlockList):
+            lines.append(f"{key}:")
+            lines.extend(f"{value.indent}- {_emit(v)}" for v in value)
+        elif isinstance(value, list):
+            lines.append(f"{key}: [{', '.join(_emit(v) for v in value)}]")
         else:
-            lines.append(f"{key}: {value}")
+            lines.append(f"{key}: {_emit(value)}")
     lines.append("---")
     return "\n".join(lines) + "\n"
 

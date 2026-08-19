@@ -107,7 +107,7 @@
 <tr>
 <td><code>humanization.md</code></td>
 <td>Always-on</td>
-<td>Writes all prose so it reads as written by a person, not a machine: specificity density, committed stance, deliberate rhythm, a banned-vocabulary list, and a test-before-rewriting calibration gate.</td>
+<td>Writes all prose so it reads as written by a person, not a machine: specificity density, committed stance, deliberate rhythm, a banned-vocabulary list, and a test-before-rewriting calibration gate. The diagnosis detail and two subordinate fundamentals moved to <code>reference/humanization-empirical-basis.md</code> on 2026-08-20.</td>
 </tr>
 <tr>
 <td><code>hidden-chars.md</code></td>
@@ -126,7 +126,7 @@
 </tr>
 <tr>
 <td><code>output-naming.md</code></td>
-<td>Always-on</td>
+<td>Path-scoped</td>
 <td>The <code>YYYY-MM-DD_{type}_{slug}.{ext}</code> naming standard for everything written under <code>outputs/</code>, so the tree stays searchable and sortable.</td>
 </tr>
 </tbody>
@@ -155,7 +155,7 @@
 <tr>
 <td><code>security.md</code></td>
 <td>Always-on</td>
-<td>Where secrets belong (never in tracked files), the defence layers, credential rotation, and incident response.</td>
+<td>Where secrets belong (never in tracked files), credential rotation, and incident response, plus the two prohibitions the model itself can break: never <code>--no-verify</code>, never <code>core.hooksPath</code>. The defence-layer narrative moved to <code>docs/SECURITY-MODEL.md</code> on 2026-08-20; the rule stays unconditional because a path-scoped rule is lost after a compaction.</td>
 </tr>
 <tr>
 <td><code>generated-code-execution.md</code></td>
@@ -168,9 +168,9 @@
 <td>Record classification (engine / private / corporate) driven by <code>config/routing-map.yaml</code>. The fail-closed direction that keeps real data out of the engine.</td>
 </tr>
 <tr>
-<td><code>vpn-preflight.md</code></td>
-<td>Always-on</td>
-<td>A confirmation gate before browsing operations that public services block from datacenter IPs (YouTube, Google, LinkedIn, some OSINT).</td>
+<td><code>reference/vpn-preflight.md</code></td>
+<td>On demand</td>
+<td>A confirmation gate before browsing operations that public services block from datacenter IPs (YouTube, Google, LinkedIn, some OSINT). Moved out of <code>.claude/rules/</code> on 2026-08-20: the four skills that need it already cite it by path, and <code>skill-router.md</code> carries the one-line obligation.</td>
 </tr>
 </tbody>
 </table>
@@ -203,7 +203,7 @@
 <tr>
 <td><code>skill-orchestrator.md</code></td>
 <td>Always-on</td>
-<td>Detects compound workflows and dispatches parallel research agents while serialising writes, bounded by a concurrency cap and approval gates.</td>
+<td>Detects compound workflows and dispatches parallel research agents while serialising writes, bounded by a concurrency cap and approval gates. The seven per-pattern briefings moved to <code>reference/orchestrator-patterns.md</code> on 2026-08-20 and reading it before dispatch is now mandatory; the safety floor stays resident.</td>
 </tr>
 <tr>
 <td><code>console-first.md</code></td>
@@ -263,7 +263,7 @@
 </tr>
 <tr>
 <td><code>documentation.md</code></td>
-<td>Always-on</td>
+<td>Path-scoped</td>
 <td>Keep documentation in step with the code: which docs to update when a skill, script, rule, or structure changes, and the version-marker convention.</td>
 </tr>
 <tr>

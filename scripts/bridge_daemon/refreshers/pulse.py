@@ -5,10 +5,15 @@ Phase 1.5: "Phase 2 will swap to a refresh_prime cache for performance."
 
 Compute the full /pulse payload on a schedule and write it to
 .daemon-state/pulse-snapshot.json. The /pulse endpoint reads from this
-snapshot, so per-request latency collapses from ~7 s (WSL /mnt/c rglob
-over outputs/ on every poll) to ~5 ms. The cost was acceptable when the
-daemon ran on Windows-native Python; the 2026-05-23 WSL migration
-exposed it because every stat() now crosses the 9P bridge.
+snapshot instead of walking the tree on every poll.
+
+The ~7 s per-request figure this cache was built against is HISTORICAL. It
+was measured in May 2026, when the workspace sat on WSL /mnt/c and every
+stat() crossed the 9P bridge. The workspace has since moved to ext4, where
+the same rglob over outputs/ is 68 ms across 5,910 entries (re-measured
+2026-08-20). The cache is still the right shape - it keeps a filesystem
+walk off the request path - but it is no longer buying two orders of
+magnitude, and nobody should size a decision on the old number.
 
 Failure modes are caught and logged, never raised - a scheduler tick
 must not crash the daemon. The endpoint falls back to inline compute

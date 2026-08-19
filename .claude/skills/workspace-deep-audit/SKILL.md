@@ -18,6 +18,11 @@ disable-model-invocation: true
 argument-hint: "[--mode={full|quick|focus}] [--focus={skills|rules|deps|security|architecture}] [--vs=<previous_audit_path>]"
 allowed-tools: "Read, Write, Edit, Glob, Grep, Bash(python3:*), Bash(git:*), Bash(wc:*), Bash(ls:*), Bash(find:*), Bash(du:*), Bash(pre-commit:*), Bash(pip:*), Agent, WebSearch, WebFetch"
 context: fork
+# Backgrounded forks (the default since Claude Code 2.1.218) get the narrower
+# background-subagent tool set, which has no Agent tool. This skill dispatches
+# parallel specialists and only degrades to sequential; keep it in the
+# foreground so the parallel path stays available. Added 2026-08-20.
+background: false
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com

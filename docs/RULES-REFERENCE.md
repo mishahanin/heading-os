@@ -22,11 +22,11 @@ Every piece of natural-language output the engine produces passes through this g
 | Rule | Scope | What it enforces |
 |------|-------|------------------|
 | `voice.md` | Always-on | Core communication style: truth first, draft-then-iterate, bilingual reply matching the user's language, no structural changes without approval, the canonical "no double dashes" rule. |
-| `humanization.md` | Always-on | Writes all prose so it reads as written by a person, not a machine: specificity density, committed stance, deliberate rhythm, a banned-vocabulary list, and a test-before-rewriting calibration gate. |
+| `humanization.md` | Always-on | Writes all prose so it reads as written by a person, not a machine: specificity density, committed stance, deliberate rhythm, a banned-vocabulary list, and a test-before-rewriting calibration gate. The diagnosis detail and two subordinate fundamentals moved to `reference/humanization-empirical-basis.md` on 2026-08-20. |
 | `hidden-chars.md` | Always-on | Zero invisible Unicode in any output (zero-width spaces, soft hyphens, non-breaking spaces, BOM). Validated with `scripts/sanitize-text.py`. |
 | `terminology.md` | Always-on | House vocabulary: the Navigation Principle, operational states, and the correct product and philosophy terms. See the [glossary](GLOSSARY.html). |
 | `voss.md` | Always-on | Chris Voss tactical-empathy overlay on all outgoing communication: labels, calibrated questions, precise numbers, never split the difference. |
-| `output-naming.md` | Always-on | The `YYYY-MM-DD_{type}_{slug}.{ext}` naming standard for everything written under `outputs/`, so the tree stays searchable and sortable. |
+| `output-naming.md` | Path-scoped | The `YYYY-MM-DD_{type}_{slug}.{ext}` naming standard for everything written under `outputs/`, so the tree stays searchable and sortable. |
 
 ### Security and safety
 
@@ -36,10 +36,10 @@ The controls with teeth. These are enforced by hooks and code, not by prose alon
 |------|-------|------------------|
 | `lethal-trifecta.md` | Always-on | The one control every send-capable path inherits: outbound send is always human-gated, never autonomous. An agent may draft and queue, a human clicks before anything leaves. |
 | `tiered-risk.md` | Path-scoped | The three-tier risk gate (`autonomous` / `notify` / `gated`) for Action Queue cards, and the invariant that a send-capable action always floors to `gated` regardless of config. |
-| `security.md` | Always-on | Where secrets belong (never in tracked files), the defence layers, credential rotation, and incident response. |
+| `security.md` | Always-on | Where secrets belong (never in tracked files), credential rotation, and incident response, plus the two prohibitions the model itself can break: never `--no-verify`, never `core.hooksPath`. The defence-layer narrative moved to `docs/SECURITY-MODEL.md` on 2026-08-20; the rule stays unconditional because a path-scoped rule is lost after a compaction. |
 | `generated-code-execution.md` | Path-scoped | The single documented carve-out from the global ban on executing generated code: the `/census` traversal, the four sandbox controls that compensate for it, and the four conditions that void the exception. It licenses executing a model-written program under those controls, never `eval`, `exec`, or `compile`, which stay forbidden outright. |
 | `classification.md` | Always-on | Record classification (engine / private / corporate) driven by `config/routing-map.yaml`. The fail-closed direction that keeps real data out of the engine. |
-| `vpn-preflight.md` | Always-on | A confirmation gate before browsing operations that public services block from datacenter IPs (YouTube, Google, LinkedIn, some OSINT). |
+| `reference/vpn-preflight.md` | On demand | A confirmation gate before browsing operations that public services block from datacenter IPs (YouTube, Google, LinkedIn, some OSINT). Moved out of `.claude/rules/` on 2026-08-20: the four skills that need it already cite it by path, and `skill-router.md` carries the one-line obligation. |
 
 ### Workflow and interaction
 
@@ -50,7 +50,7 @@ How the engine interprets a request and routes it to the right work.
 | `prompt-refinement.md` | Always-on | The interpret then clarify then await-approval flow before acting, plus the `/align`, `/devil`, and `/burst` escalations and the `!` escape valve. |
 | `measurable-execution.md` | Always-on | Before any non-trivial task, agree the metric that defines "done ideally" and, when the task signals a fit, propose `/goal` (verifiable end-condition) or `/loop` (recurrence). Attaches to prompt-refinement Phase 1; advisory. |
 | `skill-router.md` | Always-on | Matches a natural-language message to the right skill, with a full skill registry, exclusions, and compound-trigger handoff. |
-| `skill-orchestrator.md` | Always-on | Detects compound workflows and dispatches parallel research agents while serialising writes, bounded by a concurrency cap and approval gates. |
+| `skill-orchestrator.md` | Always-on | Detects compound workflows and dispatches parallel research agents while serialising writes, bounded by a concurrency cap and approval gates. The seven per-pattern briefings moved to `reference/orchestrator-patterns.md` on 2026-08-20 and reading it before dispatch is now mandatory; the safety floor stays resident. |
 | `console-first.md` | Always-on | Every capability must be operable from the terminal and chat. The web dashboard is a convenience layer, never a dependency. |
 | `memory-discipline.md` | Always-on | Before any consequential action, open the authoritative record, not the pointer that surfaced it (an index hook, recalled snippet, or summary); and keep the always-loaded pointer layer lean - hooks carry topic + pointer, never volatile state. Enforced advisory by `scripts/memory-hygiene.py`. |
 
@@ -71,7 +71,7 @@ Governs development work on the engine itself.
 | Rule | Scope | What it enforces |
 |------|-------|------------------|
 | `development-standards.md` | Path-scoped | Quality gates for every artifact: research first, restraint (simplicity and surgical changes), a debugging discipline, and the skill / script / reference standards. |
-| `documentation.md` | Always-on | Keep documentation in step with the code: which docs to update when a skill, script, rule, or structure changes, and the version-marker convention. |
+| `documentation.md` | Path-scoped | Keep documentation in step with the code: which docs to update when a skill, script, rule, or structure changes, and the version-marker convention. |
 | `documentation-style.md` | Path-scoped | A subset of ASD-STE100 Simplified Technical English for the procedural pages and skill instruction bodies: imperative steps, active voice, a word limit per sentence, one action per step, and a warning that arrives before the step it guards. Audited by `scripts/ste-check.py`, which leaves its heuristic warnings advisory. The gate is narrower than the scope: `--all` fails a commit on errors in the twelve procedural pages, while `--skills` measures the skill bodies and gates nothing. Explanatory pages and all outbound prose stay out of scope, where `humanization.md` governs instead. |
 | `trace-id.md` | Path-scoped | One correlation ID per process tree, so a single grep answers "what happened in this run?" across the daemon logs. |
 | `scope-claims.md` | Path-scoped | A tool reports the coverage its method establishes and no more: resolve the claim, name what was left out, and widen rather than go silent when the evidence is missing. Enforced by `tests/test_scope_claims.py`, which makes every session-membership or live-execution claim declare what resolves it. |

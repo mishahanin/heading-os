@@ -1,21 +1,7 @@
 ---
 name: playwright
 x-heading-requires: ["browser"]   # F-7.1: optional-dependency extras this skill needs
-description: >
-  Automate web browsers with Playwright for screenshots, scraping, form filling,
-  PDF generation, YouTube video analysis, and website testing. Use for any task
-  requiring a real browser or YouTube content understanding -- extracting data from
-  JavaScript-rendered pages, capturing screenshots of competitor websites, filling
-  and submitting web forms, generating PDFs from web pages, monitoring website
-  availability, testing 31C web properties, or understanding YouTube video content.
-  Trigger when the user says "playwright", "screenshot this site", "scrape this page",
-  "fill this form", "capture this website", "extract data from", "web automation",
-  "browser automation", "PDF from website", "monitor this site", "watch this video",
-  "what's in this YouTube video", "understand this video", "youtube transcript",
-  or any task involving programmatic browser interaction or YouTube content extraction.
-  Also trigger when a URL points to a JS-rendered page that WebFetch cannot handle.
-  Do NOT trigger for simple URL fetching (use WebFetch), quick interactive browsing
-  (use agent-browser), or building Playwright test suites as a developer.
+description: "Drive a real browser for a SCRIPTED, non-interactive job: screenshots, scraping a JS-rendered page, filling a form, PDF from a page, or reading a YouTube video's transcript. Do NOT use for a plain URL fetch that WebFetch already handles, and do NOT use for live interactive browsing (clicking around a session by hand) - that is agent-browser."
 argument-hint: "[url] [action]"
 allowed-tools: "Bash(python3:*), Bash(npx:*), Read"
 metadata:
@@ -113,7 +99,7 @@ After extracting, read the output and provide Misha with a summary of what the v
 
 ### Pre-flight: VPN Check (MANDATORY for `youtube` subcommand)
 
-Apply `.claude/rules/vpn-preflight.md` before invoking `pw.py youtube`. The
+Apply `reference/vpn-preflight.md` before invoking `pw.py youtube`. The
 youtube-transcript-api path is blocked from datacenter IPs (Mullvad exits are
 blacklisted; Proton Amsterdam is verified working). Confirm the user is on
 Proton VPN (or a residential proxy) before running.
@@ -228,7 +214,7 @@ python ".claude/skills/playwright/scripts/pw.py" screenshot "https://dashboard.e
 
 ## NEVER
 
-- Never skip the VPN pre-flight (`.claude/rules/vpn-preflight.md`) before `pw.py youtube` — datacenter IPs are blocked.
+- Never skip the VPN pre-flight (`reference/vpn-preflight.md`) before `pw.py youtube` — datacenter IPs are blocked.
 - Never submit a form (`fill --submit-selector`) on the CEO's behalf without explicit approval — outbound submission is a human-gated action.
 - Never pass a bare cwd-relative `outputs/...` to `-o` / `--output-dir`; resolve `$OUTPUTS_DIR` via `get_outputs_dir()` first so artifacts land in the DATA overlay, never the engine.
 - Never store scraped credentials, cookies, or session tokens in any tracked workspace file.

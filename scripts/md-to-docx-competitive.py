@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import set_cell_shading
+from scripts.utils.docx_helpers import load_docx, set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
 import os
@@ -35,15 +35,11 @@ def _ensure_docx():
     global NAVY, ACCENT_BLUE, DARK_GRAY, MED_GRAY, LIGHT_GRAY, WHITE, GREEN, RED, ORANGE, TEAL
     if Document is not None:
         return
-    from scripts.utils.optdeps import require
-    require("docx", extra="documents")
-    from docx import Document
-    from docx.shared import Inches, Pt, Cm, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.enum.section import WD_ORIENT
-    from docx.oxml.ns import qn, nsdecls
-    from docx.oxml import parse_xml
+    d = load_docx()
+    Document, Inches, Pt, Cm, RGBColor = d.Document, d.Inches, d.Pt, d.Cm, d.RGBColor
+    WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, WD_ORIENT = (
+        d.WD_ALIGN_PARAGRAPH, d.WD_TABLE_ALIGNMENT, d.WD_ORIENT)
+    qn, nsdecls, parse_xml = d.qn, d.nsdecls, d.parse_xml
     NAVY = RGBColor(0x0A, 0x1F, 0x3C)
     ACCENT_BLUE = RGBColor(0x1A, 0x73, 0xE8)
     DARK_GRAY = RGBColor(0x33, 0x33, 0x33)
@@ -54,16 +50,6 @@ def _ensure_docx():
     RED = RGBColor(0xC0, 0x39, 0x2B)
     ORANGE = RGBColor(0xE6, 0x7E, 0x22)
     TEAL = RGBColor(0x16, 0xA0, 0x85)
-
-def set_cell_borders(cell, top=None, bottom=None, left=None, right=None):
-    tc = cell._tc
-    tcPr = tc.get_or_add_tcPr()
-    borders = parse_xml(f'<w:tcBorders {nsdecls("w")}></w:tcBorders>')
-    for side, val in [("top", top), ("bottom", bottom), ("left", left), ("right", right)]:
-        if val:
-            border = parse_xml(f'<w:{side} {nsdecls("w")} w:val="single" w:sz="{val}" w:space="0" w:color="CCCCCC"/>')
-            borders.append(border)
-    tcPr.append(borders)
 
 def add_formatted_text(paragraph, text, bold=False, italic=False, color=None, size=None):
     run = paragraph.add_run(text)

@@ -12,6 +12,12 @@ description: >
   "youtube scan", or asks for YouTube content discovery and analysis in any domain.
 argument-hint: "[query]"
 context: fork
+# Claude Code 2.1.218 made `context: fork` run in the BACKGROUND by default, and
+# a backgrounded fork gets the narrower background-subagent tool set, which has
+# no AskUserQuestion. This skill's Phase 0 VPN gate IS an AskUserQuestion, and
+# `reference/vpn-preflight.md` calls proceeding past it "a protocol
+# violation". Without this line the harness makes that violation structural.
+background: false
 allowed-tools: "WebSearch, WebFetch, Read, Bash(python3:*)"
 model: sonnet
 metadata:
@@ -80,7 +86,7 @@ Per-channel cap, browser cookie sourcing (default: Brave ClaudeCode profile via 
 
 ## Pre-flight: VPN Check (MANDATORY, runs before Phase 0)
 
-Apply `.claude/rules/vpn-preflight.md` before any network operation in this skill.
+Apply `reference/vpn-preflight.md` before any network operation in this skill.
 In short:
 
 1. Run a silent exit-IP check:

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
 from scripts.utils.paths import get_data_root
+from scripts.utils.timeparse import parse_iso
 
 # Phase 1.32: priority -> band. P1/P2 need a decision or reply (full cards);
 # P3 is analyzed-but-no-action; P4 is low-priority noise (count only).
@@ -43,15 +44,6 @@ _DEFER_LOG_LOCK = threading.Lock()
 CRM_LOGGED_FILE = "outputs/operations/email-intelligence/_crm-logged.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
 CRM_LOGGED_MAX_BYTES = 1_000_000
 _CRM_LOGGED_LOCK = threading.Lock()
-
-
-def _parse_iso(ts: str | None) -> datetime | None:
-    if not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts)
-    except (ValueError, TypeError):
-        return None
 
 
 def read_dismiss_log(workspace_root: Path) -> set[str]:
@@ -450,9 +442,9 @@ def _inbox_row(conv: dict, crm_logged: set[str], now: datetime) -> dict:
     # Phase 1.34: flag conversations unread more than 24h so nothing the
     # CEO is deliberately holding quietly slips. No age cap - all unread
     # conversations show; aging is a visual mark only.
-    ts = _parse_iso(conv.get("latest_datetime"))
-    if ts is not None and ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+    # parse_iso always returns aware (2026-08-20), so the naive->UTC fixup that
+    # used to sit here is gone; `now` is aware and the subtraction is safe.
+    ts = parse_iso(conv.get("latest_datetime"))
     aging = ts is not None and (now - ts) > timedelta(hours=24)
     return {
         "id": conv["id"],
@@ -562,7 +554,7 @@ def read_inbox(workspace_root: Path, now: datetime | None = None,
     _epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
     for band_rows in bands.values():
         band_rows.sort(
-            key=lambda r: _parse_iso(r["latest_datetime"]) or _epoch,
+            key=lambda r: parse_iso(r["latest_datetime"]) or _epoch,
             reverse=True,
         )
 

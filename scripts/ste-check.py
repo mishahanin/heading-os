@@ -179,19 +179,74 @@ SENTENCE_SPLIT_RE = re.compile(
 # Text preparation
 # ============================================================
 
+# Marks a line a removed block emptied, so `parse_units` can tell it from a
+# blank line the author wrote. Never reaches a report: the mark is stripped
+# before any unit text is built. Carries no backtick, bracket, paren, angle
+# bracket or leading `>`, so the preparation passes that run after the blanking
+# cannot consume it.
+BLANKED_LINE = "@ste-blanked@"
+
+
+def _blank_out(match):
+    """Replace a removed block with its own newlines, so line numbers survive.
+
+    Every finding carries a line number the reader is expected to open the file
+    at. `parse_units` numbers the lines of the PREPARED text, so a block deleted
+    outright here silently shifts every finding below it by the block's height.
+
+    Measured 2026-08-19 across the 96 skill bodies: 156 of 431 findings (36%)
+    reported a line at or above the file's own frontmatter, which reads as the
+    checker auditing YAML that `.claude/rules/documentation-style.md` scopes out.
+    It was not - the frontmatter was already stripped on the line below. The
+    findings were real body prose, reported one frontmatter-height too high.
+    `.claude/skills/corporate-letter/SKILL.md` said line 21 and meant line 72,
+    with its frontmatter closing on line 51.
+
+    Frontmatter was the largest of these blocks, not the only one: a code fence
+    or a multi-line HTML comment moves everything after it by the same
+    mechanism. So the fix is height-preserving substitution for every block that
+    spans lines, not an offset added at one call site - an offset is one more
+    number to keep in step with the stripping, and the copy that stops being
+    updated is the one somebody reads a line number from.
+
+    A block opened MID-LINE needs one thing more than height. Plain blanking
+    leaves the lines it covered EMPTY, and an empty line ends a paragraph, so an
+    aside opened mid-sentence cut its own paragraph in two and the sentence
+    running through it was measured in halves. Reproduced 2026-08-20: a 26-word
+    sentence carrying a three-line aside measured 11 words and 15 words, and the
+    prose limit of 25 reported nothing. So the lines a mid-line block covers are
+    MARKED rather than left empty, and `parse_units` reads a marked line as
+    interior to the paragraph. A block that opens a line keeps the plain
+    blanking: the empty lines it leaves are what separated the paragraphs around
+    it, exactly as the author's own line breaks did.
+    """
+    newlines = match.group(0).count("\n")
+    line_start = match.string.rfind("\n", 0, match.start()) + 1
+    opens_the_line = not match.string[line_start:match.start()].strip()
+    if newlines == 0 or opens_the_line:
+        return "\n" * newlines
+
+    # One mark per covered line: the interior lines, plus the closing line,
+    # whose own remainder lands right after the mark and is read as prose.
+    return "\n" + f"{BLANKED_LINE}\n" * (newlines - 1) + BLANKED_LINE
+
+
 def strip_noise(text):
     """Remove everything a style checker must not read as prose.
 
     Code fences and inline code go first: a shell command is not a sentence and
     would blow every word limit in the file.
+
+    Blocks that span lines are blanked to their own height rather than deleted -
+    see `_blank_out` for what that costs when they are not.
     """
     text = re.sub(
         r"<!--\s*ste-skip-start\s*-->[\s\S]*?<!--\s*ste-skip-end\s*-->",
-        "", text, flags=re.IGNORECASE,
+        _blank_out, text, flags=re.IGNORECASE,
     )
-    text = re.sub(r"^---\n.*?\n---\n", "", text, count=1, flags=re.DOTALL)
-    text = re.sub(r"```[\s\S]*?```", "", text)
-    text = re.sub(r"<!--[\s\S]*?-->", "", text)
+    text = re.sub(r"^---\n.*?\n---\n", _blank_out, text, count=1, flags=re.DOTALL)
+    text = re.sub(r"```[\s\S]*?```", _blank_out, text)
+    text = re.sub(r"<!--[\s\S]*?-->", _blank_out, text)
     text = re.sub(r"`[^`\n]+`", " ", text)
     text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", " ", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
@@ -234,8 +289,16 @@ def parse_units(text):
             para_lines = []
 
     for idx, raw in enumerate(text.splitlines(), start=1):
+        blanked = raw.startswith(BLANKED_LINE)
+        if blanked:
+            raw = raw[len(BLANKED_LINE):]
         line = raw.rstrip()
         stripped = line.strip()
+
+        # A line a mid-line block emptied ends no paragraph - the author wrote
+        # prose straight through it. Every other empty line still ends one.
+        if blanked and not stripped:
+            continue
 
         if not stripped or HEADING_RE.match(line) or stripped.startswith("|"):
             flush()
@@ -423,6 +486,11 @@ def check_warning_at_end(text):
         return None
 
     for idx, raw in enumerate(lines, start=1):
+        # This check reads the same prepared text, where a mid-line block leaves
+        # a mark instead of an empty line. Drop the mark so the line reads
+        # exactly as plain blanking left it, and rule 8 decides on the prose.
+        if raw.startswith(BLANKED_LINE):
+            raw = raw[len(BLANKED_LINE):]
         stripped = raw.strip()
         if HEADING_RE.match(raw):
             found = close(block, block_has_step)

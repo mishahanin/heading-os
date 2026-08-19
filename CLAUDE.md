@@ -30,7 +30,9 @@ clone that overlay is simply absent and the engine runs on its defaults and
 - `.claude/rules/` — always-on and path-scoped behavioral rules
 - `scripts/` — CLI utilities and daemons; shared modules in `scripts/utils/`
 - `tests/` — pytest suite
-- `config/` — engine configuration plus `*.example.*` templates (real instance values stay private)
+- `config/` — engine configuration (real instance values stay private); the
+  `*.example.*` per-instance templates live beside the scripts that read them, in
+  `scripts/`
 - `docs/`, `reference/`, `examples/` — documentation and scaffolding
 
 ## Setup
@@ -63,3 +65,17 @@ block them, but the first line of defense is you.
      single source of truth in .heading-os-data). On a public clone that sibling
      is absent, so this import is a silent no-op. -->
 @../.heading-os-data/CLAUDE.operational.md
+
+<!-- Deliberately the LAST thing in the rendered system prompt. Anthropic's Opus 5
+     prompt-engineering guidance: effort does not reliably shorten a visible
+     response, so length is controlled by an explicit instruction, and a
+     late-position reminder carries more weight than an early one. Added
+     2026-08-20. It governs the SHAPE of the reply and nothing else — the
+     paragraph says so in its own words, because the previous attempt at this
+     (two clauses in the ELI5 output style) read as permission to do less work
+     and Opus 5 followed it literally. -->
+<tone_preference>Keep the written reply as short as the content allows. Match the
+length of a document to what the task needs; no filler sections, no restating
+what was just said, no boilerplate summary. This governs the length of the
+OUTPUT, never the depth of the work: run every check the task needs, read every
+file it needs, and finish the whole thing — then report it briefly.</tone_preference>

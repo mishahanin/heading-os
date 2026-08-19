@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import set_cell_shading
+from scripts.utils.docx_helpers import load_docx, set_cell_shading
 from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
 
 from copy import deepcopy
@@ -50,14 +50,10 @@ def _ensure_docx():
     global ORANGE, PURPLE, BLUE, BLACK, WHITE
     if Document is not None:
         return
-    from scripts.utils.optdeps import require
-    require("docx", extra="documents")
-    from docx import Document
-    from docx.shared import Pt, Cm, RGBColor, Emu
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.oxml.ns import qn, nsdecls
-    from docx.oxml import parse_xml
+    d = load_docx()
+    Document, Pt, Cm, RGBColor, Emu = d.Document, d.Pt, d.Cm, d.RGBColor, d.Emu
+    WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT = d.WD_ALIGN_PARAGRAPH, d.WD_TABLE_ALIGNMENT
+    qn, nsdecls, parse_xml = d.qn, d.nsdecls, d.parse_xml
     ORANGE = RGBColor(0xFF, 0x92, 0x35)
     PURPLE = RGBColor(0x74, 0x7D, 0xBE)
     BLUE = RGBColor(0x42, 0x3B, 0xFF)
@@ -192,11 +188,6 @@ def add_table(doc, headers, rows, col_widths_cm=None):
     return table
 
 
-def add_page_break(doc):
-    """Insert a page break."""
-    doc.add_page_break()
-
-
 # ============================================================
 # Rendering / Document Builder
 # ============================================================
@@ -258,7 +249,7 @@ def build_document():
         run = mp.add_run(text)
         run.font.color.rgb = ORANGE
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # TABLE OF CONTENTS
@@ -287,7 +278,7 @@ def build_document():
         run = p.add_run(item)
         p.paragraph_format.space_after = Pt(3)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 1: EXECUTIVE SUMMARY
@@ -330,7 +321,7 @@ def build_document():
         col_widths_cm=[7, 9]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 2: THE MARKET IMPERATIVE
@@ -353,7 +344,7 @@ def build_document():
     add_normal(doc, "The dominant legacy DPI vendor's bankruptcy removed the incumbent from [N]+ countries, creating a [$X]B addressable market opportunity. The remaining alternatives -- geopolitically-aligned infrastructure vendors -- carry baggage that sovereignty-minded governments and operators cannot accept.")
     add_normal(doc, "ODUN.ONE is the sovereign, non-aligned, AI-native answer.", bold=True)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 3: PLATFORM OVERVIEW
@@ -396,7 +387,7 @@ def build_document():
         for b in bullets:
             add_bullet(doc, b)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 4: CORE PLATFORM MODULES
@@ -484,7 +475,7 @@ def build_document():
         col_widths_cm=[4, 6, 6]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 5: AI & ML ARCHITECTURE
@@ -534,7 +525,7 @@ def build_document():
         col_widths_cm=[5, 5.5, 5.5]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 6: AI TRAINING PIPELINE
@@ -615,7 +606,7 @@ def build_document():
     ]:
         add_bullet(doc, b)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 7: INTELLIGENCE MODULES
@@ -654,7 +645,7 @@ def build_document():
         for b in bullets:
             add_bullet(doc, b)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 8: TELECOM USE CASES
@@ -694,7 +685,7 @@ def build_document():
     ]:
         add_rich_para(doc, [(bold_part, True, False), (normal_part, False, False)])
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 9: LAW ENFORCEMENT & NATIONAL SECURITY
@@ -850,7 +841,7 @@ def build_document():
     ]:
         add_bullet(doc, b)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 10: AI TRAINING SCENARIOS
@@ -942,7 +933,7 @@ def build_document():
         for o in outcomes:
             add_bullet(doc, o)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 11: DEPLOYMENT ARCHITECTURE
@@ -976,7 +967,7 @@ def build_document():
         col_widths_cm=[4, 5.5, 5.5]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 12: TECHNICAL SPECIFICATIONS
@@ -1037,7 +1028,7 @@ def build_document():
     ]:
         add_bullet(doc, b)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 13: INTEGRATION ARCHITECTURE
@@ -1082,7 +1073,7 @@ def build_document():
     ]:
         add_bullet(doc, b)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 14: SECURITY, COMPLIANCE & GOVERNANCE
@@ -1130,7 +1121,7 @@ def build_document():
     ]:
         add_bullet(doc, b)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # SECTION 15: WHY ODUN.ONE
@@ -1168,7 +1159,7 @@ def build_document():
         col_widths_cm=[4, 5.5, 5.5]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # LICENSING & SUPPORT
@@ -1205,7 +1196,7 @@ def build_document():
     ]:
         add_bullet(doc, b)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ============================================================
     # CLOSING PAGE

@@ -56,6 +56,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='memory-reconcile.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='session-start.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
             "timeout": 15
           }
@@ -184,7 +189,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
@@ -202,11 +207,6 @@
             "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='prompt-guard.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
             "timeout": 2,
             "async": true
-          },
-          {
-            "type": "command",
-            "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='context-monitor.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\"",
-            "timeout": 2
           }
         ]
       }
@@ -215,5 +215,14 @@
   "statusLine": {
     "type": "command",
     "command": "python3 -c \"import sys,runpy;from pathlib import Path;n='checkpoint-statusline.py';p=next((str(d/'.claude'/'hooks'/n) for d in [Path.cwd(),*Path.cwd().parents] if (d/'.claude'/'hooks'/n).is_file()),None)\nif p: sys.argv=[p]+sys.argv[1:]; runpy.run_path(p,run_name='__main__')\""
-  }
+  },
+  "env": {
+    "CLAUDE_HANDOFF_SOFT_THRESHOLD": "40",
+    "CLAUDE_HANDOFF_HARD_THRESHOLD": "45",
+    "CLAUDE_HANDOFF_REMIND_STEP": "5",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "750000",
+    "CLAUDE_HANDOFF_UNATTENDED_WAIT": "10",
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "2"
+  },
+  "autoCompactWindow": 750000
 }

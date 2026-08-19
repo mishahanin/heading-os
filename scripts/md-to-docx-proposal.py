@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import set_cell_shading
+from scripts.utils.docx_helpers import load_docx, set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
 INPUT_PATH = str(get_outputs_dir() / 'proposals' / '31C-National-Programme-DPI-Proposal-v1.md')
@@ -31,15 +31,11 @@ def _ensure_docx():
     global BRAND_DARK, BRAND_ACCENT, BRAND_LIGHT, WHITE
     if Document is not None:
         return
-    from scripts.utils.optdeps import require
-    require("docx", extra="documents")
-    from docx import Document
-    from docx.shared import Pt, Inches, Cm, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.enum.section import WD_ORIENT
-    from docx.oxml.ns import qn, nsdecls
-    from docx.oxml import parse_xml
+    d = load_docx()
+    Document, Pt, Inches, Cm, RGBColor = d.Document, d.Pt, d.Inches, d.Cm, d.RGBColor
+    WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, WD_ORIENT = (
+        d.WD_ALIGN_PARAGRAPH, d.WD_TABLE_ALIGNMENT, d.WD_ORIENT)
+    qn, nsdecls, parse_xml = d.qn, d.nsdecls, d.parse_xml
     BRAND_DARK = RGBColor(0x1A, 0x1A, 0x2E)   # Dark navy
     BRAND_ACCENT = RGBColor(0x00, 0x7A, 0xCC)  # Blue accent
     BRAND_LIGHT = RGBColor(0x4A, 0x4A, 0x5A)   # Body text grey

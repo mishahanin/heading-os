@@ -285,8 +285,10 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
     def pulse(authorization: str | None = Header(None)):
         _require_token(authorization)
         # Phase 2 cache (2026-05-24): serve the snapshot the refresher
-        # writes every 60s. Cold compute is ~7s on WSL /mnt/c; reading
-        # the snapshot is ~5ms. Fall back to inline compute only when
+        # writes every 60s. The ~7s cold-compute figure this was built
+        # against was WSL /mnt/c; on today's ext4 the walk is 68 ms
+        # (2026-08-20, see refreshers/pulse.py). Fall back to inline
+        # compute only when
         # the snapshot is absent or corrupt (boot edge case or disk
         # error) so the dashboard always renders.
         snap = _pulse_snapshot(workspace_root)  # snapshot is machine-local (.daemon-state), engine root

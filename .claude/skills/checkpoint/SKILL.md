@@ -40,6 +40,7 @@ x-heading-routing:
   router: manual
 ---
 
+
 # /checkpoint
 
 Save a manual session checkpoint without running `/compact` or clearing context.
@@ -55,10 +56,6 @@ Save a manual session checkpoint without running `/compact` or clearing context.
 - Does NOT clear the session
 - Does NOT continue implementation after writing - wait for the user to direct next action
 
-The system keys every path by session id. Several sessions run on this workspace
-at once, and a shared pointer is last-writer-wins. Before 2026-08-16 the inject
-hook could hand a resumed session another session's handoff.
-
 ## When to use
 
 - Soft / hard checkpoint offer fired (`Stop` hook surfaced the context threshold)
@@ -72,12 +69,8 @@ hook could hand a resumed session another session's handoff.
 
 Split `$ARGUMENTS` on whitespace. If the FIRST token is exactly `auto` or exactly
 `unattended`, this is a switch. It is not a checkpoint. Anything else is a note,
-including a word that merely begins with one of them.
-
-Match the whole token, never a prefix. The rule read "starts with `auto`" until
-2026-08-19. On that day `/checkpoint autocompact fires at 584k` matched `auto
-on`. The skill dropped the note, wrote no file, and switched a mode instead. A
-prefix match cannot tell a switch from a subject.
+including a word that merely begins with one of them. Match the whole token,
+never a prefix.
 
 Run one of these, then stop. Do not write any file.
 
@@ -102,10 +95,7 @@ session key, and the pruner removes it with the session.
 ### Step 1 - Get this session's paths
 
 One command prints all of them. Add `--kind auto` when the Stop hook asked for
-this save rather than the operator. The flag names the archive `_handoff_auto_`.
-That name is the only thing that separates a save the system needed from one the
-operator chose. The driven compaction looks for exactly that kind and does
-nothing without it.
+this save rather than the operator.
 
 ```bash
 python scripts/checkpoint-paths.py
@@ -113,9 +103,10 @@ python scripts/checkpoint-paths.py
 
 It emits `key=value` lines: `session_id`, `session_slug`, `stamp`,
 `project_root`, `data_root`, `archive`, `summary_pointer`, `prompt_pointer`,
-`shared_summary_pointer`, `shared_prompt_pointer`, `state`. Archive paths are data-root-relative, which is the form the
-`@`-reference resolves. Use them verbatim - never rebuild a path by hand, and
-never write into another session's pointer directory.
+`shared_summary_pointer`, `shared_prompt_pointer`, `state`. Archive paths are
+data-root-relative, which is the form the `@`-reference resolves. Use them
+verbatim - never rebuild a path by hand, and never write into another session's
+pointer directory.
 
 If the script is unavailable, get the stamp from `date -u +'%Y-%m-%d-%H%M%S'`.
 Get the session id from `echo "$CLAUDE_CODE_SESSION_ID"`. Take the slug as the
@@ -123,75 +114,13 @@ first 32 characters of that id.
 
 ### Step 2 - Write the combined handoff file
 
-The file MUST contain these sections in order. Keep prose concise - this is for resume, not a report:
-
-```markdown
-# Handoff - manual checkpoint
-
-Generated: {ISO UTC timestamp}
-Trigger: manual-checkpoint
-Session: {session id if known}
-
-## Objective
-
-What is the current task aiming to accomplish? One paragraph.
-
-## Acceptance criteria
-
-How will we know the task is done? Bullet list.
-
-## Constraints
-
-What boundaries, deadlines, dependencies, or invariants must hold? Bullet list.
-
-## Decisions
-
-Key choices made so far in this session, with one-line reasoning. Bullet list.
-
-## Files touched / inspected
-
-Absolute or workspace-relative paths grouped by role (read / written / planned). Bullet list.
-
-## Current state
-
-Where are we right now? What is the last action completed? One paragraph.
-
-## Commands / tests
-
-Commands that should be re-run on resume (tests, validators, manual checks). Bullet list.
-
-## Open issues
-
-Known problems, blockers, or questions awaiting answers. Bullet list.
-
-## Next steps
-
-The exact next 1-3 actions to take when resuming. Ordered list.
-
-## Continuation prompt
-
-Continue this Claude Code session from the saved handoff.
-
-First read:
-
-@outputs/operations/handoff-archive/{stamp}_handoff_manual_{session-slug}.md
-
-Then continue the latest unfinished task.
-
-Rules:
-1. Treat repository state as authoritative.
-2. Do not redo broad discovery unless the summary is insufficient.
-3. Before making changes, briefly restate the current objective, constraints, files involved, and next concrete action.
-4. Continue implementation from the current repo state.
-
-## User note
-
-$ARGUMENTS
-```
-
-If `$ARGUMENTS` is empty, omit the "User note" section.
+Read `references/handoff-template.md` before you write this file. It holds the
+required section list, in order, and the exact archive template.
 
 ### Step 3 - Update the pointer files
+
+Read `references/handoff-template.md` before you write these files. It holds the
+summary text and the continuation prompt text.
 
 Write the same two texts to two places each. Four files in total.
 
@@ -200,45 +129,9 @@ Write the same two texts to two places each. Four files in total.
 - `shared_summary_pointer` and `shared_prompt_pointer` hold the workspace's
   newest handoff. `/next` reads these two.
 
-A prior checkpoint almost always left these four files in place. The `Write`
-tool refuses to overwrite a file that you did not `Read` first in this session,
-and it answers with `Error writing file`.
-
-So for each pointer file below, `Read` it and then `Write` it. On a first-ever
-checkpoint, ignore the not-found result of the `Read`.
-
-Keep the summary short. The inject hook truncates at 8000 characters, so it
-writes anything past that and no session ever reads it.
-
-`Read` then `Write` the summary text to `summary_pointer` AND `shared_summary_pointer`:
-
-```markdown
-# Latest handoff summary
-
-Source: outputs/operations/handoff-archive/{archive filename}
-Generated: {ISO UTC timestamp}
-Trigger: manual-checkpoint
-
-{Copy the "Objective" + "Current state" + "Next steps" sections from the archive file. Keep it short - this is what gets injected on resume.}
-```
-
-`Read` then `Write` the continuation prompt to `prompt_pointer` AND `shared_prompt_pointer`:
-
-```
-Continue this Claude Code session from the saved handoff.
-
-First read:
-
-@outputs/operations/handoff-archive/{archive filename}
-
-Then continue the latest unfinished task.
-
-Rules:
-1. Treat repository state as authoritative.
-2. Do not redo broad discovery unless the summary is insufficient.
-3. Before making changes, briefly restate the current objective, constraints, files involved, and next concrete action.
-4. Continue implementation from the current repo state.
-```
+For each of the four pointer files, `Read` it and then `Write` it. On a
+first-ever checkpoint, ignore the not-found result of the `Read`. Keep the
+summary short. The inject hook truncates it at 8000 characters.
 
 ### Step 4 - Respond to the user
 
@@ -253,13 +146,8 @@ Do NOT continue implementation, do NOT call `/compact`, do NOT clear the session
 
 ## Auto mode
 
-Auto mode makes the Stop hook run this skill's procedure with no prompt. It
-fires once per 5% band, not at every pause, because the same hysteresis that
-governs the question governs the silent save. After a compaction, the
-SessionStart hook then tells the session to continue the unfinished task; that
-instruction is printed only when auto is on. Auto mode is OFF by default.
-
-Nothing here triggers compaction. A hook cannot start a compaction, so Claude
+Auto mode makes the Stop hook run this skill's procedure with no prompt. Auto
+mode is OFF by default. Nothing here triggers compaction on its own. Claude
 Code's own auto-compact still decides when to free the context. Auto mode only
 guarantees that the checkpoint lands first.
 
@@ -268,12 +156,6 @@ guarantees that the checkpoint lands first.
 ```bash
 python scripts/checkpoint-paths.py --auto on
 ```
-
-The threshold offer no longer gives this switch a numbered option. It names the
-switch only for the operator who stays at the keyboard, because `unattended`
-below is the better answer for the operator who leaves. Auto mode keeps one
-property that `unattended` gives up: it hands the turn back immediately, with no
-wait. The choice belongs to the current window and dies with it.
 
 **For the whole workspace,** set the environment default in
 `.claude/settings.local.json`:
@@ -287,8 +169,11 @@ wait. The choice belongs to the current window and dies with it.
 }
 ```
 
-Keep the compaction percentage ABOVE the soft threshold. The checkpoint then
-always lands before compaction frees the context.
+Keep `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` ABOVE the soft threshold. The checkpoint
+then always lands before compaction frees the context.
+
+Read `references/mode-mechanics.md` for the hysteresis band, the post-compaction
+resume instruction, and why the threshold offer stopped naming this switch.
 
 ## Unattended mode
 
@@ -298,6 +183,9 @@ It is a SEPARATE switch from `auto`, and it is OFF by default.
 ```bash
 python scripts/checkpoint-paths.py --unattended on
 ```
+
+The slash command `/unattended on|off|status` is a shorter route to the same
+switch. It runs the command above and nothing else.
 
 The threshold offer names this switch as its one standing option, because it is
 the only command you need: `--unattended on` already sets `auto`.
@@ -312,20 +200,10 @@ Use it for work that runs past the time you are at the keyboard: overnight, or
 across a weekend. Turn unattended off and `auto` returns to whatever it was
 before, including to having been unset.
 
-Two sentences here were false until 2026-08-19 and are corrected rather than
-deleted, because the correction is the point. The Stop hook DOES write in this
-mode: once per hysteresis bucket at or above the hard threshold. And a hook CAN
-trigger a compaction, just not from inside Claude Code.
-
-The harness exposes no internal way to compact on demand, so the hook does it
-from outside. Above the hard threshold, and once your handoff is on disk, the
-hook submits the literal text `/compact` to this session's own pane. It reaches
-that pane through HERDR, the terminal manager that hosts it. The harness then
-parses the text exactly as if you had typed it.
-
-If HERDR is not hosting the session, none of that happens and Claude
-Code's own auto-compact frees the context instead. The offer tells you which of
-those two it is, and says so plainly when it could not find out.
+At or above the hard threshold, and once your handoff is on disk, the hook asks
+the harness to compact from outside, through HERDR. Read
+`references/mode-mechanics.md` for that mechanism and for the two corrections
+behind it.
 
 The switch belongs to the operator. The assistant never lowers it.
 
@@ -336,13 +214,6 @@ back:
 ```bash
 python scripts/checkpoint-paths.py --unattended off
 ```
-
-This rule replaced "turn it off when the work is finished" on 2026-08-19. That
-instruction defeated itself. Work reaches the operator's decision at the end of
-nearly every stretch. So the switch went down each time before the hook wrote any
-`_handoff_auto_` file. The compaction path needs two conditions at once: the
-switch up, and that file on disk. The mechanism ran twice in one session. It
-compacted zero times.
 
 **Nothing lowers the switch except you.** The bounds below stop a stretch. They
 hand the turn back and leave the mode on, so your next instruction resumes it.
@@ -366,14 +237,7 @@ resume.
 
 The ceiling is the backstop, for the case where the marker never arrives. It
 stops a stretch after 100 continuations. Measure one night before you move that
-number with `CLAUDE_HANDOFF_UNATTENDED_MAX`. No run has yet reached the end of
-its work, so the count a real night needs is unknown.
-
-A fingerprint heuristic held this job until 2026-08-19. It watched the files the
-session wrote, and it called three unchanged readings a finished plan. It cannot
-tell a finished plan from a night of reading and thinking. It stopped all three
-unattended runs ever attempted, at three and five continuations. None came near
-the ceiling.
+number with `CLAUDE_HANDOFF_UNATTENDED_MAX`.
 
 **A stopped stretch is silent by design.** The hook records why it stopped, and
 when, in the session state. It also sends one Telegram notice when you configured
@@ -399,16 +263,10 @@ Environment defaults, for the whole workspace rather than one session:
 }
 ```
 
-The wait costs you time on every pause of a long run. Sixty seconds against fifty
-pauses is fifty minutes of a night spent waiting. This workspace runs 10 seconds.
-You lose no control: Claude Code queues anything you type at any moment, and the
-hook reads that queue.
-
-**The wait is clamped at 60 seconds, whatever you set.** Claude Code discards the
-output of a hook that times out. A wait at or above the registered timeout
-therefore loses the continuation in silence. The shipped registration allows 90
-seconds, and the clamp leaves room for the work that follows the wait. Raise the
-registration first if you need a longer grace period.
+**The wait is clamped at 60 seconds, whatever you set.** Raise the hook's own
+registered timeout first if you need a longer grace period. Read
+`references/mode-mechanics.md` for the cost of a long wait and for the clamp's
+reasoning.
 
 ## NEVER
 

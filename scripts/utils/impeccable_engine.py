@@ -177,12 +177,6 @@ def is_suppressed(rule: str, profile: str = "screen", profiles: dict | None = No
     return rule in _suppressed_rules(profile, profiles)
 
 
-def suppression_reason(rule: str, profile: str, profiles: dict | None = None) -> str | None:
-    if profiles is None:
-        profiles, _ = load_profiles()
-    return _suppressed_rules(profile, profiles).get(rule)
-
-
 def profile_for(file_path: str | Path, profiles: dict | None = None) -> str:
     """Pick the profile for a path. Longest matching glob wins; default otherwise."""
     if profiles is None:

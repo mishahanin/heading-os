@@ -1,6 +1,6 @@
 ---
 name: linkedin-post
-description: LinkedIn Post
+description: "Draft one LinkedIn post in Misha's voice. Use when the ask is a single standalone post. For a multi-post plan with a shared arc use /linkedin-series; to file a post that is already published use /linkedin-archive."
 argument-hint: "[topic]"
 allowed-tools: "Read"
 metadata:

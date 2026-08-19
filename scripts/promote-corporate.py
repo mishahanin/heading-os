@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_workspace_root, get_corporate_repo_path  # noqa: E402
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 from scripts.utils.git_push import supervised_push  # noqa: E402
+from scripts.utils.timeparse import parse_iso  # noqa: E402
 
 SOAK_HOURS = 4
 WORKSPACE_ROOT = get_workspace_root()
@@ -76,17 +77,6 @@ def verify_corporate_repo(corp: Path) -> None:
 # ============================================================
 # Pure helpers (no git) -- the testable core
 # ============================================================
-def _parse_iso(s: str):
-    """Parse an ISO timestamp to an aware datetime (UTC if naive). None on failure."""
-    if not s:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
-
-
 def resolve_canary_slug(registry: dict) -> str | None:
     """Return the slug of the entry flagged canary=true, or None."""
     execs = registry.get("executives") or registry.get("execs") or []
@@ -102,14 +92,14 @@ def evaluate_gates(now, latest_commit_at, status: dict, soak_hours: int = SOAK_H
     """Pure gate evaluation. ``now`` and ``latest_commit_at`` are aware datetimes;
     ``status`` is the canary status dict. Returns a result with per-gate booleans,
     a blocked flag, and the list of blocking reason names (subset of BLOCK_REASONS)."""
-    commit_dt = latest_commit_at if isinstance(latest_commit_at, datetime) else _parse_iso(latest_commit_at)
-    now_dt = now if isinstance(now, datetime) else _parse_iso(now)
+    commit_dt = latest_commit_at if isinstance(latest_commit_at, datetime) else parse_iso(latest_commit_at)
+    now_dt = now if isinstance(now, datetime) else parse_iso(now)
 
     soak = (now_dt - commit_dt) if (now_dt and commit_dt) else None
     soak_hours_elapsed = round(soak.total_seconds() / 3600, 1) if soak else None
     soak_ok = soak is not None and soak >= timedelta(hours=soak_hours)
 
-    last_pull = _parse_iso(status.get("last_pull_at", ""))
+    last_pull = parse_iso(status.get("last_pull_at", ""))
     canary_fresh = bool(last_pull and commit_dt and last_pull >= commit_dt)
 
     smoke_status = status.get("smoke_status")
@@ -152,7 +142,7 @@ def latest_staging_commit(corp: Path):
     _git(["fetch", "origin", "staging", "main"], corp, check=False)
     sha = _git(["rev-parse", "origin/staging"], corp).stdout.strip()
     iso = _git(["show", "-s", "--format=%cI", sha], corp).stdout.strip()
-    return sha, _parse_iso(iso)
+    return sha, parse_iso(iso)
 
 
 def read_status(corp: Path, slug: str) -> dict:

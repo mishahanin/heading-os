@@ -1,6 +1,6 @@
 ---
 name: follow-up
-description: "Draft a personalized follow-up email after a meeting or event"
+description: "Draft a follow-up email after a meeting or an event, using the CRM history for that contact. Use when the ask names a person and a past interaction. For a first-contact email use /email-draft; for a reply inside an existing thread use /email-respond."
 argument-hint: "[who] [context]"
 allowed-tools: "Read, Bash(python3:*)"
 model: sonnet

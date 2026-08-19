@@ -68,11 +68,3 @@ Bring a skill down when you edit it, run `--skills --quiet` to see where the num
 The warnings did NOT earn a gate and are not in it. Seventy-nine of the eighty-eight are `passive_voice`, decided by a regex with no part-of-speech tagger behind it, and the rest are the `-ing` opener, the padding vocabulary, and the non-imperative-step heuristic. `--strict` would gate on guesses. Read them, act on the true ones, and leave the checker where it cannot fail a commit over a construction it cannot actually parse.
 
 It verifies rules 3, 4, 7, 8, 9, and 10 mechanically, and flags rules 1 and 2 as heuristics with known false positives — there is no part-of-speech tagger behind the passive check. It **cannot** see rules 5 and 6: article omission and cross-corpus term drift need a parser and a glossary this engine does not have, so those two stay a human reading. That is why they are written down here rather than quietly dropped. Wrap any exempt block in `<!-- ste-skip-start -->` and `<!-- ste-skip-end -->`.
-
-## Classification
-
-Engine — public, fleet-shared through the `.claude/rules/` directory default.
-
-## Change control
-
-Changes to this rule require Misha's explicit approval.

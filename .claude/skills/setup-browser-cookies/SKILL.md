@@ -76,7 +76,7 @@ errors:
   log in in that browser/profile first.
 - **`App-bound v20 ... not yet supported`** — Chrome M127+ app-bound encryption. Fall
   back to `yt-dlp --cookies-from-browser brave` for that workflow (documented in
-  `.claude/rules/vpn-preflight.md`).
+  `reference/vpn-preflight.md`).
 - **`secretstorage not installed` / locked keyring (Linux)** — only v10 cookies decrypt;
   unlock the keyring (gnome-keyring / kwallet) for v11.
 

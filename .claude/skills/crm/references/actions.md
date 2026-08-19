@@ -1,0 +1,126 @@
+# /crm - action procedures
+
+Consumed by: `.claude/skills/crm/SKILL.md`, section "Actions". Holds the full
+step sequence for each of the six actions, the canonical-owner lookup table, the
+interaction-log entry template, and the brain-gated `relevant_principles` rules.
+Read the section for the action you are about to run, before you run it.
+
+Resolve every path below through the Workspace-Aware Paths table in SKILL.md.
+
+Last Updated: 2026-08-20
+
+---
+
+### `radar` (default — also runs when no arguments provided)
+
+Display the relationship health dashboard.
+
+1. Run `python scripts/crm-health.py` to get the health report
+2. Present the output organized by urgency:
+   - **RED** contacts first (overdue — need attention today)
+   - **YELLOW** contacts (approaching — plan a touch this week)
+   - **Active commitments** due in the next 7 days
+   - **GREEN** contacts (on track — for reference)
+3. For each RED contact, suggest a specific action (email, call, meeting)
+4. **Company-Wide Radar (admin only):** If `.workspace-identity.json` has `role: "admin"`:
+   a. Run `python scripts/aggregate-crm.py` to refresh aggregated data
+   b. Read the following from `../31c-crm-central/aggregated/`:
+      - `company-radar.md` - all contacts with health status across all execs
+      - `shared-contacts.md` - contacts tracked by multiple execs
+      - `ownership-map.md` - who owns which relationships
+   c. Present **Company-Wide View** after personal radar:
+      - **Fleet summary:** X execs active, Y total contacts, Z shared contacts
+      - **Health breakdown:** RED/YELLOW/GREEN/GRAY counts across all execs
+      - **Ownership stats:** contacts per exec, overdue per exec
+      - **Shared contacts:** same person tracked by multiple execs (highlight potential conflicts)
+      - **Top overdue:** 10 most overdue contacts company-wide with owner
+   d. Note: Exec workspaces do NOT get the company-wide view
+
+5. **Full CRM View (admin only):** If the user says "full CRM view" or "CRM dashboard":
+   a. Run `python scripts/generate-crm-dashboard.py` to produce the HTML dashboard
+   b. Present the output path and a summary of what's in it
+
+After surfacing radar output, suggest: `Run /crm next to see the top 3 follow-ups with drafts ready for review.`
+
+### `next`
+
+Surface the top-3 priority follow-ups with checking-in drafts ready for manual review and send. Version 0 of this subcommand presents drafts only. The CEO decides per-draft and sends manually via `send-email.py`. Auto-send-on-approval is a Phase 3 follow-up.
+
+1. Run `python3 scripts/crm_next.py` to generate today's queue. (Note: filename is snake_case for Python importability — `crm_next.py`, not `crm-next.py`.)
+2. Read the output path printed by the script (e.g., `outputs/operations/crm/next-{TODAY}.md`).
+3. Present the 3 candidates inline:
+   - Candidate index + name + company
+   - Stage + days overdue
+   - Last interaction excerpt (if any)
+   - Draft body (ready for manual send)
+4. For each candidate the CEO wants to send: invoke `python3 scripts/send-email.py --to <addr> --subject "<subject>" --body "<body>"` using the draft body. The auto-log hook in send-email.py (Phase 1) handles the last_touch bump + interaction log entry automatically.
+5. For drafts the CEO wants to revise: discuss the requested change inline, regenerate the draft body, repeat step 4.
+6. For drafts the CEO wants to skip: do nothing. The contact stays in the radar and reappears in tomorrow's queue.
+
+### `add`
+
+Create a new contact. Two-tier model: address book entity (corporate) + relationship record (exec-private).
+
+1. Parse arguments for: name, company, relationship type, region, timezone, email (REQUIRED for auto-log entity resolution to work).
+2. Generate slug: `firstname-lastname` (kebab-case).
+3. **Check if entity exists.** Look for `crm/address-book/{slug}.md`.
+   - If exists: skip address book creation, proceed to relationship record only.
+   - If not exists AND user is CEO (admin role): create the address book entry with a Profile section. Its YAML frontmatter carries slug, name, canonical_email, employer, canonical_owner per the type-tier table, and today's created date.
+   - If not exists AND user is exec: append to `personal/.sync/pending-address-book.jsonl` for CEO promotion. Proceed with relationship record creation using the slug; entity will resolve once CEO promotes.
+4. **Canonical owner lookup** (only when creating an address book entry):
+   - prospect, customer, partner, partner-active, reseller -> `alex-rivera`
+   - investor-active, investor-passive, shareholder -> `misha-hanin`
+   - tribe, tribe-leadership -> `misha-hanin`
+   - government, regulator, media, press, advisor -> `misha-hanin`
+   - ecosystem, service-provider, vendor -> `lee-park`
+5. Create the relationship record at `crm/contacts/{slug}.md` (CEO) or `personal/crm/contacts/{slug}.md` (exec) with:
+   - YAML frontmatter: `entity_ref: {slug}`, `relationship_type`, `last_touch: today`, `created: today`. Optional fields per user input: `cadence`, `source`, `pipeline_company`.
+   - **Relevant principles (CEO workspace only, brain-gated):** three conditions must hold. You are on the CEO workspace, `knowledge/odin-brain/` exists, and `relationship_type` is a deal-bearing external type, NOT `tribe`, `tribe-leadership`, or `inactive`. Then stamp an optional `relevant_principles:` YAML list. Run `python scripts/odin-principles.py --type {relationship_type} [--stage {stage}] --json` and take the top slugs. For internal types and exec workspaces (no brain), skip silently, never write the field, and never error.
+   - Empty Active Commitments + Interaction Log sections.
+6. **Tribe member case:** if `type` is `tribe` or `tribe-leadership`, also add a `corporate` rule for the file to `config/routing-map.yaml` (CEO only; execs surface a note).
+7. **@31c.io warning:** if `email` contains `@31c.io` AND type is NOT tribe or tribe-leadership, surface a warning. The text is "This contact has a @31c.io email but is not classified as tribe. Update type to 'tribe' if they are a Tribe member."
+8. Add to `context/people.md` radar table.
+9. Confirm creation with summary including the entity_ref slug.
+
+### `log`
+
+Log an interaction for an existing contact.
+
+1. Parse arguments for: contact name (fuzzy match) and interaction details
+2. Search `crm/contacts/` for the matching contact file (match against filename or frontmatter name field)
+3. If multiple matches, list them and ask which one
+4. If no match, suggest creating a new contact with `/crm add`
+5. Determine interaction type from context (Meeting, Call, Email, Event, Note)
+6. Add a new entry at the TOP of the Interaction Log section:
+   ```
+   ### YYYY-MM-DD | Type | Brief Title
+   Description of the interaction.
+   **Next:** What happens next (if applicable).
+   ```
+7. Update `last_touch` in the YAML frontmatter to today's date
+8. Check Active Commitments — if this interaction addresses any, mark them done
+9. Confirm the log entry
+
+### `find`
+
+Search across all CRM contact files.
+
+1. Parse the query from arguments
+2. Search using Grep across all files in `crm/contacts/` for matches in:
+   - Name, company, title (frontmatter)
+   - Region, type (frontmatter)
+   - Interaction history (body text)
+   - Any keyword match
+3. Present results as a compact list: Name | Company | Type | Last Touch
+4. If no results in CRM files, also check `context/people.md` for contacts not yet migrated
+
+### `update`
+
+Update a contact's profile information.
+
+1. Parse arguments for: contact name, field to update, new value
+2. Find the contact file (same fuzzy match as `log`)
+3. Update the specified field in the YAML frontmatter or profile section
+4. If updating `type`, recalculate cadence from `crm/config.md` defaults (unless cadence was manually set)
+5. **Relevant principles refresh (CEO workspace only, brain-gated):** three conditions must hold. `relationship_type` or `pipeline_company` changed, and `knowledge/odin-brain/` exists. The type is also deal-bearing and external, NOT `tribe`, `tribe-leadership`, or `inactive`. Then re-derive `relevant_principles` via `python scripts/odin-principles.py --type {relationship_type} [--stage {stage}] --json`. Skip silently on exec workspaces or internal types.
+6. Confirm the update

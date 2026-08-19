@@ -1,16 +1,35 @@
 # Compound Workflow Patterns — Full Agent Prompts
 
-> Last Updated: 2026-05-12
-> Source: `.claude/rules/skill-orchestrator.md` (full pattern prose extracted on 2026-05-11; per-agent model assignments + Patterns 6 and 7 added 2026-05-12 via perf-tuneup v2 Phase 5)
+Consumed by: `.claude/rules/skill-orchestrator.md` (always-on). The rule's
+Workflow Patterns table names one row per pattern and requires a Read of the
+matching section here before any dispatch.
+
+> Last Updated: 2026-08-20
+> Source: `.claude/rules/skill-orchestrator.md` (full pattern prose extracted on 2026-05-11; per-agent model assignments + Patterns 6 and 7 added 2026-05-12 via perf-tuneup v2 Phase 5; per-pattern agent-file roles, per-pattern approval-gate statements, and Pattern 6's check list + check safety floor moved down from the rule on 2026-08-20)
 
 Full agent-briefing prose for each of the 7 compound workflow patterns
-dispatched by the orchestrator. The rule itself carries the safety floor
-(DO-NOT lists, approval-gate counts, concurrency caps); this file carries
-the rich briefing text the rule's prefatory paragraph instructs Claude
-to Read when dispatching.
+dispatched by the orchestrator. The rule carries the cross-pattern safety
+floor (the Parallelization Safety Model, Conflict Detection, and Orchestrator
+Principles 1-8); this file carries every per-pattern detail — the agent-file
+role mapping, the DO-NOT lists, the approval gates, the concurrency notes, and
+the rich briefing text.
+
+Reading the matching section here is MANDATORY before dispatching a pattern.
+Never paraphrase a safety constraint from memory.
 
 Section headings use `## Pattern N — <name>` so Claude can read a single
 section per dispatch.
+
+## Roles are agent files
+
+Four recurring roles are agent definitions in `.claude/agents/`, not inline
+prompts: `crm-reader`, `comms-scout`, `datastore-validator`, `draft-writer`.
+Each carries its own model and its own tool list, and the tool list is the
+enforcement: `draft-writer` has no `Bash`, so it cannot reach
+`scripts/send-email.py` whatever a dispatch prompt says. Where a pattern below
+names one of these roles, dispatch THAT agent — the inline prompt text is the
+briefing to hand it, not a substitute for it. A step with no agent file named
+runs on the model stated inline.
 
 ---
 
@@ -20,6 +39,25 @@ section per dispatch.
 
 **Announcement:**
 > Running Deep Meeting Prep for [name/company]. Dispatching 4 parallel research agents - OSINT (Opus), Voss tactical prep (Opus), CRM history (Haiku), and counterpart comms scout (Haiku).
+
+**Roles and models:**
+
+- `/osint` scout — Opus (per CEO decision: /osint stays Opus)
+- `/voss` prep — Opus (voice-grade)
+- CRM history reader — the `crm-reader` agent
+- Counterpart comms scout (Exchange + Telegram, last 30 days) — the `comms-scout` agent
+
+**Safety floor (each agent):**
+
+- Do NOT write to CRM files.
+- Do NOT modify any workspace state.
+- Comms scout is read-only — no message sending, no marking as read.
+
+**Approval:** no hard gate before write phase — brief is presented first, then a single CRM log entry is written sequentially.
+
+**Write phase:** sequential, after brief is presented to CEO. CRM log entry only.
+
+**Agents dispatched:** 4. Global concurrency cap of 5 still applies per Principle 5.
 
 **Execution:**
 
@@ -49,6 +87,28 @@ DEGRADATION: If any agent fails, the others still complete. /meeting-prep runs w
 
 **Announcement:**
 > Running Morning Comms. Fetching Exchange email (Sonnet), Telegram VIRAID channel (Sonnet), calendar (Haiku), and Sentinel queue (Haiku) in parallel.
+
+**Roles and models:**
+
+- `/email-intel` fetch — Sonnet
+- `/viraid` fetch — Sonnet
+- Calendar scout (today + next 3 days from Exchange) — the `comms-scout` agent, channel `calendar`
+- Sentinel-queue scout (unprocessed urgent items) — the `comms-scout` agent, channel `sentinel-queue`
+
+**Safety floor (each agent):**
+
+- DO NOT execute any CRM writes.
+- DO NOT update pipeline.
+- DO NOT update state.json.
+- DO NOT update task files.
+- Calendar and Sentinel scouts are read-only.
+- Returns digest only.
+
+**Approval:** one hard gate before any writes.
+
+**Write phase:** sequential, one CRM contact file at a time. State files (email-intel state.json, viraid state.json) update only after approval.
+
+**Agents dispatched:** 4. Global concurrency cap of 5 still applies per Principle 5.
 
 **Execution:**
 
@@ -95,6 +155,22 @@ DEGRADATION: If Exchange fetch fails, present Viraid results alone (and vice ver
 **Announcement:**
 > Running Post-Event Follow-ups for [N] contacts. Drafting all follow-up emails in parallel (Sonnet per drafter, Haiku per image prompt if imagery is requested).
 
+**Roles and models:**
+
+- Drafter agents (one per contact) — the `draft-writer` agent
+- Image-prompt agents (one per post, when imagery requested) — Haiku
+
+**Safety floor (each agent):**
+
+- DO NOT send the email.
+- DO NOT write to CRM.
+
+**Approval:** one hard gate before any sends or CRM writes.
+
+**Write phase:** sequential per approved contact — send via scripts/send-email.py, then write CRM interaction log, then confirm. If >5 contacts, batch in groups of 5.
+
+**Agents dispatched:** up to 5 (concurrency cap). Global concurrency cap of 5 applies per Principle 5.
+
 **Execution:**
 
 CONTACT LIST PHASE (if no debrief exists): Ask user to list the contacts, or run /event-debrief first. STOP until confirmed.
@@ -127,6 +203,24 @@ CONCURRENCY LIMIT: Maximum 5 parallel agents. If >5 contacts, batch in groups of
 
 **Announcement:**
 > Running Weekly Content Production. Planning first (Opus, voice-grade), then drafting all 3 posts in parallel (Sonnet per drafter) with image prompts (Haiku per prompt).
+
+**Roles and models:**
+
+- Planning phase (`/linkedin-series`) — Opus (content strategy is voice-grade)
+- Post drafters (one per post) — the `draft-writer` agent
+- Image-prompt generators (one per post) — Haiku
+
+**Safety floor (each agent):**
+
+- Agents save draft files to `outputs/content/linkedin/` only.
+- DO NOT publish or post.
+- DO NOT send anything externally.
+
+**Approval:** two hard gates — Gate 1 approves the 3-post plan before drafting; Gate 2 approves individual posts before any publish or image generation.
+
+**Write phase:** draft files written during parallel phase. Publishing and image generation only after Gate 2 approval.
+
+**Agents dispatched:** up to 6 (post-Gate-1 parallel phase). Global concurrency cap of 5 per Principle 5 — if all 6 needed, batch posts and image prompts in two rounds.
 
 **Execution:**
 
@@ -168,6 +262,26 @@ DEGRADATION: If one post fails, present the others. Offer retry.
 **Announcement:**
 > Running Full Deal Intelligence for [prospect]. Dispatching 5 parallel research agents - OSINT (Opus), competitive analysis (Sonnet), strategic reasoning (Opus), deal-context reader (Haiku), and datastore price/proof validator (Sonnet).
 
+**Roles and models:**
+
+- `/osint` — Opus (per CEO decision: /osint stays Opus)
+- `/competitor-intel` — Sonnet (per Phase 1.1)
+- `/deep-think` — Opus
+- Deal-context reader (CRM contact files + pipeline.md entry) — the `crm-reader` agent
+- Datastore price/proof validator — the `datastore-validator` agent
+
+**Safety floor (each agent):**
+
+- Do NOT modify any workspace state.
+- Do NOT write to CRM files.
+- Research agents return output inline or to `outputs/intel/` and `outputs/negotiations/` only.
+
+**Approval:** no approval gate — this pattern produces a research package only; no CRM writes or external actions occur.
+
+**Write phase:** none. Deal package saved to `outputs/intel/` and/or `outputs/negotiations/` after synthesis.
+
+**Agents dispatched:** 5. Global concurrency cap of 5 applies per Principle 5 — exact ceiling, no wave-batching needed.
+
 **Execution:**
 
 PARALLEL PHASE (5 background agents):
@@ -196,27 +310,42 @@ DEGRADATION: If OSINT finds minimal data, /deal-strategy still runs with competi
 
 **Trigger:** Explicit `/prime` invocation only. No natural-language triggers — `/prime` is slash-command-only per the skill-router rules table.
 
-**Reality (corrected 2026-06-08):** Pattern 6 does NOT dispatch subagents. `/prime`'s health block runs **in-process** in `scripts/prime-health-parallel.py`, which executes its checks concurrently in a `ThreadPoolExecutor(max_workers=8)` and renders each result as an output block. There are no Haiku agents and no per-check model calls — each check shells out to an existing health script or reads a state file. The list below documents the eight checks, not agent prompts. (This section previously described "5 parallel Haiku agents"; that was doc drift from an abandoned dispatch model.)
+**Reality (corrected 2026-06-08):** Pattern 6 does NOT dispatch subagents. Unlike Patterns 1–5 and 7, `/prime`'s health block runs **in-process** in `scripts/prime-health-parallel.py`, which executes its read-only checks concurrently in a `ThreadPoolExecutor(max_workers=8)` and renders each result as an output block. No subagent and no per-check model call is involved — each check shells out to an existing health script or reads a state file. The Principle-5 concurrency cap therefore does not apply to `/prime`. The list below documents the checks, not agent prompts. (This section previously described "5 parallel Haiku agents"; that was doc drift from an abandoned dispatch model.)
 
 **Announcement:**
-> Running session boot. Eight read-only health checks in-process (ThreadPoolExecutor) — CRM, knowledge, memory, email-intel state, threads, fireside, sync-exchange, Odin cadence.
+> Running session boot. Read-only health checks in-process (ThreadPoolExecutor) — CRM, knowledge, memory, email-intel state, threads, fireside, sync-exchange, Odin cadence, ops radar, reminders, dream shadow.
 
-**Checks (the `CHECKS` registry):**
+**Mechanism:** in-process `ThreadPoolExecutor(max_workers=8)`, one worker per check, aggregated by `run_all()`. A check that errors or times out is reported inline and never aborts the others.
 
-- `crm_health` — `scripts/crm-health.py` (read-only): contact count, overdue-per-cadence, type-mismatch warnings.
-- `knowledge_health` — walks `knowledge/` (+ `knowledge/odin-brain/`): note counts, oldest unedited note, orphans.
-- `memory_health` — auto-memory registry (`memory/MEMORY.md` + per-key files): count, last consolidation, stale/contradictory entries.
-- `email_intel_status` — reads email-intel `state.json`: last successful run, last error, unprocessed-message posture.
-- `active_threads_archive_scan` — active threads under `threads/business/` + `threads/personal/` (CEO-only): names, last-updated, stale (>30d) flags.
+**Checks (11, defined in the `CHECKS` registry).** `scripts/prime-health-parallel.py` is the source of truth; this list mirrors it and can lag it.
+
+- `crm_health` — CRM health. `scripts/crm-health.py` (read-only): contact count, overdue-per-cadence, type-mismatch warnings.
+- `knowledge_health` — knowledge-base health. Walks `knowledge/` (+ `knowledge/odin-brain/`): note counts, oldest unedited note, orphans.
+- `memory_health` — auto-memory registry health (`memory/MEMORY.md` + per-key files): count, last consolidation, stale/contradictory entries.
+- `email_intel_status` — Email Intelligence last-run posture. Reads email-intel `state.json`: last successful run, last error, unprocessed-message posture.
+- `active_threads_archive_scan` — active threads, stale flag. Threads under `threads/business/` + `threads/personal/` (CEO-only): names, last-updated, stale (>30d) flags.
 - `fireside_health` — Fireside daemon health.
 - `sync_exchange_health` — Sync-Exchange daemon health.
 - `odin_cadence` — Odin cadence nudge (ceo-only; renders nothing when empty).
+- `ops_radar` — Ops-radar detector (ceo-only; renders nothing when all clear).
+- `reminders_due` — durable reminders due/upcoming (renders nothing when empty).
+- `dream_shadow` — dream-shadow nightly worklist (reads the latest report only, never runs the scan itself; renders nothing when empty).
 
-AGGREGATION: `run_all()` collects the eight results into /prime's normal context-load output. /prime then proceeds with its session-start sequence.
+**Safety floor (each check):**
+
+- All checks are read-only.
+- Do NOT write to any workspace file.
+- Do NOT modify state.json or any registry.
+
+AGGREGATION: `run_all()` collects the results into /prime's normal context-load output. /prime then proceeds with its session-start sequence.
 
 APPROVAL GATE: None — read-only.
 
 WRITE PHASE: None.
+
+AGENTS DISPATCHED: none — in-process threads, not subagents. Principle 5's cap is not engaged by `/prime`.
+
+**Reference:** `scripts/prime-health-parallel.py` (`CHECKS` registry + `run_all()`).
 
 DEGRADATION: A check that errors or times out is reported inline (`status: error`) and never aborts the others; `/prime` never blocks on a health-check failure.
 
@@ -228,6 +357,25 @@ DEGRADATION: A check that errors or times out is reported inline (`status: error
 
 **Announcement:**
 > Running Push & Backup. Corporate publish runs sequentially first (Sonnet). After approval and successful publish, ceo-main git push (Haiku) and CRM aggregate (Haiku) run in parallel.
+
+**Roles and models:**
+
+- Corporate publish (sequential) — Sonnet
+- ceo-main git push tail — Haiku
+- CRM aggregate tail — Haiku
+
+**Safety floor (each agent):**
+
+- Each tail agent writes to ONE specific path; no overlap.
+- ceo-main push tail writes only to the `origin/main` remote of ceo-main.
+- CRM aggregate tail writes only to `../31c-crm-central/`.
+- Tail agents do NOT touch the corporate repo, BUILD.json, or executive workspaces.
+
+**Approval:** one hard gate before corporate publish.
+
+**Write phase:** corporate publish first (serial, includes BUILD.json bump + corporate `git push`); then ceo-main push + CRM aggregate launch as a parallel wave.
+
+**Agents dispatched:** 2 in the parallel tail wave. Global concurrency cap of 5 per Principle 5 — well under the cap.
 
 **Execution:**
 

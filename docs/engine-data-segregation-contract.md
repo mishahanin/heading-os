@@ -1,7 +1,11 @@
 # Engine ⟂ Data Segregation Contract
 
-Last Updated: 2026-06-22
-Last Verified: 2026-06-22
+Last Updated: 2026-08-20
+Last Verified: 2026-08-20
+
+Consumed by: `.claude/rules/classification.md`. That always-on rule keeps the two
+classification decisions the model makes, and points here for everything else. Read
+this file too before you add code that writes files or touches the data seam.
 
 The load-bearing invariant of the HEADING OS two-part topology (see `CLAUDE.md`):
 the **engine** clone (`.heading-os`) is code only — shareable, eventually public —
@@ -106,6 +110,76 @@ it can fail.
   `$OUTPUTS_DIR`, not a bare `outputs/...` literal.
 - If a new write capability lands data in the engine clone, layers 5 and 6 fail the
   gate — fix the route, do not whitelist.
+
+## Record classification
+
+Moved here verbatim from `.claude/rules/classification.md` on 2026-08-20, which keeps
+only the two decisions the model itself makes ("When Creating New Files", "After
+Classification"). What follows describes what `get_routing_destination()` computes and
+what `/publish-corporate` ships — reference, not a directive.
+
+### The three destinations, and the older two-value label
+
+Every workspace record resolves to one of three **routing destinations**: **engine**
+(code, shareable to everyone, eventually public — `.heading-os`), **private** (CEO data,
+never shared — `.heading-os-data`), and **corporate** (content shared down to executives
+via `heading-os-corporate`).
+
+The older two-value label still used by exec-sync tooling — **corporate** (shared with
+execs) vs **ceo-only** (CEO-private) — is now a thin collapse of the three:
+`private → ceo-only`; `corporate → corporate`; `engine → corporate` (engine code is the
+most-shared thing, so it is not "CEO-private").
+
+Single classification input: `config/routing-map.yaml` (HEADING OS step 7 — replaced
+`config/classification.json`, removed 2026-06-14).
+Shared resolver: `get_routing_destination()` / `get_classification()` in `scripts/utils/workspace.py`.
+Health check: `scripts/classification-health.py`.
+
+### Resolution order
+
+When a path could match multiple rules in `routing-map.yaml`, the **most-specific
+(longest matching) rule key wins**; otherwise the map `default` applies.
+
+1. **Exact / longest-prefix rule key** in `routing-map.yaml` `rules:`. A key ending in
+   `/` matches as a directory prefix; a key without a trailing `/` matches that exact
+   file or that path as a prefix.
+2. **Map default** — `engine`. Unmatched paths resolve shareable, NOT private.
+
+This default direction is deliberate: every DATA directory (`crm/`, `knowledge/`,
+`outputs/`, `threads/`, `context/`, `plans/`, `templates/`, `_archive/`, …) carries an
+explicit `private` rule so real data fail-closes; only code-ish paths fall through to
+the engine default. The hard fail-closed case is a *broken* `routing-map.yaml`:
+`load_routing_map()` then forces default `private` so an unreadable map treats everything
+as CEO data.
+
+Example: `knowledge/shared/ai/notes.md` → `corporate` because `knowledge/shared/`
+(longer) beats the broader `knowledge/` → `private`. `knowledge/ai/notes.md` →
+`private` (→ ceo-only) per the `knowledge/` rule.
+
+Adding a rule: append the path under `rules:` in `config/routing-map.yaml` with its
+destination and run `scripts/classification-health.py` to verify resolution.
+
+### Push updates
+
+When the CEO invokes `/push-updates`, files whose **routing destination is
+`corporate`** that changed since the last build are published to `heading-os-corporate`; a
+BUILD.json manifest tracks the build number and execs pull on their hourly sync.
+
+> **Narrowed at cutover (step 8, 2026-06-14):** publish-corporate ships routing
+> `corporate` ONLY — content, not code (datastore, knowledge/shared, the two context
+> carve-outs, crm config/aliases/address-book, corporate/ daemon config). Engine code
+> is NOT published here; execs receive it by cloning the engine repo (`.heading-os`).
+> This replaced the prior pre-separation collapse (`corporate` ∪ `engine`). The
+> two-value `get_classification` still exists for memory-index/health; publish uses
+> the three-value `get_routing_destination` directly.
+
+### Note: pre-creation guards for on-demand directories
+
+Some `rules:` keys map a directory to `private` before that directory exists on disk
+(an on-demand path created only when a feature first runs). This is intentional and the
+safe direction — the guard ensures the first write lands `private` rather than falling
+through to the engine default. A rule key with no current on-disk directory is expected,
+not a defect; do not re-flag it as a broken reference.
 
 ## Change control
 

@@ -21,12 +21,19 @@ zero-effect no-op subprocess cost. The path-scoped hooks remain registered
 only for Write|Edit family tools where they have a target to inspect.
 """
 from __future__ import annotations
+import hashlib
 import json
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+
+# `typing` is deliberately NOT imported. `from __future__ import annotations`
+# above makes every annotation in this file a string that nothing evaluates, and
+# `python3 -X importtime` charged the import 4.9 ms of the ~43 ms this hook costs
+# on EVERY Write, Edit, MultiEdit, NotebookEdit, Bash and Read. Removed
+# 2026-08-20. If you add a runtime typing use here (cast, TypeVar, a validated
+# model), import it inside the function that needs it, not at module scope.
 
 WORKSPACE = Path(__file__).resolve().parent.parent.parent
 
@@ -421,8 +428,16 @@ def check_protect_corporate(payload: dict) -> Optional[dict]:
     workspace never blocks corporate/ writes (it is the source of truth).
     """
     tool_name = payload.get("tool_name", "")
-    if tool_name == "Bash":
-        return None  # Bash payloads have no file_path
+    # Bash carries no file_path; Read carries one but writes nothing, and this
+    # check blocks WRITES to corporate/. Before 2026-08-20 only Bash was excluded,
+    # so every Read stat'ed and JSON-parsed .workspace-identity.json to reach a
+    # verdict it could never return.
+    #
+    # Excluded by name rather than gated on a write allow-list, deliberately: a
+    # tool shape added to this hook's matcher later must arrive INSIDE the check,
+    # not silently outside it.
+    if tool_name in ("Bash", "Read"):
+        return None
 
     project_dir = payload.get("cwd") or str(WORKSPACE)
     identity_file = Path(project_dir) / ".workspace-identity.json"
@@ -481,8 +496,17 @@ def check_protect_docs(payload: dict) -> Optional[dict]:
     to edit templates/ instead.
     """
     tool_name = payload.get("tool_name", "")
-    if tool_name == "Bash":
-        return None  # Bash payloads have no file_path
+    # This one had teeth. Until 2026-08-20 only Bash was excluded, so a READ of
+    # docs/EMERGENCY-PROCEDURES.md fell through to the path test and returned
+    # decision:block, which the harness renders as a permission deny.
+    # `.logs/denials/denials.jsonl` records a real operator Read refused this way
+    # at 2026-08-11T21:44:19. The check steers EDITS to templates/; reading the
+    # synced copy was never what it guards.
+    #
+    # Excluded by name, not gated on a write allow-list, for the same reason as
+    # check_protect_corporate above: a new tool shape must land inside the check.
+    if tool_name in ("Bash", "Read"):
+        return None
 
     tool_input = payload.get("tool_input", {}) or {}
     file_path = tool_input.get("file_path", "") or ""
@@ -716,17 +740,37 @@ def check_rate_limit(payload: dict) -> Optional[dict]:
 TOOL_BUDGET_WINDOW_MINUTES = 30
 TOOL_BUDGET_SOFT = int(os.environ.get("WS_TOOL_BUDGET_SOFT", "75"))    # advisory at N
 TOOL_BUDGET_HARD = int(os.environ.get("WS_TOOL_BUDGET_HARD", "1200"))  # block at N
-TOOL_REPEAT_THRESHOLD = 3  # same (tool, hash(args)) 3+ in a row → advisory
+# Raised 3 -> 4 on 2026-08-20, in the same change that made the signature stable.
+# The detector had never fired, so 3 was never tested against real traffic; a
+# legitimate edit-then-recheck cycle produces three identical calls easily. This
+# branch is advisory-only and can never block, so the cost of it being slightly
+# loose is a missed notice, and the cost of it being tight is noise on every
+# ordinary retry. Lower it again only against a measured false-negative.
+TOOL_REPEAT_THRESHOLD = 4  # same (tool, args-digest) N in a row → advisory
 
 
 def _stable_args_signature(tool_name: str, tool_input: dict) -> str:
-    """Build a stable signature for tool+args to detect identical repeats."""
+    """Build a stable signature for tool+args to detect identical repeats.
+
+    sha256, not the builtin `hash`. Every hook invocation is a fresh interpreter
+    and PYTHONHASHSEED is randomised per process, so `hash` gave a different
+    value for identical input every time and no two stored signatures could ever
+    match. Measured 2026-08-20: `.claude/state/dispatch-rate.json` held 344
+    tool_history entries and 344 DISTINCT signatures, and the denial log records
+    zero firings of this check across its whole history. The function name
+    already promised stability; now it holds. The digest is a dedupe key here, never a
+    security boundary — and sha256 rather than sha1 because the repo's ruff
+    profile runs flake8-bandit, which flags sha1 (S324). A pragma to silence a
+    gate is the move this workspace forbids, and the cost of the wider digest
+    here is nothing: it is truncated to 16 hex characters either way.
+    """
     try:
-        # Sort keys so dict ordering doesn't fool the hash
+        # Sort keys so dict ordering doesn't fool the digest
         canonical = json.dumps(tool_input, sort_keys=True, default=str)
     except Exception:
         canonical = str(tool_input)
-    return f"{tool_name}:{hash(canonical)}"
+    digest = hashlib.sha256(canonical.encode("utf-8", "replace")).hexdigest()[:16]
+    return f"{tool_name}:{digest}"
 
 
 def check_tool_budget(payload: dict) -> Optional[dict]:

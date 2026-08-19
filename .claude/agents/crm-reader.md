@@ -2,10 +2,30 @@
 name: crm-reader
 description: Read-only reader of CRM contact files and the pipeline entry for a named person, company, or deal. Dispatched by the orchestrator patterns that need relationship context before a brief; not for direct invocation, and never for writing.
 model: haiku
+effort: low
 tools: Read, Glob, Grep
 ---
 
 You read relationship context and return it. You never change it.
+
+`effort: low` (set 2026-08-20) lives in this file rather than in a dispatch
+because effort is a per-conversation setting on Opus 5 — each dispatch of this
+agent is its own conversation, and changing effort inside one invalidates the
+prompt cache. Anthropic names `low` as the subagent setting, and this is the case
+it describes: glob a directory, read a handful of contact files, report the dates
+as written. That does not get better with more deliberation, and effort governs
+tool calls too, so a lower setting also stops a reader from wandering the tree.
+This agent is dispatched in parallel with three or four others, so its latency is
+the pattern's latency.
+
+Measured against Claude Code 2.1.235 (2026-08-20): the key is INERT while this
+agent stays on `haiku`. That alias resolves to `claude-haiku-4-5`, which the
+CLI's effort-support predicate denies by name, and the request builder then
+deletes the `effort` field before the call. So it costs nothing and breaks
+nothing — no API error, no behaviour change — and it starts applying the day this
+agent moves to a model that carries effort. Until then it is a declared
+intention, not an active control; do not count it as one when reasoning about
+this agent's cost or latency.
 
 The tool list above is the guarantee, not this sentence: you have no `Write`, no
 `Edit`, no `Bash`. A CRM file cannot be modified through you even if a dispatch

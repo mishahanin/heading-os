@@ -294,10 +294,13 @@ def test_revert_to_prior_config_exits_1_when_no_snapshots(entry_module, tmp_path
 def test_revert_to_prior_config_default_restores_index_1(entry_module, tmp_path, monkeypatch, capsys):
     """With >= 2 snapshots and no target_name, restores index 1 (most-recent
     prior). Output marks index 0 'current boot' and index 1 'will restore'."""
-    import time
+    # No sleep between snapshots: snapshot_config names files
+    # '{seq:09d}_{stamp}.yaml' with a monotonic sequence prefix, so the
+    # newest-first sort revert_to_prior_config relies on is correct by
+    # construction. The sleep(1.05) here until 2026-08-20 was guarding a
+    # wall-clock-only filename that no longer exists.
     from scripts.bridge_daemon.config import snapshot_config
     snapshot_config(tmp_path, {"refresh": {"email": 100}})
-    time.sleep(1.05)
     snapshot_config(tmp_path, {"refresh": {"email": 200}})
 
     monkeypatch.setattr(entry_module, "WORKSPACE_ROOT", tmp_path)
@@ -316,12 +319,9 @@ def test_revert_to_prior_config_default_restores_index_1(entry_module, tmp_path,
 def test_revert_to_prior_config_explicit_target_uses_revert_to(entry_module, tmp_path, monkeypatch, capsys):
     """With target_name, restores that specific snapshot and marks it in the
     listing (no 'current boot' marker)."""
-    import time
     from scripts.bridge_daemon.config import list_snapshots, snapshot_config
     snapshot_config(tmp_path, {"refresh": {"email": 100}})
-    time.sleep(1.05)
     snapshot_config(tmp_path, {"refresh": {"email": 200}})
-    time.sleep(1.05)
     snapshot_config(tmp_path, {"refresh": {"email": 300}})
     snaps = list_snapshots(tmp_path)
     oldest_name = snaps[-1].name  # newest-first sort, so [-1] is oldest

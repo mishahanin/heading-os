@@ -1,4 +1,4 @@
-import time
+import os
 
 import pytest
 import yaml
@@ -49,16 +49,21 @@ def test_snapshot_writes_yaml(workspace_root):
 
 
 def test_snapshot_trims_to_keep_3(workspace_root):
+    # No sleep between writes. Snapshot names are '{seq:09d}_{stamp}.yaml' with a
+    # monotonic sequence prefix, so the lexicographic sort these assertions rely on
+    # is correct by construction (see snapshot_config). The eight sleep(1.05) call
+    # sites this file carried until 2026-08-20 — thirteen executions, two of them
+    # inside loops — were guarding a wall-clock-only filename that no longer
+    # exists. Re-measured 2026-08-20 on this file alone: 15.13s before, 0.53s
+    # after, 29 passed either way.
     for i in range(5):
         snapshot_config(workspace_root, {"iteration": i})
-        time.sleep(1.05)  # ensure distinct timestamps (resolution: seconds)
     snaps = list_snapshots(workspace_root)
     assert len(snaps) == 3, snaps
 
 
 def test_list_snapshots_newest_first(workspace_root):
     snapshot_config(workspace_root, {"order": "first"})
-    time.sleep(1.05)
     snapshot_config(workspace_root, {"order": "second"})
     snaps = list_snapshots(workspace_root)
     assert len(snaps) == 2
@@ -67,7 +72,6 @@ def test_list_snapshots_newest_first(workspace_root):
 
 def test_revert_config_restores_prior(workspace_root):
     snapshot_config(workspace_root, {"refresh": {"email": 100}})
-    time.sleep(1.05)
     snapshot_config(workspace_root, {"refresh": {"email": 999}})
     restored = revert_config(workspace_root)
     user_cfg = workspace_root / ".daemon-state" / "config.yaml"
@@ -91,9 +95,7 @@ def test_revert_config_zero_snapshots(workspace_root):
 
 def test_revert_config_to_specific_snapshot(workspace_root):
     snapshot_config(workspace_root, {"refresh": {"email": 100}})
-    time.sleep(1.05)
     snapshot_config(workspace_root, {"refresh": {"email": 200}})
-    time.sleep(1.05)
     snapshot_config(workspace_root, {"refresh": {"email": 300}})
     snaps = list_snapshots(workspace_root)
     # Pick the oldest snapshot explicitly (newest-first sort -> index 2)
@@ -184,6 +186,20 @@ def test_revert_config_to_rejects_none(workspace_root):
 # Phase B - ConfigState reconciliation tests.
 
 
+def _bump_mtime(path, seconds=2.0):
+    """Move a file's mtime forward without sleeping.
+
+    reconcile() compares stat() mtimes, so these tests need the MTIME to move,
+    not the wall clock to advance. The sleep(1.05) they used until 2026-08-20
+    bought that at ~1s a call and was still only as coarse as the filesystem
+    (the old comment cited 1s granularity on FAT/NTFS). An explicit utime is
+    free and deterministic on every filesystem, so deleting the sleep here does
+    not trade a slow test for a flaky one.
+    """
+    t = path.stat().st_mtime + seconds
+    os.utime(path, (t, t))
+
+
 def test_config_state_loads_at_init(workspace_root):
     """ConfigState picks up the same merged config as load_config()."""
     corp = workspace_root / "corporate" / "daemon" / "config.yaml"
@@ -212,8 +228,8 @@ def test_reconcile_returns_true_on_corporate_mtime_change(workspace_root):
     assert cs.config["refresh"]["email"] == 100
 
     # Simulate /push-updates landing a new corporate config.
-    time.sleep(1.05)  # mtime resolution is 1s on FAT/NTFS
     corp.write_text("version: 2\nrefresh:\n  email: 250\n")
+    _bump_mtime(corp)
 
     assert cs.reconcile() is True
     assert cs.config["version"] == 2
@@ -229,8 +245,8 @@ def test_reconcile_returns_true_on_user_override_change(workspace_root):
     cs = ConfigState(workspace_root)
     assert cs.config["refresh"]["email"] == 60
 
-    time.sleep(1.05)
     user.write_text("refresh:\n  email: 45\n")
+    _bump_mtime(user)
     assert cs.reconcile() is True
     assert cs.config["refresh"]["email"] == 45
 
@@ -241,8 +257,8 @@ def test_reconcile_counts_each_reload(workspace_root):
     user.write_text("refresh:\n  email: 60\n")
     cs = ConfigState(workspace_root)
     for i in range(3):
-        time.sleep(1.05)
         user.write_text(f"refresh:\n  email: {100 + i}\n")
+        _bump_mtime(user)
         assert cs.reconcile() is True
     assert cs.reload_count == 3
 

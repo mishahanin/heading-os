@@ -1,6 +1,6 @@
 ---
 name: linkedin-series
-description: LinkedIn Content Series
+description: "Plan a multi-post LinkedIn series - three or more posts with one arc and a publishing order. Use when the ask names a week, a plan, or a post count. For a single post use /linkedin-post."
 argument-hint: "[theme]"
 allowed-tools: "Read"
 metadata:

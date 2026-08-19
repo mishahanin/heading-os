@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
+from scripts.utils.docx_helpers import load_docx
 from scripts.utils.workspace import get_outputs_dir
 
 # docx names are bound lazily (F-2.1: import stays pure).
@@ -24,13 +25,9 @@ def _ensure_docx():
     global Document, Pt, Cm, Inches, RGBColor, WD_ALIGN_PARAGRAPH, qn, OxmlElement
     if Document is not None:
         return
-    from scripts.utils.optdeps import require
-    require("docx", extra="documents")
-    from docx import Document
-    from docx.shared import Pt, Cm, Inches, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
+    d = load_docx()
+    Document, Pt, Cm, Inches, RGBColor = d.Document, d.Pt, d.Cm, d.Inches, d.RGBColor
+    WD_ALIGN_PARAGRAPH, qn, OxmlElement = d.WD_ALIGN_PARAGRAPH, d.qn, d.OxmlElement
 
 
 def add_horizontal_line(doc):

@@ -1,23 +1,6 @@
 ---
 name: recall
-description: >
-  Workspace-wide semantic recall. Searches the local associative-memory index
-  (scripts/memory-index.py: bge-m3 hybrid dense+BM25, on-machine, zero API cost)
-  across everything meaningful in the workspace -- Odin brain, business threads,
-  CRM, LinkedIn, context, reference, plans, deliverable outputs, knowledge,
-  datastore extracts, and the auto-memory files -- then answers ONLY from the
-  retrieved sources with file-path citations, or says "not in memory" when the
-  index reports a gap. Use when the user asks "what do we know about X", "where
-  did we decide Y", "have we touched Z before", "recall ...", "search my memory
-  for ...", "find what we said about ...", or wants to surface a past decision /
-  brief / contact / note by meaning rather than exact words. Do NOT use for:
-  Odin-brain-only advice or episode dedup (use /odin recall, which is
-  brain-scoped); external/world intelligence on a company or person (use /osint);
-  capturing a NEW note (use /zk); plain exact-string file search (use Grep);
-  counting or aggregating ACROSS many files, where the answer sits in no single
-  chunk ("how many threads have not moved in 30 days", "which pipeline rows have
-  no CRM card") - that is /census, which traverses rather than retrieves. This
-  skill never fabricates beyond returned sources and never sends anything. CEO-only.
+description: "Semantic recall across the whole workspace - Odin brain, threads, CRM, context, plans, outputs, knowledge and auto-memory - answering only from retrieved sources with file citations, or saying \"not in memory\". Use for \"what do we know about X\", \"where did we decide Y\", \"have we touched Z before\". Do NOT use for counting or aggregating across many files, where the answer sits in no single chunk - that is /census. Do NOT use for Odin-brain-only advice - that is /odin."
 argument-hint: "<what to recall> [--collection content|code|all] [--layer NAME] [--personal]"
 allowed-tools: "Read, Bash(python3:*), Bash(python:*)"
 metadata:

@@ -1,4 +1,11 @@
-<!-- version: 1.0.0 | last-updated: 2026-04-28 -->
+---
+paths:
+  - "outputs/**"
+  - "threads/**"
+  - "plans/**"
+---
+
+<!-- version: 1.1.0 | last-updated: 2026-08-20 -->
 
 # Output File Naming
 

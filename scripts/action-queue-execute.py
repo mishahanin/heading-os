@@ -50,21 +50,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils import dead_letter, tool_risk
+from scripts.utils.timeparse import parse_iso
 from scripts.utils.workspace import get_outputs_dir, get_workspace_root
 
 SEND_TIMEOUT_S = 120
 MAX_ATTEMPTS = 5
-
-
-def _parse_iso(value: str) -> datetime | None:
-    """Parse an ISO-8601 timestamp; return None if unparseable."""
-    try:
-        dt = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
 
 
 def send_card(engine_root: Path, card: dict, now: datetime | None = None) -> dict:
@@ -145,7 +135,7 @@ def main() -> int:
         # Backoff gate: skip a transient-failed card still inside its window.
         next_at = card.get("next_attempt_at")
         if next_at:
-            when = _parse_iso(next_at)
+            when = parse_iso(next_at)
             if when is not None and when > now:
                 continue
         res = send_card(root, card, now=now)

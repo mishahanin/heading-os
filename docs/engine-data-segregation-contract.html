@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Engine ⟂ Data Segregation Contract</title>
-<meta name="description" content="Last Updated: 2026-06-22">
+<meta name="description" content="Last Updated: 2026-08-20">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,9 +77,12 @@
 </aside>
 <main class="content">
   <h1>Engine ⟂ Data Segregation Contract</h1>
-  <p class="page-meta">Last Updated: 2026-06-22</p>
-  <p>Last Updated: 2026-06-22
-Last Verified: 2026-06-22</p>
+  <p class="page-meta">Last Updated: 2026-08-20</p>
+  <p>Last Updated: 2026-08-20
+Last Verified: 2026-08-20</p>
+<p>Consumed by: <code>.claude/rules/classification.md</code>. That always-on rule keeps the two
+classification decisions the model makes, and points here for everything else. Read
+this file too before you add code that writes files or touches the data seam.</p>
 <p>The load-bearing invariant of the HEADING OS two-part topology (see <code>CLAUDE.md</code>):
 the <strong>engine</strong> clone (<code>.heading-os</code>) is code only — shareable, eventually public —
 and carries NO real data, secrets, PII, or third-party entities. All data lives in
@@ -219,6 +222,63 @@ it can fail.</p>
 <li>If a new write capability lands data in the engine clone, layers 5 and 6 fail the
   gate — fix the route, do not whitelist.</li>
 </ul>
+<h2 id="record-classification">Record classification</h2>
+<p>Moved here verbatim from <code>.claude/rules/classification.md</code> on 2026-08-20, which keeps
+only the two decisions the model itself makes (&ldquo;When Creating New Files&rdquo;, &ldquo;After
+Classification&rdquo;). What follows describes what <code>get_routing_destination()</code> computes and
+what <code>/publish-corporate</code> ships — reference, not a directive.</p>
+<h3 id="the-three-destinations-and-the-older-two-value-label">The three destinations, and the older two-value label</h3>
+<p>Every workspace record resolves to one of three <strong>routing destinations</strong>: <strong>engine</strong>
+(code, shareable to everyone, eventually public — <code>.heading-os</code>), <strong>private</strong> (CEO data,
+never shared — <code>.heading-os-data</code>), and <strong>corporate</strong> (content shared down to executives
+via <code>heading-os-corporate</code>).</p>
+<p>The older two-value label still used by exec-sync tooling — <strong>corporate</strong> (shared with
+execs) vs <strong>ceo-only</strong> (CEO-private) — is now a thin collapse of the three:
+<code>private → ceo-only</code>; <code>corporate → corporate</code>; <code>engine → corporate</code> (engine code is the
+most-shared thing, so it is not &ldquo;CEO-private&rdquo;).</p>
+<p>Single classification input: <code>config/routing-map.yaml</code> (HEADING OS step 7 — replaced
+<code>config/classification.json</code>, removed 2026-06-14).
+Shared resolver: <code>get_routing_destination()</code> / <code>get_classification()</code> in <code>scripts/utils/workspace.py</code>.
+Health check: <code>scripts/classification-health.py</code>.</p>
+<h3 id="resolution-order">Resolution order</h3>
+<p>When a path could match multiple rules in <code>routing-map.yaml</code>, the <strong>most-specific
+(longest matching) rule key wins</strong>; otherwise the map <code>default</code> applies.</p>
+<ol>
+<li><strong>Exact / longest-prefix rule key</strong> in <code>routing-map.yaml</code> <code>rules:</code>. A key ending in
+   <code>/</code> matches as a directory prefix; a key without a trailing <code>/</code> matches that exact
+   file or that path as a prefix.</li>
+<li><strong>Map default</strong> — <code>engine</code>. Unmatched paths resolve shareable, NOT private.</li>
+</ol>
+<p>This default direction is deliberate: every DATA directory (<code>crm/</code>, <code>knowledge/</code>,
+<code>outputs/</code>, <code>threads/</code>, <code>context/</code>, <code>plans/</code>, <code>templates/</code>, <code>_archive/</code>, …) carries an
+explicit <code>private</code> rule so real data fail-closes; only code-ish paths fall through to
+the engine default. The hard fail-closed case is a <em>broken</em> <code>routing-map.yaml</code>:
+<code>load_routing_map()</code> then forces default <code>private</code> so an unreadable map treats everything
+as CEO data.</p>
+<p>Example: <code>knowledge/shared/ai/notes.md</code> → <code>corporate</code> because <code>knowledge/shared/</code>
+(longer) beats the broader <code>knowledge/</code> → <code>private</code>. <code>knowledge/ai/notes.md</code> →
+<code>private</code> (→ ceo-only) per the <code>knowledge/</code> rule.</p>
+<p>Adding a rule: append the path under <code>rules:</code> in <code>config/routing-map.yaml</code> with its
+destination and run <code>scripts/classification-health.py</code> to verify resolution.</p>
+<h3 id="push-updates">Push updates</h3>
+<p>When the CEO invokes <code>/push-updates</code>, files whose <strong>routing destination is
+<code>corporate</code></strong> that changed since the last build are published to <code>heading-os-corporate</code>; a
+BUILD.json manifest tracks the build number and execs pull on their hourly sync.</p>
+<blockquote>
+<p><strong>Narrowed at cutover (step 8, 2026-06-14):</strong> publish-corporate ships routing
+<code>corporate</code> ONLY — content, not code (datastore, knowledge/shared, the two context
+carve-outs, crm config/aliases/address-book, corporate/ daemon config). Engine code
+is NOT published here; execs receive it by cloning the engine repo (<code>.heading-os</code>).
+This replaced the prior pre-separation collapse (<code>corporate</code> ∪ <code>engine</code>). The
+two-value <code>get_classification</code> still exists for memory-index/health; publish uses
+the three-value <code>get_routing_destination</code> directly.</p>
+</blockquote>
+<h3 id="note-pre-creation-guards-for-on-demand-directories">Note: pre-creation guards for on-demand directories</h3>
+<p>Some <code>rules:</code> keys map a directory to <code>private</code> before that directory exists on disk
+(an on-demand path created only when a feature first runs). This is intentional and the
+safe direction — the guard ensures the first write lands <code>private</code> rather than falling
+through to the engine default. A rule key with no current on-disk directory is expected,
+not a defect; do not re-flag it as a broken reference.</p>
 <h2 id="change-control">Change control</h2>
 <p>Changes to this contract or any weakening of the six layers require Misha&rsquo;s explicit
 approval. Classification: engine (this is public-shippable documentation of the public

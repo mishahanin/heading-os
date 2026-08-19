@@ -1,6 +1,6 @@
 ---
 name: dashboard
-description: "Generate the daily CEO Morning Dashboard -- a single-page operational briefing aggregating CRM health, pipeline, calendar, email, strategy, and data freshness."
+description: "Build the daily CEO morning dashboard - one page over CRM health, pipeline, calendar, email and data freshness. Use for the morning briefing. For the end-of-week review use /weekly-review; for one function's health use /state-check."
 argument-hint: "(no arguments)"
 metadata:
   author: Misha Hanin

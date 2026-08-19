@@ -68,7 +68,30 @@ def load_schemas() -> dict:
 
 
 def parse_frontmatter(path: Path) -> dict | None:
-    """Extract YAML frontmatter from a contact .md file. Returns None when missing."""
+    """Extract YAML frontmatter from a contact .md file. Returns None when missing.
+
+    NOT MIGRATED to ``scripts.utils.markdown.parse_frontmatter``. This parser is
+    schema-aware, not generic: the value types it produces ARE what jsonschema
+    then checks, so swapping it silently rewrites the validation result.
+    Measured 2026-08-20 over the live 326-record corpus (165 contacts + 161
+    address-book entities), counting records whose parsed values violate a type
+    declared in config/schemas/:
+
+      this parser                  0 / 326   (was 1 before the block-list fix
+                                              below; a list at its key's own
+                                              column read as an empty string)
+      -> parse_frontmatter        326 / 326  (last_touch etc. become datetime.date
+                                              where every schema declares string)
+      -> parse_frontmatter_str    170 / 326  (tags become "['a', 'b']" where every
+                                              schema declares array)
+
+    Two more divergences the type count does not show: ``yaml.safe_load`` reads a
+    ``#`` inside an unquoted value as a comment and truncates it (one record's
+    ``source`` loses its trailing "#"-prefixed reference), and the int coercion
+    below deliberately EXCLUDES
+    phone/telegram/zip/postal_code so a numeric-looking phone stays a string for
+    the string-typed schema field. Keep this parser paired with the schemas.
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except Exception:
@@ -120,8 +143,12 @@ def parse_frontmatter(path: Path) -> dict | None:
         if value == "":
             # Peek ahead for list items
             arr: list = []
-            while i < len(lines) and re.match(r'^\s+-\s+', lines[i]):
-                item = re.sub(r'^\s+-\s+', '', lines[i]).strip()
+            # `\s*`, not `\s+`: YAML lets a block list sit at its key's own
+            # column, and one live record does. With `\s+` that record read as
+            # `tags: ''` and the gate reported a type error against a file that
+            # is correct on disk.
+            while i < len(lines) and re.match(r'^\s*-\s+', lines[i]):
+                item = re.sub(r'^\s*-\s+', '', lines[i]).strip()
                 item = item.strip('"').strip("'")
                 arr.append(item)
                 i += 1
@@ -174,9 +201,24 @@ def main() -> int:
     try:
         import jsonschema
     except ImportError:
-        if not args.quiet:
-            print(f"{YELLOW}SKIP{RESET}: jsonschema not installed - run `pip install jsonschema` to enforce")
-        return 0  # Fail open - don't block commits on missing dev dep
+        # Still fail open, because the pre-commit hook, canary-smoke, and the
+        # migration verifier all read the exit code and a hard failure here
+        # blocks every commit until the dependency lands. But say so on EVERY
+        # path, including --quiet and --json.
+        #
+        # --quiet used to suppress this line, so the pre-commit hook printed
+        # nothing and exited 0. Measured 2026-08-20: `jsonschema` is not
+        # installed in this venv and is declared in no manifest, so four
+        # callers had been reporting a green CRM schema gate that never ran a
+        # single validation. "Quiet" means do not list the passing files; it
+        # never meant hide that nothing was checked
+        # (see .claude/rules/scope-claims.md).
+        note = "jsonschema not installed - NOTHING was validated. Install it to enforce."
+        if args.json:
+            print(json.dumps({"status": "skipped", "validated": 0, "reason": note}))
+        else:
+            print(f"{YELLOW}SKIP{RESET}: {note}", file=sys.stderr)
+        return 0
 
     # Verify all three schemas are present before proceeding
     schemas_dir = ROOT / "config" / "schemas"

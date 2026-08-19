@@ -8,6 +8,25 @@ WorkingDirectory={{WORKSPACE}}
 ExecStart={{PYTHON}} scripts/bridge-daemon.py --start
 Restart=on-failure
 RestartSec=5
+# 2026-08-20: the daemon leaks. Measured an hour apart on the CEO laptop:
+# VmRSS 1,198,672 kB at 23:40 -> 1,909,224 kB at 00:52 (~600 MB/hour), with
+# VmHWM equal to VmRSS (nothing is ever released) and one anonymous mapping of
+# ~878 MB. Import-only baseline is 43 MB. Recycling every 6 hours caps the
+# process at roughly 3.6 GB instead of letting it run to OOM. Nothing is lost
+# across the restart: pulse-snapshot.json, heartbeat.json and
+# watchdog-state.json are all written atomically to .daemon-state/ and reloaded
+# on boot, and the two send-capable jobs (cold_sweep, action_queue executor)
+# default to enabled:false in scripts/bridge_daemon/config.py DEFAULTS, so a
+# recycle cannot re-fire an outbound action.
+# Restart stays on-failure, matching the three sibling unit templates. A first
+# pass changed it to always, believing RuntimeMaxSec exits 0 and would leave
+# the daemon stopped forever. That is false and was measured on this machine
+# with two transient probes (systemd 255, WSL2): a unit killed by RuntimeMaxSec
+# logs "Failed with result 'timeout'", which on-failure restarts. NRestarts
+# reached 3 in 12 s with /bin/sleep, and 2 in 11 s with a process that traps
+# SIGTERM and exits 0 - the timeout result survives the clean exit either way.
+# This is a cap, not a fix - the leak itself is still unlocated.
+RuntimeMaxSec=21600
 # stdout/stderr go to journald, not to bridge.log. The daemon's own Python
 # logging handler already writes structured logs to .daemon-state/bridge.log;
 # adding systemd's append-on-write doubles I/O against the same path. On a

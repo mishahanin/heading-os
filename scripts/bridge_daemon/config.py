@@ -28,7 +28,13 @@ DEFAULTS = {
         "calendar": 300,
         "crm": 300,
         "inflight": 60,
-        "pulse": 60,       # locked 2026-05-24 - WSL /mnt/c rglob over outputs/ is ~7s, see refreshers/pulse.py
+        # Locked 2026-05-24 against a ~7 s rglob over outputs/. That number was
+        # measured on WSL /mnt/c and no longer describes this machine: the
+        # workspace moved to ext4, and the same walk is 68 ms over 5,910 entries
+        # (re-measured 2026-08-20). The interval is left at 60 s because nothing
+        # here has re-derived what it SHOULD be, only that the old reason is
+        # gone. Do not quote the 7 s figure as current. See refreshers/pulse.py.
+        "pulse": 60,
         "prime": 14400,
         "heartbeat": 60,   # spec section 3.7 - locked 60s
         "config_reconcile": 60,  # spec section 3.6 - 60s reconciliation tick

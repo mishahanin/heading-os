@@ -37,6 +37,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from scripts.utils.timeparse import parse_iso
 from scripts.utils.workspace import get_workspace_root
 
 logger = logging.getLogger("x31c.watchdog")
@@ -71,18 +72,6 @@ WATCHDOG_STATE_FILE = ".daemon-state/watchdog-state.json"
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _parse_iso(s: str | None) -> datetime | None:
-    if not s or not isinstance(s, str):
-        return None
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
 
 
 def format_age(seconds: float) -> str:
@@ -194,7 +183,7 @@ def _read_beat(workspace_root: Path, name: str) -> dict | None:
 def _age_seconds(record: dict | None, now: datetime) -> float | None:
     if not record:
         return None
-    dt = _parse_iso(record.get("last_heartbeat"))
+    dt = parse_iso(record.get("last_heartbeat"))
     if dt is None:
         return None
     return (now - dt).total_seconds()
@@ -301,7 +290,7 @@ def check_once(
         age = _age_seconds(record, now)
         prev = state.get(name) if isinstance(state.get(name), dict) else {}
         prev_state = prev.get("state", "ok")
-        last_alert = _parse_iso(prev.get("last_alert_ts"))
+        last_alert = parse_iso(prev.get("last_alert_ts"))
         fired = False
 
         if status in ("silent", "missing"):

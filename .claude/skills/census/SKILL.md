@@ -1,20 +1,6 @@
 ---
 name: census
-description: >
-  Recursive Language Models (RLM, arXiv:2512.24601) applied to the workspace: an
-  aggregating question is answered by a Python traversal program that visits every
-  file in a named corpus scope inside a sandbox, and returns structured JSON. The
-  corpus never enters the context window; only the question, the corpus metadata
-  and the counted result do. Use when the answer requires VISITING MANY FILES and
-  exists in no single one: "how many active threads have not moved in 30 days",
-  "which pipeline rows have no CRM card", "count the memory files with a dangling
-  link", "which contacts have not been touched since May". Do NOT use for: finding
-  something the workspace already recorded somewhere (use /recall, which is
-  semantic retrieval over an index); Odin-brain advice (/odin); capturing a new
-  note (/zk); external intelligence (/osint); an exact-string search (Grep); or
-  any question whose corpus fits the context window, where a traversal primitive
-  measurably hurts (SRLM, arXiv:2603.15653) and the engine refuses by design.
-  Reads and counts only. Never sends, never writes to the corpus. CEO-only.
+description: "Answer an aggregating question by traversing every file in a named corpus inside a sandbox, so the corpus never enters the context window. Use when the answer exists in no single file: \"how many threads have not moved in 30 days\", \"which pipeline rows have no CRM card\". Do NOT use to find something already recorded somewhere - that is /recall, which retrieves rather than counts."
 argument-hint: "<aggregating question> [--corpus threads|crm|context|auto_memory|knowledge|outputs]"
 allowed-tools: "Read, Write, Bash(python3:*), Bash(python:*)"
 metadata:

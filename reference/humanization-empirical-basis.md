@@ -1,18 +1,69 @@
-<!-- version: 1.1.1 | last-updated: 2026-04-28 -->
+<!-- version: 1.2.0 | last-updated: 2026-08-20 -->
 
 # Humanisation rule - empirical basis
 
 Consumed by: `.claude/rules/humanization.md`
 
-Last Updated: 2026-04-28
-Last Verified: 2026-06-08
+Last Updated: 2026-08-20
+Last Verified: 2026-08-20
 
 > The nine datapoints below are a fixed historical record of detector-based
 > falsifications run on 2026-04-28; they are not re-run. "Last Verified"
 > advances when the record is re-confirmed accurate and still the basis the
 > humanisation rule cites — not when the experiments are repeated.
 
-The humanisation rule's calibration gate (Step 0) and structural-vs-content guidance are derived from nine detector-based falsifications run against ZeroGPT (datapoints 1-8) and a cross-detector observation against QuillBot + ZeroGPT (datapoint 9), all on 2026-04-28. This file captures the full datapoint detail. The rule itself summarises the conclusions; reach here when the conclusions need to be re-validated, when a new datapoint contradicts the rule, or when an executive-side reader wants to understand why the rule says what it does.
+The humanisation rule's calibration gate (Step 0) and structural-vs-content guidance are derived from nine detector-based falsifications run against ZeroGPT (datapoints 1-8) and a cross-detector observation against QuillBot + ZeroGPT (datapoint 9), all on 2026-04-28. This file captures the full datapoint detail, plus the rule sections moved out of the always-on floor on 2026-08-20 (Step 0a, fundamentals 3 and 5, the two scope sections, the failure modes, and the change-control note). The rule itself summarises the conclusions; reach here when the conclusions need to be re-validated, when a new datapoint contradicts the rule, or when an executive-side reader wants to understand why the rule says what it does.
+
+---
+
+## Detail moved out of the always-on rule (2026-08-20)
+
+The seven blocks below were resident in `.claude/rules/humanization.md` until the
+2026-08-20 context-floor pass. They are operative guidance, not history — the rule
+points here at each split point. Nothing in them was changed on the move.
+
+### Step 0a - Diagnose the dominant signal at 15-40%
+
+- **Signal A: literary polish.** Reads written-for-effect: vivid metaphors, dramatic build-up, polished closers, three-fold dramatic commands, smooth connective tissue - the LLM default register. **Strip aggressively:** kill metaphors, drop articles/conjunctions/hedges, fragment hard, paraphrase polished quotes, use flat direct verbs, tolerate minor roughness. (Datapoint 5 swung -13.8 points on aggressive polish-strip.)
+- **Signal B: already-rough, high-specificity prose scoring 15-40%.** Hard fragments and dense specifics already present. **Do NOT fragment further or smooth** - touching rhythm collapses the variance that already exists. Swap banned vocabulary, add specificity to the few abstract paragraphs, strengthen stance, leave structure alone.
+- **Diagnose:** polished-and-dramatic → Signal A; rough-and-lived → Signal B. In genuine doubt, run ONE intervention type and re-test; the detector tells you whether you guessed right.
+
+Empirical basis (eight 2026-04-28 falsifications, full detail below): structural patterns (anaphora, parallelism, "Not X. Y." pivots, three-fold lists) are NOT consistent AI tells - they flag only when paired with thin specificity AND uncommitted stance AND polished-LLM register.
+
+### Fundamental 3 - Burstiness on purpose (subordinate to specificity)
+
+In any paragraph of three or more sentences, mix short and long - either long-clause variance (one 30-50 word rolling sentence beside two shorter ones) or fragment variance (sub-7-word fragments among mid-length). **CRITICAL caveat: burstiness is not enforceable on existing prose.** Changing an author's chosen rhythm in either direction - fragmenting long sentences OR smoothing fragments - homogenises variance and worsens the detector score. **For existing prose, do not touch rhythm;** this fundamental applies to from-scratch generation only. Vary deliberately only if from-scratch output is running mechanical 18-word sentences in sequence.
+
+### Fundamental 5 - Geometry over vocabulary
+
+At least once per paragraph, take the second- or third-most-natural continuation - the word the model would not have picked (DetectGPT 2023; Binoculars 2024; Orwell's first rule). Specific numbers, proper nouns, and domain-specific verbs ("trim the pipeline" not "optimise the pipeline") force off-distribution continuations. Largely overlaps fundamental 1.
+
+### What the rule does NOT do
+
+<!-- audit-skip-start -->
+- NOT roleplay or pretend to be a person (identity-level pretence fails and is not the goal).
+<!-- audit-skip-end -->
+- NOT chase detector pass/fail as the success metric - scores are noisy proxies; read-aloud and craft judgement stay primary.
+- NOT apply to code, JSON, machine logs, config, structured tables, or third-party quotations (quote as written).
+- NOT mandate any specific writer's voice - it sits underneath whoever's voice is being applied, ensuring it lands as human.
+
+### Failure modes to watch
+
+- **Over-scrubbing without replacing** (the vacuum trap) - banned-word removal that leaves nothing behind is forgettable prose.
+- **Mechanical 1-short-1-long metronome** - rigid rhythmic variance is itself an AI tell; the rule is deliberate variance, not a metronome of it.
+- **Forced specifics that aren't true** - inventing is worse than generalising; ask when the specific isn't known.
+- **Identity mimicry without the substrate** - "use Misha's voice" without consulting `reference/misha-voice.md` produces caricature.
+- **Ignoring the rule on "internal" output** - it applies to every prose output, including chat replies, status updates, internal notes; two-pass is mandatory on outbound, the five fundamentals apply universally.
+
+### When the rule cannot apply
+
+1. **Direct quotation or citation** - preserve the source verbatim, even if it violates the rule.
+2. **Code, configuration, or structured data** - not prose; the rule does not apply.
+3. **User-supplied draft Claude is editing** - apply the rule when Claude authors; when editing user-authored prose, ask before changing voice, and fix only obvious unintended issues (banned vocabulary the user didn't intend) without confirmation.
+
+### Change control
+
+Updates to the humanisation rule require Misha's explicit approval. The vocabulary catalog is expected to drift over six to twelve months as detectors retrain; refresh on that cadence.
 
 ---
 

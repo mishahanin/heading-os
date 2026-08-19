@@ -13,6 +13,7 @@ unchanged; new helpers (home, data_dir, state_dir, log_dir) are re-exported
 too for callers that already import from this module.
 """
 
+import functools
 import json
 import os
 from pathlib import Path
@@ -440,19 +441,26 @@ def load_exec_registry() -> dict:
     return {"version": "1.0", "executives": []}
 
 
-def load_routing_map() -> dict:
-    """Load config/routing-map.yaml. Returns {default, rules} with legal destinations.
+@functools.lru_cache(maxsize=4)
+def _load_routing_map_cached(path: str, mtime_ns: int, size: int) -> dict:
+    """Parse one routing map. Keyed on file IDENTITY (path + mtime + size), never bare.
 
-    Fails closed: on any error, returns a map whose default is 'private' so an
-    unresolvable path is treated as data (never accidentally 'engine'/shareable).
+    A bare ``lru_cache`` on ``load_routing_map()`` would make a long-running daemon
+    (bridge-daemon, sentinel) blind to an edit of routing-map.yaml — and that file is
+    the classifier deciding what counts as private data, so blindness there is a leak
+    path, not a staleness annoyance. Keying on mtime_ns + size means an edited map is
+    a cache MISS and gets re-parsed on the next call.
+
+    Fails closed exactly as the uncached loader did: any read/parse error yields
+    default 'private'.
     """
     import yaml
 
-    root = get_workspace_root()
-    path = root / "config" / "routing-map.yaml"
+    from scripts.utils import yamlio
+
     try:
         with open(path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
+            data = yamlio.safe_load(fh) or {}
     except (OSError, yaml.YAMLError):
         return {"default": "private", "rules": {}}
     default = data.get("default", "private")
@@ -462,6 +470,29 @@ def load_routing_map() -> dict:
         default = "private"
     rules = {k: v for k, v in rules.items() if v in legal}
     return {"default": default, "rules": rules}
+
+
+def load_routing_map() -> dict:
+    """Load config/routing-map.yaml. Returns {default, rules} with legal destinations.
+
+    Fails closed: on any error, returns a map whose default is 'private' so an
+    unresolvable path is treated as data (never accidentally 'engine'/shareable).
+
+    Cached on file identity (2026-08-20). Before the cache this re-parsed the YAML on
+    EVERY get_routing_destination() call — measured 6.4 ms per call, so the 1535-file
+    engine-tree-clean scan paid 9.63 s of pure parsing; with the map parsed once it is
+    0.19 s. Returns a fresh copy per call so a caller mutating `rules` cannot corrupt
+    the shared cached map for the rest of the process.
+    """
+    path = get_workspace_root() / "config" / "routing-map.yaml"
+    try:
+        st = path.stat()
+        mtime_ns, size = st.st_mtime_ns, st.st_size
+    except OSError:
+        # No file / unreadable stat: fail closed, and do not poison the cache.
+        return {"default": "private", "rules": {}}
+    m = _load_routing_map_cached(str(path), mtime_ns, size)
+    return {"default": m["default"], "rules": dict(m["rules"])}
 
 
 def get_routing_destination(file_path: str) -> str:

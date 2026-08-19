@@ -1067,14 +1067,6 @@ Sessions run Mon and Wed at 18:30 local time. Reply here with any question."""
 # Phase 3 helpers
 # ============================================================
 
-def _format_session_date(date_iso: str) -> tuple[str, str]:
-    """Return ('YYYY-MM-DD', 'Mon'/'Wed') human strings."""
-    from datetime import date as _date
-    d = _date.fromisoformat(date_iso)
-    day_name = d.strftime("%a")
-    return d.isoformat(), day_name
-
-
 def _zoom_url() -> str:
     """Return the recurring Zoom URL from env, or a placeholder warning string."""
     load_env()
@@ -3765,14 +3757,6 @@ def cmd_log_session(args) -> None:
 # ============================================================
 # Phase 2/3 subcommand stubs (anything not yet wired)
 # ============================================================
-
-def _not_implemented(name: str, phase: str):
-    def stub(args):
-        print(f"{YELLOW}Subcommand '{name}' not implemented yet ({phase}){RESET}",
-              file=sys.stderr)
-        sys.exit(2)
-    return stub
-
 
 # ============================================================
 # Webhook subcommands (Phase 4 — real-time delivery via setWebhook)

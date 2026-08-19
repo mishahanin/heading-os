@@ -6,6 +6,141 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- **`check_protect_docs` refused to let anything READ six files in `docs/`.** The
+  check gated on `tool_name == "Bash"` and let every other tool fall through to a
+  path test, so a `Read` of `docs/EMERGENCY-PROCEDURES.md` returned
+  `decision: block`, which the harness renders as a permission deny. Not
+  theoretical: `.logs/denials/denials.jsonl` records a real operator Read refused
+  this way on 2026-08-11, eight days before anyone noticed. `check_protect_corporate`
+  had the same shape and was stat'ing `.workspace-identity.json` on every Read to
+  reach a verdict it could never return. Both now exclude `Bash` and `Read` by
+  name rather than gating on a write allow-list, so a tool shape added to the
+  matcher later arrives INSIDE the check instead of silently outside it.
+
+- **`check_tool_budget`'s repeat detector could never fire.** `_stable_args_signature`
+  built its key with the builtin `hash`, and `PYTHONHASHSEED` is randomised per
+  process while every hook invocation is a fresh interpreter. The live state file
+  held 344 tool-history entries and 344 DISTINCT signatures; the branch had never
+  executed in the workspace's whole recorded history. Now sha1. The guard is a
+  subprocess test, because the in-process version passes against the broken
+  implementation too — which is exactly why this survived.
+
+- **Three per-OS install templates carried an empty `env` block.** The live
+  compaction settings are in the gitignored `settings.local.json`, so every
+  machine built from a template ran the stock auto-compact window instead of the
+  tuned one. Two guards now hold it: the templates must carry the same env, and
+  the arithmetic that derives a 584,000-token trigger from a 750,000 window is
+  pinned, so a future edit to the window cannot silently move the point.
+
+- **The templates also registered PostToolUse on `Write|Edit` only**, so a
+  workspace provisioned from one ran no hidden-character scan and no
+  prompt-injection scan on `MultiEdit` or `NotebookEdit`. Both hook bodies already
+  handled those shapes; only the matcher was wrong.
+
+- **`yt-pulse` could not run the VPN gate its own rule calls mandatory.** Claude
+  Code 2.1.218 made `context: fork` background by default, and a background fork
+  gets the narrower subagent tool set, which has no `AskUserQuestion`. Seventeen
+  skills set `context: fork` and none set `background`. Fixed there and on the two
+  skills that dispatch parallel specialists.
+
+- **`ops.py` returned a naive datetime** where seven sibling `_parse_iso` copies
+  returned an aware one, and compared it against an aware cutoff. One
+  externally-appended log line would 500 the `/settings/ops` endpoint. Replaced
+  with one shared `scripts/utils/timeparse.py` across eight call sites.
+
+- **`harness-audit.py` called a disabled plugin "running in this session".** It
+  read `installed_plugins.json` (what was fetched) and nothing read
+  `enabledPlugins` (whether the loader starts it) — the same over-claim
+  `.claude/rules/scope-claims.md` was written for, one layer down. It also walked
+  vendored `node_modules`, which produced all 1,596 baseline-drift lines and all
+  46 injected-instruction hits, so a genuine change to a real plugin would have
+  been invisible inside the wall. Both fixed; drift is 0 and injection hits are 0.
+
+- **The rule-split guard reported four live directives as lost.** It could see a
+  rule SPLIT into a sibling but not a rule OFFLOADED into `docs/`. It now honours a
+  committed `<rule>.destinations` file — a named claim someone can be held to,
+  never a widening to "anywhere in the repo" — and three tests hold it, including
+  one proving a declaration is not a blanket exemption.
+
+### Removed
+
+- **`.claude/hooks/context-monitor.py`**, and its four registrations. It read
+  `remaining_percentage` from the PostToolUse payload, a key the payload does not
+  carry, so it exited at the same line on every invocation since it was written;
+  the debounce file it writes on every warning had never been created once. It was
+  one of only two synchronous PostToolUse hooks, so deleting it halved that
+  blocking chain.
+
+- **The `## Active Threads` block in the memory index.** All thirty rows quoted a
+  live status and a live date, which `memory-discipline.md` forbids in an index
+  hook, and it was measurably stale — thirty threads active on disk, twenty-nine
+  listed, one of those already closed. It also sat inside the cached prompt prefix
+  and changed on 66 commits in 30 days, rebuilding a ~50k-token prefix each time.
+  `/prime` now reads the live set from disk.
+
+### Changed
+
+- **The always-on rule set is 40% smaller: 119,896 bytes across 18 files down to
+  71,412 across 15.** No directive was lost; every stream was verified by a
+  separate agent that diffed the removed lines one at a time and traced each to
+  its destination. `skill-orchestrator.md` lost seven pattern blocks that every one
+  of them already pointed at in `reference/orchestrator-patterns.md`, and reading
+  that reference before dispatch is now mandatory rather than merely advised.
+  `security.md` kept the directives a model can actually violate and moved the
+  defence-layer narrative to `docs/SECURITY-MODEL.md`; it stays unconditional,
+  because a path-scoped rule is lost after a compaction. `documentation.md` and
+  `output-naming.md` are now path-scoped. `vpn-preflight.md` moved to `reference/`,
+  with its obligation kept resident in one line because that gate has no path
+  signal to fire on.
+
+- **The coverage floor moved from the push gate to CI**, where it can actually stop
+  a regression. It cost 37.9 s on every push (measured A/B, twice) while demanding
+  27% against a delivered 43.44%, so it could not fail. The test that guarded it
+  moved with it and now asserts both halves of the pair, since dropping the flag
+  from one place without adding it to the other leaves the floor enforced nowhere.
+
+- **`load_routing_map()` is cached on file identity** — `(path, mtime_ns, size)`,
+  never a bare `lru_cache`, because a long-running daemon must still see an edit
+  to the file that decides what counts as private data. It was re-parsing the YAML
+  on every `get_routing_destination()` call: 9 ms each, and the entire cost of the
+  `engine-tree-clean` pre-commit hook that fires on every commit.
+
+- **`security-guidance` disabled**, on measurement rather than preference: 333 ms
+  per write against this workspace's own 71 ms, zero findings across 12,308 lines
+  of its own log, and duplicate cover from three existing gates. Its one unique
+  capability, an LLM review of a commit diff, is available on demand through
+  `/code-review`. `code-review` and `code-simplifier` enabled in the same pass —
+  one slash command and one agent definition, no hooks, no per-turn cost. The
+  roster moved out of the always-on router rule into `reference/plugin-roster.md`,
+  after that rule was found to document four plugins enabled nowhere and omit
+  three that were running.
+
+- **`skillListingBudgetFraction` raised to 0.03.** Claude Code budgets the skill
+  listing at a fraction of the context window and, on overflow, drops
+  DESCRIPTIONS rather than skills — a skill goes mute with no error, still typable
+  as `/name` but no longer matchable. The 73 model-invocable skills here carried
+  97% of the default budget on their own, before ~40 plugin skills shared it.
+  Nine descriptions were rewritten in the same pass: six too thin to route on, four
+  over a thousand characters that opened with an arXiv citation or an
+  implementation detail. Every one re-tested through the LLM-judge harness.
+
+- **The bridge daemon is capped at a 6-hour recycle** while its leak is located:
+  measured 1,198 MB RSS at 23:40 and 1,856 MB twelve hours later, monotone, against
+  a 43 MB import baseline. Its log was 84% APScheduler job-lifecycle chatter, in
+  which a job that STOPPED firing looked identical to one that fires; the
+  scheduler's logger is now at WARNING.
+
+- **Test suite: 5,713 tests in 72.6 s parallel**, from 5,643 in 426 s serial. CI
+  gained `-n auto` on two steps that were running the suite serially on a two-way
+  matrix with xdist already installed. 17.6 s of `time.sleep` came out of two
+  bridge test files, where it guarded a timestamp collision the code had already
+  fixed with a monotonic sequence prefix, and four marp assertions that were
+  wrapped in a truthiness guard — so a broken render passed green — became real
+  assertions against a deck now rendered once instead of five times.
+
+
 ## [0.10.0] - 2026-08-17
 
 The release about not halting for nothing, and about what a compaction keeps. No

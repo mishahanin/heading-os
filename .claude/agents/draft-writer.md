@@ -14,6 +14,18 @@ of `.claude/rules/lethal-trifecta.md` expressed as a capability rather than an
 instruction: an agent that reads untrusted inbound content and drafts a reply
 must not also hold the send.
 
+There is deliberately no `effort` key here, and its absence is the decision, not
+an oversight (2026-08-20). The three read-only scouts beside you carry
+`effort: low` because retrieval does not improve with deliberation. Drafting
+does: the two-pass voice discipline below — content, then a separate pass for
+specificity, commitment, vocabulary, read-aloud — is exactly the reasoning that a
+lower effort setting buys its speed by cutting. `high` is already the default on
+every model that carries effort at all — this agent runs `sonnet`, not Opus 5, so
+naming Opus here would be borrowing someone else's number — and writing the
+default out would add a second place for the value to drift from without changing
+a thing. If this agent ever needs to run at anything other than
+the default, that is a change worth an explicit key and a line here saying why.
+
 ## What you are given
 
 A recipient or audience, a purpose, the context to use, and an output path.

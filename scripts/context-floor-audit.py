@@ -157,11 +157,33 @@ def measure(root: Path) -> dict:
         "memory_index": memory,
         "claude_md": claude_md,
     }
+    # Two totals, not one. `total_bytes` sums every surface this script can see on
+    # disk. `observed_bytes` sums only the four whose injection into a live session
+    # this workspace has actually confirmed by reading its own system prompt.
+    #
+    # The difference is `skill_other_frontmatter` — the x-heading-* blocks — at
+    # ~136 KB, the single largest row here. The harness's skill listing carries a
+    # name and a description; no x-heading content has ever been observed in a
+    # session's available-skills block. But this script's method cannot settle
+    # that either way, so it does not assert the opposite: the row keeps its place
+    # in the on-disk total and is simply excluded from the observed one.
+    #
+    # Why it matters: config/context-floor-baseline.json commits a number, and a
+    # later "we cut the floor by N" has to name WHICH of the two it moved. Added
+    # 2026-08-20 per .claude/rules/scope-claims.md.
+    observed_keys = (
+        "skill_descriptions",
+        "always_on_rules",
+        "memory_index",
+        "claude_md",
+    )
     return {
         "bytes_per_token": BYTES_PER_TOKEN,
         "skill_count": skills["skills"],
         "components": components,
         "total_bytes": sum(components.values()),
+        "observed_bytes": sum(components[k] for k in observed_keys),
+        "observed_components": list(observed_keys),
         "path_scoped_rules_bytes": rules["path_scoped_bytes"],
         "largest_descriptions": skills["per_skill"][:10],
         "always_on_rules": rules["always_on"],
@@ -175,7 +197,10 @@ def render(result: dict) -> None:
     for name, byte_count in result["components"].items():
         print(f"{name:<28}{byte_count:>12}{_tokens(byte_count):>10}")
     total = result["total_bytes"]
-    print(f"{BOLD}{'TOTAL':<28}{total:>12}{_tokens(total):>10}{RESET}")
+    observed = result["observed_bytes"]
+    print(f"{BOLD}{'TOTAL (surfaces on disk)':<28}{total:>12}{_tokens(total):>10}{RESET}")
+    print(f"{BOLD}{'OBSERVED FLOOR':<28}{observed:>12}{_tokens(observed):>10}{RESET}"
+          f"  {GRAY}<- injection confirmed{RESET}")
 
     scoped = result["path_scoped_rules_bytes"]
     print(f"\n{GRAY}Path-scoped rules, NOT in the total (they load only on a "
@@ -205,8 +230,13 @@ def render(result: dict) -> None:
           f"tool schemas are not on disk here and are NOT counted. Token figures "
           f"are bytes/{BYTES_PER_TOKEN}, an estimate, not a tokenizer result. "
           f"This script cannot observe which parts of a SKILL.md the harness "
-          f"actually injects; it reports descriptions and the rest of the "
-          f"frontmatter as two separate candidate surfaces.{RESET}")
+          f"actually injects, so it prints two totals. TOTAL sums every surface "
+          f"on disk. OBSERVED FLOOR sums only "
+          f"{', '.join(result['observed_components'])} - the four whose presence "
+          f"in a live system prompt has been read directly. The gap between them "
+          f"is skill_other_frontmatter (the x-heading-* blocks), which is on disk "
+          f"and whose injection is unconfirmed in either direction. Say which "
+          f"total you moved.{RESET}")
 
 
 def main() -> int:

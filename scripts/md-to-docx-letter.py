@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
+from scripts.utils.docx_helpers import load_docx
 from scripts.utils.workspace import get_outputs_dir
 
 # docx names are bound lazily (F-2.1: import stays pure).
@@ -24,12 +25,9 @@ def _ensure_docx():
     global Document, Pt, Inches, Cm, WD_ALIGN_PARAGRAPH, qn
     if Document is not None:
         return
-    from scripts.utils.optdeps import require
-    require("docx", extra="documents")
-    from docx import Document
-    from docx.shared import Pt, Inches, Cm
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml.ns import qn
+    d = load_docx()
+    Document, Pt, Inches, Cm = d.Document, d.Pt, d.Inches, d.Cm
+    WD_ALIGN_PARAGRAPH, qn = d.WD_ALIGN_PARAGRAPH, d.qn
 
 
 def create_letter_docx(md_path, docx_path):

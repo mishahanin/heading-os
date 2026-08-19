@@ -28,16 +28,38 @@ from scripts.utils.colors import GREEN, RED, RESET
 # through Phases 0-3). Phase 4 ratchets it to 27 — one point below the achieved
 # 27.57% after the Phase 3 regression tests landed, keeping a thin churn buffer.
 # It only ever moves up; this is the real no-regression guarantee.
-COVERAGE_FLOOR = 27
+#
+# ENFORCED IN CI, NOT HERE (2026-08-20). The floor used to ride on this pre-push
+# gate, where it could not do its job and cost real time: measured on the
+# operator's box, the regression run took 124.7s mean WITH coverage and 86.8s
+# WITHOUT — 37.9s on every push — while printing "Total coverage: 43.44%" against
+# a floor of 27, so the gate could never fail on it. The floor now lives on the
+# unit-tests step of .github/workflows/ci.yml, which runs on every push and PR
+# and is the surface a regression would actually have to get past. This constant
+# stays the documented home of the ratchet: raise it here, and raise the
+# --cov-fail-under in ci.yml in the same change.
+#
+# 27 -> 35 in the same move, so the documented ratchet is not stale on the day it
+# lands: ci.yml enforces 35, and a constant that says 27 while the gate says 35
+# reads as a floor nobody kept. 35 is itself deliberately under the measured 43%
+# (re-measured 2026-08-20 on the exact CI selection: 53052 statements, 30088
+# missed, TOTAL 43%) because the runner has no private data overlay, no marp-cli
+# and no LFS fixtures, so it covers strictly less than this box does.
+#
+# NOTHING IN THIS FILE READS THIS CONSTANT ANY MORE. It is documentation until a
+# test ties it to the ci.yml value; see the finding filed with this change.
+COVERAGE_FLOOR = 35
 
 
 def build_command(acceptance: bool) -> list[str]:
     """Return the pytest argv for the requested mode.
 
-    Regression mode (default) runs everything except acceptance gates AND enforces
-    the coverage floor across the full suite. Acceptance mode runs only the A+
-    sign-off gates with no floor. The floor lives here, not in pyproject addopts,
-    so single-file `pytest tests/x.py` runs are never blocked by partial coverage.
+    Regression mode (default) runs everything except acceptance gates. Acceptance
+    mode runs only the A+ sign-off gates. Neither measures coverage: the floor is
+    enforced on the CI unit-tests step (see COVERAGE_FLOOR above), which is where
+    a coverage regression can actually be stopped. Keeping it out of pyproject
+    addopts also means single-file `pytest tests/x.py` runs are never blocked by
+    partial coverage.
     """
     # -n auto: distribute the regression suite across all CPU cores (pytest-xdist).
     # The serial gate was the slow part of every engine push (~4 min); parallel
@@ -46,7 +68,7 @@ def build_command(acceptance: bool) -> list[str]:
     base = [sys.executable, "-m", "pytest", "-q"]
     if acceptance:
         return base + ["-m", "acceptance"]
-    return base + ["-n", "auto", "-m", "not acceptance", "--cov=scripts", f"--cov-fail-under={COVERAGE_FLOOR}"]
+    return base + ["-n", "auto", "-m", "not acceptance"]
 
 
 def child_env() -> dict[str, str]:

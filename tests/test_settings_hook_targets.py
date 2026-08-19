@@ -91,6 +91,115 @@ def test_no_settings_file_references_a_retired_shim(rel):
     assert not named, f"{rel} references retired shim(s): {sorted(named)}"
 
 
+PER_OS_TEMPLATES = [
+    ".claude/settings.local.linux.json",
+    ".claude/settings.local.macos.json",
+    ".claude/settings.local.windows.json",
+]
+
+# The compaction-control settings, decided over 2026-08-18/19 and measured
+# against Claude Code 2.1.235. The window is NOT the point compaction fires at:
+# the harness computes `effective = window - 20000` and then
+# `min(effective - 0.20*effective, effective - 13000)`, so 750000 puts the real
+# trigger at 584000 - above the 45% hard threshold, which is the whole design.
+# Setting the window to 584000 instead would move the trigger to 451200 and
+# undo the tuning. Read `plans/2026-08-19-compaction-control.md` in the data
+# overlay before changing any value here.
+COMPACTION_ENV = {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "750000",
+    "CLAUDE_HANDOFF_SOFT_THRESHOLD": "40",
+    "CLAUDE_HANDOFF_HARD_THRESHOLD": "45",
+}
+
+
+@pytest.mark.parametrize("rel", PER_OS_TEMPLATES)
+def test_per_os_template_carries_the_compaction_env(rel):
+    """A fresh install must land on the tuned compaction point, not the default.
+
+    `settings.local.json` is gitignored, so the live values on this machine are
+    invisible to a new clone. A workspace is built by copying one of these three
+    templates (scripts/setup-platform.sh). All three carried an EMPTY env block
+    until 2026-08-20, so every machine except this one ran the stock window and
+    compacted at a different point than the one that was measured and chosen.
+    """
+    path = ROOT / rel
+    if not path.is_file():
+        pytest.skip(f"{rel} not present in this clone")
+    env = json.loads(path.read_text(encoding="utf-8")).get("env") or {}
+    wrong = {k: (env.get(k), v) for k, v in COMPACTION_ENV.items() if env.get(k) != v}
+    assert not wrong, (
+        f"{rel} env drifted from the tuned compaction settings "
+        f"(key: got, want): {wrong}. See COMPACTION_ENV above for why the "
+        "window value is not the trigger value."
+    )
+
+
+def test_all_templates_ship_one_identical_hooks_block():
+    """The three per-OS templates differ only in `permissions`, never in hooks.
+
+    They drifted, and the drift had teeth. Until 2026-08-20 all three registered
+    PostToolUse on `Write|Edit` while the live file used
+    `Write|Edit|MultiEdit|NotebookEdit`, so every workspace built from a template
+    ran no hidden-character scan (post-write-sanitize.py, the mechanical arm of
+    hidden-chars.md) and no prompt-injection scan (prompt-guard.py, defence layer
+    4 in security.md) on a MultiEdit or a NotebookEdit. The templates also
+    omitted memory-reconcile.py entirely.
+
+    Nothing compared them, so nothing noticed. This does.
+    """
+    blocks = {}
+    for rel in PER_OS_TEMPLATES:
+        path = ROOT / rel
+        if not path.is_file():
+            pytest.skip(f"{rel} not present in this clone")
+        blocks[rel] = json.dumps(
+            json.loads(path.read_text(encoding="utf-8")).get("hooks", {}), sort_keys=True
+        )
+    distinct = set(blocks.values())
+    assert len(distinct) == 1, (
+        "per-OS templates carry different hooks blocks: "
+        + ", ".join(f"{k} -> {hash(v)}" for k, v in blocks.items())
+    )
+
+
+def test_post_tool_use_covers_every_write_shape():
+    """A write hook registered on `Write|Edit` silently skips two write shapes.
+
+    MultiEdit puts its text in edits[i].new_string and NotebookEdit in
+    new_source; both hook bodies already destructure them, so only the matcher
+    was ever wrong.
+    """
+    for rel in PER_OS_TEMPLATES:
+        path = ROOT / rel
+        if not path.is_file():
+            pytest.skip(f"{rel} not present in this clone")
+        entries = json.loads(path.read_text(encoding="utf-8"))["hooks"].get("PostToolUse", [])
+        for entry in entries:
+            matcher = entry.get("matcher", "")
+            missing = [t for t in ("Write", "Edit", "MultiEdit", "NotebookEdit") if t not in matcher]
+            assert not missing, f"{rel} PostToolUse matcher {matcher!r} misses {missing}"
+
+
+def test_the_compaction_window_still_derives_the_intended_trigger():
+    """Pin the arithmetic, so a future window edit cannot silently move the point.
+
+    This encodes the formula decoded from Claude Code 2.1.235 on 2026-08-19. If
+    a later harness changes it, this test fails and the number gets re-measured
+    rather than assumed.
+    """
+    window = int(COMPACTION_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
+    effective = max(100000, min(1000000, window)) - 20000
+    fires_at = min(effective - int(0.20 * effective), effective - 13000)
+    assert fires_at == 584000, (
+        f"the configured window {window} now derives a trigger of {fires_at}, "
+        "not the measured 584000"
+    )
+    hard_threshold_pct = int(COMPACTION_ENV["CLAUDE_HANDOFF_HARD_THRESHOLD"])
+    assert fires_at < window * (100 - hard_threshold_pct) / 100 + window, (
+        "sanity: the trigger must sit inside the configured window"
+    )
+
+
 def test_the_guard_can_see_a_missing_hook():
     """Pin the detector against the defect shape, so it cannot decay to a no-op.
 

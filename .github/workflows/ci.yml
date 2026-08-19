@@ -199,7 +199,13 @@ jobs:
           enable-cache: true
           prune-cache: true   # v9 flipped this default to false
       - run: uv sync --dev --all-extras --frozen
-      - run: uv run pytest tests/security -q -p no:cacheprovider
+      # -n auto (pytest-xdist, already a dev dependency and already used by the
+      # pre-push gate): the security suite has no ordered or single-writer cases.
+      # Re-measured on the operator's box 2026-08-20, back-to-back on this exact
+      # selection: 559 passed in 39.98s serial, 14.98s at -n auto. (An earlier
+      # revision of this comment claimed 426s vs 82s; that pair did not reproduce
+      # for tests/security and has been replaced with the numbers that did.)
+      - run: uv run pytest tests/security -q -p no:cacheprovider -n auto
 
   unit-tests:
     name: unit tests (py${{ matrix.python }})
@@ -230,10 +236,27 @@ jobs:
       - run: uv python install ${{ matrix.python }}
       - run: uv sync --dev --all-extras --frozen --python ${{ matrix.python }}
       - name: unit + capability tests (integration/acceptance excluded)
+        # This step is where the coverage floor lives as of 2026-08-20. It used
+        # to ride on scripts/run-tests.py (the pre-push gate), where it cost
+        # 37.9s of every push (124.7s with coverage vs 86.8s without) and could
+        # never fail: that run reports 43.44% against a floor of 27. Here it runs
+        # on every push and PR, on both matrix legs, which is the surface a
+        # coverage regression would actually have to get past. COVERAGE_FLOOR in
+        # scripts/run-tests.py remains the documented home of the ratchet - raise
+        # it there and here in the same change.
+        #
+        # 35, not 43. The scope widened from scripts/utils to all of scripts, and
+        # this runner is strictly thinner than the operator's box: no private data
+        # overlay, no marp-cli, no LFS fixtures, so several capability tests skip
+        # here that measured code there. 43% was measured locally on this exact
+        # selection; 35 keeps ~8 points of buffer so a skipped capability cannot
+        # turn the build red on its own.
+        #
+        # -n auto for the same reason as the security suite above.
         run: >
-          uv run pytest tests/ -q -p no:cacheprovider
+          uv run pytest tests/ -q -p no:cacheprovider -n auto
           -m "not integration and not acceptance"
-          --cov=scripts/utils --cov-report=term
+          --cov=scripts --cov-report=term --cov-fail-under=35
 
   integration-tests:
     # The `integration` marker is excluded from every other job, so until now

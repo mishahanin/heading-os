@@ -381,6 +381,46 @@ def _verify_port_free(port: int) -> int:
     return port
 
 
+def _configure_logging(log_path: Path = LOG_PATH) -> logging.Logger:
+    """Configure the root logger for the daemon process and return it.
+
+    Extracted from start_daemon() on 2026-08-20 so the logger levels have a
+    test seam - start_daemon() itself ends in uvicorn.run() and cannot be
+    called from a test.
+    """
+    install_log_factory()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Rotating handler: 1 MB per file, 3 backups (~4 MB total cap).
+    # Workspace convention - matches scripts/sync-exchange-daemon.py.
+    handler = RotatingFileHandler(
+        log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(trace_id)s] %(message)s"))
+    root = logging.getLogger()
+    # Clear any pre-existing handlers (defense vs. test contamination).
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    # 2026-08-20: APScheduler logs every job start and every successful
+    # completion at INFO. Measured over the four retained bridge.log files
+    # (16,277 lines): 13,780 of them - 84.7% - were APScheduler job-lifecycle
+    # chatter. Success shouted as loudly as failure, so a job that STOPPED
+    # firing read exactly like one that fires every minute, and the log
+    # carried no signal. WARNING keeps genuine scheduler failures (missed
+    # runs, job exceptions, executor errors) - they still propagate to root,
+    # so they reach both the file and install_error_tracker below, which
+    # feeds heartbeat.json's recent_error_count from WARNING+ records.
+    # The daemon's own lines are untouched: pulse/mail/config log on the root
+    # logger or on scripts.bridge_daemon.* loggers, none of which descend
+    # from 'apscheduler'.
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
+    # Phase J: attach the error tracker to root so every WARNING+ record
+    # feeds heartbeat.json's recent_error_count + last_error fields.
+    install_error_tracker(root)
+    return root
+
+
 def start_daemon(explicit_port: int | None = None):
     """Start the bridge daemon: load token + config, pick a port, start observer +
     scheduler, then run uvicorn on 127.0.0.1. Cleans up on exit or exception.
@@ -395,23 +435,7 @@ def start_daemon(explicit_port: int | None = None):
     # record factory before any logging so every line (and every subprocess
     # this daemon spawns) carries the same [trace_id].
     tracing.mint()
-    install_log_factory()
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    # Rotating handler: 1 MB per file, 3 backups (~4 MB total cap).
-    # Workspace convention - matches scripts/sync-exchange-daemon.py.
-    handler = RotatingFileHandler(
-        LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
-    )
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(trace_id)s] %(message)s"))
-    root = logging.getLogger()
-    # Clear any pre-existing handlers (defense vs. test contamination).
-    for h in list(root.handlers):
-        root.removeHandler(h)
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
-    # Phase J: attach the error tracker to root so every WARNING+ record
-    # feeds heartbeat.json's recent_error_count + last_error fields.
-    install_error_tracker(root)
+    _configure_logging()
 
     observer = None
     sched = None
@@ -474,8 +498,9 @@ def start_daemon(explicit_port: int | None = None):
             "inflight": lambda: r_inflight.refresh(WORKSPACE_ROOT, state),
             # Phase 2 (2026-05-24): pulse refresher computes the full payload
             # off the request path and writes .daemon-state/pulse-snapshot.json.
-            # Endpoint reads from snapshot, so per-request latency dropped from
-            # ~7s (WSL /mnt/c rglob over outputs/) to ~5ms.
+            # Endpoint reads from the snapshot. The ~7s figure that justified
+            # this was WSL /mnt/c; the same walk is 68 ms on today's ext4
+            # (2026-08-20). See refreshers/pulse.py before re-deciding sizes.
             "pulse": lambda: r_pulse.refresh(WORKSPACE_ROOT, state, cfg_state, data_root=data_root),
             # Phase 1.152: heartbeat writer (spec section 3.7). Default
             # cadence is set in scheduler.py via config; falls back to

@@ -319,3 +319,80 @@ def test_checks_list_has_seven_branches(dispatch):
         "check_rate_limit",
         "check_tool_budget",
     ]
+
+
+# ============================================================
+# Read must never be refused by a check that guards writes
+# ============================================================
+
+
+@pytest.mark.parametrize("file_name", sorted({"GETTING-STARTED.md", "EMERGENCY-PROCEDURES.md"}))
+def test_protect_docs_allows_reading_a_synced_file(dispatch, file_name):
+    """A Read of an auto-synced docs file must pass.
+
+    Until 2026-08-20 check_protect_docs excluded only Bash, so a Read fell
+    through to the path test and returned decision:block — which the harness
+    renders as a permission deny. `.logs/denials/denials.jsonl` holds a real
+    operator Read refused this way at 2026-08-11T21:44:19. The check exists to
+    steer EDITS to templates/; reading the synced copy was never in scope.
+    """
+    payload = {
+        "tool_name": "Read",
+        "tool_input": {"file_path": f"/w/docs/{file_name}"},
+    }
+    assert dispatch.check_protect_docs(payload) is None
+
+
+def test_protect_docs_still_blocks_writing_a_synced_file(dispatch):
+    """The guarantee the fix must not weaken: the write is still refused."""
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/w/docs/GETTING-STARTED.md", "content": "x"},
+    }
+    result = dispatch.check_protect_docs(payload)
+    assert result is not None
+    assert result["decision"] == "block"
+    assert "templates/GETTING-STARTED.md" in result["reason"]
+
+
+def test_protect_corporate_ignores_read(dispatch):
+    """Same shape, same reason: this check blocks writes to corporate/."""
+    payload = {
+        "tool_name": "Read",
+        "tool_input": {"file_path": "/w/corporate/anything.md"},
+        "cwd": "/w",
+    }
+    assert dispatch.check_protect_corporate(payload) is None
+
+
+# ============================================================
+# _stable_args_signature must be stable ACROSS processes
+# ============================================================
+
+
+def test_args_signature_is_stable_across_processes():
+    """Two fresh interpreters must produce the same signature for one payload.
+
+    This has to be a subprocess test. The in-process version passes against the
+    old builtin-`hash` implementation too, because PYTHONHASHSEED is fixed for
+    the life of one interpreter — which is exactly why the defect survived: every
+    hook invocation is a NEW interpreter, so no two stored signatures could ever
+    match, and the repeat detector had never fired once in the workspace's whole
+    recorded history (344 tool_history entries, 344 distinct signatures).
+    """
+    import subprocess
+
+    probe = (
+        "import importlib.util,sys;"
+        f"s=importlib.util.spec_from_file_location('d', {str(DISPATCH_PATH)!r});"
+        "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+        "print(m._stable_args_signature('Read', {'file_path': '/x/y.md'}))"
+    )
+    seen = {
+        subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        for _ in range(3)
+    }
+    assert len(seen) == 1, f"signature differs between processes: {seen}"
+    assert seen.pop().startswith("Read:")

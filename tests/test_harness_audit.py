@@ -241,6 +241,105 @@ def test_the_dormant_version_stays_on_the_hashed_surface(tmp_path):
     assert any("6.1.1" in path for path in entries), entries
 
 
+def test_a_plugin_disabled_in_settings_is_not_reported_as_running(tmp_path):
+    """The 2026-08-20 misreport.
+
+    `security-guidance` was set false in `.claude/settings.json` and this audit
+    still printed all eight of its hooks under "running in this session", because
+    the tool read `installed_plugins.json` (what was FETCHED) and nothing read
+    `enabledPlugins` (whether the loader STARTS it).
+
+    The first fix removed the plugin from the active set, which did not work and
+    is worth pinning here: `_is_loaded` treats an unknown path as live, so
+    removal moved it from "active" to "unknown" and it was still reported as
+    running. An explicit `false` needs its own branch, checked first.
+    """
+    cache = _cache_with_two_versions(tmp_path)
+    record = _installed_record(tmp_path, cache / "vendor" / "thing" / "6.2.0")
+    settings = tmp_path / "user-settings.json"
+    settings.write_text(json.dumps({"enabledPlugins": {"thing@vendor": False}}),
+                        encoding="utf-8")
+
+    manifest = tmp_path / "m.json"
+    env = dict(os.environ, HEADING_OS_PLUGIN_ROOT=str(cache),
+               HEADING_OS_USER_SETTINGS=str(settings),
+               HEADING_OS_INSTALLED_PLUGINS=str(record))
+    proc = subprocess.run(
+        [sys.executable, str(_CLI), "--manifest", str(manifest), "--json"],
+        capture_output=True, text=True, cwd=str(_ROOT), timeout=180, env=env)
+    hooks = json.loads(proc.stdout)["third_party_hooks"]
+
+    plugin_hooks = [h for h in hooks if "vendor/thing" in h["source"].replace("\\", "/")]
+    assert plugin_hooks, "fixture produced no hooks to judge"
+    assert not any(h["loaded"] for h in plugin_hooks), (
+        "a plugin explicitly disabled in enabledPlugins must not be reported as "
+        f"running: {plugin_hooks}")
+
+
+def test_disabling_one_plugin_does_not_silence_another(tmp_path):
+    """The failure direction the fix must not open.
+
+    An audit that goes quiet about a hook that DOES run is worse than one that
+    over-reports, so the disable must be scoped to the named key alone.
+    """
+    cache = tmp_path / "cache"
+    for name in ("off-plugin", "on-plugin"):
+        hooks = cache / "vendor" / name / "1.0.0" / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": f"run-{name}"}]}]}}),
+            encoding="utf-8")
+    record = tmp_path / "installed_plugins.json"
+    record.write_text(json.dumps({"plugins": {
+        "off-plugin@vendor": [{"installPath": str(cache / "vendor" / "off-plugin" / "1.0.0")}],
+        "on-plugin@vendor": [{"installPath": str(cache / "vendor" / "on-plugin" / "1.0.0")}],
+    }}), encoding="utf-8")
+    settings = tmp_path / "user-settings.json"
+    settings.write_text(json.dumps({"enabledPlugins": {"off-plugin@vendor": False}}),
+                        encoding="utf-8")
+
+    manifest = tmp_path / "m.json"
+    env = dict(os.environ, HEADING_OS_PLUGIN_ROOT=str(cache),
+               HEADING_OS_USER_SETTINGS=str(settings),
+               HEADING_OS_INSTALLED_PLUGINS=str(record))
+    proc = subprocess.run(
+        [sys.executable, str(_CLI), "--manifest", str(manifest), "--json"],
+        capture_output=True, text=True, cwd=str(_ROOT), timeout=180, env=env)
+    hooks = json.loads(proc.stdout)["third_party_hooks"]
+
+    live = {h["command"] for h in hooks if h["loaded"]}
+    assert "run-on-plugin" in live, f"an enabled plugin went silent: {hooks}"
+    assert "run-off-plugin" not in live, f"a disabled plugin still reads live: {hooks}"
+
+
+def test_vendored_dependency_trees_are_off_the_hashed_surface(tmp_path):
+    """node_modules is pruned, and the prune is scoped to it.
+
+    One plugin's vendored npm tree produced 1596 of 1596 drift lines and all 46
+    injected-pattern hits, which is how an audit goes blind while still exiting
+    non-zero every run.
+    """
+    cache = tmp_path / "cache"
+    plugin = cache / "vendor" / "thing" / "1.0.0"
+    (plugin / "node_modules" / "some-dep").mkdir(parents=True)
+    (plugin / "node_modules" / "some-dep" / "index.js").write_text("x = 1\n", encoding="utf-8")
+    (plugin / "skills").mkdir(parents=True)
+    (plugin / "skills" / "real.md").write_text("# real skill\n", encoding="utf-8")
+
+    manifest = tmp_path / "m.json"
+    env = dict(os.environ, HEADING_OS_PLUGIN_ROOT=str(cache),
+               HEADING_OS_USER_SETTINGS=str(tmp_path / "absent.json"),
+               HEADING_OS_INSTALLED_PLUGINS=str(tmp_path / "absent2.json"))
+    subprocess.run(
+        [sys.executable, str(_CLI), "--manifest", str(manifest), "--update-manifest"],
+        capture_output=True, text=True, cwd=str(_ROOT), timeout=180, env=env)
+    entries = json.loads(manifest.read_text(encoding="utf-8"))["entries"]
+
+    assert any("real.md" in path for path in entries), entries
+    assert not any("node_modules" in path for path in entries), (
+        f"vendored tree is still on the hashed surface: {entries}")
+
+
 def test_a_cache_the_record_does_not_mention_is_reported_as_live(tmp_path):
     """Dormant needs proof of supersession, never mere absence.
 

@@ -5,7 +5,11 @@ The source-of-truth map for the HEADING OS documentation site (`docs/`, served a
 regenerated from a Markdown source or hand-authored HTML. This file says which,
 how to edit each, and how the drift guard keeps them honest.
 
-Last Updated: 2026-07-08
+Consumed by: `.claude/rules/documentation.md` (the propagation rule points here for
+the fleet propagation chain and the shared-versus-CEO-only distribution list), and by
+anyone editing a page under `docs/`.
+
+Last Updated: 2026-08-20
 
 ## The one generator
 
@@ -108,3 +112,92 @@ drift is caught before it reaches CI.
 
 Either way, run the drift guard locally before committing:
 `python scripts/regenerate-docs-html.py --all && git diff --exit-code docs/`.
+
+## Propagation: from this repo to the fleet
+
+The two sections below moved here verbatim from `.claude/rules/documentation.md`
+on 2026-08-20, when that rule was made path-scoped. They give the route a docs or
+template change takes to reach each executive clone. They also give the list of
+pages that are exec-shared, and the list that stays CEO-only.
+
+## Propagation Chain
+
+The CEO manually initiates updates; each exec machine pulls automatically on a schedule.
+
+### CEO side (manual, initiated by `/push-updates` or equivalent)
+
+When Misha updates any shared content in ceo-main:
+
+1. **Commit + classify** changed files per `config/routing-map.yaml` (private/engine stays CEO-side; corporate is prepared for publish).
+2. **Publish to `../heading-os-corporate/`** via `/publish-corporate` or `/push-updates` (corporate-classified files + BUILD.json bump).
+3. **Push `../heading-os-corporate/` to GitHub** (`origin/main`) -- manual, by Misha, after confirming the changeset.
+
+`AIOS-for-the-CEO` is not part of this chain (independent OSS repo `mishahanin/AIOS-for-the-CEO` since 2026-04-25; the old `/export-update` skill and `scripts/export-sync.py` are archived).
+
+### Exec side (manual git pull on each exec machine)
+
+The old auto-sync (`workspace-sync.py`, a destructive copy-and-orphan-delete
+engine) is retired; no `31C-Sync-{slug}` task / launchd agent / systemd timer is
+installed anymore (only the 15-min Sentinel schedule remains). Each exec syncs
+with plain git:
+
+- **Code down:** `git pull --ff-only` on the engine clone (the exec's
+  `.heading-os`). Engine code ships by cloning the engine repo, not by copying.
+- **Corporate content down:** the corporate-consumption seam —
+  `python scripts/sync-corporate.py` clones/pulls `heading-os-corporate` into the
+  gitignored `.corporate-repo/`, read in place via `get_corporate_root()`, and
+  `/sync` refreshes it (deferral lifted 2026-06-26 — CEO cutover complete).
+- **Data up / backup:** `python scripts/push-all.py` pushes the exec's own data
+  repo (`heading-os-data-{slug}`), which carries `crm/contacts/`. CEO aggregation
+  reads each exec's data repo directly via `aggregate-crm.py`.
+- **First-run record recovery:** after a clean deploy, a one-shot
+  `python scripts/import-legacy-records.py --from <old-records-path>` copies the
+  exec's prior `crm/contacts/`, `threads/`, `knowledge/`, and personal `context/`
+  off disk (local, non-destructive, idempotent).
+
+The convenience wrapper for the routine pull + backup is `/sync`.
+
+### Worst-case propagation time
+
+Up to whenever the exec next runs `git pull` on their clones. There is no fixed
+1-hour cadence anymore; an online exec sees published changes the moment they
+pull (or run `/sync`). Offline execs catch up on their next pull.
+
+### What this means for a change in ceo-main
+
+- Same session: visible to CEO immediately (file on disk).
+- +minutes: visible in corporate GitHub (once CEO runs `/publish-corporate` + `git push`).
+- +0-60 min after GitHub push: visible in each online exec's `corporate/` tree (via their scheduled task).
+- Exec session: exec reads their local `corporate/` copy; no network call per read.
+
+## Documentation Distribution
+
+### Shared with all execs (via corporate repo `docs/`):
+- `GETTING-STARTED.md` -- Executive onboarding guide (detailed, with all skills)
+- `GETTING-STARTED.html` -- Branded HTML version (printable, shareable)
+- `EMERGENCY-PROCEDURES.md` / `.html` -- What to do when sync/push/update chain breaks (CEO outage, corporate outage, credential leak, schedule failure)
+
+> The canonical public deployment guide is `docs/DEPLOYMENT.md` (engine-routed,
+> not in the templates -> docs synced set), with `docs/QUICKSTART.md` as its
+> one-page short form. Neither is exec-distributed via this sync chain.
+- `QUICKSTART.md` -- one-page genericized public reference, not a hand-authored CEO guide.
+
+### CEO-only (stays in ceo-main only -- NEVER publish to corporate or exec workspaces):
+- `CEO-ADMIN-GUIDE.md` -- Admin workflows, provisioning, offboarding, emergency revocation
+- `CEO-ADMIN-GUIDE.html` -- Branded HTML version
+
+The `/publish-corporate` skill and the `sync-docs.py` hook (templates/ -> docs/) include `docs/` in the publish paths. CEO-ADMIN-GUIDE files must NEVER be placed in the corporate repo or any exec workspace.
+
+The milestone table below moved here in the same change. It tracks cleanup that
+waits on the whole fleet to reach a state. That is a propagation concern, not an
+authoring one.
+
+## Migration Cruft Milestones
+
+Some cleanup cannot land immediately because it depends on the whole fleet reaching a state, not just ceo-main. Track those here so they are not forgotten (2026-06-09 audit #62).
+
+| Item | Blocked on | Remove when | Status |
+|---|---|---|---|
+| _(none open)_ | | | The last entry, four backward-compat hook shims delegating to `_dispatch.py`, cleared on 2026-08-11. Its blocker was written before the two-part topology hard-cut and outlived the condition it described: the tracked `settings.local.{linux,macos,windows}.json` templates have named `_dispatch.py` since the engine's initial import, so no workspace built from this repository ever referenced a shim. `tests/test_settings_hook_targets.py` now holds that property, which is what the row was really waiting for. |
+
+When an item clears, delete its row and the corresponding files in the same change so this table never carries stale entries.

@@ -13,20 +13,13 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from scripts.utils.timeparse import parse_iso
+
 LOG_TAIL_LINES = 50
 LOG_TAIL_MAX_BYTES = 200_000  # cap total bytes returned even if 50 lines is huge
 USAGE_MAX_LINES = 20_000  # safety: stop after this many lines (the file rotates eventually)
 
 TELEMETRY_EVENT_TYPES = ("page_view", "launch", "return_to_browser", "finalize")
-
-
-def _parse_iso(s):
-    if not s or not isinstance(s, str):
-        return None
-    try:
-        return datetime.fromisoformat(s)
-    except (ValueError, TypeError):
-        return None
 
 
 def read_telemetry_summary(workspace_root: Path, now: datetime | None = None) -> dict:
@@ -81,7 +74,7 @@ def read_telemetry_summary(workspace_root: Path, now: datetime | None = None) ->
                 evt = rec.get("event")
                 if not ts_str or not evt:
                     continue
-                ts = _parse_iso(ts_str)
+                ts = parse_iso(ts_str)
                 if ts is None:
                     continue
                 if ts >= cutoff_7d:

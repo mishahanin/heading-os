@@ -89,6 +89,25 @@ ALLOWED_REPO_PREFIXES = (
 SKIP_START = "<!-- audit-skip-start -->"
 SKIP_END = "<!-- audit-skip-end -->"
 
+# Vendored dependency trees, pruned from the walk. Added 2026-08-20.
+#
+# `mattpocock-skills` 1.2.2 ships 24 MB of npm packages — prettier, @babel,
+# @changesets, @manypkg — which is release tooling for the plugin's own
+# repository, shipped to every consumer. It cost this audit its whole signal:
+# 1596 of 1596 drift lines were `added` under that one tree, so a genuine change
+# to `superpowers` or `claude-security` would have been invisible inside the
+# wall, and all 46 "injected instruction pattern" hits came from the same place
+# (iconv-lite, human-id, whatwg-url).
+#
+# THE CONDITION THAT MAKES THIS WRONG, stated so it can be re-checked: pruning
+# means the audit stops vouching for content that IS on disk and could in
+# principle be executed. It is acceptable only while the pruned tree ships no
+# hooks. `mattpocock-skills/1.2.2/hooks` does not exist. Re-check that on any
+# version bump of a plugin that vendors dependencies, and if one ever ships a
+# hook from inside `node_modules`, remove it from this set rather than trusting
+# the assumption.
+PRUNED_DIRS = frozenset({"node_modules", ".git", "__pycache__", ".venv"})
+
 MANIFEST_VERSION = 1
 
 
@@ -145,7 +164,79 @@ def installed_plugins_path() -> Path:
     return home() / ".claude" / "plugins" / "installed_plugins.json"
 
 
-def active_install_paths(path: Path) -> set | None:
+def disabled_plugin_keys(repo: Path) -> set:
+    """Plugin keys switched OFF in any settings file that can switch one off.
+
+    Installation and enablement are two different facts, and this tool knew only
+    the first. `installed_plugins.json` records what was fetched and never
+    forgets; `enabledPlugins` in a settings file records whether the loader
+    starts it. On 2026-08-20 `security-guidance` was set to false in
+    `.claude/settings.json` and this audit still printed its eight hooks under
+    the words "running in this session" — the same shape of over-claim that
+    `.claude/rules/scope-claims.md` was written for, one layer down.
+
+    Only an explicit `false` disables. An absent key means enabled, which is the
+    harness's own default and the safe reading for an audit: an unlisted plugin
+    is reported as live rather than hidden.
+
+    Three files can carry the key. The repository's tracked settings and its
+    gitignored local settings are read from the passed repo root; the user-level
+    file is read through `user_settings_path()` so the env override applies.
+    """
+    disabled = set()
+    candidates = [
+        repo / ".claude" / "settings.json",
+        repo / ".claude" / "settings.local.json",
+        user_settings_path(),
+    ]
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue  # absent or unparseable: contributes nothing, hides nothing
+        enabled = data.get("enabledPlugins") if isinstance(data, dict) else None
+        if not isinstance(enabled, dict):
+            continue
+        for key, value in enabled.items():
+            if value is False:
+                disabled.add(key)
+    return disabled
+
+
+def disabled_install_paths(path: Path, repo: Path) -> set:
+    """Resolved `installPath`s of plugins a settings file switched OFF.
+
+    Kept SEPARATE from `active_install_paths` on purpose. `_is_loaded` treats an
+    unknown path as live — dormant requires proof — so simply removing a
+    disabled plugin from the active set would move it into "unknown" and it would
+    still be reported as running. That is exactly what the first attempt at this
+    fix did on 2026-08-20, and the audit still printed all eight
+    `security-guidance` hooks minutes after the plugin was disabled.
+
+    An explicit `false` in `enabledPlugins` IS the proof `_is_loaded` asks for,
+    so it gets its own set and its own branch.
+    """
+    off = disabled_plugin_keys(repo)
+    if not off:
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        return set()
+    paths = set()
+    for key, entries in plugins.items():
+        if key not in off:
+            continue
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and isinstance(entry.get("installPath"), str):
+                paths.add(Path(entry["installPath"]).resolve())
+    return paths
+
+
+def active_install_paths(path: Path, repo: Path | None = None) -> set | None:
     """Resolved `installPath`s Claude Code actually loads, or None if unknown.
 
     The cache keeps every version it ever fetched; the loader reads exactly one
@@ -153,6 +244,10 @@ def active_install_paths(path: Path) -> set | None:
     that over-count under the words "running in this session" until 2026-08-12,
     when it reported `superpowers` 6.1.1 and 6.2.0 as two live SessionStart
     hooks. Only 6.2.0 was loaded; 6.1.1 was an orphan the cache had not swept.
+
+    Since 2026-08-20 it also subtracts anything explicitly disabled in a
+    settings file (see `disabled_plugin_keys`), because installed and enabled
+    are different facts and this function reported only the first.
 
     None means the record could not be read, and a caller must then treat every
     cached hook as live. An audit that hides an executing hook because a JSON
@@ -194,11 +289,16 @@ def _walk_surface(root: Path):
     absent from the baseline AND absent from the injection scan, and the audit
     exited 0. Unvouchable content on the loaded surface is a finding, so a
     symlink is reported by name and never resolved.
+
+    Vendored dependency trees are pruned; see PRUNED_DIRS for the reasoning and
+    the condition that would make the pruning wrong.
     """
     if not root.is_dir():
         return [], []
     files, links = [], []
     for path in root.rglob("*"):
+        if any(part in PRUNED_DIRS for part in path.parts):
+            continue
         if path.suffix.lower() not in SURFACE_SUFFIXES:
             continue
         if path.is_symlink():
@@ -231,7 +331,7 @@ def _hooks_from_mapping(mapping, source: str):
     return found
 
 
-def _is_loaded(source: Path, active: set | None) -> bool:
+def _is_loaded(source: Path, active: set | None, disabled: set | None = None) -> bool:
     """Whether a plugin's `hooks.json` belongs to the version actually loaded.
 
     Dormant requires PROOF, not absence of proof. A hook is called dormant only
@@ -246,9 +346,13 @@ def _is_loaded(source: Path, active: set | None) -> bool:
     the over-count it was written to fix. The repository's own contract test
     caught it.
     """
+    resolved = source.resolve()
+    # Explicit disable beats everything, including the unknown-is-live default:
+    # a settings file saying false IS the proof this function asks for.
+    if disabled and any(resolved == p or p in resolved.parents for p in disabled):
+        return False
     if active is None:
         return True
-    resolved = source.resolve()
     if any(resolved == path or path in resolved.parents for path in active):
         return True
     # Under the plugin directory of an active version, but not under that
@@ -256,7 +360,8 @@ def _is_loaded(source: Path, active: set | None) -> bool:
     return not any(path.parent in resolved.parents for path in active)
 
 
-def third_party_hooks(root: Path, settings: Path, active: set | None = None):
+def third_party_hooks(root: Path, settings: Path, active: set | None = None,
+                      disabled: set | None = None):
     """Every hook command on the installed surface, flagged by whether it loads.
 
     Two sources, because a hook can arrive by either road: a plugin's own
@@ -273,7 +378,7 @@ def third_party_hooks(root: Path, settings: Path, active: set | None = None):
                           "source": str(path), "loaded": True})
             continue
         block = data.get("hooks") if isinstance(data, dict) else None
-        loaded = _is_loaded(path, active)
+        loaded = _is_loaded(path, active, disabled)
         for entry in _hooks_from_mapping(block if block is not None else data, str(path)):
             found.append({**entry, "loaded": loaded})
 
@@ -421,9 +526,14 @@ def _render(result) -> None:
     print()
 
     if dormant:
-        print(f"{GRAY}{len(dormant)} further hook(s) sit in the plugin cache in a "
-              f"version the loader does not read. On the surface, not in the "
-              f"session:{RESET}")
+        # Two different reasons land a hook here now, and the line says both
+        # rather than the one it used to: a superseded VERSION the loader skips,
+        # and a plugin a settings file switched OFF. Naming only the first would
+        # be the same over-claim in reverse — a reader would conclude a disabled
+        # plugin was merely an old copy.
+        print(f"{GRAY}{len(dormant)} further hook(s) are on the installed surface "
+              f"but not in this session - either a superseded version the loader "
+              f"does not read, or a plugin set false in enabledPlugins:{RESET}")
         for entry in dormant:
             print(f"  {GRAY}{entry['event']:<20} {entry['source']}{RESET}")
         print()
@@ -519,9 +629,11 @@ def main() -> int:
             seen.add(entry["path"])
             unreadable.append(entry)
 
-    active = active_install_paths(installed_plugins_path())
+    active = active_install_paths(installed_plugins_path(), repo)
     result = {
-        "third_party_hooks": third_party_hooks(root, user_settings_path(), active),
+        "third_party_hooks": third_party_hooks(
+            root, user_settings_path(), active,
+            disabled_install_paths(installed_plugins_path(), repo)),
         "activation_known": active is not None,
         "baseline_missing": baseline is None,
         "drift": ({"added": [], "changed": [], "removed": []} if baseline is None

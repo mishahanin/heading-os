@@ -117,3 +117,57 @@ def test_committed_inventories_match_the_live_rules():
         "with `python scripts/rule_split_check.py --snapshot .claude/rules/<file>.md`. "
         f"Dropped: {bad}"
     )
+
+
+def test_a_directive_offloaded_to_a_declared_destination_is_not_a_loss(tmp_path):
+    """A rule may offload a directive OUT of .claude/rules/ without losing it.
+
+    The union was `rules_dir/<base>*.md` only, so it saw a rule SPLIT into a
+    sibling but not a rule OFFLOADED into docs/ or reference/. On 2026-08-20
+    documentation.md moved its propagation chain into docs/DOCS-PIPELINE.md and
+    four frozen directives read as dropped while every one was alive at the
+    destination — the false positive that pressures the next person to re-freeze
+    the snapshot, which is how this guard would decay into a rubber stamp.
+    """
+    rules = tmp_path / "rules"
+    docs = tmp_path / "docs"
+    inv = tmp_path / "inv"
+    for d in (rules, docs, inv):
+        d.mkdir()
+    (rules / "widget.md").write_text("You MUST scan the file.\n", encoding="utf-8")
+    (docs / "detail.md").write_text("NEVER skip the gate.\n", encoding="utf-8")
+    (inv / "widget.md.txt").write_text(
+        "You MUST scan the file.\nNEVER skip the gate.\n", encoding="utf-8")
+
+    # Without the declaration the offloaded directive reads as dropped.
+    assert check_inventories(inventory_dir=inv, rules_dir=str(rules)) == [
+        ("widget.md", "NEVER skip the gate.")]
+
+    # Declaring the destination resolves it.
+    (inv / "widget.md.destinations").write_text(
+        "# comment ignored\n\ndocs/detail.md\n", encoding="utf-8")
+    assert check_inventories(inventory_dir=inv, rules_dir=str(rules)) == []
+
+    # And the guard still bites: delete it from the destination and it is a loss
+    # again. A destination declaration must not become a blanket exemption.
+    (docs / "detail.md").write_text("unrelated prose.\n", encoding="utf-8")
+    assert check_inventories(inventory_dir=inv, rules_dir=str(rules)) == [
+        ("widget.md", "NEVER skip the gate.")]
+
+
+def test_a_declared_destination_that_does_not_exist_is_not_a_free_pass(tmp_path):
+    """Naming a file that is not there must not silence the check.
+
+    Otherwise the cheapest way past this guard is a typo.
+    """
+    rules = tmp_path / "rules"
+    inv = tmp_path / "inv"
+    for d in (rules, inv):
+        d.mkdir()
+    (rules / "widget.md").write_text("You MUST scan the file.\n", encoding="utf-8")
+    (inv / "widget.md.txt").write_text(
+        "You MUST scan the file.\nNEVER skip the gate.\n", encoding="utf-8")
+    (inv / "widget.md.destinations").write_text("docs/nope.md\n", encoding="utf-8")
+
+    assert check_inventories(inventory_dir=inv, rules_dir=str(rules)) == [
+        ("widget.md", "NEVER skip the gate.")]

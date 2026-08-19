@@ -193,6 +193,21 @@ if any, comes after and stays optional. Full rule:
 | `reference/` | Engine reference material consumed by skills and rules. |
 | `examples/` | A read-only demo data tree so a bare clone (no private data repo) still has something to run against. |
 
+## Rules: routing and change control, stated once
+
+Every file in `.claude/rules/` is **engine-routed** — public, shipped to every
+workspace by the directory default in `config/routing-map.yaml` — and **changing
+one requires the operator's explicit approval.** Both facts are true of the whole
+directory, so a rule does not repeat them in a footer.
+
+A rule states its own classification ONLY when it differs from that default, or
+its own change-control line ONLY when it says something extra: `tiered-risk.md`
+names the `send_capable` invariant, `corporate-docs.md` names the propagation
+step after an edit, `output-naming.md` warns that changing the form invalidates
+every filename already written. Those earn their lines. "Changes to this rule
+require Misha's explicit approval" on its own does not, and was removed from the
+rules carrying nothing else on 2026-08-20.
+
 ## Claude-Code-specific behavior
 
 `CLAUDE.md` at the repository root is the Claude-Code-specific entry point.

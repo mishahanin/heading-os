@@ -73,11 +73,3 @@ The detector is deliberately wide and its false positives are a feature: a
 defect of this shape is written in whatever words the author reached for, not in
 a fixed phrase. The registry also pins the detector against decay, since a
 phrase list that matches nothing passes everything.
-
-## Classification
-
-Engine (public, fleet-shared via the `.claude/rules/` default).
-
-## Change control
-
-Changes to this rule require Misha's explicit approval.

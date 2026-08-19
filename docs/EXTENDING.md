@@ -217,3 +217,14 @@ apply the fix, watch it pass.
 *HEADING OS · Extending the engine · maintained by Misha Hanin · see also
 [Architecture](ARCHITECTURE.html) for how the pieces compose and
 [Security model](SECURITY-MODEL.html) for the controls your code inherits.*
+
+## 9. Trigger regression tests
+
+Moved here from `.claude/rules/skill-router.md` on 2026-08-20 — it is authoring
+guidance, never routing, and that rule loads on every session.
+
+The router is a markdown rule the model interprets, so a new skill's triggers can silently hijack another skill's queries. `scripts/skill-trigger-test.py` is an LLM-judge harness that regression-tests this: it feeds the router rules plus a target skill's description to a judge model and checks whether each query in `.claude/skills/{name}/triggers.json` routes as expected (`should_trigger`). Run `python scripts/skill-trigger-test.py --all` (or `--skill NAME`, or `--changed [--base REF]` to test only skills whose `SKILL.md`/`triggers.json` changed since the base, default `origin/main` - a `skill-router.md` change widens scope to all); it is **advisory** by default (non-deterministic judge) and gates only under `--strict --threshold`. `/push-updates` Phase 0 runs `--changed --strict --threshold 0.85` as a **soft gate** (surfaces routing regressions on changed skills; the CEO confirms to override; not a hard block yet, per audit #63-2). 69 routing-sensitive skills carry `triggers.json` today, holding 710 cases between them (counted 2026-08-03; the prior figure of 24 was stale). When adding or re-scoping a skill, add or update its `triggers.json` and re-run the harness.
+
+## 10. Archived skills
+
+`.claude/skills/archive/{date-slug}/SKILL.md` is the workspace convention for retired skills. The parent `archive/` directory has no SKILL.md of its own and is intentionally inert - Claude Code's skill discovery is single-level and does not auto-load nested skills. Archived skills do not appear in the registry above and are never invoked unless explicitly retrieved (`git mv` back into `.claude/skills/{name}/`). Do NOT create a stub SKILL.md inside `archive/` itself; that would shadow the convention and risk false routing.

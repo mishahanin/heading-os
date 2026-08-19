@@ -75,6 +75,16 @@ context: [Optional - why this intelligence is needed now, e.g., "pre-meeting", "
 
 ---
 
+## Pre-flight: VPN Check (conditional, runs before Phase 0)
+
+Apply `reference/vpn-preflight.md` before any network operation in this skill.
+Some OSINT sources rate-limit datacenter and VPN exit IPs. Present the gate and
+wait for explicit confirmation before any research stream reaches Google,
+LinkedIn, or a public OSINT source. Skip it only for a target answered entirely
+from `datastore/`, `crm/`, and `context/`.
+
+---
+
 ## Phase 0: Context Loading
 
 **Customization (optional).** This skill is customization-aware (pilot). Resolve any per-exec overrides first: `python scripts/resolve_customization.py --skill .claude/skills/osint`. Apply any `activation_steps_prepend`, `persistent_facts`, and output-path overrides from the merged result. On any failure, proceed with the defaults below - never block. Layout + authoring guide: `config/skill-custom/README.md`.

@@ -29,7 +29,6 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 |------|---------|
 | `post-write-sanitize.py` | Scans every written or edited file for invisible Unicode characters and flags contamination. Enforces the [hidden-characters rule](RULES-REFERENCE.html). |
 | `prompt-guard.py` | Advisory detection of prompt-injection patterns in ingest-path files (`knowledge/`, `datastore/`, `crm/contacts/`), the paths where untrusted third-party text lands. |
-| `context-monitor.py` | Warns when the context window approaches capacity, so long sessions get a checkpoint before they run out of room. |
 | `sync-docs.py` | Auto-syncs `templates/` to `docs/` when documentation files change, keeping the two in step per the documentation rule. |
 
 ## SessionStart

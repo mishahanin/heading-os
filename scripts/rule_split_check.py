@@ -155,12 +155,60 @@ def check_split(original_text: str, successor_texts: list[str]) -> list[str]:
     return [imp for imp, cnt in orig.items() if succ[imp] < cnt]
 
 
-def _rule_union_sentences(stem: str, rules_dir: str = ".claude/rules") -> set[str]:
+def _declared_destinations(stem: str, inventory_dir: Path, repo_root: Path) -> list[Path]:
+    """Files OUTSIDE `.claude/rules/` that a rule declared as an offload target.
+
+    One path per line in `<inventory_dir>/<stem>.destinations`; blank lines and
+    `#` comments ignored. Absent file means no destinations, which is the common
+    case and stays free.
+
+    Why this exists: the union was `rules_dir/<base>*.md` only, so it could see a
+    rule SPLIT into a sibling but not a rule OFFLOADED into `docs/` or
+    `reference/`. On 2026-08-20 `documentation.md` moved its propagation chain to
+    `docs/DOCS-PIPELINE.md` and four frozen directives read as dropped although
+    every one of them was alive in the destination — a false positive that
+    pressures the next person to re-freeze the snapshot, which is exactly how a
+    guard like this decays into a rubber stamp.
+
+    The destination list is committed beside the snapshot ON PURPOSE. Widening
+    the search to "anywhere in the repo" would make the check unfalsifiable: a
+    directive could vanish from every loaded surface and still match some
+    unrelated prose. A named file is a claim someone made and can be held to.
+    """
+    manifest = Path(inventory_dir) / f"{stem}.destinations"
+    try:
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        rel = line.split("#", 1)[0].strip()
+        if rel:
+            out.append(repo_root / rel)
+    return out
+
+
+def _rule_union_sentences(stem: str, rules_dir: str = ".claude/rules",
+                          inventory_dir: Path = INVENTORY_DIR) -> set[str]:
     # stem is a basename like "development-standards.md"; glob its core+detail siblings
-    # so the snapshot survives a later split (development-standards.md + -detail.md).
+    # so the snapshot survives a later split (development-standards.md + -detail.md),
+    # plus any file the rule declared as an offload destination.
     base = stem[:-3] if stem.endswith(".md") else stem
     pattern = f"{rules_dir}/{base}*.md"
-    text = "\n".join(Path(p).read_text(encoding="utf-8") for p in sorted(glob.glob(pattern)))
+    paths = [Path(p) for p in sorted(glob.glob(pattern))]
+    # A destination path is repo-relative, so it needs the repo root. Derive it
+    # from rules_dir by stripping the `.claude/rules` tail when it is there, and
+    # otherwise take the parent — which is what a test fixture's `<tmp>/rules`
+    # wants. The first cut hard-coded `.parent.parent` and happened to be right
+    # for the real layout and wrong for every other, which a synthetic case
+    # caught immediately: the destination resolved one directory above the
+    # fixture and the check reported a live directive as dropped.
+    rp = Path(rules_dir)
+    repo_root = rp.parent.parent if rp.parts[-2:] == (".claude", "rules") else rp.parent
+    for extra in _declared_destinations(stem, inventory_dir, repo_root):
+        if extra.is_file():
+            paths.append(extra)
+    text = "\n".join(p.read_text(encoding="utf-8") for p in paths)
     return {_norm(s) for s in _units(text) if _norm(s)}
 
 
@@ -181,7 +229,7 @@ def check_inventories(inventory_dir: Path = INVENTORY_DIR,
     bad = []
     for inv in sorted(glob.glob(str(Path(inventory_dir) / "*.txt"))):
         stem = Path(inv).name[:-4]  # strip ".txt"
-        union = _rule_union_sentences(stem, rules_dir)
+        union = _rule_union_sentences(stem, rules_dir, Path(inventory_dir))
         for line in Path(inv).read_text(encoding="utf-8").splitlines():
             if line.strip() and _norm(line) not in union:
                 bad.append((stem, line))

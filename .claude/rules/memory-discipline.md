@@ -74,12 +74,3 @@ explicit instruction from the operator.
   point-in-time — verify against the current record before asserting it as fact.
 - Applies to auto-memory, business threads, CRM, outputs, and any
   pointer-to-record structure — not only the memory system.
-
-## Classification
-
-Engine (public, fleet-shared via the `.claude/rules/` default) — the discipline
-applies to every workspace, not only the CEO's.
-
-## Change control
-
-Changes to this rule require Misha's explicit approval.

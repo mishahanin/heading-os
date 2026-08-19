@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -102,12 +103,76 @@ def _near_dup_threshold() -> float:
         return 0.86
 
 
+# An index hook line: "- [Title](target) - trailing text". Deliberately the same
+# shape scan_volatile_hooks() matches, so prose paragraphs and bare bullets in
+# MEMORY.md (which carry no link target) can never be flagged.
+_HOOK_LINE_RE = re.compile(r"^\s*[-*]\s+\[[^\]]+\]\(([^)]+)\)")
+
+# The live-state tells, all three drawn from what the `## Active Threads` block
+# actually wrote before 2026-08-20.
+_LIVE_STATE_SIGNALS = (
+    ("last-touched date", re.compile(r",\s*last\s+\d{4}-\d{2}-\d{2}\b")),
+    ("inline status", re.compile(r"\bstatus:\s*\S")),
+    ("quiet-until date", re.compile(r"\[quiet until\s+\d{4}-\d{2}-\d{2}\]")),
+)
+
+
+def scan_live_state_rows(memory_dir: Path) -> dict:
+    """Advisory: flag MEMORY.md hooks that quote a live status or a live date.
+
+    memory-discipline.md: "A MEMORY.md index line names WHAT a memory is about
+    and points to the file; it does NOT quote a live value ... a live deadline, a
+    current status." Until 2026-08-20 the `## Active Threads` block broke that on
+    every one of its 29 rows ("- active, last 2026-08-19"), and it was the single
+    largest thing in a file injected inside the cached prompt prefix at every
+    SessionStart: 4,820 of 17,639 chars (27%), rewritten by 66 commits in 30 days.
+    It was also measurably stale by then - 30 threads active on disk, 29 listed,
+    one of the 29 already closed - which is exactly the failure the rule predicts.
+
+    scan_volatile_hooks() could not see it: that scanner skips `threads/` link
+    targets by design and only looks for money values, so the largest violation of
+    the rule it enforces went unflagged for months. This check works on the
+    PATTERN instead of the target, so it holds for any hook that regrows one.
+
+    Advisory rather than gating, deliberately: `thread.py open|log` re-adds rows
+    through ensure_active_threads_section()/add_thread_to_index() in
+    scripts/utils/threads_lib.py, so a gate here would fire on the next
+    legitimate thread write rather than on a mistake. Retiring that writer is the
+    follow-up; until then this reports the regrowth instead of blocking on it.
+
+    READS ONLY; never mutates. Returns:
+        {"ok": bool, "flagged": [{"target", "line", "signals"}], "note": str}
+    """
+    memory_file = Path(memory_dir) / "MEMORY.md"
+    if not memory_file.exists():
+        return {"ok": True, "flagged": [], "note": "no MEMORY.md"}
+    try:
+        text = memory_file.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        return {"ok": False, "flagged": [], "note": f"unreadable MEMORY.md: {exc}"}
+
+    flagged: list[dict] = []
+    for raw in text.splitlines():
+        m = _HOOK_LINE_RE.match(raw)
+        if not m:
+            continue
+        signals = [name for name, pat in _LIVE_STATE_SIGNALS if pat.search(raw)]
+        if signals:
+            flagged.append({"target": m.group(1), "line": raw.strip(), "signals": signals})
+    return {
+        "ok": True,
+        "flagged": flagged,
+        "note": f"{len(flagged)} hook(s) quoting live state",
+    }
+
+
 def gather() -> dict:
     """Collect both halves and split defects into gate vs advisory."""
     mem_dir = get_data_root() / "auto-memory"
     mem = compute_memory_defects(mem_dir)
     redundancy = scan_redundancy(mem_dir, threshold=_near_dup_threshold())
     volatile = scan_volatile_hooks(mem_dir)
+    live_state = scan_live_state_rows(mem_dir)
     dangling = scan_dangling_links(mem_dir)
     brain = collect_brain_compile()
     bdata = brain["data"] or {}
@@ -140,6 +205,7 @@ def gather() -> dict:
         "advisory": advisory,
         "redundancy": redundancy,
         "volatile_hooks": volatile,
+        "live_state_rows": live_state,
         "dangling_links": dangling,
     }
 
@@ -266,6 +332,25 @@ def render_report(result: dict, generated_iso: str) -> str:
             lines.append(f"- {f['file']} [{', '.join(f['signals'])}]: {f['description']}")
     lines.append("")
 
+    ls = result.get("live_state_rows", {"flagged": []}).get("flagged", [])
+    lines.append(f"### Hooks quoting live status / date: {len(ls)}")
+    lines.append("")
+    lines.append(
+        "A hook that carries `active, last <date>` or an inline `status:` is a "
+        "record, not a pointer, and it goes stale the moment the thing it names "
+        "moves. The `## Active Threads` block was retired on 2026-08-20 for this "
+        "(4,820 of 17,639 chars of a SessionStart-injected file, 29 rows, one of "
+        "them already closed on disk). Read the live set with "
+        "`python scripts/thread.py list`."
+    )
+    lines.append("")
+    if not ls:
+        lines.append("- none")
+    else:
+        for f in ls:
+            lines.append(f"- {f['target']} [{', '.join(f['signals'])}]: {f['line']}")
+    lines.append("")
+
     dangling = result.get("dangling_links", {"flagged": []}).get("flagged", [])
     lines.append("## Dangling links (advisory - not gated)")
     lines.append("")
@@ -377,6 +462,13 @@ def main() -> int:
                 f"  {YELLOW}advisory{RESET}: {len(vh)} volatile hook(s) + "
                 f"{len(vd)} volatile description(s) "
                 f"(move live values to the body - see memory-discipline.md)"
+            )
+        ls = result.get("live_state_rows", {}).get("flagged", [])
+        if not args.quiet and ls:
+            print(
+                f"  {YELLOW}advisory{RESET}: {len(ls)} hook(s) quoting live "
+                f"status/date (the retired ## Active Threads shape) - "
+                f"read the live set with `python scripts/thread.py list`"
             )
 
     return 1 if gate_count else 0

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
-from scripts.utils.docx_helpers import set_cell_shading
+from scripts.utils.docx_helpers import load_docx, set_cell_shading
 from scripts.utils.workspace import get_outputs_dir
 
 # ============================================================
@@ -34,15 +34,12 @@ def _ensure_docx():
     global DARK_NAVY, BRAND_BLUE, BRAND_ORANGE, DARK_GRAY, MEDIUM_GRAY, LIGHT_GRAY, WHITE
     if Document is not None:
         return
-    from scripts.utils.optdeps import require
-    require("docx", extra="documents")
-    from docx import Document
-    from docx.shared import Inches, Pt, Cm, RGBColor, Emu
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.enum.section import WD_ORIENT
-    from docx.oxml.ns import qn, nsdecls
-    from docx.oxml import parse_xml
+    d = load_docx()
+    Document, Inches, Pt, Cm = d.Document, d.Inches, d.Pt, d.Cm
+    RGBColor, Emu = d.RGBColor, d.Emu
+    WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, WD_ORIENT = (
+        d.WD_ALIGN_PARAGRAPH, d.WD_TABLE_ALIGNMENT, d.WD_ORIENT)
+    qn, nsdecls, parse_xml = d.qn, d.nsdecls, d.parse_xml
     DARK_NAVY = RGBColor(0x0A, 0x1A, 0x2F)
     BRAND_BLUE = RGBColor(0x00, 0x6B, 0xB6)
     BRAND_ORANGE = RGBColor(0xE8, 0x6C, 0x00)
@@ -52,21 +49,6 @@ def _ensure_docx():
     WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 TABLE_HEADER_BG = '006BB6'
 TABLE_ALT_BG = 'F0F6FC'
-
-
-# ============================================================
-# Table & Style Helpers
-# ============================================================
-def style_header_row(row, bg_color=TABLE_HEADER_BG):
-    """Style a table header row with background color and white text."""
-    for cell in row.cells:
-        set_cell_shading(cell, bg_color)
-        for paragraph in cell.paragraphs:
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            for run in paragraph.runs:
-                run.font.color.rgb = WHITE
-                run.font.bold = True
-                run.font.size = Pt(9)
 
 
 def add_styled_table(doc, headers, rows, col_widths=None):
@@ -199,10 +181,6 @@ def add_placeholder(doc, text):
     return p
 
 
-def add_page_break(doc):
-    doc.add_page_break()
-
-
 def add_separator(doc):
     """Add a visual separator line."""
     p = doc.add_paragraph()
@@ -327,7 +305,7 @@ def build_document():
             )
             tcPr.append(tcBorders)
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # DOCUMENT CONTROL
@@ -366,7 +344,7 @@ def build_document():
         col_widths=[2.0, 2.0, 1.5, 1.0]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # TABLE OF CONTENTS placeholder
@@ -403,7 +381,7 @@ def build_document():
 
     add_placeholder(doc, '[Note: Update page numbers after finalizing document in Word. Use Insert > Table of Contents for automatic generation.]')
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 1: EXECUTIVE SUMMARY
@@ -450,7 +428,7 @@ def build_document():
 
     add_body_text(doc, 'The platform deploys on standard x86 hardware using a container-native architecture (Kubernetes). Integration is non-disruptive -- starting in passive monitoring mode before transitioning to inline enforcement after validation. All data remains within the customer\'s infrastructure. No external cloud dependencies exist. High availability is built in through Active-Active clustering with automatic failover and session state synchronization.')
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 2: CUSTOMER REQUIREMENTS
@@ -498,7 +476,7 @@ def build_document():
         col_widths=[0.4, 2.0, 0.6, 2.2, 1.3]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 3: SOLUTION OVERVIEW
@@ -599,7 +577,7 @@ def build_document():
         col_widths=[1.8, 2.4, 2.3]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 4: ARCHITECTURE DESIGN
@@ -688,7 +666,7 @@ def build_document():
 
     add_body_text(doc, 'Result: >99% classification accuracy on encrypted traffic. No decryption required. No performance degradation. Models improve continuously as they process new traffic.')
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 5: NETWORK INTEGRATION
@@ -758,7 +736,7 @@ def build_document():
         col_widths=[1.5, 2.0, 3.0]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 6: USE CASE LIBRARY
@@ -839,7 +817,7 @@ def build_document():
         col_widths=[2.0, 3.0, 1.5]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 7: DEPLOYMENT ARCHITECTURE
@@ -889,7 +867,7 @@ def build_document():
         col_widths=[2.5, 4.0]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 8: HIGH AVAILABILITY
@@ -915,7 +893,7 @@ def build_document():
         col_widths=[2.0, 4.5]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 9: SECURITY & DATA SOVEREIGNTY
@@ -973,7 +951,7 @@ def build_document():
         col_widths=[2.5, 4.0]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 10: IMPLEMENTATION APPROACH
@@ -1010,7 +988,7 @@ def build_document():
         col_widths=[2.0, 2.0, 2.5]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # SECTION 11: SUPPORT & OPERATIONS
@@ -1057,7 +1035,7 @@ def build_document():
         col_widths=[2.0, 4.5]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # APPENDIX A: TECHNICAL SPECIFICATIONS
@@ -1106,7 +1084,7 @@ def build_document():
         col_widths=[2.0, 4.5]
     )
 
-    add_page_break(doc)
+    doc.add_page_break()
 
     # ══════════════════════════════════════════════
     # APPENDIX D: COMPETITIVE ADVANTAGE

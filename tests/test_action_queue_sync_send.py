@@ -27,8 +27,23 @@ _spec_x.loader.exec_module(aqx)
 
 
 def _check(name, cond):
-    print(f"  [{'OK ' if cond else 'FAIL'}] {name}")
-    return bool(cond)
+    """Fail the test when `cond` is false. The name is the failure message.
+
+    This used to `return bool(cond)`. Every caller accumulated the result into
+    an `ok` flag and closed with `return ok`, which is how these files ran
+    before they were renamed `test_*.py`: as standalone scripts, under a
+    `main()` that read the return value.
+
+    Under pytest a test that RETURNS False still PASSES. Pytest only emits
+    `PytestReturnNotNoneWarning` and moves on. So the rename made the runner
+    redundant and the conditions blind at the same time, and nothing said so.
+    Measured 2026-08-20 across the three files that shared this helper: 25 test
+    functions, 78 conditions, none able to fail the suite.
+
+    An assert is the whole fix. The `main()` runner went with it, because its
+    only job was to read a return value that no longer exists.
+    """
+    assert cond, name
 
 
 class _FakeProc:
@@ -47,42 +62,40 @@ def _email_card(**over):
 
 
 def test_send_card():
-    ok = True
     # gate invariant: email_send resolves gated
-    ok &= _check("email_send resolves gated", tool_risk.tier_for("email_send") == tool_risk.GATED)
+    _check("email_send resolves gated", tool_risk.tier_for("email_send") == tool_risk.GATED)
 
     # success
     orig = aqx.subprocess.run
     try:
         aqx.subprocess.run = lambda *a, **k: _FakeProc(0)
         r = aqx.send_card(ROOT, _email_card())
-        ok &= _check("send success -> sent", r["result"] == "sent")
+        _check("send success -> sent", r["result"] == "sent")
         # failure
         aqx.subprocess.run = lambda *a, **k: _FakeProc(1, stderr="smtp boom")
         r = aqx.send_card(ROOT, _email_card())
-        ok &= _check("send failure -> send_failed + error", r["result"] == "send_failed" and "boom" in r["error"])
+        _check("send failure -> send_failed + error", r["result"] == "send_failed" and "boom" in r["error"])
     finally:
         aqx.subprocess.run = orig
 
     # a non-send type is skipped (never sends)
     r = aqx.send_card(ROOT, _email_card(action_type="note"))
-    ok &= _check("note (non-send type) -> skipped", r["result"] == "skipped")
+    _check("note (non-send type) -> skipped", r["result"] == "skipped")
     # gate-refusal: if email_send ever failed to resolve gated (tampered ledger),
     # the synchronous send path REFUSES rather than sends (defensive invariant).
     orig_tier = aqx.tool_risk.tier_for
     try:
         aqx.tool_risk.tier_for = lambda t: "autonomous"  # force non-gated
         r = aqx.send_card(ROOT, _email_card())
-        ok &= _check("email_send not gated -> refused (no send)", r["result"] == "refused")
+        _check("email_send not gated -> refused (no send)", r["result"] == "refused")
     finally:
         aqx.tool_risk.tier_for = orig_tier
     # telegram_send -> explicit 501 permanent
     r = aqx.send_card(ROOT, _email_card(action_type="telegram_send"))
-    ok &= _check("telegram_send -> 501 permanent", r["result"] == "send_failed" and r["classification"] == "permanent")
+    _check("telegram_send -> 501 permanent", r["result"] == "send_failed" and r["classification"] == "permanent")
     # empty body -> permanent, no subprocess
     r = aqx.send_card(ROOT, _email_card(draft_body=""))
-    ok &= _check("empty body -> permanent", r["result"] == "send_failed" and r["classification"] == "permanent")
-    return ok
+    _check("empty body -> permanent", r["result"] == "send_failed" and r["classification"] == "permanent")
 
 
 # ---- Success Signal (filled in Step 2 once action-queue.py is rewritten) ----
@@ -96,7 +109,6 @@ def _load_aq_cli():
 
 def test_success_signal():
     """Daemon-free list/show/approve on a temp DATA root; synchronous transition."""
-    ok = True
     try:
         aqcli = _load_aq_cli()
     except Exception as exc:  # action-queue.py not yet rewritten (Step 2)
@@ -122,22 +134,8 @@ def test_success_signal():
             res = aqcli.approve_and_send(ROOT, data_root, "abc123")
         finally:
             aqcli._AQX.subprocess.run = orig
-        ok &= _check("approve transitions card to sent in one call", res.get("result") == "sent")
+        _check("approve transitions card to sent in one call", res.get("result") == "sent")
         # the queue file reflects sent
         q = json.loads((qdir / "queue.json").read_text())
         sent = [c for c in q["actions"] if c["id"] == "abc123" and c["status"] == "sent"]
-        ok &= _check("queue.json shows status sent", len(sent) == 1)
-    return ok
-
-
-def main():
-    ok = True
-    for fn in (test_send_card, test_success_signal):
-        print(f"\n{fn.__name__}:")
-        ok &= fn()
-    print("\nALL PASS" if ok else "\nSOME FAILED")
-    return 0 if ok else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        _check("queue.json shows status sent", len(sent) == 1)

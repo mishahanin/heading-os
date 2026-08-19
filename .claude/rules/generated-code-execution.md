@@ -125,11 +125,6 @@ This rule licenses `/census` and nothing else. A new caller of
 `scripts/utils/sandbox.py` inherits the controls but not the argument: it needs
 its own reason, written here, before it executes anything a model wrote. Adding
 `eval`, `exec` or `compile` to any other script remains forbidden outright.
-
-## Classification
-
-Engine (public, fleet-shared via the `.claude/rules/` default).
-
 ## Change control
 
 Changes to this rule, or to any of the four controls it depends on, require

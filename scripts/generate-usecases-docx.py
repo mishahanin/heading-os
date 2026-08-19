@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
+from scripts.utils.docx_helpers import load_docx
 from scripts.utils.workspace import get_datastore_dir, get_outputs_dir
 
 # ============================================================
@@ -27,13 +28,10 @@ def _ensure_docx():
     global DARK_BLUE, ACCENT_BLUE, DARK_GRAY, MED_GRAY
     if Document is not None:
         return
-    from scripts.utils.optdeps import require
-    require("docx", extra="documents")
-    from docx import Document
-    from docx.shared import Pt, Cm, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.oxml.ns import qn
+    d = load_docx()
+    Document, Pt, Cm, RGBColor = d.Document, d.Pt, d.Cm, d.RGBColor
+    WD_ALIGN_PARAGRAPH, WD_TABLE_ALIGNMENT, qn = (
+        d.WD_ALIGN_PARAGRAPH, d.WD_TABLE_ALIGNMENT, d.qn)
     DARK_BLUE = RGBColor(0x0A, 0x1E, 0x3D)
     ACCENT_BLUE = RGBColor(0x1A, 0x5C, 0xB0)
     DARK_GRAY = RGBColor(0x33, 0x33, 0x33)

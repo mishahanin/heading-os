@@ -88,6 +88,18 @@ def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
     """Return (frontmatter_dict, error_message); error_message is empty on success.
 
     Mirrors scripts/skill-metadata-check.py::parse_frontmatter for consistency.
+
+    NOT MIGRATED to ``scripts.utils.markdown.parse_frontmatter``, for the same
+    reason that audit keeps its own copy: the shared util collapses every failure
+    mode into ``({}, text)``, and the error string is this gate's whole output -
+    ``load_routing_rows`` prints ``{rel}: {err}`` and CI fails on it. Measured
+    2026-08-20 over the 96 SKILL.md corpus: the rendered rows and the audit
+    results are identical under the shared util today, but the parsed dict
+    already differs on 2 of 96 (canopus, census - the shared util's regex drops
+    the newline before the closing fence, so the last folded scalar of
+    ``x-heading-capability`` loses its trailing "\\n"). Deduplicating the two
+    gates needs a diagnostic parser in scripts/utils/markdown.py that returns the
+    taxonomy; until that exists, the mirrored copy is deliberate.
     """
     try:
         text = skill_md.read_text(encoding="utf-8")

@@ -1,18 +1,6 @@
 ---
 name: editorial-review
-description: >
-  Document-level STRUCTURAL editor for long deliverables. Reviews a draft's argument
-  architecture -- section ordering, claim-to-evidence linkage, hierarchy, redundancy,
-  buried lede, missing sections -- and proposes CUT / MERGE / MOVE / CONDENSE / SPLIT /
-  ADD / PROMOTE / PRESERVE operations with word-savings estimates, BEFORE any sentence is
-  touched. Content is sacrosanct: it reorganizes, it never argues with the ideas. Phase 2
-  hands all sentence-level work (rhythm, specificity, vocabulary) to the always-on
-  humanization.md prose rule -- it never duplicates that. Use when the user says "editorial
-  pass", "structural review", "review the structure of this", "tighten this document",
-  "restructure this draft", or wants a long proposal / brief / report's argument arc
-  checked. Do NOT use for: sentence-level prose / "make this sound human" (that is
-  humanization.md), typo or grammar fixes (sanitize-text + humanization-check), fact-checking
-  (/validate), artifact grading (/evaluate), short chat replies, or atomic /zk notes.
+description: "Structural editor for a long draft: section order, claim-to-evidence linkage, redundancy, buried lede, missing sections. Proposes CUT / MERGE / MOVE / CONDENSE / SPLIT / ADD operations before any sentence is rewritten, and never changes the content itself. Use on a draft that is complete but badly ordered."
 argument-hint: "[file:<path> | pasted text]"
 allowed-tools: "Read, Edit, Write, Bash(python3:*), Bash(python:*)"
 metadata:

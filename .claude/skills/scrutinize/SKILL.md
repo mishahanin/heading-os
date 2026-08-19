@@ -16,6 +16,8 @@ description: >
 argument-hint: "[plan | execution | file:<path> | dir:<path> | workspace | trajectory:<run_id>] [--relentless] [--no-refute]"
 allowed-tools: "Read, Glob, Grep, Bash(python3:*), Bash(python:*), Bash(git:*), Edit, Write, Agent"
 context: fork
+# Backgrounded forks lack the Agent tool; this skill dispatches specialists.
+background: false
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
@@ -62,12 +64,9 @@ Principal-engineer posture: find what is wrong, not what works. Every finding ne
 
 ## Variables
 
-- `target` (optional) - `plan` | `execution` | `file:<path>` | `dir:<path>` | `workspace` | `trajectory:<run_id>`; if omitted, auto-detect per `references/target-detection.md`.
-- `--relentless` (flag) - auto-apply-and-loop with adaptive termination per `references/relentless-adaptive.md`: pre-approves all proposed fixes, applies them, re-runs Phase 1 on the same target, loops until terminated. Not compatible with `target=plan`.
-- `--no-refute` (flag) - skip Phase 2.5 (refutation + debate); findings emit directly to the approval block with scorer-emitted confidence only. Recorded in the saved report.
-- `--include-low-confidence` (flag) - show findings below the confidence threshold (default 75) in the approval block; default hides them but logs them in the saved report.
-- `--include-ambiguous` (flag) - surface AMBIGUOUS debate verdicts with an `[AMBIGUOUS]` tag for CEO adjudication; default drops them.
-- `--no-code-review` (flag) - skip the Kimi code-specialist voice on code targets (see Phase 1 + `references/code-review-voice.md`); default runs it on code.
+One optional `target` plus five flags. Full catalog: `references/flags.md`,
+which Phase 0 step 1 already loads. `argument-hint` in the frontmatter carries
+the same list in one line.
 
 ---
 

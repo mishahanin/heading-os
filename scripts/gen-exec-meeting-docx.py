@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
+from scripts.utils.docx_helpers import load_docx  # noqa: E402
 from scripts.utils.workspace import get_outputs_dir, resolve_config_with_example  # noqa: E402
 
 OUT_DIR = get_outputs_dir() / "operations" / "exec-meeting"
@@ -35,11 +36,9 @@ def _ensure_docx():
     global Document, Pt, RGBColor, WD_ALIGN_PARAGRAPH, NAVY, GRAY
     if Document is not None:
         return
-    from scripts.utils.optdeps import require
-    require("docx", extra="documents")
-    from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    d = load_docx()
+    Document, Pt, RGBColor = d.Document, d.Pt, d.RGBColor
+    WD_ALIGN_PARAGRAPH = d.WD_ALIGN_PARAGRAPH
     NAVY = RGBColor(0x1A, 0x2B, 0x4A)
     GRAY = RGBColor(0x60, 0x60, 0x60)
 

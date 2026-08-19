@@ -159,8 +159,14 @@ scripts/_scratch/
 
 # CEO internal design/plan/spec archive — routes `private`, lives in the DATA
 # overlay (.heading-os-data/docs/superpowers/), never in the engine clone.
-# (4 files were misrouted here and moved out 2026-06-22; this keeps them out.)
+# (4 files were misrouted here and moved out 2026-06-22; this keeps them out.
+# 11 more had accumulated here untracked by 2026-08-20 and moved out the same way.)
 docs/superpowers/
+
+# Design records and ADRs are the same genre and follow the same rule, decided
+# 2026-08-20: the engine is public, but HOW it was built is not. The six files
+# that had been tracked here moved to .heading-os-data/docs/design/.
+docs/design/
 
 # Git worktrees (per superpowers:using-git-worktrees skill)
 .worktrees/

@@ -43,6 +43,12 @@ Only if no compound pattern matched, evaluate the message against the skill regi
 - For medium-confidence matches, present skills in order of relevance with 1-line descriptions.
 - When matching, prioritize action verbs over nouns. "Investigate ExampleTelco" is stronger signal than "ExampleTelco".
 - Context matters: "prepare for the board meeting" is `/meeting-prep`, not `/investor-update`, unless the user says "update the board".
+- **VPN pre-flight.** Any skill that reaches a public site which blocks datacenter
+  IPs - `/yt-pulse`, `/playwright` on YouTube, `/osint`, `/x-pulse`, and anything
+  calling `scripts/firecrawl.py` - runs the gate in `reference/vpn-preflight.md`
+  before its first network call, and waits for an explicit answer. Proceeding past
+  it unanswered is a protocol violation. This one line is resident because the
+  obligation has no path signal to trigger on; the gate's mechanics do not.
 
 ## Skill Registry
 
@@ -205,59 +211,35 @@ Weekly content, Deal depth, Session boot, Push & backup) hand off to the
 orchestrator instead of a single skill. Read the reference file before
 dispatching any compound workflow.
 
-## Trigger Regression Tests
-
-The router is a markdown rule the model interprets, so a new skill's triggers can silently hijack another skill's queries. `scripts/skill-trigger-test.py` is an LLM-judge harness that regression-tests this: it feeds the router rules plus a target skill's description to a judge model and checks whether each query in `.claude/skills/{name}/triggers.json` routes as expected (`should_trigger`). Run `python scripts/skill-trigger-test.py --all` (or `--skill NAME`, or `--changed [--base REF]` to test only skills whose `SKILL.md`/`triggers.json` changed since the base, default `origin/main` - a `skill-router.md` change widens scope to all); it is **advisory** by default (non-deterministic judge) and gates only under `--strict --threshold`. `/push-updates` Phase 0 runs `--changed --strict --threshold 0.85` as a **soft gate** (surfaces routing regressions on changed skills; the CEO confirms to override; not a hard block yet, per audit #63-2). 69 routing-sensitive skills carry `triggers.json` today, holding 710 cases between them (counted 2026-08-03; the prior figure of 24 was stale). When adding or re-scoping a skill, add or update its `triggers.json` and re-run the harness.
-
-## Scheduled & Background Tasks
-
-Scheduled tasks created via the `CronCreate` tool are recorded in
-`.claude/scheduled_tasks.json`, but they are **session-scoped**: they fire only
-in the session that created them, or when it is resumed via `claude --resume` /
-`--continue` before expiry (recurring tasks expire 7 days after creation). A
-fresh session does NOT re-activate them. For reminders that must fire regardless
-of session lifecycle (and catch up after the machine was off), use the durable
-reminders system: `scripts/reminders.py` (CLI) + the `reminders.timer`
-systemd-user timer -> `scripts/reminders-notify.py` -> Telegram, with a `/prime`
-backstop. See docs/superpowers/specs/2026-07-14-durable-reminders-design.md.
-
-To view active scheduled tasks: `cat .claude/scheduled_tasks.json | python -m json.tool` (or just read the file directly).
-
-To cancel a task: use `CronDelete` with the task ID shown in the JSON. Editing the file by hand is not supported - the runtime will overwrite changes.
-
-If the file grows large or contains orphaned tasks (e.g., after long periods between sessions), list them via `CronList` and prune with `CronDelete`. There is no automatic cleanup.
-
-Scheduled tasks are machine-local - they do NOT sync to corporate or execs. Each machine maintains its own scheduled set.
-
 ## Fallback for Unregistered Skills
 
 If no registry match is found but the user's intent clearly maps to a slash command present in `.claude/skills/`, invoke it anyway. After invocation, note: "This skill isn't in the router registry yet. It should be added to `.claude/rules/skill-router.md`."
 
 This fallback applies only to local skills in `.claude/skills/`. See the next section for plugin-namespaced skills.
 
-## Archived Skills Convention
+## What moved out of this rule
 
-`.claude/skills/archive/{date-slug}/SKILL.md` is the workspace convention for retired skills. The parent `archive/` directory has no SKILL.md of its own and is intentionally inert - Claude Code's skill discovery is single-level and does not auto-load nested skills. Archived skills do not appear in the registry above and are never invoked unless explicitly retrieved (`git mv` back into `.claude/skills/{name}/`). Do NOT create a stub SKILL.md inside `archive/` itself; that would shadow the convention and risk false routing.
+Four sections left this file on 2026-08-20. It is always-on, so every byte here
+is paid on every session, and none of the four was routing logic.
 
-## Plugin-Namespaced Skills (External, Never Auto-Routable)
+- **Plugin-namespaced skills.** The routing rule stays below; the roster of what
+  is installed, enabled, disabled and why moved to `reference/plugin-roster.md`.
+- **Scheduled and background tasks** — `reference/scheduled-tasks.md`.
+- **Trigger regression tests** — `docs/EXTENDING.md`, under writing a skill. It
+  is authoring guidance, never routing.
+- **Archived skills convention** — `docs/EXTENDING.md`.
 
-Plugins shipped via the Claude Code plugin system expose skills under a `plugin:skill` namespace. Enablement lives in two tiers: workspace-level `.claude/settings.json` `enabledPlugins`, and user-level `~/.claude/settings.json` `enabledPlugins`. Currently enabled:
+## Plugin-namespaced skills
 
-- `superpowers:*` v6.2.0 - 14 skills: brainstorming, writing-plans, executing-plans, subagent-driven-development, using-git-worktrees, test-driven-development, systematic-debugging, verification-before-completion, receiving-code-review, requesting-code-review, finishing-a-development-branch, writing-skills, using-superpowers, dispatching-parallel-agents - workspace-level. The v6 major (upgraded from v5.1.0 on 2026-07-14, then 6.1.1 to 6.2.0 on 2026-08-06) kept the same 14-skill set throughout - no skills added or removed - so all namespaced-name bindings remain valid. The 6.1.1 directory is still in the plugin cache and is NOT loaded; `installed_plugins.json` names 6.2.0, and `scripts/harness-audit.py` reports the superseded copy separately rather than as a running hook. The earlier v5.1.0 (2026-04-30) had removed the legacy `/brainstorm`, `/write-plan`, `/execute-plan` slash-command stubs and the `superpowers:code-reviewer` named agent; invoke each skill by its namespaced name (`superpowers:brainstorming`) via the Skill tool. The `using-superpowers` skill bootstraps the set at SessionStart via the plugin's own hook.
-- `skill-creator:skill-creator` - workspace-level
-- `claude-md-management:revise-claude-md`, `claude-md-management:claude-md-improver` - workspace-level
-- `frontend-design:frontend-design` - workspace-level
-- `code-review:code-review` - workspace-level. Code review pass on the active branch / pending changes. Invoke explicitly when a major project step is completed and needs review against the original plan and coding standards.
-- `code-simplifier:code-simplifier` - workspace-level. Refines code for clarity, consistency, and maintainability while preserving functionality. Invoke explicitly after implementing a non-trivial change when you want a simplification pass.
-- `andrej-karpathy-skills:karpathy-guidelines` - user-level
-- `context7:context7` - user-level, mirrors local `/context7` skill (local wins on bare-name lookup)
+Plugins expose skills as `plugin:skill`. **They are never auto-routed from
+natural language.** Invoke one by its namespaced name through the Skill tool when
+its own metadata clearly applies, or the operator types `/plugin:skill`. On a
+bare-name collision the local `.claude/skills/` entry wins; use the namespaced
+form to force the plugin variant.
 
-**Routing rule:** These skills are **never auto-routable from natural language**. The router does not match them against any trigger. They require one of:
+Why: plugin content evolves independently of this workspace, so a local keyword
+guess routes against a purpose that may have drifted.
 
-1. Explicit slash-command form typed by the user (e.g., `/superpowers:brainstorming`)
-2. Explicit Skill tool invocation by Claude when the plugin's own metadata says it applies (e.g., `using-superpowers` fires at session start per its own description)
-3. Direct invocation by another skill that references it
-
-**Why:** Plugin content evolves independently of this workspace. Auto-routing based on local keyword guesses would produce false positives against skills whose actual purpose may drift. When a plugin skill clearly applies, Claude invokes it explicitly; otherwise, local registry wins.
-
-**Local-skill naming collision:** If a local `.claude/skills/{name}` ever collides with a plugin skill name (e.g., workspace has `/skill-creator` and plugin exposes `skill-creator:skill-creator`), the local skill wins on bare-name lookup. Use the namespaced form to force the plugin variant.
+Which plugins are enabled, which are deliberately off, and what each costs per
+turn: `reference/plugin-roster.md`. Verify it with
+`python scripts/harness-audit.py`, never by reading the list.

@@ -1,7 +1,13 @@
-<!-- version: 1.1.0 | last-updated: 2026-05-24 -->
+<!-- version: 1.2.0 | last-updated: 2026-08-20 -->
 # VPN Pre-flight Gate
 
-Last Updated: 2026-05-24
+Consumed by: `/yt-pulse`, `/playwright`, `/osint`, and `/setup-browser-cookies` —
+every skill that makes outbound requests to a public service which blocks
+datacenter and VPN exit IPs. Each cites this file by path in its own pre-flight
+section. Moved here from `.claude/rules/vpn-preflight.md` on 2026-08-20: the gate
+is loaded by the skills that need it, not by every session.
+
+Last Updated: 2026-08-20
 Last Verified: 2026-05-24
 
 Before any skill or script that makes outbound requests to public web services which blacklist datacenter/VPN IPs -- YouTube (transcripts/captions), Google Search, LinkedIn, some OSINT sources -- Claude MUST present a VPN pre-flight gate and wait for explicit user confirmation before proceeding.
@@ -35,6 +41,7 @@ If `protonvpn-cli` is not on PATH (some setups install only the GUI Flatpak with
 | Always | `/playwright` youtube subcommand | same transcript API |
 | Conditional | `/osint`, `/osint-advanced` | some OSINT sources rate-limit datacenter IPs |
 | Conditional | `scripts/firecrawl.py` callers, `/playwright` on Google/LinkedIn URLs | bot detection |
+| Never | `/x-pulse` | scraping runs server-side inside the Apify actor; this workspace only calls the authenticated `api.apify.com`, so the local exit IP never reaches X.com |
 | Never | Scripts hitting 31C Exchange, Telegram, Google Workspace APIs | authenticated endpoints, IP doesn't matter |
 | Never | `/email-intel`, `/telegram`, `/sentinel` | as above |
 

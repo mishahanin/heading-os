@@ -104,6 +104,11 @@ rules:
   # Fail-closed to private wholesale: a public engine never ships the design history.
   # Generic specs can be cherry-promoted later; the DEFAULT must be private (2026-06-13 CEO audit).
   "docs/superpowers/": private
+  # docs/design/ holds the ADRs and design records. Same genre, same rule, decided
+  # by the CEO on 2026-08-20: the engine is public, but how and why it was built is
+  # not. Six files were tracked public here until that date and moved to
+  # .heading-os-data/docs/design/. The engine .gitignore now blocks the path too.
+  "docs/design/": private
   "docs/security/": private                   # security posture / findings — never public
   # USAGE-GUIDE (CEO-instance worked-examples, saturated with real deals/financials)
   # was retired 2026-06-27; its generic replacement is the usage section of the

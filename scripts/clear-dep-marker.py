@@ -9,6 +9,8 @@ dismiss the session-start banner. Manual clear is the contract: the
 mechanism never auto-clears on sync to avoid masking install failures.
 
 Spec: docs/superpowers/specs/2026-04-27-layered-requirements-distribution-design.md
+(data overlay: .heading-os-data/docs/superpowers/specs/2026-04-27-layered-requirements-distribution-design.md;
+that tree routes private, so a public clone does not carry it)
 """
 
 import sys

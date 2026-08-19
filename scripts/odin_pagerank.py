@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils.workspace import get_knowledge_dir, get_workspace_root  # noqa: E402
 from scripts.utils.air_gap import is_denied  # noqa: E402
+from scripts.utils.markdown import parse_frontmatter as _parse_frontmatter  # noqa: E402
 
 try:  # pyyaml is pinned in requirements; degrade to defaults if absent.
     import yaml
@@ -104,17 +105,32 @@ def _tokenize(text: str) -> set[str]:
 
 
 def parse_frontmatter(text: str) -> dict:
-    """Return the YAML frontmatter as a dict (empty if none / unparseable)."""
-    m = FRONTMATTER_RE.match(text)
-    if not m:
-        return {}
-    if yaml is None:
-        return {}
+    """Return the YAML frontmatter as a dict (empty if none / unparseable).
+
+    Thin wrapper around :func:`scripts.utils.markdown.parse_frontmatter` that
+    drops the body and preserves the historical return shape (dict only).
+
+    Measured 2026-08-20 before the swap: the shared util returns the identical
+    dict on all 526 knowledge notes (521 graph nodes, 2474 edges), and
+    ``build_graph`` produces a byte-identical node/adjacency/resolver dump. Two
+    residual edge cases the corpus does not exercise: on YAML that fails to
+    parse the shared util falls back to its regex parser (partial dict) where
+    this returned ``{}``, and it also accepts a closing ``---`` fence at EOF
+    with no trailing newline, which ``FRONTMATTER_RE`` below (still the body
+    stripper) does not.
+
+    The ``except Exception`` is the pre-swap catch-all, kept because the shared
+    util narrows to ``yaml.YAMLError`` only: verified 2026-08-20 that a single
+    note with ``created: 2026-02-30`` raises ValueError out of ``safe_load``
+    (``!!bool maybe`` -> KeyError, 2000-deep nesting -> RecursionError), and
+    ``build_graph`` has no guard, so one bad date would abort the whole recall
+    graph where it used to degrade that one note to ``{}``.
+    """
     try:
-        data = yaml.safe_load(m.group(1))
-        return data if isinstance(data, dict) else {}
+        fm, _body = _parse_frontmatter(text)
     except Exception:
         return {}
+    return fm
 
 
 def parse_wikilinks(text: str) -> list[str]:

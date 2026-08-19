@@ -1,7 +1,7 @@
-<!-- version: 1.0.0 | last-updated: 2026-04-28 -->
+<!-- version: 1.1.0 | last-updated: 2026-08-20 -->
 # Zero Hidden Characters Policy
 
-Last Verified: 2026-05-15
+Last Verified: 2026-08-20
 
 NEVER include invisible Unicode characters in any generated text. This applies to ALL outputs -- documents, code, messages, posts, proposals, everything.
 
@@ -13,3 +13,5 @@ Full reference: `reference/hidden-characters.md`
 Sanitizer: `scripts/sanitize-text.py`
 
 **Validation on every deliverable.** When presenting any draft copy to Misha (messages, posts, emails, proposals, etc.), run the sanitizer to validate and include confirmation: "Word count: X. Hidden characters: clean." If characters were found and removed, say so explicitly.
+
+This rule is the canonical owner of that confirmation line: its wording, when it is required, and what to say when the scan was not clean are defined here, and any other rule or skill that asks for it defers to this file rather than restating it.

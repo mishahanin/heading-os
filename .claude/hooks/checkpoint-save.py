@@ -562,6 +562,11 @@ Rules:
                 cs = {}
         else:
             cs = {}
+        # Close the statusline's running peak into a dated record BEFORE the
+        # reset below, because this is the only moment the level compaction
+        # fired at still exists anywhere: the next statusline render writes the
+        # post-compact reading and the pre-compact one is gone for good.
+        CP.record_compaction(cs, now.isoformat(), pointer_trigger)
         cs.update(
             {
                 "needs_compact_offer": False,

@@ -459,6 +459,71 @@ def compact_point() -> tuple[str, str] | None:
     return None
 
 
+COMPACT_HISTORY_MAX = 20
+
+
+def record_peak(state: dict, used: float | None, when_iso: str) -> None:
+    """Carry the HIGHEST context reading seen since the last compaction.
+
+    The statusline rewrites the whole state dict after every turn, so
+    `used_percentage` is the LAST reading and never the largest. Measured on
+    2026-08-19: auto-compact fired at 38% remaining, and seven minutes later the
+    state file read 11% used with nothing left of the level it fired at - the
+    one number that decides whether the configured threshold is in force.
+
+    Monotone by construction: a lower reading is ignored, so only a compaction
+    (record_compaction below) resets it.
+    """
+    if used is None:
+        return
+    previous = state.get("peak_used_percentage")
+    if (
+        isinstance(previous, (int, float))
+        and not isinstance(previous, bool)
+        and float(previous) >= float(used)
+    ):
+        return
+    state["peak_used_percentage"] = float(used)
+    state["peak_used_at"] = when_iso
+
+
+def record_compaction(state: dict, when_iso: str, trigger: str) -> dict | None:
+    """Close the current peak into a compaction record and start a fresh one.
+
+    Returns the appended entry, or None when no reading was ever observed.
+
+    `used_pct_at_or_above` is a LOWER BOUND, not the firing point. The statusline
+    renders once per turn, and the harness can compact between two renders, so
+    the true level is at or above the last reading this hook saw. Naming it as a
+    bound is the whole difference between a measurement and an assertion the
+    method never established (.claude/rules/scope-claims.md).
+
+    `configured` is what the environment asks for, so the record answers the
+    operator's actual question - configured versus observed - in one line.
+    """
+    peak = state.pop("peak_used_percentage", None)
+    peak_at = state.pop("peak_used_at", None)
+    if not isinstance(peak, (int, float)) or isinstance(peak, bool):
+        return None
+
+    point = compact_point()
+    window = state.get("context_window_size")
+    entry = {
+        "at": when_iso,
+        "trigger": trigger,
+        "used_pct_at_or_above": float(peak),
+        "last_seen_at": peak_at,
+        "configured": f"{point[0]}:{point[1]}" if point else None,
+        "context_window_size": window if isinstance(window, int) else None,
+    }
+    history = state.get("compact_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(entry)
+    state["compact_history"] = history[-COMPACT_HISTORY_MAX:]
+    return entry
+
+
 def read_json(path: Path) -> dict:
     if not path.exists():
         return {}

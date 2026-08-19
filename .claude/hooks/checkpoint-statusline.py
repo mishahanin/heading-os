@@ -198,6 +198,7 @@ def main() -> int:
     # choice here would erase it on the next render.
     auto = CP.auto_mode(state)
 
+    now_iso = CP.utc_now().isoformat()
     state.update(
         {
             "session_id": CP.session_id(payload),
@@ -208,10 +209,20 @@ def main() -> int:
             "auto": auto,
             "used_percentage": used,
             "remaining_percentage": cw.get("remaining_percentage"),
+            # Absolute numbers, recorded because the percentage alone cannot
+            # settle an argument about where compaction fires. The harness
+            # sends these in the same payload; nothing here derives them.
+            "context_window_size": cw.get("context_window_size"),
+            "context_input_tokens": (cw.get("current_usage") or {}).get("input_tokens"),
             "current_bucket": bucket,
-            "updated_at": CP.utc_now().isoformat(),
+            "updated_at": now_iso,
         }
     )
+
+    # AFTER the update, never inside it. This dict is written every turn, so a
+    # peak listed among the fields above would be overwritten by the current
+    # reading on the next render - which is the defect being fixed, not the fix.
+    CP.record_peak(state, used, now_iso)
 
     if level is not None:
         if bucket > previous_last_offered:

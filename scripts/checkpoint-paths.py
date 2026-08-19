@@ -20,6 +20,7 @@ Usage:
   python scripts/checkpoint-paths.py --unattended on      # continue at a pause
   python scripts/checkpoint-paths.py --unattended off     # halt at a pause again
   python scripts/checkpoint-paths.py --unattended status  # report, change nothing
+  python scripts/checkpoint-paths.py --compact-history    # where compaction fired
 
 Archive paths are DATA-root-relative (`outputs/...`), which is the form the
 @-reference and the inject hook resolve. The state path is project-relative.
@@ -81,6 +82,50 @@ def collect() -> dict:
             else state.as_posix()
         ),
     }
+
+
+def compact_history() -> int:
+    """Print where compaction actually fired, per session, newest last.
+
+    Console-first (.claude/rules/console-first.md): the record is written by two
+    hooks, and without this the only way to read it is to cat a JSON file whose
+    name contains a session id nobody has memorised.
+
+    Every state file in the directory is read, not just this session's, because
+    the question is usually asked in a FRESH session about the previous one -
+    and by then this session's own history is empty.
+    """
+    state_dir = CP.state_path(CP.project_root(), "x").parent
+    files = sorted(state_dir.glob("checkpoint-*.json")) if state_dir.is_dir() else []
+
+    point = CP.compact_point()
+    print(f"configured: {point[0]}={point[1]}" if point
+          else "configured: nothing in the environment sets a compaction point")
+
+    rows = 0
+    for path in files:
+        history = CP.read_json(path).get("compact_history")
+        if not isinstance(history, list) or not history:
+            continue
+        print(f"\n{path.stem.removeprefix('checkpoint-')}")
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            pct = entry.get("used_pct_at_or_above")
+            print(
+                f"  {entry.get('at')}  trigger={entry.get('trigger')}  "
+                f"fired at >= {pct}% used  (configured {entry.get('configured')})"
+            )
+            rows += 1
+
+    if rows == 0:
+        # Stated, not left as an empty page. A silent exit here reads as "it
+        # never fires", which is a different claim from "nothing has been
+        # recorded yet" - and after this change the second one is true until the
+        # next compaction.
+        print("\nNo compaction has been recorded yet on this tree.")
+        print("The record is written at the next compact, by checkpoint-save.py.")
+    return 0
 
 
 def auto_switch(value: str) -> int:
@@ -226,7 +271,15 @@ def main(argv=None) -> int:
         help="continue at a pause after a silent grace period, THIS session only "
              "(overrides CLAUDE_HANDOFF_UNATTENDED); `on` implies --auto on",
     )
+    ap.add_argument(
+        "--compact-history",
+        action="store_true",
+        help="print where compaction fired on this tree, per session",
+    )
     args = ap.parse_args(argv)
+
+    if args.compact_history:
+        return compact_history()
 
     if args.auto:
         return auto_switch(args.auto)

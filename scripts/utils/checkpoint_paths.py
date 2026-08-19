@@ -192,16 +192,70 @@ def raise_unattended(state: dict) -> dict:
     # CLAUDE_HANDOFF_AUTO, which is not the same as a `session_auto` of False.
     state["unattended_prior_auto"] = state.get("session_auto")
     state["session_auto"] = True
-    # A fresh run starts its counters from zero, or yesterday's stall would stop
-    # tonight's work before it began.
-    for key in (
-        "unattended_continuations",
-        "unattended_stall",
-        "unattended_fingerprint",
-        "unattended_stalled_at",
-        "unattended_turn_id",
-    ):
+    # A fresh run starts its counters from zero, or last night's numbers would
+    # stop tonight's work before it began.
+    state.pop("unattended_turn_id", None)
+    clear_unattended_window(state)
+    return state
+
+
+# The keys that describe ONE unattended stretch, as opposed to the switch itself.
+# Cleared together, always: a stretch that has ended and a stretch that never
+# started must look identical, or `--unattended status` reports this morning's
+# run with last night's reason. It did, on 2026-08-19, for the whole of one
+# session: `unattended_stop_reason` survived a `--unattended on` because only
+# some of these were popped.
+_WINDOW_KEYS = (
+    "unattended_continuations",
+    "unattended_done_at",
+    "unattended_done_note",
+    "unattended_paused_at",
+    "unattended_stop_reason",
+    # Written by the fingerprint fuse this file carried until 2026-08-19. Popped
+    # so a state file written before that date does not keep reporting a stall
+    # nothing can now clear.
+    "unattended_stall",
+    "unattended_fingerprint",
+    "unattended_stalled_at",
+)
+
+
+def clear_unattended_window(state: dict) -> dict:
+    """Start a new stretch: forget how the previous one ended, keep the switch.
+
+    Called when the mode is raised, and when the operator speaks during the grace
+    period. Operator input IS a new window: the ceiling bounds one uninterrupted
+    stretch, so a count left over from last night would cut tonight short, and a
+    done marker describes a plan he has just replaced with a new instruction.
+
+    Deliberately does NOT touch `session_unattended`. The switch is the
+    operator's; only he lowers it.
+
+    Mutates and returns `state`; the caller writes it.
+    """
+    for key in _WINDOW_KEYS:
         state.pop(key, None)
+    return state
+
+
+def mark_unattended_done(state: dict, note: str) -> dict:
+    """Record that the plan is finished, so the Stop hook stops continuing.
+
+    The EXPLICIT end-of-work signal, written by the assistant through
+    `scripts/checkpoint-paths.py --done`. It replaced a heuristic on 2026-08-19
+    that inferred the same thing from whether any file had changed across three
+    continuations. The heuristic could not tell a finished plan from a night of
+    reading, research and thinking, and it stopped all three unattended runs that
+    had ever been attempted, at three and five continuations each.
+
+    Like everything else in `_WINDOW_KEYS`, this describes one stretch and not
+    the switch. It does not turn the mode off, and the operator's next
+    instruction clears it.
+
+    Mutates and returns `state`; the caller writes it.
+    """
+    state["unattended_done_at"] = utc_now().isoformat()
+    state["unattended_done_note"] = (note or "").strip() or "no note given"
     return state
 
 
@@ -374,75 +428,6 @@ def wait_seconds() -> int:
     return env_int(
         "CLAUDE_HANDOFF_UNATTENDED_WAIT", 60, minimum=1, maximum=UNATTENDED_WAIT_MAX
     )
-
-
-def progress_fingerprint(project: Path, payload: dict | None = None) -> str:
-    """A digest of "has anything THIS SESSION does has moved", for the fuse.
-
-    Two inputs: the committed head, and the size-and-mtime of every file this
-    session wrote, per its own transcript. A continuation that moved neither did
-    nothing, whatever it said about itself.
-
-    Both halves of that are corrections. The first version hashed
-    `git status --short` and the COUNT of files written, and both were wrong in
-    opposite directions:
-
-    - `git status` reports that a file changed and never who changed it, so a
-      sibling session or a daemon writing one file between two pauses reset the
-      fuse. An overnight run with nothing left to do would then never stall - it
-      would run to the 100-continuation ceiling inventing work, which is the one
-      outcome the mode's own text calls unrecoverable. This is the defect
-      `.claude/rules/scope-claims.md` was written for, in the function that leans
-      on it hardest.
-    - the COUNT could not see the second edit of a file already written, because
-      `files_written()` returns a set. Real work confined to files already in it
-      read as three identical fingerprints and stopped the run for no progress.
-
-    Per-file size and mtime fixes the second; reading only this session's own
-    files fixes the first. One residual limit, named rather than hidden: a
-    SIBLING session's commit still moves HEAD and so still resets this fuse. HEAD
-    stays in because committing is the most common form of real progress that
-    touches no file mtime, and a sibling commit is a far narrower window than a
-    sibling write.
-
-    Deliberately NOT a timestamp and NOT a turn counter. Both advance whether or
-    not work happened, which is exactly the failure the fuse exists to catch.
-
-    Total: a tree without git, or an unreadable transcript, contributes an empty
-    component rather than raising. That degrades the fuse toward "everything
-    looks unchanged", which stops an unattended run early. Stopping early is the
-    safe direction here; continuing blind is not.
-    """
-    payload = payload or {}
-    parts: list[str] = []
-    try:
-        proc = subprocess.run(  # nosec B603 B607 - fixed argv, no shell
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(project),
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        parts.append(proc.stdout.strip() if proc.returncode == 0 else "")
-    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
-        print(f"checkpoint: git rev-parse unavailable: {exc}", file=sys.stderr)
-        parts.append("")
-
-    try:
-        from scripts.utils.session_scope import files_written
-
-        mine = files_written(payload.get("transcript_path"))
-        for path in sorted(mine or []):
-            try:
-                stat = path.stat()
-                parts.append(f"{path}:{stat.st_size}:{stat.st_mtime_ns}")
-            except OSError:
-                parts.append(f"{path}:gone")
-    except Exception as exc:  # noqa: BLE001 - a missing component, not a failure
-        print(f"checkpoint: written-file scan unavailable: {exc}", file=sys.stderr)
-
-    joined = "\x00".join(parts)
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
 def config(state: dict | None = None) -> dict:

@@ -126,7 +126,6 @@ def _env(**over) -> dict:
             # Short enough to run in a suite, long enough that a poll happens.
             "CLAUDE_HANDOFF_UNATTENDED_WAIT": "4",
             "CLAUDE_HANDOFF_UNATTENDED_POLL": "1",
-            "CLAUDE_HANDOFF_UNATTENDED_STALL": "3",
             "CLAUDE_HANDOFF_UNATTENDED_MAX": "100",
             # Never let a stall test reach a real transport.
             "CHECKPOINT_TELEGRAM_TARGET": "",
@@ -411,6 +410,79 @@ def test_unattended_yields_to_a_pending_queued_message(tmp_path):
     )
 
 
+_WINDOW = {
+    "unattended_continuations": 42,
+    "unattended_done_at": "2026-08-19T03:14:00+00:00",
+    "unattended_done_note": "last night's plan",
+    "unattended_paused_at": "2026-08-19T03:14:01+00:00",
+    "unattended_stop_reason": "the plan is finished: last night's plan",
+}
+
+
+def test_an_operator_turn_starts_a_new_window(tmp_path):
+    """SC-4. A Stop the hook did not continue clears the counters and the marker.
+
+    Added 2026-08-19 with the done marker, and it is the half that makes the
+    marker survivable. Without it the FIRST finished plan ends the mode for the
+    rest of the session: the marker is checked before the wait, so every later
+    pause hands the turn straight back, and the operator's next instruction never
+    reaches the line that would retire it. He would have to re-run
+    `--unattended on` after every completed plan, having been told the switch is
+    his and nothing lowers it.
+
+    A differing `prompt_id` is the signal. The operator typing during the grace
+    period is visible to `_wait_out_the_grace`, but by the Stop that closes the
+    turn his message opened, that queue entry is consumed; the turn identity is
+    not.
+
+    The switch is asserted untouched in the same breath, because "clear the
+    window" and "clear the mode" are one careless line apart.
+    """
+    transcript = _seed(
+        tmp_path,
+        _state(session_unattended=True, unattended_turn_id="an-older-turn", **_WINDOW),
+        [ENQUEUE],
+    )
+    res = _run(OFFER_HOOK, _payload(tmp_path, transcript), _env(), tmp_path)
+    _assert_silent(res, "a queued message was pending")
+    for key in _WINDOW:
+        assert key not in res.state, (
+            f"{key} survived the operator's instruction: {res.state}"
+        )
+    assert res.state.get("session_unattended") is True, (
+        f"clearing the window also cleared the mode: {res.state}"
+    )
+
+
+def test_a_continued_turn_does_not_reset_the_ceiling(tmp_path):
+    """SC-6. The hook's own continuations keep counting toward the ceiling.
+
+    The other side of the test above, and the one that keeps it honest: if a
+    matching `prompt_id` cleared the window too, the ceiling would reset at every
+    pause and bound nothing at all. It is the only bound left behind the marker.
+    """
+    turn = "11111111-2222-3333-4444-555555555555"
+    transcript = _seed(
+        tmp_path,
+        _state(
+            session_unattended=True,
+            unattended_turn_id=turn,
+            unattended_continuations=100,
+        ),
+        [],
+    )
+    res = _run(
+        OFFER_HOOK,
+        _payload(tmp_path, transcript, prompt_id=turn),
+        _env(CLAUDE_HANDOFF_UNATTENDED_MAX=100),
+        tmp_path,
+    )
+    _assert_silent(res, "the ceiling was already reached on this hook's own turn")
+    assert res.state.get("unattended_paused_at"), (
+        f"a continued turn reset the ceiling instead of hitting it: {res.state}"
+    )
+
+
 def test_a_consumed_queue_is_not_a_pending_one(tmp_path):
     """SC-4. An enqueue with its matching remove is spent and must not stop the wait.
 
@@ -497,68 +569,98 @@ def test_the_continuation_leaves_the_call_to_the_model(tmp_path):
     assert "ask the user" not in reason, (
         f"the continuation asks the operator:\n{reason}"
     )
-    assert "if" in reason, "the continuation is unconditional"
+    # The probe was `"if" in reason` until 2026-08-19, when the conditional moved
+    # from an if-clause to a question ("Finished the plan, ...? Run ... and stop.")
+    # and this test failed on prose that satisfied every word of its own docstring.
+    # A contract test pins the property; binding it to one conjunction pinned the
+    # wording instead. Both question marks and if-clauses express the condition.
+    assert "?" in reason or "if" in reason, "the continuation is unconditional"
     assert "stop" in reason, "the stop branch is missing"
     assert "continue" in reason or "resume" in reason, "the continue branch is missing"
 
 
 # ---------------------------------------------------------------------------
-# SC-6 - the fuse
+# SC-6 - what ends a stretch
 # ---------------------------------------------------------------------------
+#
+# The fingerprint fuse this section tested until 2026-08-19 is GONE, and its two
+# tests went with it rather than being adapted. It asked whether any file had
+# changed across three continuations and called an unchanged answer a finished
+# plan; it could not tell that apart from a night of reading, research and
+# thinking, and it stopped all three unattended runs ever attempted, at three and
+# five continuations. Its replacement is an explicit marker the assistant writes.
+#
+# What replaced them is below: the marker stops a stretch, the ceiling backstops
+# a marker that never arrives, and NEITHER lowers the operator's switch.
 
-def test_unattended_stops_on_a_stall(tmp_path):
-    """SC-6. At the stall limit the mode stops continuing and records why.
+def test_unattended_stops_on_the_done_marker(tmp_path):
+    """SC-6. A declared-finished plan stops the stretch and records why.
 
-    Without this, "yes, there is more to do" can be answered forever and the fuse
-    the scope document promised is prose. The record is asserted as well as the
-    silence, because a mode that stops without saying so is indistinguishable
-    from a mode that crashed.
+    The record is asserted as well as the silence, because a mode that stops
+    without saying so is indistinguishable from a mode that crashed.
     """
     transcript = _seed(
         tmp_path,
-        _state(session_unattended=True, unattended_stall=3, unattended_continuations=7),
+        _state(
+            session_unattended=True,
+            unattended_turn_id="11111111-2222-3333-4444-555555555555",
+            unattended_done_at="2026-08-19T03:14:00+00:00",
+            unattended_done_note="plan compaction-control: 5 of 5",
+            unattended_continuations=7,
+        ),
         [],
     )
     res = _run(OFFER_HOOK, _payload(tmp_path, transcript), _env(), tmp_path)
-    _assert_silent(res, "the stall limit was already reached")
-    assert res.state.get("unattended_stalled_at"), (
-        f"the stall was not recorded in the state file: {res.state}"
+    _assert_silent(res, "the plan was already declared finished")
+    assert res.state.get("unattended_paused_at"), (
+        f"the pause was not recorded in the state file: {res.state}"
+    )
+    assert "5 of 5" in (res.state.get("unattended_stop_reason") or ""), (
+        f"the note did not reach the recorded reason: {res.state}"
     )
 
 
-def test_an_unchanged_fingerprint_counts_toward_the_stall(tmp_path):
-    """SC-6. A continuation that changed nothing increments the stall counter.
+def test_a_stopped_stretch_leaves_the_operator_switch_alone(tmp_path):
+    """SC-6. Nothing in this hook lowers `session_unattended`. Only the operator does.
 
-    The counter is what makes the limit reachable. Seeded with the value the hook
-    itself will compute, via the shared helper, so the test binds to a stated
-    function rather than to a guess at an internal.
+    This is the property the 2026-08-19 defect turned on. The switch being up is a
+    precondition of the driven compaction, and a hook that lowered it at the end of
+    a stretch took the mechanism down with it: the mode ran twice in one session
+    and compacted zero times. It is also simply not the hook's call - the switch
+    says the operator is away, and he is still away at 3am.
     """
-    from scripts.utils import checkpoint_paths as CP
-
-    transcript = _seed(tmp_path, _state(session_unattended=True), [])
-    payload = _payload(tmp_path, transcript)
-    seen = CP.progress_fingerprint(tmp_path, payload)
-    _seed(
+    transcript = _seed(
         tmp_path,
-        _state(session_unattended=True, unattended_stall=0, unattended_fingerprint=seen),
+        _state(
+            session_unattended=True,
+            unattended_turn_id="11111111-2222-3333-4444-555555555555",
+            unattended_done_at="2026-08-19T03:14:00+00:00",
+            unattended_continuations=7,
+        ),
         [],
     )
-    res = _run(OFFER_HOOK, payload, _env(), tmp_path)
-    assert res.decision is not None, "stalled on the first unchanged continuation"
-    assert res.state.get("unattended_stall") == 1, (
-        f"the stall counter did not move: {res.state}"
+    res = _run(OFFER_HOOK, _payload(tmp_path, transcript), _env(), tmp_path)
+    _assert_silent(res, "the plan was already declared finished")
+    assert res.state.get("session_unattended") is True, (
+        f"the hook lowered the operator's switch: {res.state}"
     )
 
 
 def test_unattended_stops_at_the_continuation_ceiling(tmp_path):
-    """SC-6. The continuation count has a hard ceiling independent of the stall.
+    """SC-6. The continuation count has a hard ceiling, independent of the marker.
 
-    The stall fuse catches work that stopped moving. The ceiling catches work that
-    keeps moving and never ends, which is the failure the ralph-loop plugin bounds
-    with `--max-iterations` for the same reason.
+    The backstop for the marker never being written - a run that keeps moving and
+    never ends, which is the failure the ralph-loop plugin bounds with
+    `--max-iterations` for the same reason.
     """
     transcript = _seed(
-        tmp_path, _state(session_unattended=True, unattended_continuations=100), []
+        tmp_path,
+        _state(
+            session_unattended=True,
+            unattended_turn_id="11111111-2222-3333-4444-555555555555",
+            unattended_continuations=100,
+        ),
+        [],
     )
     res = _run(
         OFFER_HOOK,

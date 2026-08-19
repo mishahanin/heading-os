@@ -79,6 +79,7 @@ C_DIM = "\033[2m" if _USE_ANSI else ""
 C_CYAN_B = "\033[1;36m" if _USE_ANSI else ""
 C_YELLOW_B = "\033[1;33m" if _USE_ANSI else ""
 C_GREEN = "\033[32m" if _USE_ANSI else ""
+C_GREEN_B = "\033[1;32m" if _USE_ANSI else ""
 C_YELLOW = "\033[33m" if _USE_ANSI else ""
 C_RED = "\033[31m" if _USE_ANSI else ""
 
@@ -120,8 +121,33 @@ def progress_bar(used: float) -> str:
     return "[" + "█" * filled + "░" * empty + "]"
 
 
+def autonomy_segment(auto: bool, unattended: bool) -> str:
+    """One always-present segment naming which autonomy switches are live.
+
+    Always rendered, in all three states, on purpose. Until 2026-08-19 the only
+    hint was an `auto-` prefix inside the checkpoint tag, which appeared solely
+    when a checkpoint was already due. So `off` and `on` looked identical for
+    most of a session, and the operator could not tell a switch that was off
+    from a mechanism that had failed. Showing `off` costs nine characters and
+    removes that ambiguity, which is the whole point of putting it here.
+    """
+    if unattended:
+        return f"{C_GREEN_B}⏵ unattended{C_RESET}"
+    if auto:
+        return f"{C_YELLOW}⏵ auto{C_RESET}"
+    # Two spaces after the glyph, not one. U+23F8 renders narrower than U+23F5 in
+    # the operator's terminal, so a single space left `manual` visually crowding
+    # the pause mark while `unattended` sat clear of the play mark.
+    return f"{C_DIM}⏸  manual{C_RESET}"
+
+
 def build_status_line(
-    payload: dict, project: Path, used: float | None, level: str | None, auto: bool
+    payload: dict,
+    project: Path,
+    used: float | None,
+    level: str | None,
+    auto: bool,
+    unattended: bool = False,
 ) -> str:
     parts: list[str] = []
 
@@ -152,6 +178,8 @@ def build_status_line(
         bar = progress_bar(used)
         remaining = max(0, min(100, round(100 - used)))
         parts.append(f"{color}{bar} {remaining}%{C_RESET}{tail}")
+
+    parts.append(autonomy_segment(auto, unattended))
 
     model = (payload.get("model") or {}).get("display_name") or "Claude"
     parts.append(f"{C_DIM}{model}{C_RESET}")
@@ -197,6 +225,10 @@ def main() -> int:
     # never be: this dict is written after every turn, so listing the operator's
     # choice here would erase it on the next render.
     auto = CP.auto_mode(state)
+    # Read for display only. Like `session_auto`, it is deliberately absent from
+    # the update below: this dict is written every turn, so listing the
+    # operator's choice here would erase it on the next render.
+    unattended = CP.unattended_mode(state)
 
     now_iso = CP.utc_now().isoformat()
     state.update(
@@ -248,7 +280,7 @@ def main() -> int:
         # State write failure should not break the status line
         print(f"checkpoint-statusline: state write failed: {exc}", file=sys.stderr)
 
-    print(build_status_line(payload, project, used, level, auto))
+    print(build_status_line(payload, project, used, level, auto, unattended))
     return 0
 
 

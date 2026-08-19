@@ -102,16 +102,24 @@ SKILL_REF = ".claude/skills/checkpoint/SKILL.md"
 OPTIONS = """\
 1. `/checkpoint` - save the work now. Frees no context.
 2. `/checkpoint unattended on` - {recommended}. The hook then saves and compacts \
-automatically, at this threshold and every one after. See below.
+automatically, at this threshold and every one after.
 3. `/compact` - compact now, once. The question returns at the next threshold.
-4. Continue as is - Claude Code compacts by itself at {native}.
+4. Continue as is - Claude Code compacts by itself at {native}.{detail}"""
+
+
+# Shown ONCE per session, appended to the options above. It explains the
+# mechanism rather than the choice, so it is worth reading the first time and
+# is pure noise on the fifth. The operator raised exactly that on 2026-08-19,
+# looking at a threshold offer he had already read four times that evening.
+OPTIONS_DETAIL = """
 
 About option 2: at this threshold and every one after, the hook waits 60 seconds \
 and shows a countdown. Type anything and the turn comes back to you in about two \
 seconds. Stay silent and it saves the handoff, compacts by itself, and stops \
 asking. From then on the session also works through ordinary pauses instead of \
 halting to ask you something. Outbound sends still wait for your approval - that \
-gate is code, not this switch. The mode turns itself off when the work is finished.
+gate is code, not this switch. The mode stays on until you turn it off; the status \
+line shows whether it is live. Only the stall and ceiling fuses lower it for you.
 
 How the hook compacts: {compaction}"""
 
@@ -299,13 +307,20 @@ def build_reason(
     than act, in their language - because the body is the text he reads.
     """
     body = HARD_BODY if level == "hard" else SOFT_BODY
+    if state.get("offer_detail_shown"):
+        detail = ""
+    else:
+        detail = OPTIONS_DETAIL.format(
+            compaction=_compaction_sentence(state, state_path, session)
+        )
+        _persist(state_path, offer_detail_shown=True)
     return REASON_WRAPPER.format(
         body=body.format(
             used=used,
             remaining=remaining,
             recommended=RECOMMENDED,
             native=_native_phrase(),
-            compaction=_compaction_sentence(state, state_path, session),
+            detail=detail,
         )
     )
 
@@ -330,27 +345,40 @@ def build_auto_reason(
     )
 
 
+# Deliberately four lines, and it was twenty-five until 2026-08-19.
+#
+# The harness prints a blocking Stop hook's whole message to the OPERATOR's
+# transcript as well as feeding it to the assistant, and this one fires at every
+# pause of an unattended run. So each sentence here is a sentence he re-reads,
+# once per continuation, forever. He asked why, holding a screenshot of it.
+#
+# What was cut, and where it lives now: the history of why the assistant must
+# not lower the switch (this file, above `_pause_unattended`, and the Unattended
+# section of the checkpoint skill); the HERDR and native-auto-compact mechanics
+# (`_compaction_sentence`, still shown once per session in `OPTIONS_DETAIL`).
+# What stays is only what changes the assistant's next action.
+#
+# `build_reason`'s docstring records the same defect one layer up. Two rounds of
+# it in one file is the signal: prose addressed to the assistant is not free,
+# and the default should be to cut rather than to add.
+#
+# The one paragraph ADDED back, on the same day, is the done-marker instruction.
+# It earns its lines by being the only way a night can end on purpose: this hook
+# reads state, not prose, so an assistant that writes "the work is finished" and
+# stops has said nothing the mechanism can hear, and the next pause continues it
+# again. The sentence it replaced told the assistant to do exactly that.
 UNATTENDED_WRAPPER = """\
-Context is about {used:.0f}% used (~{remaining:.0f}% remaining). Unattended mode \
-is on for this window, and the {wait}-second grace period passed with no input, \
-so the turn continues rather than halting.
+{used:.0f}% used, unattended on, {wait}s grace passed with no input, so the turn \
+continues.
 
-Decide this yourself, and do not put the question to anyone:
-- If an unfinished task from the current objective remains, resume it now and \
-carry on working.
-- If the work is finished and verified, or you were waiting on a judgement only \
-the operator can make, run `python scripts/checkpoint-paths.py --unattended off` \
-first, then stop here and say so in one line. The autonomy was granted for this \
-stretch of work; leaving it on hands it to whatever touches the window next.
+Decide alone, ask nobody. Resume the unfinished task. Never invent work.
 
-A halted night is recoverable. Work invented to look busy is not, so stopping is \
-the right answer whenever there is no real next action.
+Finished the plan, or left only a judgement the operator owns? Run `python \
+scripts/checkpoint-paths.py --done "<one line>"` and stop. That command is the \
+only thing this hook can hear; prose cannot reach it.
 
-Do NOT run /compact. Once a checkpoint is on disk above the hard threshold, this \
-hook submits it for you when the turn ends. {compaction}
-
-Continuation {done} of {maximum} for this window. This pause is below the hard \
-threshold, or its bucket already saved, so nothing was written on this one."""
+Do not touch the unattended switch, and do not run /compact. The hook owns both. \
+Continuation {done} of {maximum}."""
 
 
 def _used_percentage(state: dict) -> float | None:
@@ -756,35 +784,34 @@ def _request_compaction(
     )
 
 
-def _stop_unattended(state: dict, state_path: Path, reason: str) -> int:
-    """End the mode's autonomy and leave a record that says why.
+def _pause_unattended(state: dict, state_path: Path, reason: str) -> int:
+    """Stop continuing this stretch, and leave the operator's switch alone.
 
-    The record is written ONCE. Every later pause in the window reaches this
-    function again, and re-stamping the time would move the one fact the operator
-    reads it for: `--unattended status` presents `unattended_stalled_at` as the
-    moment the run stopped, so a re-stamp turns a 03:00 stall into whatever time
-    he happens to look. The reason is pinned with it, because the first stop is
-    the true cause and a later one only repeats it.
+    Returning 0 IS the stop. Nothing continues unless this hook prints a block
+    decision, so handing the turn back ends the run as completely as anything
+    could; the session then sits idle until the operator speaks.
+
+    Until 2026-08-19 this also called `CP.lower_unattended`, and that was the
+    defect rather than the safety. The switch is the operator's statement that he
+    is away. A hook that lowers it decides on his behalf that he has come back,
+    and he has not - he is asleep. He reads the state from the status line in the
+    morning and turns it off himself if the answer is off, which is the whole of
+    what the automatic lowering ever bought. What it COST was the compaction
+    path: that needs the switch up AND an `_handoff_auto_` file on disk, and the
+    switch went down first every time.
+
+    The record is written ONCE. Every later pause reaches this function again, and
+    re-stamping would move the one fact the operator reads it for: `--unattended
+    status` presents `unattended_paused_at` as the moment the stretch stopped, so
+    a re-stamp turns an 03:00 finish into whatever time he happens to look.
     """
-    if state.get("unattended_stalled_at"):
+    if state.get("unattended_paused_at"):
         return 0
-
-    # Actually turn the switch off, through the SAME helper the `--unattended off`
-    # CLI uses. Until 2026-08-19 this function ended a run's autonomy but left
-    # `session_unattended` reading on, so `--unattended status` reported a live
-    # mode about a run that had stopped hours earlier, and the next thing to
-    # touch the window would have inherited autonomy nobody granted it.
-    # `_persist` re-reads the file, so the mutation is applied to the fresh copy
-    # rather than to the one this function was handed.
-    def _lower(fresh: dict) -> dict:
-        CP.lower_unattended(fresh)
-        return fresh
 
     _persist(
         state_path,
-        unattended_stalled_at=CP.utc_now().isoformat(),
+        unattended_paused_at=CP.utc_now().isoformat(),
         unattended_stop_reason=reason,
-        _mutate=_lower,
     )
     _notify_stall(reason)
     return 0
@@ -794,78 +821,89 @@ def unattended_turn(
     payload: dict,
     state: dict,
     state_path: Path,
-    project: Path,
     used: float,
     turn: str,
 ) -> int:
     """Wait for the operator, then either hand the turn back or continue it.
 
-    Two bounds stand between this and a run that never ends, and they catch
-    different failures. The no-progress fuse catches work that stopped moving
-    while still answering "yes, there is more to do". The ceiling catches work
-    that keeps moving and never converges, which is what the ralph-loop plugin
-    bounds with --max-iterations for the same reason.
+    Two things end a stretch, and only these two.
+
+    The DONE MARKER is the primary one, and it is explicit: the assistant writes
+    it with `scripts/checkpoint-paths.py --done "<note>"` when the plan is
+    finished, and the continuation prose tells it to. It replaced a fingerprint
+    heuristic on 2026-08-19. That heuristic asked whether any file had changed
+    across three continuations and read a night of reading, research and thinking
+    as a finished plan; it stopped all three unattended runs ever attempted, at
+    three and five continuations, none of them anywhere near the ceiling. An
+    explicit signal from the one party that knows the answer beats a proxy for it.
+
+    The CEILING is the backstop for the marker never being written, and it is
+    deliberately dumb. It stays at 100 pending one measured night: no run has ever
+    reached the end of its work, so the number a real night needs is unknown, and
+    `CLAUDE_HANDOFF_UNATTENDED_MAX` moves it without a code change.
+
+    NEITHER lowers the operator's switch. See `_pause_unattended`.
     """
-    stall_limit = CP.env_int(
-        "CLAUDE_HANDOFF_UNATTENDED_STALL", 3, minimum=1, maximum=100
-    )
     maximum = CP.env_int(
         "CLAUDE_HANDOFF_UNATTENDED_MAX", 100, minimum=1, maximum=10000
     )
+
+    # FIRST, before either end is consulted. A Stop whose `prompt_id` is not the
+    # one this hook continued belongs to a turn the OPERATOR started, and his
+    # instruction is a new stretch: it retires a done marker describing a plan he
+    # has just replaced, and it resets a ceiling half-spent last night that would
+    # otherwise cut tonight short.
+    #
+    # `prompt_id` is the signal because it is the only one that survives to the
+    # Stop that matters. The operator typing during the grace period is visible to
+    # `_wait_out_the_grace`, but that pause ends with the turn handed back and the
+    # window uncleared; his message then opens a NEW turn, and by the Stop that
+    # closes it the queue entry is long consumed. The turn identity is not.
+    #
+    # An EMPTY `turn` clears nothing. Without a prompt_id the comparison cannot
+    # tell a fresh instruction from a continuation, and the fail-safe direction is
+    # to leave the counters alone: clearing on every Stop would retire the ceiling
+    # altogether, which is the one bound with no other backstop behind it.
+    if turn and state.get("unattended_turn_id") != turn:
+        def _new_window(fresh: dict) -> dict:
+            CP.clear_unattended_window(fresh)
+            return fresh
+
+        _persist(state_path, _mutate=_new_window)
+        state = CP.read_json(state_path)
+
     done = int(state.get("unattended_continuations") or 0)
 
-    # Both ceilings are checked BEFORE the wait. A window that has already spent
-    # its autonomy should hand the turn back at once, not hold it for a minute
-    # first.
+    # Both ends are checked BEFORE the wait. A stretch that has already finished
+    # should hand the turn back at once, not hold it for the grace period first.
+    if state.get("unattended_done_at"):
+        note = state.get("unattended_done_note") or "no note given"
+        return _pause_unattended(state, state_path, f"the plan is finished: {note}")
     if done >= maximum:
-        return _stop_unattended(
+        return _pause_unattended(
             state, state_path, f"reached the ceiling of {maximum} continuations"
         )
-    if int(state.get("unattended_stall") or 0) >= stall_limit:
-        return _stop_unattended(
-            state,
-            state_path,
-            f"no progress across {stall_limit} consecutive continuations",
-        )
-
-    # Measured BEFORE the wait. The session is idle while the hook sleeps, so the
-    # reading is the same either way - but a git call and a transcript read AFTER
-    # a 60-second sleep push the total toward the registered 90-second timeout,
-    # and the harness discards the output of a hook that outruns it.
-    fingerprint = CP.progress_fingerprint(project, payload)
 
     session = CP.session_id(payload)
     if _wait_out_the_grace(payload, session):
         return 0
-    moved = fingerprint != state.get("unattended_fingerprint")
-    stall = 0 if moved else int(state.get("unattended_stall") or 0) + 1
-
-    if stall >= stall_limit:
-        _persist(state_path, unattended_stall=stall,
-                 unattended_fingerprint=fingerprint)
-        return _stop_unattended(
-            state,
-            state_path,
-            f"no progress across {stall_limit} consecutive continuations",
-        )
 
     done += 1
     _persist(
         state_path,
-        unattended_stall=stall,
-        unattended_fingerprint=fingerprint,
         unattended_continuations=done,
         unattended_turn_id=turn,
         unattended_last_at=CP.utc_now().isoformat(),
     )
 
+    # `remaining` and `compaction` were dropped from the template on 2026-08-19
+    # and their arguments went with them, rather than staying as dead kwargs
+    # `str.format` would silently accept.
     reason = UNATTENDED_WRAPPER.format(
         used=used,
-        remaining=_remaining_percentage(state, used),
         wait=CP.wait_seconds(),
         done=done,
         maximum=maximum,
-        compaction=_compaction_sentence(state, state_path, session),
     )
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0
@@ -998,7 +1036,7 @@ def main() -> int:
                 )
                 return 0
 
-        return unattended_turn(payload, state, state_path, project, used, turn)
+        return unattended_turn(payload, state, state_path, used, turn)
 
     if not state.get("needs_compact_offer"):
         return 0

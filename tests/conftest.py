@@ -121,6 +121,45 @@ if _ENV_FILE.exists():
         if _ and "hc-ping.com" in _value:
             os.environ[_key.strip()] = ""
 
+# The same containment, applied to the second instrument the suite could drive
+# from the outside: the notifications bot. A deadman ping is believed; a Telegram
+# message is READ, and the operator cannot tell one sent by a daemon from one
+# sent by a test run.
+#
+# Measured 2026-08-19. `_notify_stall` in .claude/hooks/checkpoint-offer.py sends
+# "HEADING OS: unattended run stopped. <reason>" when the no-progress fuse trips,
+# and `test_the_pause_record_is_written_once` calls `_pause_unattended` directly.
+# That test deleted HEADING_OS_TELEGRAM_CHAT_ID, a name `_notify_stall` never
+# reads: the function walks CHECKPOINT_ / OPS_RADAR_ / ODIN_CADENCE_
+# _TELEGRAM_TARGET, and any earlier test that called the real `load_env()` had
+# already put ODIN_CADENCE_TELEGRAM_TARGET in os.environ for the rest of the
+# session. Every run of the suite therefore sent the operator one real alert
+# about an unattended run that had never started. He received nine of them in one
+# afternoon and read them as a failing feature.
+#
+# Matched on the NAME here, not the value, because a chat id is a bare number
+# with nothing distinctive to match on. Two rings: the targets, which the callers
+# check first, and the bot token, without which `telegram_notify.notify()`
+# returns False before it opens a socket whatever target survives.
+#
+# NOT contained here: TELEGRAM_API_ID / _API_HASH / _PHONE, the credentials of
+# the operator's own Telegram ACCOUNT rather than the bot. No test in this suite
+# drives that client, so blanking them would be a guard against nothing; a test
+# that starts driving it needs its own containment, and it is named here so that
+# day is not a discovery.
+# tests/test_telegram_send_containment.py fails without these lines.
+_MUTED_TELEGRAM = {"TELEGRAM_NOTIFY_BOT_TOKEN"}
+_MUTED_TELEGRAM.update(k for k in os.environ if k.endswith("_TELEGRAM_TARGET"))
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        _key, _, _value = _line.partition("=")
+        _key = _key.strip()
+        if _ and _key.endswith("_TELEGRAM_TARGET"):
+            _MUTED_TELEGRAM.add(_key)
+_MUTED_TELEGRAM = tuple(sorted(_MUTED_TELEGRAM))
+for _key in _MUTED_TELEGRAM:
+    os.environ[_key] = ""
+
 
 @pytest.fixture(autouse=True)
 def _isolate_runtime_logs():
@@ -133,9 +172,18 @@ def _isolate_runtime_logs():
     own contract does exactly that, and it is how this fixture was found.
     Restoring per test costs nothing and does not fight monkeypatch, which
     applies inside the test body, after this.
+
+    The Telegram names are re-armed here for a sharper version of the same
+    reason. Several notifier tests `monkeypatch.delenv` a target to exercise the
+    unconfigured path, and a DELETED name is not a blanked one: the next
+    `load_env()` anywhere in the session restores the operator's real chat id,
+    because load_env uses setdefault. Blanking again before each test is what
+    keeps the containment from lasting only until the first test that clears it.
     """
     os.environ["WORKSPACE_LOG_DIR"] = _TEST_LOG_DIR
     os.environ["WS_RATE_LIMIT_STATE"] = str(_TEST_RATE_STATE)
+    for _name in _MUTED_TELEGRAM:
+        os.environ[_name] = ""
     yield
 
 

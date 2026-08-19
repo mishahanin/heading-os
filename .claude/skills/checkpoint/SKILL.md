@@ -31,7 +31,7 @@ x-heading-routing:
   category: Operations
   label: /checkpoint [note]
   triggers:
-    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries two session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown 60-second countdown instead of halting, and it already includes `auto`. The mode turns itself off when the work finishes or a fuse fires.
+    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries two session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown 60-second countdown instead of halting, and it already includes `auto`. Only the stall and ceiling fuses lower the mode; the assistant never does, and the status line shows its state on every render.
   exclusions:
     - Auto-resume after /compact handled by checkpoint-save.py (PostCompact)
     - reflective end-of-session -> /calibrate
@@ -327,22 +327,57 @@ If HERDR is not hosting the session, none of that happens and Claude
 Code's own auto-compact frees the context instead. The offer tells you which of
 those two it is, and says so plainly when it could not find out.
 
-When the work is finished, run `python scripts/checkpoint-paths.py --unattended
-off` before you stop. The hook's own fuses do it for you when they fire. The
-autonomy was granted for a stretch of work, not for the session.
+The switch belongs to the operator. The assistant never lowers it.
 
-Two bounds stop a run that goes nowhere. Each one catches a different failure.
+The status line names its state on every render: `⏵ unattended`, `⏵ auto`, or
+`⏸  manual`. Read it there. Turn the mode off yourself when you want the window
+back:
 
-- The no-progress fuse compares a fingerprint of the committed head and of the
-  size and modification time of every file this session wrote. It reads only this
-  session's own files, so a sibling session or a daemon writing to the tree
-  cannot reset it. The third evaluation that moves neither stops the mode, so two
-  continuations happen before it fires, not three.
-- The ceiling stops the mode after 100 continuations in one window.
+```bash
+python scripts/checkpoint-paths.py --unattended off
+```
 
-**A stopped run is silent by design.** The hook records which of the two fuses
-stopped it, and the time it stopped, in the session state. It also sends one Telegram notice when you configured a target. Read
-that state with `--unattended status`.
+This rule replaced "turn it off when the work is finished" on 2026-08-19. That
+instruction defeated itself. Work reaches the operator's decision at the end of
+nearly every stretch. So the switch went down each time before the hook wrote any
+`_handoff_auto_` file. The compaction path needs two conditions at once: the
+switch up, and that file on disk. The mechanism ran twice in one session. It
+compacted zero times.
+
+**Nothing lowers the switch except you.** The bounds below stop a stretch. They
+hand the turn back and leave the mode on, so your next instruction resumes it.
+
+### How a night ends
+
+The assistant declares the plan finished. This is the primary signal, and it is
+explicit. Run this at the end of the work:
+
+```bash
+python scripts/checkpoint-paths.py --done "plan X: 7 of 7 items"
+```
+
+The Stop hook reads session state. It never reads prose. So an assistant that
+writes "the work is finished" and stops has told the mechanism nothing, and the
+next pause continues it again. The continuation message names this command at
+every pause for that reason.
+
+Your next instruction clears the marker on its own. You do not run a command to
+resume.
+
+The ceiling is the backstop, for the case where the marker never arrives. It
+stops a stretch after 100 continuations. Measure one night before you move that
+number with `CLAUDE_HANDOFF_UNATTENDED_MAX`. No run has yet reached the end of
+its work, so the count a real night needs is unknown.
+
+A fingerprint heuristic held this job until 2026-08-19. It watched the files the
+session wrote, and it called three unchanged readings a finished plan. It cannot
+tell a finished plan from a night of reading and thinking. It stopped all three
+unattended runs ever attempted, at three and five continuations. None came near
+the ceiling.
+
+**A stopped stretch is silent by design.** The hook records why it stopped, and
+when, in the session state. It also sends one Telegram notice when you configured
+a target. Read that state with `--unattended status`.
 
 The mode stays quiet whenever something else already drives the Stop event.
 Three signals claim it. A scheduled `/loop` wakeup claims it. In-flight
@@ -358,12 +393,16 @@ Environment defaults, for the whole workspace rather than one session:
 ```json
 "env": {
   "CLAUDE_HANDOFF_UNATTENDED": "1",
-  "CLAUDE_HANDOFF_UNATTENDED_WAIT": "60",
+  "CLAUDE_HANDOFF_UNATTENDED_WAIT": "10",
   "CLAUDE_HANDOFF_UNATTENDED_POLL": "2",
-  "CLAUDE_HANDOFF_UNATTENDED_STALL": "3",
   "CLAUDE_HANDOFF_UNATTENDED_MAX": "100"
 }
 ```
+
+The wait costs you time on every pause of a long run. Sixty seconds against fifty
+pauses is fifty minutes of a night spent waiting. This workspace runs 10 seconds.
+You lose no control: Claude Code queues anything you type at any moment, and the
+hook reads that queue.
 
 **The wait is clamped at 60 seconds, whatever you set.** Claude Code discards the
 output of a hook that times out. A wait at or above the registered timeout

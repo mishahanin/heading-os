@@ -433,21 +433,6 @@ def _cp():
     return CP
 
 
-def _wrote(tmp_path: Path, files: list[Path]) -> Path:
-    """A transcript claiming this session wrote exactly these files."""
-    path = tmp_path / "written.jsonl"
-    path.write_text(
-        "\n".join(
-            json.dumps({"message": {"content": [
-                {"type": "tool_use", "name": "Edit", "input": {"file_path": str(f)}}
-            ]}})
-            for f in files
-        ) + "\n",
-        encoding="utf-8",
-    )
-    return path
-
-
 @pytest.mark.parametrize("consumer", ["remove", "dequeue", "popAll"])
 def test_every_consuming_queue_operation_empties_the_queue(tmp_path, consumer):
     """The harness has FOUR queue operations, and the first version knew two.
@@ -485,43 +470,17 @@ def test_an_unconsumed_message_still_reads_as_pending(tmp_path):
     assert mod._queue_pending(transcript, SESSION_A) is True
 
 
-def test_a_sibling_write_does_not_reset_the_no_progress_fuse(tmp_path):
-    """The fuse must measure THIS session, or an overnight run never stalls.
-
-    Another session, a daemon, or a PostToolUse hook writing one file between two
-    pauses moved `git status --short`, so the fingerprint changed and the stall
-    counter went back to zero. A run with nothing left to do then reached the
-    100-continuation ceiling inventing work.
-    """
-    CP = _cp()
-    project = tmp_path / "p"
-    project.mkdir()
-    mine = project / "mine.py"
-    mine.write_text("A\n", encoding="utf-8")
-    payload = {"transcript_path": str(_wrote(tmp_path, [mine]))}
-
-    before = CP.progress_fingerprint(project, payload)
-    (project / "theirs.py").write_text("B\n", encoding="utf-8")
-
-    assert CP.progress_fingerprint(project, payload) == before, (
-        "a file this session never wrote moved this session's progress fuse"
-    )
-
-
-def test_a_second_edit_of_my_own_file_does_move_the_fuse(tmp_path):
-    """And the opposite failure: the count could not see it, so real work that
-    stayed inside files already written read as three dead continuations."""
-    CP = _cp()
-    project = tmp_path / "p"
-    project.mkdir()
-    mine = project / "mine.py"
-    mine.write_text("A\n", encoding="utf-8")
-    payload = {"transcript_path": str(_wrote(tmp_path, [mine]))}
-
-    before = CP.progress_fingerprint(project, payload)
-    mine.write_text("A much longer second version\n", encoding="utf-8")
-
-    assert CP.progress_fingerprint(project, payload) != before
+# The two tests that stood here held `progress_fingerprint`, the heuristic that
+# decided whether an unattended run had stopped making progress. Both the
+# function and its two callers were removed on 2026-08-19, so the tests went with
+# them rather than being kept green against nothing.
+#
+# What replaced the heuristic: the assistant declares the plan finished, with
+# `scripts/checkpoint-paths.py --done "<note>"`, and the Stop hook reads that
+# marker. The heuristic could not tell a finished plan from a night of reading
+# and thinking, and it stopped all three unattended runs ever attempted, at three
+# and five continuations. The properties it used to hold live in
+# tests/contract/2026-08-17-checkpoint-unattended/test_contract.py, under SC-6.
 
 
 @pytest.mark.parametrize("configured", ["120", "600", "89", "90"])
@@ -573,21 +532,40 @@ def test_a_finished_background_task_does_not_claim_the_stop_event():
     ) == "background_tasks", "an unknown state must still claim"
 
 
-def test_the_stall_record_is_written_once(tmp_path, monkeypatch):
+def test_the_pause_record_is_written_once(tmp_path, monkeypatch):
     """`--unattended status` presents this timestamp as the moment the run
-    stopped. Re-stamping it at every later pause turns a 03:00 stall into
-    whatever time the operator happens to look."""
-    monkeypatch.delenv("HEADING_OS_TELEGRAM_CHAT_ID", raising=False)
+    stopped. Re-stamping it at every later pause turns a 03:00 finish into
+    whatever time the operator happens to look.
+
+    `_pause_unattended` also SENDS, and this test drives it twice. It used to
+    delete HEADING_OS_TELEGRAM_CHAT_ID, a name `_notify_stall` never reads, so
+    the send went out for real: nine alerts reached the operator on 2026-08-19,
+    one per run of the suite. The three names it does read are blanked below, at
+    the seam rather than by hope, and the session-wide containment behind that
+    lives in tests/conftest.py with tests/test_telegram_send_containment.py
+    holding it.
+    """
+    for _name in (
+        "CHECKPOINT_TELEGRAM_TARGET",
+        "OPS_RADAR_TELEGRAM_TARGET",
+        "ODIN_CADENCE_TELEGRAM_TARGET",
+    ):
+        monkeypatch.setenv(_name, "")
     mod = _offer_module()
     path = tmp_path / "state.json"
 
-    mod._stop_unattended({}, path, "no progress across 3 consecutive continuations")
+    mod._pause_unattended({}, path, "the plan is finished: 5 of 5 items")
     first = json.loads(path.read_text(encoding="utf-8"))
-    mod._stop_unattended(first, path, "reached the ceiling of 100 continuations")
+    mod._pause_unattended(first, path, "reached the ceiling of 100 continuations")
     again = json.loads(path.read_text(encoding="utf-8"))
 
-    assert again["unattended_stalled_at"] == first["unattended_stalled_at"]
+    assert again["unattended_paused_at"] == first["unattended_paused_at"]
     assert again["unattended_stop_reason"] == first["unattended_stop_reason"]
+    # The switch is the operator's. Asserted here as well as in the contract
+    # suite because this is the function that used to lower it.
+    assert "session_unattended" not in again, (
+        f"the pause touched the operator's switch: {again}"
+    )
 
 
 def test_a_suppressed_offer_is_not_recorded_as_delivered(env):

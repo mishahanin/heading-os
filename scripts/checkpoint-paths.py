@@ -20,6 +20,7 @@ Usage:
   python scripts/checkpoint-paths.py --unattended on      # continue at a pause
   python scripts/checkpoint-paths.py --unattended off     # halt at a pause again
   python scripts/checkpoint-paths.py --unattended status  # report, change nothing
+  python scripts/checkpoint-paths.py --done "plan X: 7 of 7"  # the plan is finished
   python scripts/checkpoint-paths.py --compact-history    # where compaction fired
 
 Archive paths are DATA-root-relative (`outputs/...`), which is the form the
@@ -217,16 +218,20 @@ def unattended_switch(value: str) -> int:
             wait = CP.wait_seconds()
             print(
                 f"at the threshold: wait {wait}s, continue on silence · "
-                f"continuations {int(state.get('unattended_continuations') or 0)}, "
-                f"stall {int(state.get('unattended_stall') or 0)}"
+                f"continuations {int(state.get('unattended_continuations') or 0)}"
             )
-        if state.get("unattended_stalled_at"):
-            # The recorded reason, not a hardcoded one. Two different fuses can
-            # stop the mode and the hook writes which; printing the stall wording
-            # for both made them indistinguishable to the operator.
+        if state.get("unattended_done_at"):
+            note = state.get("unattended_done_note") or "no note given"
+            print(f"DONE: {note}")
+            print(f"declared at: {state['unattended_done_at']}")
+        if state.get("unattended_paused_at"):
+            # The recorded reason, not a hardcoded one. The done marker and the
+            # ceiling both pause a stretch and the hook writes which; one
+            # hardcoded wording made them indistinguishable to the operator.
             why = state.get("unattended_stop_reason") or "no reason recorded"
-            print(f"STOPPED: {why}")
-            print(f"stopped at: {state['unattended_stalled_at']}")
+            print(f"PAUSED: {why}")
+            print(f"paused at: {state['unattended_paused_at']}")
+            print("The switch is still on. Your next instruction resumes it.")
         return 0
 
     # Both bodies moved into scripts/utils/checkpoint_paths.py on 2026-08-19, so
@@ -254,6 +259,41 @@ def unattended_switch(value: str) -> int:
     return 0
 
 
+def done_marker(note: str) -> int:
+    """Declare the plan finished, so the unattended stretch stops at the pause.
+
+    The assistant's half of the mode. The Stop hook reads state and never prose,
+    so an assistant that writes "the work is finished" and stops has told the
+    mechanism nothing, and the next pause continues it again. This is the sentence
+    the mechanism can hear.
+
+    It does NOT turn the mode off: `session_unattended` is the operator's, and he
+    reads the status line in the morning and decides. The operator's next
+    instruction clears this marker on its own, so a resumed plan needs no command.
+    """
+    project = CP.project_root()
+    slug = CP.safe_slug(CP.session_id())
+    path = CP.state_path(project, slug)
+    state = CP.read_json(path)
+
+    if not CP.unattended_mode(state):
+        # Not an error. The marker is harmless and correct to record either way,
+        # and refusing it would make the assistant's instruction conditional on a
+        # switch it is told never to read.
+        print(f"note: unattended is off for this session ({slug}); marker recorded anyway.")
+
+    CP.mark_unattended_done(state, note)
+    try:
+        CP.write_json_atomic(path, state)
+    except OSError as exc:
+        print(f"checkpoint-paths: could not write the marker: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"done recorded for this session ({slug}): {state['unattended_done_note']}")
+    print("The next pause hands the turn back. The unattended switch is untouched.")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Print this session's checkpoint paths.")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of key=value")
@@ -267,6 +307,12 @@ def main(argv=None) -> int:
         choices=("on", "off", "status"),
         help="continue at a pause after a silent grace period, THIS session only "
              "(overrides CLAUDE_HANDOFF_UNATTENDED); `on` implies --auto on",
+    )
+    ap.add_argument(
+        "--done",
+        metavar="NOTE",
+        help="declare the plan finished: the unattended stretch stops at the next "
+             "pause, and the switch is left alone for the operator to read",
     )
     ap.add_argument(
         "--kind",
@@ -290,6 +336,9 @@ def main(argv=None) -> int:
 
     if args.unattended:
         return unattended_switch(args.unattended)
+
+    if args.done is not None:
+        return done_marker(args.done)
 
     paths = collect(args.kind)
     if args.json:

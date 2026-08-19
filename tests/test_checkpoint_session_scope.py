@@ -1211,3 +1211,43 @@ def test_a_wait_without_herdr_still_runs_its_full_duration(env):
     elapsed = time.monotonic() - started
     assert result.returncode == 0
     assert elapsed >= 3, f"the wait was cut short to {elapsed:.1f}s without herdr"
+
+
+def test_the_wait_plus_its_overhead_cannot_reach_the_registered_timeout(env):
+    """Claude Code DISCARDS the output of a hook that times out.
+
+    So the failure this guards is silent and total: the operator is told the
+    session will carry on, the registration's 90 seconds pass, the continuation
+    is thrown away, and the session halts anyway. Nothing reports it.
+
+    Two other tests cover the neighbouring properties and neither covers this
+    one. `test_the_configured_wait_is_bounded` checks the PARAMETER, which is
+    arithmetic on an env var. The test above checks that a wait runs its full
+    DURATION. What is left is the work stacked on top of the wait - resolving the
+    pane, redrawing the countdown label, and the save that follows - and that is
+    the part which grows quietly as features land on this hook.
+
+    Measured at a 3-second wait so the suite does not pay 60, then projected onto
+    the ceiling. The projection is the assertion, because the ceiling is what an
+    operator can actually configure.
+    """
+    _install_fake_herdr(env, SESSION_A, mode="ok")
+    _statusline(env, SESSION_A, 42)
+    _set_state(env, SESSION_A, session_unattended=True)
+    env["env"]["CLAUDE_HANDOFF_UNATTENDED_WAIT"] = "3"
+    env["env"]["CLAUDE_HANDOFF_UNATTENDED_POLL"] = "1"
+    started = time.monotonic()
+    result = _stop_turn(env, SESSION_A, turn="t-overhead")
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 0
+    overhead = elapsed - 3
+    assert overhead >= 0, f"the wait did not run at all: {elapsed:.1f}s"
+
+    CP = _cp()
+    projected = CP.UNATTENDED_WAIT_MAX + overhead
+    assert projected < 90, (
+        f"at the {CP.UNATTENDED_WAIT_MAX}s ceiling this hook would take about "
+        f"{projected:.1f}s against a registered 90s timeout, so Claude Code "
+        f"would discard the continuation. Measured overhead: {overhead:.1f}s."
+    )

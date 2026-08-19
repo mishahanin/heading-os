@@ -105,12 +105,38 @@ def _run(args: list[str], timeout: int) -> dict:
 
 
 def agents() -> list[dict]:
-    """Every agent HERDR currently hosts, as raw records."""
+    """Every agent HERDR currently hosts, as raw records.
+
+    Every shape this does not expect leaves as HerdrUnavailable, which is the
+    one exception the callers handle. `_run` already converts UNPARSEABLE output;
+    the gap this closes is output that parses into the wrong shape - a bare list
+    where an object belongs, say, which a future HERDR release can introduce
+    without warning. That used to leave `payload.get` raising AttributeError
+    straight through `_herdr_status` and out of the Stop hook, so a third-party
+    format change cost the session its whole checkpoint system: no offer, no
+    save, no countdown, exit 1, no output.
+
+    A malformed ENTRY raises rather than being skipped. Dropping it would answer
+    "HERDR does not host this session" when the truth is "the lookup could not be
+    trusted", and `resolve_pane` exists to keep those two apart.
+    """
     payload = _run(["agent", "list"], LIST_TIMEOUT)
-    result = payload.get("result") or {}
+    if not isinstance(payload, dict):
+        raise HerdrUnavailable(
+            f"agent list returned {type(payload).__name__}, not an object"
+        )
+    result = payload.get("result")
+    if result is None:
+        result = {}
+    if not isinstance(result, dict):
+        raise HerdrUnavailable(
+            f"agent list result is {type(result).__name__}, not an object"
+        )
     found = result.get("agents")
     if not isinstance(found, list):
         raise HerdrUnavailable("agent list carried no agents array")
+    if not all(isinstance(agent, dict) for agent in found):
+        raise HerdrUnavailable("agent list carried a malformed agent record")
     return found
 
 
@@ -125,7 +151,13 @@ def resolve_pane(session_id: str) -> str | None:
     if not session_id:
         return None
     for agent in agents():
-        session = agent.get("agent_session") or {}
+        session = agent.get("agent_session")
+        # `or {}` alone covered a missing key and left a present-but-wrong one
+        # crashing, which is the same defect `agents()` above just closed one
+        # level up. A record that does not describe a session is not this
+        # session, so skipping it is the honest reading here.
+        if not isinstance(session, dict):
+            continue
         if session.get("kind") == "id" and session.get("value") == session_id:
             pane = agent.get("pane_id")
             return pane if isinstance(pane, str) and pane else None

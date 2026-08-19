@@ -150,6 +150,51 @@ def test_a_payload_without_agents_raises(herdr_present, monkeypatch):
         HA.resolve_pane(SESSION)
 
 
+# Parseable output of the WRONG SHAPE. `_run` already converts output that does
+# not parse; these are the cases that parse fine and then fail an attribute
+# lookup. Found on 2026-08-19 by a harness whose fake `herdr` printed a bare
+# list: `payload.get` raised AttributeError, nothing caught it, and the Stop hook
+# died with exit 1 and no output - so a HERDR format change would have cost the
+# session its offer, its save and its countdown at once. Every one of these must
+# arrive as HerdrUnavailable, the single exception the callers already degrade on.
+@pytest.mark.parametrize("payload", [
+    [{"pane_id": "w1:p1"}],                     # a bare list where an object goes
+    "a string",
+    42,
+    None,
+    {"result": [{"pane_id": "w1:p1"}]},         # result is a list, not an object
+    {"result": "unexpected"},
+    {"result": {"agents": "not a list"}},
+    {"result": {"agents": {"pane_id": "w1:p1"}}},
+    {"result": {"agents": ["a bare string"]}},  # a malformed RECORD
+    {"result": {"agents": [None]}},
+])
+def test_a_wrong_shaped_payload_raises_rather_than_crashing(
+    herdr_present, monkeypatch, payload
+):
+    _stub(monkeypatch, payload)
+    with pytest.raises(HA.HerdrUnavailable):
+        HA.resolve_pane(SESSION)
+
+
+def test_a_record_that_is_not_about_a_session_is_skipped(herdr_present, monkeypatch):
+    """Distinct from the cases above on purpose.
+
+    A malformed agents ARRAY means the lookup cannot be trusted, so it raises. A
+    single record whose `agent_session` is not an object is simply not this
+    session, so the search goes on and the real match is still found. Collapsing
+    the two would report "HERDR does not host this session" for a neighbour's
+    broken record, which is the one answer `resolve_pane` must never invent.
+    """
+    _stub(monkeypatch, {"result": {"agents": [
+        {"pane_id": "w9:p9", "agent_session": ["not", "an", "object"]},
+        {"pane_id": "w9:p8", "agent_session": None},
+        {"pane_id": "w1:p1",
+         "agent_session": {"kind": "id", "value": SESSION}},
+    ]}})
+    assert HA.resolve_pane(SESSION) == "w1:p1"
+
+
 def test_label_calls_carry_the_tightest_timeout(herdr_present, monkeypatch):
     """The countdown sits inside a grace period and must never eat it."""
     seen = _stub(monkeypatch, {"result": {}})

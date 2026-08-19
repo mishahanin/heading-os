@@ -67,8 +67,21 @@ for _candidate in [_BOOT.parent, *_BOOT.parents]:
         break
 from scripts.utils import checkpoint_paths as CP  # noqa: E402
 from scripts.utils import herdr_agent as HA  # noqa: E402
+from scripts.utils.colors import GREEN, RESET, supports_ansi  # noqa: E402
 
 CP.force_utf8()
+
+# Colour on ONE word of the menu, and it is an experiment rather than a
+# established feature. The status line is a surface Claude Code documents as
+# ANSI-capable; this reason block is not, so whether the escape renders or prints
+# raw is unknown until an operator crosses a threshold and looks. It degrades to
+# plain text on a terminal that cannot colour, and the word survives either way -
+# the recommendation is carried by the word, never by the colour.
+# One expression, not an opening constant and a closing one. Written as a pair,
+# an edit to either half leaves the other applied - which produced a real
+# `RECOMMENDED\x1b[0m`, an unbalanced escape, the first time a test disabled the
+# colour. There is no half-coloured state to reach now.
+RECOMMENDED = f"{GREEN}RECOMMENDED{RESET}" if supports_ansi() else "RECOMMENDED"
 
 # The countdown redraws on this cadence, not on the 2-second poll: 12 calls
 # across a 60-second wait instead of 30, for a figure nobody reads more finely.
@@ -88,7 +101,8 @@ SKILL_REF = ".claude/skills/checkpoint/SKILL.md"
 # containment as a choice is what made the list confusing. One command now.
 OPTIONS = """\
 1. `/checkpoint` - save the work now. Frees no context.
-2. `/checkpoint unattended on` - RECOMMENDED. From here on the hook does it all. See below.
+2. `/checkpoint unattended on` - {recommended}. The hook then saves and compacts \
+automatically, at this threshold and every one after. See below.
 3. `/compact` - compact now, once. The question returns at the next threshold.
 4. Continue as is - Claude Code compacts by itself at {native}.
 
@@ -289,6 +303,7 @@ def build_reason(
         body=body.format(
             used=used,
             remaining=remaining,
+            recommended=RECOMMENDED,
             native=_native_phrase(),
             compaction=_compaction_sentence(state, state_path, session),
         )

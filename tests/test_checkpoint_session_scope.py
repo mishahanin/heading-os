@@ -24,6 +24,7 @@ safe to inject.
 """
 import json
 import os
+import re
 import subprocess
 import time
 import sys
@@ -32,6 +33,10 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from scripts.utils.colors import supports_ansi  # noqa: E402
+
 HOOKS = ROOT / ".claude" / "hooks"
 STATUSLINE = HOOKS / "checkpoint-statusline.py"
 OFFER = HOOKS / "checkpoint-offer.py"
@@ -820,6 +825,75 @@ def test_the_hard_offer_also_carries_the_switch(env):
         assert switch in reason, (
             f"the hard offer drops {switch}, which the soft one carries:\n{reason}"
         )
+
+
+def test_option_two_says_when_the_compaction_happens(env):
+    """"From here on the hook does it all" told the operator nothing.
+
+    The option is the one that hands compaction to the hook, and the sentence
+    that sold it named neither the action nor the moment. An operator choosing
+    between four lines cannot pick the one whose effect is described as "it all".
+    The wording now states both: what the hook does, and when it does it.
+    """
+    _statusline(env, SESSION_A, 46)
+    reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
+    assert "compacts" in reason, (
+        f"option 2 never says the hook compacts:\n{reason}"
+    )
+    assert "every one after" in reason, (
+        "option 2 does not say the compaction repeats at each threshold, which "
+        f"is the fact that separates it from option 3:\n{reason}"
+    )
+    assert "does it all" not in reason, (
+        f"the vague wording came back to the menu:\n{reason}"
+    )
+
+
+def test_the_menu_reads_correctly_with_every_escape_stripped(env):
+    """Colour is decoration on this line; the word is the recommendation.
+
+    Added 2026-08-19 as an EXPERIMENT: the status line is a surface Claude Code
+    documents as ANSI-capable, and this reason block is not, so whether the
+    escape renders or prints raw is unknown until an operator crosses a threshold
+    and looks. That is an acceptable thing to try and an unacceptable thing to
+    depend on.
+
+    So the test strips the escapes rather than trying to suppress them. Setting
+    TERM=dumb would prove nothing here: `supports_ansi()` short-circuits to True
+    off `os.name != "nt"`, so on this runner the no-colour branch is unreachable
+    and a test that pretended to take it would be decoration itself. Stripping is
+    the real question anyway - it is what a surface that discards ANSI leaves the
+    operator holding.
+    """
+    _statusline(env, SESSION_A, 46)
+    reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", reason)
+    assert "- RECOMMENDED. The hook then saves and compacts" in plain, (
+        "with the escapes gone the option line no longer reads as one sentence, "
+        f"so the colour is load-bearing:\n{plain!r}"
+    )
+
+
+def test_no_escape_leaks_into_a_line_the_colour_was_not_meant_for(env):
+    """One word is coloured. An escape anywhere else is a bug that only shows up
+    on the surface that prints escapes raw, which is the surface this is an
+    experiment about.
+
+    Skipped where colour is correctly off, because zero escapes is the right
+    answer there and failing on it would report a bare Windows console as a
+    defect.
+    """
+    if not supports_ansi():
+        pytest.skip("colour is off on this terminal, so there is no escape to place")
+    _statusline(env, SESSION_A, 46)
+    reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
+    coloured = [ln for ln in reason.splitlines() if "\x1b[" in ln]
+    assert len(coloured) == 1, (
+        f"expected the escape on the option-2 line alone, found it on: {coloured}"
+    )
+    assert coloured[0].count("\x1b[") == 2, (
+        f"the option-2 line carries an unbalanced set of escapes: {coloured[0]!r}"
+    )
 
 
 def test_inject_uses_the_auto_closing_for_a_flagged_session(env):

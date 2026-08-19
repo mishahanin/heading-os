@@ -16,6 +16,8 @@ it. Objective gate (drives the exit code):
 Advisory (reported, never gates):
   - stale memory files (>45 days)
   - Odin stale seeds, stale positions, orphan principles
+  - dangling `[[wikilinks]]` in auto-memory (a dead pointer often carries a dead
+    premise; a target cited by several files is a shared one)
 
 Usage:
   python scripts/memory-hygiene.py            # full run, writes report, exit 0/1
@@ -41,6 +43,7 @@ from scripts.utils.memory_health import (  # noqa: E402
     compute_memory_defects,
     scan_redundancy,
     scan_volatile_hooks,
+    scan_dangling_links,
 )
 from scripts.utils.workspace import (  # noqa: E402
     get_data_root,
@@ -105,6 +108,7 @@ def gather() -> dict:
     mem = compute_memory_defects(mem_dir)
     redundancy = scan_redundancy(mem_dir, threshold=_near_dup_threshold())
     volatile = scan_volatile_hooks(mem_dir)
+    dangling = scan_dangling_links(mem_dir)
     brain = collect_brain_compile()
     bdata = brain["data"] or {}
     temporal = bdata.get("temporal_validity") or {}
@@ -136,6 +140,7 @@ def gather() -> dict:
         "advisory": advisory,
         "redundancy": redundancy,
         "volatile_hooks": volatile,
+        "dangling_links": dangling,
     }
 
 
@@ -259,6 +264,26 @@ def render_report(result: dict, generated_iso: str) -> str:
     else:
         for f in vd:
             lines.append(f"- {f['file']} [{', '.join(f['signals'])}]: {f['description']}")
+    lines.append("")
+
+    dangling = result.get("dangling_links", {"flagged": []}).get("flagged", [])
+    lines.append("## Dangling links (advisory - not gated)")
+    lines.append("")
+    lines.append(
+        "A `[[wikilink]]` that resolves to no memory file. One is fine - the "
+        "convention allows it as a marker for a memory worth writing later. What "
+        "is worth reading is the SENTENCE around it: a dead pointer often carries "
+        "a dead premise, and a target cited by several files is a shared stale "
+        "premise rather than a typo. Repoint at the real record (a file path, a "
+        "thread) or write the memory."
+    )
+    lines.append("")
+    lines.append(f"### Dangling targets: {len(dangling)}")
+    if not dangling:
+        lines.append("- none")
+    else:
+        for f in dangling:
+            lines.append(f"- `{f['target']}` <- {', '.join(f['cited_by'])}")
     lines.append("")
 
     lines.append("---")

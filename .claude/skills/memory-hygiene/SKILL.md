@@ -68,7 +68,9 @@ If the Odin brain is unavailable, the script degrades clearly and still reports 
 Read the report it wrote and present, grouped:
 
 1. **Objective defects (the gate)** - dangling/circular `superseded_by`, orphan memory files, over-budget `MEMORY.md`. These are the items that need action.
-2. **Advisory (non-gating)** - stale files (>45 days), Odin stale seeds/positions, orphan principles. Mention counts; do not treat as failures.
+2. **Advisory (non-gating)** - stale files (>45 days), Odin stale seeds/positions, orphan principles, near-duplicate pairs, volatile pointers, and dangling `[[wikilinks]]`. Mention counts; do not treat as failures.
+
+Read the dangling-link list for breadth, not for count. One unresolved link marks a memory worth writing later, which the convention allows. A target cited by several files is different: it usually means those files share a premise that died with the pointer. Name such a target to `/dream` explicitly.
 
 State the exit posture plainly: "clean" or "N objective defect(s)".
 

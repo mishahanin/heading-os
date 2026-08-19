@@ -158,6 +158,55 @@ def scan_volatile_hooks(memory_dir) -> dict:
     }
 
 
+_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def scan_dangling_links(memory_dir) -> dict:
+    """Advisory: find `[[wikilinks]]` in auto-memory that resolve to no memory file.
+
+    A dangling link is cheap on its own -- the convention allows one as a marker
+    for a memory worth writing later. It is expensive because the SENTENCE around
+    it goes stale with it and nothing notices. On 2026-08-19 five files cited
+    `no-exec-sync-until-ceo-cutover` as the reason work was "still deferred", two
+    months after the deferral was lifted; the pointer being dead was the only
+    outward sign that the premise was too.
+
+    Two namespaces are deliberately not memory links and are skipped: `thread:*`
+    addresses the thread registry, and an all-digit target is a bare record id.
+
+    READS ONLY; never mutates. Returns:
+
+        {
+          "ok": bool,                 # False when the directory is unreadable
+          "flagged": [{"target": str, "cited_by": [filename, ...]}, ...],
+          "note": str,
+        }
+    """
+    memory_dir = Path(memory_dir)
+    if not memory_dir.is_dir():
+        return {"ok": False, "flagged": [], "note": f"no such directory: {memory_dir}"}
+
+    files = sorted(memory_dir.glob("*.md"))
+    known = {p.stem for p in files}
+    citers: dict[str, list[str]] = {}
+    for p in files:
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            # A file we cannot read cannot be cleared, so say so by skipping it
+            # rather than counting it as link-free.
+            continue
+        for target in _WIKILINK_RE.findall(text):
+            if target in known or target.startswith("thread:") or target.isdigit():
+                continue
+            citers.setdefault(target, [])
+            if p.name not in citers[target]:
+                citers[target].append(p.name)
+
+    flagged = [{"target": t, "cited_by": c} for t, c in sorted(citers.items())]
+    return {"ok": True, "flagged": flagged, "note": f"{len(flagged)} dangling link(s)"}
+
+
 def compute_memory_defects(memory_dir: Path) -> dict:
     """Compute objective auto-memory defects for a single memory directory.
 

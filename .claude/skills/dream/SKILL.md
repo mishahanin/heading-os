@@ -124,6 +124,7 @@ Check workspace state for facts that might contradict or extend existing memorie
    - Memory says X, but the workspace now shows Y
    - Memory references a file/tool/path that no longer exists
    - Memory contains a relative date that has lost meaning
+   - A `[[wikilink]]` resolves to no memory file (the hygiene report lists these under "Dangling links"). Read the sentence around it, not only the pointer: a dead link often sits inside a dead premise. Repoint it at the record it means - a file path, a thread - or write the memory. Leave it only when it genuinely marks a memory worth writing later.
 
 4. **Transcript search (targeted only):**
    If investigating a specific signal or if `$ARGUMENTS` points to a topic, grep narrowly:

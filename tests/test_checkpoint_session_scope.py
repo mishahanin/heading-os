@@ -25,6 +25,7 @@ safe to inject.
 import json
 import os
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -324,7 +325,14 @@ def test_auto_mode_does_not_claim_a_compaction_point_it_never_verified(env):
     env["env"].pop("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", None)
     _statusline(env, SESSION_A, 46)
     reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
-    assert "auto-compact" not in reason.lower() or "not configured" in reason.lower(), (
+    # The honest phrasings, either of which satisfies the rule. "not configured"
+    # was the only accepted wording until 2026-08-19; the sentence now says "a
+    # point this hook cannot determine" instead, which is the same claim in
+    # plainer words. The property under test is unchanged: no NUMBER may appear
+    # when nothing configured one.
+    lowered = reason.lower()
+    honest = "not configured" in lowered or "cannot determine" in lowered
+    assert "auto-compact" not in lowered or honest, (
         f"the hook asserts a compaction point nothing configured:\n{reason}"
     )
 
@@ -530,10 +538,19 @@ def test_the_grace_period_cannot_be_set_past_the_registered_timeout(
 
 
 def test_a_grace_period_inside_the_bound_is_honoured(monkeypatch):
-    """The ceiling must not become a way to ignore the operator's setting."""
+    """The ceiling must not become a way to ignore the operator's setting.
+
+    The value used here was 75 until 2026-08-19, when the ceiling itself dropped
+    to 60 to make room for the countdown's out-of-loop HERDR calls, so 75 stopped
+    being "inside the bound". It is written against the constant now rather than
+    against a literal, so the next move of the ceiling cannot make this test
+    assert the opposite of its own name.
+    """
     CP = _cp()
-    monkeypatch.setenv("CLAUDE_HANDOFF_UNATTENDED_WAIT", "75")
-    assert CP.wait_seconds() == 75
+    inside = CP.UNATTENDED_WAIT_MAX - 15
+    assert inside > 0, "the ceiling fell far enough that this test tests nothing"
+    monkeypatch.setenv("CLAUDE_HANDOFF_UNATTENDED_WAIT", str(inside))
+    assert CP.wait_seconds() == inside
 
 
 def test_a_finished_background_task_does_not_claim_the_stop_event():
@@ -570,9 +587,18 @@ def test_the_stall_record_is_written_once(tmp_path, monkeypatch):
 
 def test_a_suppressed_offer_is_not_recorded_as_delivered(env):
     """When something else drives the Stop event the offer is not shown, so it
-    must not be marked shown - the operator would lose that threshold for good."""
+    must not be marked shown - the operator would lose that threshold for good.
+
+    Narrowed to BELOW the hard threshold on 2026-08-19. The claimant courtesy
+    used to be unconditional and this case ran at 46%, above this fixture's hard
+    of 45. It now holds only below hard; the case above it is the sibling test,
+    and the reason for the split is that the suppressed notice at hard is the
+    last save before compaction, which cannot wait a turn. 42 is chosen because
+    it must sit ABOVE soft for an offer to be due at all - the fixture runs
+    40/45, not the 25/30 defaults, so a value below 40 would test nothing.
+    """
     CP = _cp()
-    _statusline(env, SESSION_A, 46)
+    _statusline(env, SESSION_A, 42)
     res = _run(OFFER, env, {
         "session_id": SESSION_A,
         "cwd": str(env["project"]),
@@ -588,6 +614,37 @@ def test_a_suppressed_offer_is_not_recorded_as_delivered(env):
     )
     assert state.get("needs_compact_offer") is True, (
         "an offer that was never delivered was recorded as delivered"
+    )
+    assert state.get("continuation_claimant"), "the claimant was not recorded"
+
+
+def test_the_hard_threshold_outranks_claimant_suppression(env):
+    """CAP-2. At or above hard the claimant no longer silences the hook.
+
+    Below hard, a scheduled wakeup or in-flight background work deserves the
+    turn to itself and the notice can wait. At hard it cannot: that notice is
+    the last save before compaction frees the context, and an unattended run
+    that grew to 617k tokens with nothing on disk left through this return on
+    2026-08-19. The claimant is still recorded either way.
+    """
+    CP = _cp()
+    _statusline(env, SESSION_A, 46)
+    res = _run(OFFER, env, {
+        "session_id": SESSION_A,
+        "cwd": str(env["project"]),
+        "workspace": {"project_dir": str(env["project"])},
+        "stop_hook_active": False,
+        "background_tasks": [{"task_id": "t-1", "status": "running"}],
+    })
+
+    assert res.stdout.strip(), "the hard threshold did not outrank the claimant"
+    assert json.loads(res.stdout)["decision"] == "block"
+    state = json.loads(
+        (_state_dir(env) / f"checkpoint-{CP.safe_slug(SESSION_A)}.json")
+        .read_text(encoding="utf-8")
+    )
+    assert state.get("continuation_claimant"), (
+        "the claimant must still be recorded when the threshold outranks it"
     )
 
 
@@ -648,8 +705,20 @@ def test_unattended_on_raises_auto_and_off_puts_it_back(env):
     assert _unattended(env, SESSION_A, "off").returncode == 0
     state = _state_of(env, SESSION_A)
     assert state.get("session_unattended") is False
-    assert state.get("session_auto") is False, (
-        "unattended off left an auto the operator never asked for"
+    # Narrowed 2026-08-19 (CAP-8). `off` now RESTORES the prior value rather
+    # than pinning False. `session_auto` was ABSENT before `on`, and absent is a
+    # real value: it means defer to CLAUDE_HANDOFF_AUTO. Writing False over it
+    # was a behaviour change wearing the word "restore", because it overrides a
+    # workspace default the operator may have set deliberately. The property
+    # this test was written for is unchanged - the operator is not left with an
+    # auto he never chose - and the sibling test below covers the case where he
+    # did choose one.
+    assert "session_auto" not in state, (
+        "off pinned a value where the session had none, overriding the "
+        "workspace default in a direction the operator never chose"
+    )
+    assert "unattended_prior_auto" not in state, (
+        "the bookkeeping key outlived the switch it was recorded for"
     )
 
 
@@ -722,12 +791,18 @@ def test_the_soft_offer_carries_the_session_switch(env):
     """
     _statusline(env, SESSION_A, 42)
     reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
-    assert "continue without compact" in reason, "this is not the soft body"
-    for switch in ("/checkpoint unattended on", "/checkpoint auto on"):
-        assert switch in reason, (
-            f"the soft offer does not name {switch}, one of the two ways to stop "
-            f"being asked:\n{reason}"
-        )
+    # The two bodies share one option list since 2026-08-19, so the marker has to
+    # be the framing line above it rather than an option inside it.
+    assert "Consider checkpointing now" in reason, "this is not the soft body"
+    assert "/checkpoint unattended on" in reason, (
+        f"the soft offer does not name the standing switch:\n{reason}"
+    )
+    # `/checkpoint auto on` is deliberately NOT here any more. `--unattended on`
+    # already sets session_auto, so naming both presented a containment as a
+    # choice, which is what made the list confusing.
+    assert "/checkpoint auto on" not in reason, (
+        f"the withdrawn second switch came back to the menu:\n{reason}"
+    )
 
 
 def test_the_hard_offer_also_carries_the_switch(env):
@@ -740,7 +815,8 @@ def test_the_hard_offer_also_carries_the_switch(env):
     _stop(env, SESSION_A)
     _statusline(env, SESSION_A, 52)
     reason = json.loads(_stop(env, SESSION_A).stdout)["reason"]
-    for switch in ("/checkpoint unattended on", "/checkpoint auto on"):
+    assert "hard threshold reached" in reason, "this is not the hard body"
+    for switch in ("/checkpoint unattended on",):
         assert switch in reason, (
             f"the hard offer drops {switch}, which the soft one carries:\n{reason}"
         )
@@ -752,3 +828,286 @@ def test_inject_uses_the_auto_closing_for_a_flagged_session(env):
     _compact(env, SESSION_A, "SESSION-A-WORK the long migration")
     out = _inject(env, SESSION_A).stdout
     assert "AUTO MODE" in out, f"a flagged session was not resumed hands-off:\n{out}"
+
+
+# --------------------------------------------------------------------------
+# The driven compaction: CAP-5 and CAP-7
+#
+# The hook runs as a subprocess here, so `herdr` itself is replaced rather than
+# the seam that calls it. That is the stronger test: it exercises the real
+# argument vector, the real JSON parsing, and the real failure branches, none of
+# which a monkeypatched function would touch.
+# --------------------------------------------------------------------------
+
+FAKE_HERDR = '''#!/usr/bin/env python3
+import json, os, sys
+
+argv = sys.argv[1:]
+with open(os.environ["FAKE_HERDR_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(argv) + "\\n")
+
+mode = os.environ.get("FAKE_HERDR_MODE", "ok")
+if mode == "broken":
+    print("this is not json")
+    raise SystemExit(1)
+
+if argv[:2] == ["agent", "list"]:
+    agents = []
+    if mode != "not-hosted":
+        agents.append({
+            "pane_id": "w1:p1",
+            "agent_status": "working",
+            "agent_session": {"kind": "id", "value": os.environ["FAKE_HERDR_SESSION"]},
+        })
+    print(json.dumps({"result": {"agents": agents}}))
+else:
+    print(json.dumps({"result": {"type": "agent_prompted",
+                                 "agent": {"agent_status": "working"}}}))
+'''
+
+
+def _install_fake_herdr(env, session, mode="ok"):
+    """Put a fake `herdr` first on PATH and return the call-log path."""
+    bindir = env["project"].parent / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    binary = bindir / "herdr"
+    binary.write_text(FAKE_HERDR, encoding="utf-8")
+    binary.chmod(0o755)
+    log = env["project"].parent / f"herdr-calls-{mode}.log"
+    log.write_text("", encoding="utf-8")
+    env["env"]["PATH"] = f"{bindir}{os.pathsep}{env['env']['PATH']}"
+    env["env"]["FAKE_HERDR_LOG"] = str(log)
+    env["env"]["FAKE_HERDR_SESSION"] = session
+    env["env"]["FAKE_HERDR_MODE"] = mode
+    return log
+
+
+def _calls(log: Path) -> list:
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def _set_state(env, session, **updates):
+    CP = _cp()
+    path = _state_dir(env) / f"checkpoint-{CP.safe_slug(session)}.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state.update(updates)
+    path.write_text(json.dumps(state), encoding="utf-8")
+    return state
+
+
+def _stop_turn(env, session, *, turn="t-1", active=False, transcript=True):
+    """One Stop event, with the payload fields the driven block reads.
+
+    A REAL transcript file by default. `_wait_out_the_grace` treats an absent
+    one as "the operator may have spoken, hand the turn back" and returns
+    immediately, so pointing at a missing file silently skips the wait these
+    tests are timing.
+    """
+    path = env["project"] / f"{session}.jsonl"
+    if transcript and not path.exists():
+        path.write_text("", encoding="utf-8")
+    return _run(OFFER, env, {
+        "session_id": session,
+        "cwd": str(env["project"]),
+        "workspace": {"project_dir": str(env["project"])},
+        "stop_hook_active": active,
+        "prompt_id": turn,
+        "transcript_path": str(path),
+    })
+
+
+def _write_handoff(env, session, kind, stamp):
+    directory = _archive_dir(env)
+    directory.mkdir(parents=True, exist_ok=True)
+    CP = _cp()
+    path = directory / f"{stamp}_handoff_{kind}_{CP.safe_slug(session)}.md"
+    path.write_text("body", encoding="utf-8")
+    return path
+
+
+def _arm_unattended_save(env, session):
+    """Drive the session to the state that follows a hard-threshold save.
+
+    Returns the state after the save, so a caller can read `last_offer_at`.
+    """
+    _statusline(env, session, 46)
+    _set_state(env, session, session_unattended=True)
+    result = _stop_turn(env, session, turn="t-save")
+    assert result.stdout.strip(), "the unattended save did not fire (CAP-1)"
+    return json.loads(
+        (_state_dir(env) / f"checkpoint-{_cp().safe_slug(session)}.json")
+        .read_text(encoding="utf-8")
+    )
+
+
+def test_unattended_saves_at_the_hard_threshold(env):
+    """CAP-1. The one thing this mode never did before 2026-08-19."""
+    state = _arm_unattended_save(env, SESSION_A)
+    assert state.get("needs_compact_offer") is False, "the bucket was not consumed"
+    assert state.get("last_offer_at"), "the crossing was not stamped"
+    assert state.get("unattended_turn_id") == "t-save", (
+        "the save did not claim the turn, so the driven block cannot cross the "
+        "stop_hook_active guard on the next Stop"
+    )
+
+
+def test_unattended_below_hard_does_not_save(env):
+    """The negative half: a bucket below hard still just continues."""
+    _statusline(env, SESSION_A, 42)
+    _set_state(env, SESSION_A, session_unattended=True)
+    env["env"]["CLAUDE_HANDOFF_UNATTENDED_WAIT"] = "1"
+    env["env"]["CLAUDE_HANDOFF_UNATTENDED_POLL"] = "1"
+    result = _stop_turn(env, SESSION_A, turn="t-soft")
+    reason = json.loads(result.stdout)["reason"] if result.stdout.strip() else ""
+    assert "Save a checkpoint silently" not in reason, (
+        f"a save fired below the hard threshold:\n{reason}"
+    )
+
+
+def test_the_driven_compaction_submits_once_the_handoff_exists(env):
+    """CAP-5, the whole point of the change.
+
+    Includes both placement regressions: this Stop carries `stop_hook_active`
+    true, and `needs_compact_offer` was already cleared by the save. Against the
+    placement the plan originally specified - after the save paths - `main()`
+    returns before the block in BOTH modes and nothing is ever submitted.
+    """
+    log = _install_fake_herdr(env, SESSION_A)
+    state = _arm_unattended_save(env, SESSION_A)
+    _write_handoff(env, SESSION_A, "auto", "2099-01-01-000000")
+
+    _stop_turn(env, SESSION_A, turn="t-next", active=True)
+
+    submissions = [c for c in _calls(log) if c[:2] == ["agent", "prompt"]]
+    assert submissions == [["agent", "prompt", "w1:p1", "/compact"]], (
+        f"the driven compaction did not submit exactly once: {submissions}"
+    )
+    fresh = json.loads(
+        (_state_dir(env) / f"checkpoint-{_cp().safe_slug(SESSION_A)}.json")
+        .read_text(encoding="utf-8")
+    )
+    assert fresh.get("compact_requested_at"), "the request was not recorded"
+    assert fresh.get("compact_request_count") == 1
+    assert fresh.get("compact_requests"), "the correlation list the probe reads is empty"
+
+
+def test_the_driven_compaction_waits_for_the_handoff(env):
+    """Ordering is the point: handoff first, boundary second."""
+    log = _install_fake_herdr(env, SESSION_A)
+    _arm_unattended_save(env, SESSION_A)
+    # No handoff written at all.
+    _stop_turn(env, SESSION_A, turn="t-next", active=True)
+    assert not [c for c in _calls(log) if c[:2] == ["agent", "prompt"]], (
+        "compaction was requested with no handoff on disk"
+    )
+
+
+def test_a_post_compaction_archive_does_not_satisfy_the_ordering(env):
+    """The kind filter, at the hook rather than at the probe.
+
+    `checkpoint-save.py` writes `_handoff_compact-*` AFTER every compaction. If
+    the hook accepted those, the ordering condition would be permanently true
+    after the first compaction of a session.
+    """
+    log = _install_fake_herdr(env, SESSION_A)
+    _arm_unattended_save(env, SESSION_A)
+    _write_handoff(env, SESSION_A, "compact-manual", "2099-01-01-000000")
+    _stop_turn(env, SESSION_A, turn="t-next", active=True)
+    assert not [c for c in _calls(log) if c[:2] == ["agent", "prompt"]], (
+        "a post-compaction archive satisfied the handoff-first ordering"
+    )
+
+
+def test_the_driven_compaction_fires_once_per_bucket(env):
+    log = _install_fake_herdr(env, SESSION_A)
+    _arm_unattended_save(env, SESSION_A)
+    _write_handoff(env, SESSION_A, "auto", "2099-01-01-000000")
+    _stop_turn(env, SESSION_A, turn="t-next", active=True)
+    _stop_turn(env, SESSION_A, turn="t-next-2", active=True)
+    submissions = [c for c in _calls(log) if c[:2] == ["agent", "prompt"]]
+    assert len(submissions) == 1, (
+        f"the repeat guard let the same bucket submit twice: {submissions}"
+    )
+
+
+def test_an_unreachable_herdr_does_not_break_the_turn(env):
+    """The net exists for this case; a compaction helper must never be fatal."""
+    log = _install_fake_herdr(env, SESSION_A, mode="broken")
+    _arm_unattended_save(env, SESSION_A)
+    _write_handoff(env, SESSION_A, "auto", "2099-01-01-000000")
+    result = _stop_turn(env, SESSION_A, turn="t-next", active=True)
+    assert result.returncode == 0, f"the hook failed the turn:\n{result.stderr}"
+    fresh = json.loads(
+        (_state_dir(env) / f"checkpoint-{_cp().safe_slug(SESSION_A)}.json")
+        .read_text(encoding="utf-8")
+    )
+    assert fresh.get("compact_request_error"), "the failure was not recorded"
+    assert "compact_requested_at" not in fresh, (
+        "a failed submission was recorded as a request, which would let the "
+        "probe correlate a boundary this workspace never caused"
+    )
+
+
+def test_a_session_herdr_does_not_host_is_recorded_as_not_hosted(env):
+    """"Not hosted" and "could not tell" are different facts (scope-claims)."""
+    _install_fake_herdr(env, SESSION_A, mode="not-hosted")
+    _arm_unattended_save(env, SESSION_A)
+    _write_handoff(env, SESSION_A, "auto", "2099-01-01-000000")
+    _stop_turn(env, SESSION_A, turn="t-next", active=True)
+    fresh = json.loads(
+        (_state_dir(env) / f"checkpoint-{_cp().safe_slug(SESSION_A)}.json")
+        .read_text(encoding="utf-8")
+    )
+    assert fresh.get("compact_host") == "not-hosted"
+    assert not fresh.get("compact_request_error"), (
+        "a definite not-hosted was recorded as a lookup failure"
+    )
+
+
+def test_attended_mode_never_drives_a_compaction(env):
+    """Open Question 3: an attended operator may be mid-thought."""
+    log = _install_fake_herdr(env, SESSION_A)
+    _statusline(env, SESSION_A, 46)
+    _stop_turn(env, SESSION_A, turn="t-1")
+    _write_handoff(env, SESSION_A, "auto", "2099-01-01-000000")
+    _stop_turn(env, SESSION_A, turn="t-2", active=True)
+    assert not [c for c in _calls(log) if c[:2] == ["agent", "prompt"]], (
+        "attended mode drove a compaction"
+    )
+
+
+def test_the_wait_shows_a_countdown_and_always_clears_it(env):
+    """CAP-7. A still terminal must be visibly a wait, and never stay one."""
+    log = _install_fake_herdr(env, SESSION_A)
+    _statusline(env, SESSION_A, 42)
+    _set_state(env, SESSION_A, session_unattended=True)
+    env["env"]["CLAUDE_HANDOFF_UNATTENDED_WAIT"] = "6"
+    env["env"]["CLAUDE_HANDOFF_UNATTENDED_POLL"] = "1"
+    _stop_turn(env, SESSION_A, turn="t-wait")
+
+    renames = [c for c in _calls(log) if c[:2] == ["agent", "rename"]]
+    assert renames, "the wait showed no countdown at all"
+    assert renames[-1] == ["agent", "rename", "w1:p1", "--clear"], (
+        f"the countdown was left frozen on screen: {renames[-1]}"
+    )
+    seconds = [
+        int(c[3].split(" - ")[1].split("s")[0])
+        for c in renames if c[3] != "--clear"
+    ]
+    assert seconds == sorted(seconds, reverse=True), (
+        f"the countdown did not count down: {seconds}"
+    )
+
+
+def test_a_wait_without_herdr_still_runs_its_full_duration(env):
+    """The countdown is decoration. Losing it must not shorten the wait."""
+    _install_fake_herdr(env, SESSION_A, mode="not-hosted")
+    _statusline(env, SESSION_A, 42)
+    _set_state(env, SESSION_A, session_unattended=True)
+    env["env"]["CLAUDE_HANDOFF_UNATTENDED_WAIT"] = "3"
+    env["env"]["CLAUDE_HANDOFF_UNATTENDED_POLL"] = "1"
+    started = time.monotonic()
+    result = _stop_turn(env, SESSION_A, turn="t-wait")
+    elapsed = time.monotonic() - started
+    assert result.returncode == 0
+    assert elapsed >= 3, f"the wait was cut short to {elapsed:.1f}s without herdr"

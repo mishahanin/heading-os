@@ -37,7 +37,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils import checkpoint_paths as CP  # noqa: E402
 
 
-def collect() -> dict:
+def collect(kind: str = "manual") -> dict:
+    """Every path the checkpoint skill needs, for one save.
+
+    `kind` becomes the archive's kind segment. It exists because a hook-driven
+    save and an operator-typed /checkpoint were indistinguishable on disk before
+    2026-08-19: both landed as `_handoff_manual_`, so nothing downstream could
+    tell "the system saved because it had to" from "the operator chose to save".
+    The compaction probe's handoff invariant needs exactly that distinction, and
+    the archive holds only four kinds - compact-manual, compact-auto, manual,
+    session-close - none of which carried it.
+    """
     project = CP.project_root()
     handoff = CP.handoff_dir(project, CP.engine_root())
     sid = CP.session_id()
@@ -71,7 +81,7 @@ def collect() -> dict:
         "stamp": stamp,
         "project_root": str(project),
         "data_root": str(base),
-        "archive": ref(handoff / f"{stamp}_handoff_manual_{slug}.md"),
+        "archive": ref(handoff / f"{stamp}_handoff_{kind}_{slug}.md"),
         "summary_pointer": ref(latest / "summary.md"),
         "prompt_pointer": ref(latest / "prompt.md"),
         "shared_summary_pointer": ref(shared / "summary.md"),
@@ -219,25 +229,12 @@ def unattended_switch(value: str) -> int:
             print(f"stopped at: {state['unattended_stalled_at']}")
         return 0
 
-    state["session_unattended"] = value == "on"
-    state["session_unattended_at"] = CP.utc_now().isoformat()
+    # Both bodies moved into scripts/utils/checkpoint_paths.py on 2026-08-19, so
+    # this CLI and the hook's fuse stop cannot drift apart. They already had.
     if value == "on":
-        # Record whether WE are the reason auto is on, so `off` can undo exactly
-        # what `on` did and nothing more.
-        state["unattended_raised_auto"] = state.get("session_auto") is not True
-        state["session_auto"] = True
-        # A fresh run starts its counters from zero, or yesterday's stall would
-        # stop tonight's work before it began.
-        for key in (
-            "unattended_continuations",
-            "unattended_stall",
-            "unattended_fingerprint",
-            "unattended_stalled_at",
-            "unattended_turn_id",
-        ):
-            state.pop(key, None)
-    elif state.pop("unattended_raised_auto", False):
-        state["session_auto"] = False
+        CP.raise_unattended(state)
+    else:
+        CP.lower_unattended(state)
     try:
         CP.write_json_atomic(path, state)
     except OSError as exc:
@@ -272,6 +269,13 @@ def main(argv=None) -> int:
              "(overrides CLAUDE_HANDOFF_UNATTENDED); `on` implies --auto on",
     )
     ap.add_argument(
+        "--kind",
+        choices=("manual", "auto"),
+        default="manual",
+        help="archive kind segment: manual for an operator-typed /checkpoint, "
+             "auto for a save the Stop hook asked for",
+    )
+    ap.add_argument(
         "--compact-history",
         action="store_true",
         help="print where compaction fired on this tree, per session",
@@ -287,7 +291,7 @@ def main(argv=None) -> int:
     if args.unattended:
         return unattended_switch(args.unattended)
 
-    paths = collect()
+    paths = collect(args.kind)
     if args.json:
         print(json.dumps(paths, indent=2))
     else:

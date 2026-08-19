@@ -175,6 +175,106 @@ def session_slug(payload: dict | None = None) -> str:
     return safe_slug(session_id(payload))
 
 
+def raise_unattended(state: dict) -> dict:
+    """Turn the mode ON in `state`, remembering exactly what it changed.
+
+    `unattended_raised_auto` says whether WE are the reason `session_auto` is on.
+    `unattended_prior_auto` says what `session_auto` HELD, including the case of
+    holding nothing - and that second key is why `lower_unattended` can claim to
+    restore rather than merely to unset. Added 2026-08-19.
+
+    Mutates and returns `state`; the caller writes it.
+    """
+    state["session_unattended"] = True
+    state["session_unattended_at"] = utc_now().isoformat()
+    state["unattended_raised_auto"] = state.get("session_auto") is not True
+    # `None` is a real, distinct prior value: an absent `session_auto` defers to
+    # CLAUDE_HANDOFF_AUTO, which is not the same as a `session_auto` of False.
+    state["unattended_prior_auto"] = state.get("session_auto")
+    state["session_auto"] = True
+    # A fresh run starts its counters from zero, or yesterday's stall would stop
+    # tonight's work before it began.
+    for key in (
+        "unattended_continuations",
+        "unattended_stall",
+        "unattended_fingerprint",
+        "unattended_stalled_at",
+        "unattended_turn_id",
+    ):
+        state.pop(key, None)
+    return state
+
+
+def lower_unattended(state: dict) -> dict:
+    """Turn the mode OFF in `state`, undoing exactly what `raise_unattended` did.
+
+    ONE implementation, called by both the `--unattended off` CLI and the hook's
+    fuse stop. They diverged before this existed: the CLI cleared the switch and
+    the fuse did not, so a fuse-stopped run reported a mode that was on and
+    inert, and `--unattended status` said `on` about a run that had already
+    stopped hours earlier.
+
+    The `session_auto` half is a RESTORE, not an unset. The CLI used to write
+    `session_auto = False` whenever it had raised the flag, which pins False over
+    a workspace `CLAUDE_HANDOFF_AUTO=1` the operator set deliberately - a
+    behaviour change wearing the word "restore". Popping the key returns the
+    session to deferring, which is what an absent prior value meant.
+
+    Mutates and returns `state`; the caller writes it.
+    """
+    state["session_unattended"] = False
+    state["session_unattended_at"] = utc_now().isoformat()
+    if state.pop("unattended_raised_auto", False):
+        prior = state.pop("unattended_prior_auto", None)
+        if prior is None:
+            state.pop("session_auto", None)
+        else:
+            state["session_auto"] = prior
+    else:
+        state.pop("unattended_prior_auto", None)
+    return state
+
+
+def transcript_dir(project: Path) -> Path:
+    """Where Claude Code keeps this workspace's session transcripts.
+
+    The harness mangles the project path into a single directory name by
+    replacing every `/` and every `.` with `-`, so
+    `/home/x/ai/.heading-os` becomes `-home-x-ai--heading-os` - the doubled dash
+    is the dot following a slash, not a typo. Derived rather than hardcoded, so a
+    clone at a different path resolves its own transcripts.
+
+    Shared by `scripts/compact-now.py` and `scripts/compaction-probe.py`, which
+    both need it. It lives here rather than in either caller because the second
+    copy of a path-mangling rule is the one that stops being fixed.
+    """
+    mangled = str(project.resolve()).replace("/", "-").replace(".", "-")
+    return Path.home() / ".claude" / "projects" / mangled
+
+
+def newest_session_id(project: Path) -> str | None:
+    """The id of the most recently written transcript for this workspace.
+
+    Used by CLI entry points that have no hook payload and no exported session
+    id. Returns None when the directory is absent or holds no transcript; the
+    caller decides whether that is an error, because it is one for
+    `compact-now.py` and merely an empty window for the probe.
+    """
+    directory = transcript_dir(project)
+    if not directory.is_dir():
+        return None
+    newest = None
+    newest_mtime = -1.0
+    for path in directory.glob("*.jsonl"):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > newest_mtime:
+            newest, newest_mtime = path, mtime
+    return newest.stem if newest else None
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -246,9 +346,20 @@ def unattended_mode(state: dict | None = None) -> bool:
 # was told in writing that the session would carry on. The knob used to clamp at
 # 600, so `CLAUDE_HANDOFF_UNATTENDED_WAIT=120` was accepted and reported back as
 # "wait 120s, continue on silence" while the hook was being killed at 90. The
-# shipped Stop registration allows 90 seconds; 75 leaves room for the progress
+# shipped Stop registration allows 90 seconds; 75 left room for the progress
 # fingerprint's git call and the state write that follow the wait.
-UNATTENDED_WAIT_MAX = 75
+#
+# Lowered 75 -> 60 on 2026-08-19, for a second reason that stacks on the first.
+# The wait now renders a countdown through `herdr agent rename`, and three of
+# those calls are ADDITIVE to the wait rather than absorbed by it: the
+# `resolve_pane` lookup before the loop (10s ceiling), the `clear_label` in the
+# `finally` (2s), and the final iteration's overrun (2s). At a 60-second wait the
+# worst case lands near 79 seconds and fits under 90. At 75 it reaches about 94,
+# the harness discards the hook's output, and the continuation is lost in
+# silence - which is the exact failure the clamp was introduced to prevent. The
+# alternative, dropping the countdown above 60, would remove it precisely when
+# the wait is longest and a still terminal is most likely to be read as a hang.
+UNATTENDED_WAIT_MAX = 60
 
 
 # A task record carrying one of these is history, not work in flight.

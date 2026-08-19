@@ -2,12 +2,11 @@
 name: checkpoint
 description: "Сохранить manual checkpoint текущей сессии в outputs/operations/handoff-archive/ без выполнения /compact. Используй когда хочешь зафиксировать состояние работы и иметь возможность вернуться позже с чистым контекстом. NEVER auto-trigger - вызывается ТОЛЬКО явной командой /checkpoint."
 allowed-tools: "Write, Read, Bash(date:*), Bash(python scripts/checkpoint-paths.py:*), Bash(python3 scripts/checkpoint-paths.py:*)"
-disable-model-invocation: true
 argument-hint: "[заметка] | auto on|off|status | unattended on|off|status"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.3"
+  version: "1.5"
 x-heading-orchestration:
   parallel_safe: false
   shared_state: ["outputs/operations/handoff-archive/", ".claude/state/"]
@@ -20,8 +19,9 @@ x-heading-capability:
   how: >
     Explicit invocation only - type /checkpoint [optional note]; never
     auto-triggers. It writes one archive file plus updates the .latest/ pointer
-    files the SessionStart inject hook reads, and does NOT run /compact or clear
-    the session.
+    files the SessionStart inject hook reads. The skill itself never runs
+    /compact. In auto or unattended mode the Stop hook asks the harness to
+    compact after the archive lands, from outside, through HERDR.
   when: >
     Use before switching tasks, before a risky action, or when the
     checkpoint-offer hook fires at the soft/hard context thresholds. For
@@ -31,7 +31,7 @@ x-heading-routing:
   category: Operations
   label: /checkpoint [note]
   triggers:
-    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries two session switches, `auto on|off|status` for silent saves and `unattended on|off|status` to continue at a pause after a silent grace period instead of halting.
+    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries two session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown 60-second countdown instead of halting, and it already includes `auto`. The mode turns itself off when the work finishes or a fuse fires.
   exclusions:
     - Auto-resume after /compact handled by checkpoint-save.py (PostCompact)
     - reflective end-of-session -> /calibrate
@@ -70,8 +70,14 @@ hook could hand a resumed session another session's handoff.
 
 ### Step 0 - Handle a switch argument first
 
-If `$ARGUMENTS` starts with `auto` or with `unattended`, this is a switch. It is
-not a checkpoint.
+Split `$ARGUMENTS` on whitespace. If the FIRST token is exactly `auto` or exactly
+`unattended`, this is a switch. It is not a checkpoint. Anything else is a note,
+including a word that merely begins with one of them.
+
+Match the whole token, never a prefix. The rule read "starts with `auto`" until
+2026-08-19. On that day `/checkpoint autocompact fires at 584k` matched `auto
+on`. The skill dropped the note, wrote no file, and switched a mode instead. A
+prefix match cannot tell a switch from a subject.
 
 Run one of these, then stop. Do not write any file.
 
@@ -95,7 +101,11 @@ session key, and the pruner removes it with the session.
 
 ### Step 1 - Get this session's paths
 
-One command prints all of them:
+One command prints all of them. Add `--kind auto` when the Stop hook asked for
+this save rather than the operator. The flag names the archive `_handoff_auto_`.
+That name is the only thing that separates a save the system needed from one the
+operator chose. The driven compaction looks for exactly that kind and does
+nothing without it.
 
 ```bash
 python scripts/checkpoint-paths.py
@@ -289,23 +299,37 @@ It is a SEPARATE switch from `auto`, and it is OFF by default.
 python scripts/checkpoint-paths.py --unattended on
 ```
 
-The threshold offer names this switch as its second option, beside the plain
-checkpoint, so you can choose it from the list.
+The threshold offer names this switch as its one standing option, because it is
+the only command you need: `--unattended on` already sets `auto`.
 
-Above the soft threshold, the Stop hook then waits instead of asking. Type
-anything inside the wait, and the turn goes back to you within one poll. Stay
-silent for the whole wait, and the hook tells the assistant to carry on.
+Above the soft threshold, the Stop hook then waits instead of asking. The wait
+shows a countdown in the HERDR label, so a still terminal is visibly a wait and
+not a hang. Type anything inside it, and the turn goes back to you within one
+poll. Stay silent for the whole wait, and the hook tells the assistant to carry
+on.
 
 Use it for work that runs past the time you are at the keyboard: overnight, or
-across a weekend. It also turns `auto` on. Be exact about what that buys: the
-Stop hook in this mode writes no checkpoint at all. Auto is what makes the
-SessionStart hook tell the session to carry on after a compaction. The handoff itself is written by the PostCompact hook at each
-compaction, whatever either switch says. Turn unattended off, and `auto` goes
-back too, unless you chose `auto on` yourself.
+across a weekend. Turn unattended off and `auto` returns to whatever it was
+before, including to having been unset.
 
-Nothing here triggers a compaction, and no hook can. The mode removes the reason
-a session halts, and Claude Code's own auto-compact then fires mid-work and
-carries on. That is why the mode is not named after compaction.
+Two sentences here were false until 2026-08-19 and are corrected rather than
+deleted, because the correction is the point. The Stop hook DOES write in this
+mode: once per hysteresis bucket at or above the hard threshold. And a hook CAN
+trigger a compaction, just not from inside Claude Code.
+
+The harness exposes no internal way to compact on demand, so the hook does it
+from outside. Above the hard threshold, and once your handoff is on disk, the
+hook submits the literal text `/compact` to this session's own pane. It reaches
+that pane through HERDR, the terminal manager that hosts it. The harness then
+parses the text exactly as if you had typed it.
+
+If HERDR is not hosting the session, none of that happens and Claude
+Code's own auto-compact frees the context instead. The offer tells you which of
+those two it is, and says so plainly when it could not find out.
+
+When the work is finished, run `python scripts/checkpoint-paths.py --unattended
+off` before you stop. The hook's own fuses do it for you when they fire. The
+autonomy was granted for a stretch of work, not for the session.
 
 Two bounds stop a run that goes nowhere. Each one catches a different failure.
 
@@ -341,10 +365,10 @@ Environment defaults, for the whole workspace rather than one session:
 }
 ```
 
-**The wait is clamped at 75 seconds, whatever you set.** Claude Code discards the
-output of a hook that times out, so a wait at or above the registered timeout
-loses the continuation in silence. The shipped registration allows 90 seconds,
-and the clamp leaves room for the work that follows the wait. Raise the
+**The wait is clamped at 60 seconds, whatever you set.** Claude Code discards the
+output of a hook that times out. A wait at or above the registered timeout
+therefore loses the continuation in silence. The shipped registration allows 90
+seconds, and the clamp leaves room for the work that follows the wait. Raise the
 registration first if you need a longer grace period.
 
 ## NEVER

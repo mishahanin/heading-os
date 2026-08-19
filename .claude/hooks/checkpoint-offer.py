@@ -19,16 +19,20 @@ pause hands the turn back to the operator at all:
   - auto off, unattended off (the default): surface the /checkpoint vs /compact
     vs continue choice and wait for the operator. Nothing is written.
   - auto on: drive the assistant to save the checkpoint silently and resume.
-  - unattended on: ask nothing. Wait out a grace period, hand the turn back the
-    moment the operator types, and otherwise tell the assistant to carry on.
+  - unattended on: ask nothing. Save at a hard-threshold bucket crossing, then
+    wait out a grace period, hand the turn back the moment the operator types,
+    and otherwise tell the assistant to carry on.
 
-The offer prompt names `unattended` as its second option and `auto` as a
-condition beside it, because the operator is already reading the list at the
-moment they decide the work is going to be long. A command they have to remember
-is one they will not use. Note what unattended does NOT do: it never writes a
-checkpoint from this hook. It turns `auto` on for the SessionStart hook's sake,
-which is what resumes the work after a compaction, and the handoff itself is
-written by the PostCompact hook whatever either switch says.
+The offer prompt names `unattended` as its one standing option, because
+`--unattended on` already sets `session_auto` - the two are nested, not siblings,
+and offering both made the list read as a choice between them.
+
+What changed on 2026-08-19: this hook used to write nothing at all in unattended
+mode, and the docstring said so as if it were a design property. It was the
+defect. The mode now saves once per hysteresis bucket at or above the hard
+threshold, and then asks the harness to compact - see the driven block in
+`main()`. The PostCompact hook still writes its own archive on top of that,
+whatever either switch says.
 
 Two guards stand ahead of all three. `stop_hook_active` is honoured, per 2.1.228's
 own warning to a hook that blocks eight consecutive times, EXCEPT on a turn this
@@ -37,10 +41,15 @@ something else already drives the Stop event: a scheduled wakeup, in-flight
 background work, or a ralph-loop naming this session. See
 `checkpoint_paths.continuation_claimant`, including why /goal is not detectable.
 
-Compaction is NOT touched, here or anywhere: no hook in Claude Code can trigger
-one. What unattended mode changes is whether the session is still RUNNING when
-the harness's own auto-compact fires, which is the only reason a compaction lands
-mid-work rather than never.
+Compaction: no hook can trigger one from INSIDE Claude Code, and this file does
+not try. It reaches the same end from outside. Once a handoff is on disk above
+the hard threshold, `main()` submits the literal text `/compact` to the terminal
+that hosts this session, through HERDR (`scripts/utils/herdr_agent.py`), and the
+harness parses it exactly as it would from the keyboard. That path is proven, not
+assumed: session 10f49ae5 on 2026-08-19 produced a real `compact_boundary` this
+way. It also depends entirely on HERDR hosting the session, and it degrades in
+silence when it does not - which is why the harness's own auto-compact stays
+armed behind it.
 """
 
 import json
@@ -50,15 +59,47 @@ import time
 from pathlib import Path
 
 _BOOT = Path(__file__).resolve()
+_ROOT = _BOOT.parent
 for _candidate in [_BOOT.parent, *_BOOT.parents]:
     if (_candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
         sys.path.insert(0, str(_candidate))
+        _ROOT = _candidate
         break
 from scripts.utils import checkpoint_paths as CP  # noqa: E402
+from scripts.utils import herdr_agent as HA  # noqa: E402
 
 CP.force_utf8()
 
+# The countdown redraws on this cadence, not on the 2-second poll: 12 calls
+# across a 60-second wait instead of 30, for a figure nobody reads more finely.
+LABEL_REFRESH_SECONDS = 5
+
 SKILL_REF = ".claude/skills/checkpoint/SKILL.md"
+
+
+# The four options are IDENTICAL in both bodies and only the framing line above
+# them differs. They are two-tiered on purpose: option 2 carries five facts the
+# operator needs before choosing it, and written inline it ran seven lines and
+# visually crushed the other three. Four one-line options are scanned; the detail
+# block is read only by whoever picked the option it belongs to.
+#
+# The old list named `auto on` and `unattended on` as sibling options. They are
+# not siblings - `--unattended on` already sets `session_auto` - and presenting a
+# containment as a choice is what made the list confusing. One command now.
+OPTIONS = """\
+1. `/checkpoint` - save the work now. Frees no context.
+2. `/checkpoint unattended on` - RECOMMENDED. From here on the hook does it all. See below.
+3. `/compact` - compact now, once. The question returns at the next threshold.
+4. Continue as is - Claude Code compacts by itself at {native}.
+
+About option 2: at this threshold and every one after, the hook waits 60 seconds \
+and shows a countdown. Type anything and the turn comes back to you in about two \
+seconds. Stay silent and it saves the handoff, compacts by itself, and stops \
+asking. From then on the session also works through ordinary pauses instead of \
+halting to ask you something. Outbound sends still wait for your approval - that \
+gate is code, not this switch. The mode turns itself off when the work is finished.
+
+How the hook compacts: {compaction}"""
 
 
 SOFT_BODY = """\
@@ -66,28 +107,15 @@ Context is about {used:.0f}% used (~{remaining:.0f}% remaining).
 Consider checkpointing now so you can resume later with a fresh context.
 
 Options:
-1. `/checkpoint` - save a summary and continuation prompt to this session's handoff archive, no compact.
-2. `/checkpoint unattended on` - for work that runs past the time the operator is at the keyboard: at each pause ABOVE this threshold it waits for them, then carries on alone. It writes no checkpoint itself; the compaction hooks do that.
-   Name `/checkpoint auto on` as well ONLY if they want the question to stop while STAYING at the keyboard: it saves a checkpoint silently at each threshold and hands the turn straight back, with no wait.
-3. `/compact` - run a manual compact now; the post-compact hook will save the compact summary.
-4. continue without compact - keep working as is.
-
-Tell them this too, because it decides how much any of it matters: {compaction}"""
+""" + OPTIONS
 
 
 HARD_BODY = """\
 Context is about {used:.0f}% used - hard threshold reached.
-Strongly recommend a checkpoint or compact before continuing further.
+Strongly recommend settling this before continuing further.
 
 Recommended options:
-1. `/checkpoint` - save a summary and continuation prompt (preserves work; does not free context).
-2. `/checkpoint unattended on` - if the operator is about to leave: at each pause above this threshold it waits for them, then carries on alone. It writes no checkpoint itself; the compaction hooks do that.
-   Name `/checkpoint auto on` as well ONLY if they want the question to stop while STAYING at the keyboard: it saves a checkpoint silently at each threshold and hands the turn straight back, with no wait.
-3. `/compact` - run a manual compact now; the post-compact hook will save the compact summary and free context.
-
-Tell them this too, because it decides how much any of it matters: {compaction}
-
-Do not offer "continue without compact"."""
+""" + OPTIONS
 
 
 REASON_WRAPPER = """\
@@ -100,20 +128,110 @@ AUTO_WRAPPER = """\
 Context is about {used:.0f}% used (~{remaining:.0f}% remaining), which crossed the {level} checkpoint threshold. AUTO MODE is on.
 
 Do this now, without asking:
-1. Save a checkpoint silently, following @{skill} exactly: run `python scripts/checkpoint-paths.py` for this session's stamp and paths, write the archive it names, then update the two pointer files it names. Those paths are scoped to this session - never write into another session's pointer directory.
+1. Save a checkpoint silently, following @{skill} exactly: run `python scripts/checkpoint-paths.py --kind auto` for this session's stamp and paths, write the archive it names, then update the two pointer files it names. Those paths are scoped to this session - never write into another session's pointer directory. The `--kind auto` matters: it names the archive `_handoff_auto_`, which is how this hook, and the compaction probe, tell a save the system asked for from one you chose. Without it the compaction below will not fire.
 2. Print ONE line naming the archive path written.
 3. If you were mid-task, resume it where you left off. If you had finished and were waiting for the user, stop after that line.
 
-Do NOT run /compact yourself. {compaction}"""
+Do NOT run /compact yourself. Once your checkpoint is on disk, this hook submits \
+it for you when the turn ends. {compaction}"""
 
 
-def _compaction_sentence() -> str:
-    """What this hook actually knows about where compaction fires.
+# The harness's own trigger, derived from the configured window. Decoded from the
+# 2.1.235 binary on 2026-08-19: `Hve()` subtracts the output reserve, `CRa()`
+# takes the lower of a buffer fraction and a flat floor margin.
+NATIVE_OUTPUT_RESERVE = 20000
+NATIVE_BUFFER_FRACTION = 0.2
+NATIVE_FLOOR_MARGIN = 13000
 
-    Nothing here can trigger compaction, and nothing here can observe the
-    harness default either. Naming a percentage the environment never set is an
-    assertion the method does not support, so an unconfigured environment gets
-    said so instead (.claude/rules/scope-claims.md).
+
+def _native_phrase() -> str:
+    """Roughly where the harness's own compaction fires, hedged on purpose.
+
+    This printed the CONFIGURED WINDOW as if it were the firing point until
+    2026-08-19, so a 750000-token window was announced to the operator as
+    "Claude Code compacts by itself at 750000 tokens". It does not. The window is
+    the ceiling; the harness reserves output tokens off it and then takes a
+    buffer fraction on top, which at 750000 puts the real trigger near 584000 -
+    166000 tokens earlier than the sentence claimed. An operator planning around
+    the printed number would have planned around the wrong one.
+
+        effective = window - 20000
+        trigger   = min(effective - round(effective * 0.2), effective - 13000)
+
+    Said as "roughly", and that hedge is not modesty. The buffer fraction is a
+    REMOTE-CONFIG value - gate `tengu_amber_moleskin`, falling back to
+    `tengu_amber_rokovoko`, falling back to the scalar 0.2 - so a server-side
+    change moves this number with no version bump and nothing local to notice.
+    A figure printed as exact would assert a precision the method cannot support
+    (.claude/rules/scope-claims.md). The same applies to the window itself: the
+    harness takes the smaller of the configured value and the model's own
+    window, and this hook cannot see the second one.
+    """
+    point = CP.compact_point()
+    if point is None:
+        return "a point this hook cannot determine"
+    kind, value = point
+    if kind == "percent":
+        return f"roughly {value}% used"
+    # `compact_point` returns the raw environment STRING, having only checked
+    # that it is all digits. Every caller before this one interpolated it and
+    # never did arithmetic on it, so the type never mattered.
+    try:
+        window = int(value)
+    except (TypeError, ValueError):
+        return "a point this hook cannot determine"
+    effective = window - NATIVE_OUTPUT_RESERVE
+    trigger = min(
+        effective - round(effective * NATIVE_BUFFER_FRACTION),
+        effective - NATIVE_FLOOR_MARGIN,
+    )
+    return f"roughly {trigger} tokens (from the {window} window)"
+
+
+def _herdr_status(state: dict, state_path: Path, session: str) -> tuple[str, str]:
+    """("hosted", pane) / ("not-hosted", "") / ("unknown", ""), cached per session.
+
+    Three outcomes and never a guess. "Not hosted" and "could not tell" are
+    different facts, and reporting the second as the first is the exact defect
+    `.claude/rules/scope-claims.md` was written for.
+
+    A resolved pane and a definite not-hosted are stable for a session and are
+    cached, so the sentence costs one `herdr agent list` per session rather than
+    one per Stop. "Unknown" is deliberately NOT cached: it is a transient failure
+    and caching it would make one bad moment permanent for the window.
+    """
+    cached = state.get("compact_host")
+    if cached == "not-hosted":
+        return ("not-hosted", "")
+    if isinstance(cached, str) and cached and cached != "unknown":
+        return ("hosted", cached)
+
+    try:
+        pane = HA.resolve_pane(session)
+    except HA.HerdrUnavailable as exc:
+        print(f"checkpoint-offer: herdr lookup failed: {exc}", file=sys.stderr)
+        return ("unknown", "")
+    if pane is None:
+        _persist(
+            state_path,
+            compact_host="not-hosted",
+            compact_host_checked_at=CP.utc_now().isoformat(),
+        )
+        return ("not-hosted", "")
+    _persist(
+        state_path,
+        compact_host=pane,
+        compact_host_checked_at=CP.utc_now().isoformat(),
+    )
+    return ("hosted", pane)
+
+
+def _compaction_sentence(state: dict, state_path: Path, session: str) -> str:
+    """How compaction will actually happen for THIS session, honestly.
+
+    Every option in the offer ends by pointing here, so this sentence carries the
+    honesty load for the whole menu. It may claim the driven path only when
+    `resolve_pane` has actually matched this session's id.
     """
     carry = (
         "Its PreCompact hook steers what that summary keeps and its PostCompact "
@@ -121,23 +239,35 @@ def _compaction_sentence() -> str:
         "a compaction is the SUMMARY: the handoff on disk is not re-injected "
         "afterwards, and is what a NEW session resumes from instead."
     )
-    point = CP.compact_point()
-    if point is None:
+    native = _native_phrase()
+    status, pane = _herdr_status(state, state_path, session)
+
+    if status == "hosted":
         return (
-            "Native compaction is not configured here (neither "
-            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE nor CLAUDE_CODE_AUTO_COMPACT_WINDOW "
-            f"is set), so this hook cannot say when it will fire. {carry}"
+            "Claude Code has no internal way to compact on demand, so this hook "
+            "does it from outside: it submits the literal text /compact to this "
+            f"session's own terminal through HERDR, the terminal manager hosting "
+            f"it (pane {pane}). The harness then parses it exactly as if it were "
+            f"typed. Native auto-compact at {native} stays armed as the fallback. "
+            f"{carry}"
         )
-    kind, value = point
-    if kind == "percent":
-        return f"Native auto-compact is configured to fire near {value}% used. {carry}"
+    if status == "not-hosted":
+        return (
+            "HERDR is not hosting this session, so this hook cannot compact it - "
+            "Claude Code has no internal way to compact on demand. Native "
+            f"auto-compact at {native} is what will free the context. {carry}"
+        )
     return (
-        f"Native auto-compact is configured at {value} tokens (measured against "
-        f"the smaller of that and the model's own window). {carry}"
+        "This hook could not determine whether HERDR is hosting this session, so "
+        "it cannot say whether it will be able to compact. Native auto-compact at "
+        f"{native} is armed either way. {carry}"
     )
 
 
-def build_reason(level: str, used: float, remaining: float) -> str:
+def build_reason(
+    level: str, used: float, remaining: float,
+    state: dict, state_path: Path, session: str,
+) -> str:
     """Render the offer reason, in English only.
 
     The reason text is emitted on stderr and the operator sees it, so every
@@ -159,12 +289,16 @@ def build_reason(level: str, used: float, remaining: float) -> str:
         body=body.format(
             used=used,
             remaining=remaining,
-            compaction=_compaction_sentence(),
+            native=_native_phrase(),
+            compaction=_compaction_sentence(state, state_path, session),
         )
     )
 
 
-def build_auto_reason(level: str, used: float, remaining: float) -> str:
+def build_auto_reason(
+    level: str, used: float, remaining: float,
+    state: dict, state_path: Path, session: str,
+) -> str:
     """The hands-off variant: save, say where, carry on.
 
     It POINTS AT the skill rather than restating its section list. The nexi
@@ -177,7 +311,7 @@ def build_auto_reason(level: str, used: float, remaining: float) -> str:
         remaining=remaining,
         level=level,
         skill=SKILL_REF,
-        compaction=_compaction_sentence(),
+        compaction=_compaction_sentence(state, state_path, session),
     )
 
 
@@ -190,15 +324,18 @@ Decide this yourself, and do not put the question to anyone:
 - If an unfinished task from the current objective remains, resume it now and \
 carry on working.
 - If the work is finished and verified, or you were waiting on a judgement only \
-the operator can make, stop here and say so in one line.
+the operator can make, run `python scripts/checkpoint-paths.py --unattended off` \
+first, then stop here and say so in one line. The autonomy was granted for this \
+stretch of work; leaving it on hands it to whatever touches the window next.
 
 A halted night is recoverable. Work invented to look busy is not, so stopping is \
 the right answer whenever there is no real next action.
 
-Do NOT run /compact. {compaction}
+Do NOT run /compact. Once a checkpoint is on disk above the hard threshold, this \
+hook submits it for you when the turn ends. {compaction}
 
-Continuation {done} of {maximum} for this window. Nothing was written on your \
-behalf and the handoff on disk is unchanged."""
+Continuation {done} of {maximum} for this window. This pause is below the hard \
+threshold, or its bucket already saved, so nothing was written on this one."""
 
 
 def _used_percentage(state: dict) -> float | None:
@@ -334,25 +471,73 @@ def _wait_out_the_grace(payload: dict, session: str) -> bool:
     except OSError:
         return True
 
+    # The countdown surface. Sixty seconds of an unchanging terminal reads as a
+    # hang, and an operator who believes the session hung interrupts it - which
+    # delivers exactly the input this wait is watching for, given for the wrong
+    # reason. The label is written through HERDR rather than to the terminal
+    # itself: /dev/tty would fight Claude Code's TUI for the same lines, and this
+    # hook's stdout is shown only after it returns, which is after the wait it
+    # would have described.
+    #
+    # Never load-bearing. Any failure here leaves the wait running its full
+    # duration unchanged; a missing countdown is a worse experience, a shortened
+    # wait would be a defect.
+    pane = None
+    try:
+        pane = HA.resolve_pane(session)
+    except HA.HerdrUnavailable as exc:
+        print(f"checkpoint-offer: countdown unavailable: {exc}", file=sys.stderr)
+
+    labels_alive = pane is not None
+    next_label = 0.0
+
     deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        time.sleep(min(poll, max(deadline - time.monotonic(), 0.1)))
-        try:
-            size = path.stat().st_size
-        except OSError:
-            return True
-        if size <= offset:
-            continue
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
-                handle.seek(offset)
-                fresh = handle.read()
-        except OSError:
-            return True
-        offset = size
-        if _operator_spoke(fresh, session):
-            return True
-    return False
+    try:
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if labels_alive and now >= next_label:
+                remaining = int(deadline - now)
+                try:
+                    HA.set_label(
+                        pane, f"waiting for operator - {remaining}s -> auto-continue"
+                    )
+                except HA.HerdrUnavailable as exc:
+                    # One failure stops all of them. Retrying a broken socket
+                    # every five seconds would spend the wait on the thing that
+                    # is only decoration.
+                    labels_alive = False
+                    print(
+                        f"checkpoint-offer: countdown stopped: {exc}", file=sys.stderr
+                    )
+                next_label = now + LABEL_REFRESH_SECONDS
+
+            time.sleep(min(poll, max(deadline - time.monotonic(), 0.1)))
+            try:
+                size = path.stat().st_size
+            except OSError:
+                return True
+            if size <= offset:
+                continue
+            try:
+                with path.open("r", encoding="utf-8", errors="replace") as handle:
+                    handle.seek(offset)
+                    fresh = handle.read()
+            except OSError:
+                return True
+            offset = size
+            if _operator_spoke(fresh, session):
+                return True
+        return False
+    finally:
+        # Both exits, always. A label frozen at "12s" outlives the wait and is
+        # worse than never having shown one.
+        if pane is not None:
+            try:
+                HA.clear_label(pane)
+            except HA.HerdrUnavailable as exc:
+                print(
+                    f"checkpoint-offer: countdown not cleared: {exc}", file=sys.stderr
+                )
 
 
 def _notify_stall(reason: str) -> None:
@@ -382,7 +567,7 @@ def _notify_stall(reason: str) -> None:
         print(f"checkpoint-offer: stall notice failed: {exc}", file=sys.stderr)
 
 
-def _persist(state_path: Path, **updates) -> None:
+def _persist(state_path: Path, _mutate=None, **updates) -> None:
     """Apply our own keys to what is on disk NOW, never a whole stale copy.
 
     The statusline rewrites this file after every turn. Writing back the copy this
@@ -390,13 +575,170 @@ def _persist(state_path: Path, **updates) -> None:
     unattended mode writes at every pause above the threshold rather than once per
     5% bucket, so that window stopped being rare. Only the keys named by the caller
     move.
+
+    `_mutate` is for the changes a keyword cannot express - one that REMOVES a
+    key, or one whose new value depends on the fresh copy rather than on the copy
+    the caller read. It runs against the fresh state after `updates` are applied.
+    Added 2026-08-19 so the fuse stop could call `CP.lower_unattended`, which pops
+    keys; expressing that as keywords would have meant writing the popped names
+    back as nulls.
     """
     fresh = CP.read_json(state_path)
     fresh.update(updates)
+    if _mutate is not None:
+        fresh = _mutate(fresh)
     try:
         CP.write_json_atomic(state_path, fresh)
     except Exception as exc:  # noqa: BLE001 - a lost note is not worth a broken turn
         print(f"checkpoint-offer: state write failed: {exc}", file=sys.stderr)
+
+
+def _stamp(iso: str) -> str:
+    """An ISO timestamp in the archive filename's own format, for comparison.
+
+    Filenames, never mtime: `checkpoint-save.py` truncates its stamp to %H%M%S,
+    and mtime moves with any later touch, so the name is the only stable record
+    of when an archive was written.
+    """
+    raw = str(iso or "").replace("Z", "")
+    try:
+        date, clock = raw.split("T", 1)
+    except ValueError:
+        return ""
+    clock = clock.split(".", 1)[0].split("+", 1)[0].replace(":", "")
+    return f"{date}-{clock[:6]}"
+
+
+def _handoff_since(project: Path, session: str, since_iso: str | None) -> bool:
+    """Is a PRE-compaction handoff for this session on disk, newer than `since`?
+
+    Kind `auto` only. The PostCompact hook writes `compact-auto` and
+    `compact-manual` archives AFTER every compaction, so accepting those would
+    make this condition true forever after the first one - the ordering this
+    whole path exists to guarantee, satisfied by a file the compaction itself
+    produced.
+
+    Resolved through `CP.handoff_dir()` rather than a relative path: the archive
+    lives in the private data overlay while this hook lives in the engine, so a
+    bare relative path resolves against the wrong tree. The root passed is
+    `_ROOT`, the engine this hook was loaded from - passing `project` instead
+    resolves the archive project-locally and finds nothing, which is a silent
+    "no handoff yet" rather than an error.
+    """
+    floor = _stamp(since_iso) if since_iso else ""
+    if not floor:
+        return False
+    try:
+        directory = CP.handoff_dir(project, _ROOT)
+    except Exception as exc:  # noqa: BLE001 - an unresolvable overlay blocks, never raises
+        print(f"checkpoint-offer: handoff dir unresolved: {exc}", file=sys.stderr)
+        return False
+    if not directory.is_dir():
+        return False
+    needle = f"_handoff_auto_{CP.safe_slug(session)}"
+    for path in directory.glob("*.md"):
+        name = path.name
+        if needle in name and name[:17] > floor:
+            return True
+    return False
+
+
+def _driven_pending(state: dict) -> bool:
+    """Cheap pre-check: could the driven block have anything to do this Stop?
+
+    Read before `used` is resolved, only to decide whether the `stop_hook_active`
+    guard may be crossed. Everything it skips is re-checked properly inside
+    `_request_compaction`.
+    """
+    if not (CP.auto_mode(state) or CP.unattended_mode(state)):
+        return False
+    bucket = int(state.get("offer_bucket") or state.get("current_bucket") or 0)
+    return state.get("compact_requested_bucket") != bucket
+
+
+def _request_compaction(
+    payload: dict, state: dict, state_path: Path, project: Path, used: float
+) -> None:
+    """Ask the harness to compact, from outside, once the handoff is on disk.
+
+    This is the whole point of the plan this function came from. Claude Code has
+    no in-process entry point for `/compact`, so the request is made by
+    submitting the literal text to the terminal hosting this session, through
+    HERDR. See `scripts/utils/herdr_agent.py`.
+
+    It NEVER blocks and never raises. Submitting is only half the mechanism: the
+    prompt is queued while this turn is still running and executes when the turn
+    ends, so a hook that blocked here would deadlock its own request. And a
+    compaction helper that broke a turn would be worse than no compaction at all
+    - the native auto-compact is armed behind this for exactly that reason.
+    """
+    if not (CP.auto_mode(state) or CP.unattended_mode(state)):
+        return
+    if used < CP.config(state)["hard"]:
+        return
+    bucket = int(state.get("offer_bucket") or state.get("current_bucket") or 0)
+    if state.get("compact_requested_bucket") == bucket:
+        return
+
+    session = CP.session_id(payload)
+    # Ordering is the point: handoff first, boundary second. `last_offer_at` is
+    # the field the save path stamps when it marks the offer delivered, and it
+    # is the only recorded moment of the hard-threshold crossing.
+    if not _handoff_since(project, session, state.get("last_offer_at")):
+        return
+
+    try:
+        pane = HA.resolve_pane(session)
+    except HA.HerdrUnavailable as exc:
+        # "Could not tell" is not "not hosted", and the state file must not
+        # record it as though it were (.claude/rules/scope-claims.md).
+        _persist(
+            state_path,
+            compact_request_error=str(exc),
+            compact_request_error_at=CP.utc_now().isoformat(),
+        )
+        return
+
+    if pane is None:
+        _persist(
+            state_path,
+            compact_host="not-hosted",
+            compact_host_checked_at=CP.utc_now().isoformat(),
+        )
+        return
+
+    try:
+        HA.submit_compact(pane)
+    except HA.HerdrUnavailable as exc:
+        _persist(
+            state_path,
+            compact_request_error=str(exc),
+            compact_request_error_at=CP.utc_now().isoformat(),
+        )
+        return
+
+    now = CP.utc_now().isoformat()
+
+    def _record(fresh: dict) -> dict:
+        # The append-only list, not just the scalars. The probe correlates EVERY
+        # boundary in a session against a request, and a scalar holds only the
+        # most recent one - a session that compacts twice could never prove the
+        # first.
+        entries = fresh.get("compact_requests")
+        if not isinstance(entries, list):
+            entries = []
+        entries.append({"at": now, "bucket": bucket, "pane": pane})
+        fresh["compact_requests"] = entries[-CP.COMPACT_HISTORY_MAX:]
+        return fresh
+
+    _persist(
+        state_path,
+        compact_requested_at=now,
+        compact_requested_bucket=bucket,
+        compact_request_count=int(state.get("compact_request_count") or 0) + 1,
+        compact_host=pane,
+        _mutate=_record,
+    )
 
 
 def _stop_unattended(state: dict, state_path: Path, reason: str) -> int:
@@ -411,10 +753,23 @@ def _stop_unattended(state: dict, state_path: Path, reason: str) -> int:
     """
     if state.get("unattended_stalled_at"):
         return 0
+
+    # Actually turn the switch off, through the SAME helper the `--unattended off`
+    # CLI uses. Until 2026-08-19 this function ended a run's autonomy but left
+    # `session_unattended` reading on, so `--unattended status` reported a live
+    # mode about a run that had stopped hours earlier, and the next thing to
+    # touch the window would have inherited autonomy nobody granted it.
+    # `_persist` re-reads the file, so the mutation is applied to the fresh copy
+    # rather than to the one this function was handed.
+    def _lower(fresh: dict) -> dict:
+        CP.lower_unattended(fresh)
+        return fresh
+
     _persist(
         state_path,
         unattended_stalled_at=CP.utc_now().isoformat(),
         unattended_stop_reason=reason,
+        _mutate=_lower,
     )
     _notify_stall(reason)
     return 0
@@ -495,7 +850,7 @@ def unattended_turn(
         wait=CP.wait_seconds(),
         done=done,
         maximum=maximum,
-        compaction=_compaction_sentence(),
+        compaction=_compaction_sentence(state, state_path, session),
     )
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0
@@ -521,9 +876,28 @@ def main() -> int:
     # itself continued, identified by the payload's own prompt_id. An absent
     # prompt_id is never a match: without it the comparison would be None
     # against None, which is a fail-open into an unbounded loop.
+    #
+    # The driven-compaction block needs the SAME exemption, by a different key,
+    # and finding that out was the whole value of the 2026-08-19 scrutiny pass.
+    # The block must fire on the Stop that FOLLOWS the handoff save, and on that
+    # Stop `stop_hook_active` is true while `ours` is false, so this guard
+    # returned before anything else ran and the capability was dead in both
+    # modes. Crossing the guard for it is safe in a way crossing it generally is
+    # not: `compaction_only` makes the hook evaluate that one block and return
+    # WITHOUT printing a decision, so it cannot contribute to the consecutive
+    # blocks this guard exists to bound.
     turn = str(payload.get("prompt_id") or "")
     ours = bool(turn) and state.get("unattended_turn_id") == turn
+    compaction_only = False
     if payload.get("stop_hook_active") and not (unattended and ours):
+        if not _driven_pending(state):
+            return 0
+        compaction_only = True
+
+    # Resolved BEFORE the claimant check since 2026-08-19, because the claimant
+    # decision now depends on it. Nothing else about this read changed.
+    used = _used_percentage(state)
+    if used is None:
         return 0
 
     # Something else already drives this Stop event: stay out of its way. Checked
@@ -531,6 +905,15 @@ def main() -> int:
     # an offer that was never delivered must not be recorded as delivered - the
     # operator would lose that threshold's notice for good. See
     # `continuation_claimant` for the three signals, and for why /goal is not one.
+    #
+    # The courtesy has ONE limit, added 2026-08-19. Below the hard threshold a
+    # claimant silences this hook entirely, and that is right: a scheduled wakeup
+    # or in-flight background work should not have a second voice talking over it
+    # for a notice that can wait a turn. At or above hard the notice cannot wait a
+    # turn, because it is the last save before compaction frees the context. So
+    # the claimant is still RECORDED and the hook continues rather than returning.
+    # The unattended run that reached 617k tokens with nothing on disk left
+    # through this return.
     claimant = CP.continuation_claimant(payload, project)
     if claimant:
         _persist(
@@ -538,10 +921,16 @@ def main() -> int:
             continuation_claimant=claimant,
             continuation_seen_at=CP.utc_now().isoformat(),
         )
-        return 0
+        if used < CP.config(state)["hard"]:
+            return 0
 
-    used = _used_percentage(state)
-    if used is None:
+    # Evaluated HERE, and the placement is load-bearing rather than tidy. This is
+    # the only point on the path that both modes reach on every Stop: below it
+    # the unattended branch returns for the whole unattended path, and the
+    # `needs_compact_offer` check returns for auto mode on precisely the turn
+    # after a save - which is the turn this block exists for.
+    _request_compaction(payload, state, state_path, project, used)
+    if compaction_only:
         return 0
 
     if unattended:
@@ -551,6 +940,49 @@ def main() -> int:
         # announce a threshold once, it is to not halt.
         if used < CP.config(state)["soft"]:
             return 0
+
+        # The one thing this mode never did. Until 2026-08-19 the line below
+        # returned straight into `unattended_turn`, so `build_auto_reason` - the
+        # only path in this file that causes a checkpoint to be written - was
+        # unreachable in the one mode that exists for an absent operator. The
+        # mode's own docstring said so plainly, and that sentence was the defect
+        # rather than a caveat.
+        #
+        # Hard threshold only, and once per hysteresis bucket. This mode pauses
+        # constantly; saving at every pause would write dozens of near-identical
+        # archives. The bucket marker is the same one the attended path uses to
+        # fire once per 5% band.
+        if state.get("needs_compact_offer") and used >= CP.config(state)["hard"]:
+            level = state.get("offer_level")
+            if level in ("soft", "hard"):
+                bucket = int(
+                    state.get("offer_bucket") or state.get("current_bucket") or 0
+                )
+                _persist(
+                    state_path,
+                    needs_compact_offer=False,
+                    offer_level=None,
+                    last_offered_bucket=bucket,
+                    last_offer_at=CP.utc_now().isoformat(),
+                    # Claims this turn for the driven-compaction block, which is
+                    # carved out of the `stop_hook_active` guard exactly as this
+                    # mode is. Without this key `ours` is False on the follow-up
+                    # Stop and the guard returns before the block is reached, so
+                    # the compaction never fires. The two are one mechanism.
+                    unattended_turn_id=turn,
+                )
+                remaining = _remaining_percentage(state, used)
+                reason = build_auto_reason(
+                    level, used, remaining, state, state_path,
+                    CP.session_id(payload),
+                )
+                print(
+                    json.dumps(
+                        {"decision": "block", "reason": reason}, ensure_ascii=False
+                    )
+                )
+                return 0
+
         return unattended_turn(payload, state, state_path, project, used, turn)
 
     if not state.get("needs_compact_offer"):
@@ -582,7 +1014,9 @@ def main() -> int:
     # `state` is the entry-time copy and is only READ from here on, so the
     # operator's `session_auto` is still in hand.
     build = build_auto_reason if CP.config(state)["auto"] else build_reason
-    reason = build(level, used, remaining)
+    reason = build(
+        level, used, remaining, state, state_path, CP.session_id(payload)
+    )
 
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0

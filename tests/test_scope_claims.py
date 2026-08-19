@@ -63,6 +63,14 @@ DECLARED_CLAIMANTS = {
     # by `files_written`, which reads this session's own transcript, and the hook
     # reports an empty set rather than narrowing anything by it.
     ".claude/hooks/checkpoint-precompact.py": "files_written",
+    # "does not host this session" is a membership claim about a terminal, and it
+    # decides what the operator is told. The lookup behind it is `resolve_pane`,
+    # which matches the session id against `agent_session.value` from
+    # `herdr agent list`. The distinction it must preserve is that "not hosted"
+    # is a definite answer while an unreachable HERDR is not one, and the CLI
+    # returns different exit codes for them (2 versus 1) rather than collapsing
+    # both into the sentence a reader would act on.
+    "scripts/compact-now.py": "resolve_pane",
 }
 
 # The detector is deliberately wide, because a defect of this shape is written

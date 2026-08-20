@@ -3,6 +3,22 @@
 Step 3 of the Canopus standard for `plans/2026-08-17-checkpoint-unattended.md`. Ten
 criteria, one test per criterion at least, each claimed in a docstring opening.
 
+**PROMOTED into the ordinary suite on 2026-08-20**, from
+`tests/contract/2026-08-17-checkpoint-unattended/`. The slice shipped on
+2026-08-17; the promotion is the step that never happened, and its absence is
+what turned CI red. The record `records/slices/2026-08-17-checkpoint-unattended.md`
+now carries `retired_sha: 0ae816f`, the last commit at which this file still
+stood exactly as approved, and points `promoted_to` here.
+
+Why it could not stay frozen: after 0ae816f the product moved past it on
+purpose. The no-progress stall fuse was replaced by an explicit done marker
+(2026-08-19), and the continuation prose was rewritten twice. Restoring the
+approved bytes at HEAD leaves four tests red against behaviour that was changed
+deliberately, so the frozen form asserts a product that no longer exists. From
+here this file is maintained like any other test: it may be edited, and the
+`canopus_check` C1 clause no longer holds it to bytes frozen for a slice that
+has shipped.
+
 Four properties this file holds that the ordinary suite does not, and why each
 belongs here.
 
@@ -44,7 +60,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 OFFER_HOOK = ROOT / ".claude" / "hooks" / "checkpoint-offer.py"

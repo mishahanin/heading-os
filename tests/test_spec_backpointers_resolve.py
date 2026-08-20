@@ -69,16 +69,24 @@ OVERLAY_PREFIX = ".heading-os-data/"
 
 def _resolve(doc: str) -> Path | None:
     """Engine-relative pointers resolve against the engine root; overlay
-    pointers against the DATA root. Returns None when the overlay is absent,
-    which is the public-clone case and not a defect."""
+    pointers against the DATA root. Returns None when no overlay backs this
+    checkout, which is the public-clone case and not a defect.
+
+    The absence test is `data_overlay_present()`, NOT `get_data_root().exists()`.
+    `get_data_root()` never returns a missing path: with no overlay it falls back
+    to the bundled read-only `examples/` tree, which exists and contains no
+    specs. So the `.exists()` form skipped nothing, resolved all 84 pointers
+    against `examples/`, and failed every one of them on CI while printing
+    "0 skipped: private overlay absent" in the same breath. Green here, red
+    there, for three days.
+    """
     if not doc.startswith(OVERLAY_PREFIX):
         return ROOT / doc
-    from scripts.utils.workspace import get_data_root
+    from scripts.utils.paths import data_overlay_present, get_data_root
 
-    data_root = Path(get_data_root())
-    if not data_root.exists():
+    if not data_overlay_present():
         return None
-    return data_root / doc[len(OVERLAY_PREFIX):]
+    return Path(get_data_root()) / doc[len(OVERLAY_PREFIX):]
 
 
 def test_every_anchor_pointer_into_docs_resolves():

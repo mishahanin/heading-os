@@ -655,7 +655,8 @@ def test_an_unconsumed_message_still_reads_as_pending(tmp_path):
 # marker. The heuristic could not tell a finished plan from a night of reading
 # and thinking, and it stopped all three unattended runs ever attempted, at three
 # and five continuations. The properties it used to hold live in
-# tests/contract/2026-08-17-checkpoint-unattended/test_contract.py, under SC-6.
+# tests/test_checkpoint_unattended_contract.py, under SC-6 (promoted there from
+# tests/contract/2026-08-17-checkpoint-unattended/ when the slice was retired).
 
 
 @pytest.mark.parametrize("configured", ["120", "600", "89", "90"])

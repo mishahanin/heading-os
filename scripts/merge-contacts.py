@@ -30,7 +30,14 @@ from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 # YAML / Markdown parsing helpers
 # ---------------------------------------------------------------------------
 
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+# `[ \t]*\n` after the closing `---`, not `\s*\n`. `\s` includes the newline, so
+# the greedy form also swallowed every BLANK LINE that followed the frontmatter,
+# and the writer then put exactly one back. A record with a blank line survived
+# that round trip; a record with none came back with one inserted, which is a
+# rewrite of a file the tool was asked to merge one field into. Invisible across
+# the operator's 326 records, which all carry the blank line, and caught by
+# `examples/crm/contacts/EXAMPLE-contact.md`, which does not.
+FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---[ \t]*\n", re.DOTALL)
 
 
 class _BlockList(list):
@@ -380,7 +387,10 @@ def main() -> None:
     # ---- Merge ----
     merged_fm = merge_frontmatter(fm_from, fm_into, args.from_exec, args.into)
     merged_body = merge_notes(body_from, body_into, args.from_exec, args.into)
-    merged_text = serialize_frontmatter(merged_fm) + "\n" + merged_body
+    # No separator inserted here. `serialize_frontmatter` already ends with
+    # `---\n`, and since the regex above stopped consuming blank lines the body
+    # carries whatever gap the file had. Adding "\n" was what inserted one.
+    merged_text = serialize_frontmatter(merged_fm) + merged_body
 
     # Write merged file
     target_path.write_text(merged_text, encoding="utf-8")

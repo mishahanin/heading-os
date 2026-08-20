@@ -147,10 +147,37 @@ def test_every_live_crm_record_round_trips_byte_for_byte(mc):
         fm, body = mc.parse_frontmatter(text)
         if not fm:
             continue
-        if mc.serialize_frontmatter(fm) + "\n" + body != text:
+        # Mirrors the production join exactly (merge-contacts.py, "Merge"
+        # block). A test that reassembles differently from the writer measures
+        # its own arithmetic, not the tool's.
+        if mc.serialize_frontmatter(fm) + body != text:
             damaged.append(f.name)
 
     assert not damaged, f"{len(damaged)} of {len(records)} rewritten: {damaged[:8]}"
+
+
+@pytest.mark.parametrize("gap,label", [
+    ("", "no blank line after the frontmatter"),
+    ("\n", "one blank line"),
+    ("\n\n", "two blank lines"),
+])
+def test_the_gap_after_the_frontmatter_is_preserved(mc, gap, label):
+    """The tool merges one field. Everything else must come back byte-identical,
+    including whitespace it was never asked about.
+
+    Until 2026-08-20 the closing `---\\s*\\n` swallowed every following blank
+    line and the writer put exactly one back. A record with one blank line
+    survived; a record with none gained one, and a record with two lost one.
+    All 326 of the operator's records carry exactly one, so the corpus test
+    above could not see it. `examples/crm/contacts/EXAMPLE-contact.md` carries
+    none, which is how CI found it while every local run stayed green.
+    """
+    text = f"---\nname: Example\ntier: prospect\n---\n{gap}Body line one.\n"
+    fm, body = mc.parse_frontmatter(text)
+    assert fm, f"{label}: frontmatter did not parse"
+    assert mc.serialize_frontmatter(fm) + body == text, (
+        f"{label}: the round trip changed the file"
+    )
 
 
 def test_every_live_block_list_reads_back_as_a_list(mc):

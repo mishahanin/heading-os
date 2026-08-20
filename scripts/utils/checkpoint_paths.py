@@ -34,6 +34,7 @@ import os
 import subprocess  # nosec B404 - fixed argv, never shell=True
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -699,6 +700,83 @@ def write_json_atomic(path: Path, data: dict) -> None:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp_name)
         raise
+
+
+LOCK_WAIT_SECONDS = 2.0
+LOCK_POLL_SECONDS = 0.01
+
+
+@contextlib.contextmanager
+def locked_state(path: Path, *, wait: float = LOCK_WAIT_SECONDS):
+    """Read-modify-write one state file under an exclusive lock.
+
+    Yields the dict. Whatever the block leaves in it is written atomically when
+    the block exits without raising; on an exception nothing is written and the
+    file keeps its previous contents.
+
+    **Why a lock and not just an atomic write.** `write_json_atomic` makes each
+    WRITE indivisible, which is a different guarantee from making a read and its
+    following write indivisible. Four processes write this file - the statusline
+    on every render, the Stop hook, the PostCompact hook, and the CLI - and the
+    statusline writes back the WHOLE dict it read at the top of its run.
+    Measured 2026-08-20: the exposed span between that read and that write is
+    0.814 ms median and 3.686 ms at worst, and in 1 of 60 forced-overlap trials
+    a concurrent `checkpoint-paths.py --unattended on` was lost, silently, while
+    the CLI printed `unattended=on`. The operator's switch went nowhere and
+    nothing said so.
+
+    **It degrades rather than hangs, and says which.** A hook that blocks is
+    worse than a hook that races: the Stop hook has a 90-second budget and the
+    statusline runs on every turn. So the wait is bounded, and on expiry the
+    block proceeds UNLOCKED with a line on stderr rather than raising. The same
+    applies where `fcntl` is unavailable (Windows): the lock is skipped and the
+    behaviour is exactly what it was before this existed.
+
+    The lock lives in a sidecar `<name>.lock`, never in the state file itself -
+    locking the file a writer is about to `os.replace` would lock an inode that
+    stops being the file.
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - non-POSIX
+        fcntl = None
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    handle = None
+    held = False
+    if fcntl is not None:
+        deadline = time.monotonic() + wait
+        try:
+            handle = open(lock_path, "a+")  # noqa: SIM115 - released in the finally
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        print(
+                            f"checkpoint: {lock_path.name} busy for {wait:.0f}s; "
+                            "writing unlocked",
+                            file=sys.stderr,
+                        )
+                        break
+                    time.sleep(LOCK_POLL_SECONDS)
+        except OSError as exc:
+            print(f"checkpoint: could not open {lock_path.name}: {exc}", file=sys.stderr)
+
+    try:
+        state = read_json(path)
+        yield state
+        write_json_atomic(path, state)
+    finally:
+        if handle is not None:
+            if held:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                handle.close()
 
 
 def write_text_atomic(path: Path, content: str) -> None:

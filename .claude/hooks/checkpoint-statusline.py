@@ -45,6 +45,12 @@ from scripts.utils import checkpoint_paths as CP  # noqa: E402
 
 CP.force_utf8()
 
+# A sentinel distinct from None, because None is a REAL value here:
+# `offer_level` and `offer_bucket` are set to None on purpose, and a
+# diff keyed on `.get(k)` alone could not tell "set to None this render"
+# from "was already absent".
+_UNSET = object()
+
 _CFG = CP.config()
 SOFT_THRESHOLD = _CFG["soft"]
 HARD_THRESHOLD = _CFG["hard"]
@@ -261,6 +267,9 @@ def main() -> int:
     project = CP.project_root(payload)
     state_path = CP.state_path(project, CP.session_slug(payload))
     state = CP.read_json(state_path)
+    # Kept so the write below can send only what THIS render changed,
+    # instead of the whole dict it read. See the write for why.
+    state_at_read = dict(state)
     previous_last_offered = int(state.get("last_offered_bucket") or 0)
 
     # Resolved from the session's own switch when it has one, from the workspace
@@ -290,17 +299,34 @@ def main() -> int:
             "hard_threshold": HARD_THRESHOLD,
             "remind_step": REMIND_STEP,
             "auto": auto,
-            "used_percentage": used,
-            "remaining_percentage": cw.get("remaining_percentage"),
-            # Absolute numbers, recorded because the percentage alone cannot
-            # settle an argument about where compaction fires. The harness
-            # sends these in the same payload; nothing here derives them.
-            "context_window_size": cw.get("context_window_size"),
-            "context_input_tokens": _mapping(cw.get("current_usage")).get("input_tokens"),
-            "current_bucket": bucket,
             "updated_at": now_iso,
         }
     )
+    # The MEASUREMENT keys, written only by a render that actually measured.
+    #
+    # They were in the block above until 2026-08-20, so a payload carrying no
+    # readable `context_window` stamped `used_percentage: null` and
+    # `current_bucket: 0` over the last good reading. That is not a display
+    # detail: `checkpoint-offer.py::_used_percentage` reads this key, returns
+    # None on a null, and every threshold decision on that Stop then runs with
+    # no reading at all. Observed live in the compaction watch log the same day,
+    # 51.0 -> null -> 52.0 inside three minutes.
+    #
+    # Same rule as the offer keys below: a render that measured nothing decides
+    # nothing (.claude/rules/scope-claims.md § fail toward over-reporting).
+    if used is not None:
+        state.update(
+            {
+                "used_percentage": used,
+                "remaining_percentage": cw.get("remaining_percentage"),
+                # Absolute numbers, recorded because the percentage alone cannot
+                # settle an argument about where compaction fires. The harness
+                # sends these in the same payload; nothing here derives them.
+                "context_window_size": cw.get("context_window_size"),
+                "context_input_tokens": _mapping(cw.get("current_usage")).get("input_tokens"),
+                "current_bucket": bucket,
+            }
+        )
 
     # AFTER the update, never inside it. This dict is written every turn, so a
     # peak listed among the fields above would be overwritten by the current
@@ -339,20 +365,24 @@ def main() -> int:
         state["offer_level"] = None
         state["offer_bucket"] = None
 
-    # NOT converted to the read-modify-write of `checkpoint-offer.py::_persist`,
-    # which applies only its own keys to what is on disk NOW. Measured
-    # 2026-08-20: the exposed span between the read above and this write is 0.814
-    # ms median (3.686 ms max), of which 0.239 ms is the read and the atomic write
-    # themselves, so re-reading here would shrink the window about 3x and close
-    # nothing. A concurrent `scripts/checkpoint-paths.py --unattended on` was lost
-    # in 1 of 60 forced-overlap trials, silently, while the CLI printed
-    # "unattended=on". Closing it needs one exclusive lock around read-modify-write
-    # shared by every writer of this file, which belongs in
-    # scripts/utils/checkpoint_paths.py - outside this hook. Reported rather than
-    # half-fixed here, because a 0.24 ms window that looks handled is worse than a
-    # 0.81 ms one that is known.
+    # Send only what THIS render changed, applied to what is on disk NOW, under
+    # the lock every writer of this file shares (`CP.locked_state`).
+    #
+    # Writing `state` wholesale was the defect. This hook reads at the top of the
+    # render and wrote at the bottom, so anything another process wrote in
+    # between was replaced by the value read before it existed. Measured
+    # 2026-08-20: the exposed span is 0.814 ms median and 3.686 ms at worst, and
+    # a concurrent `scripts/checkpoint-paths.py --unattended on` was lost in 1 of
+    # 60 forced-overlap trials - silently, while the CLI printed
+    # "unattended=on". The operator's switch went nowhere and nothing said so.
+    #
+    # The diff is computed rather than enumerated on purpose: a hand-written list
+    # of "the keys this hook owns" is a list that stops being true the next time
+    # someone adds a field here.
+    changes = {k: v for k, v in state.items() if state_at_read.get(k, _UNSET) != v}
     try:
-        CP.write_json_atomic(state_path, state)
+        with CP.locked_state(state_path) as fresh:
+            fresh.update(changes)
     except Exception as exc:
         # State write failure should not break the status line
         print(f"checkpoint-statusline: state write failed: {exc}", file=sys.stderr)

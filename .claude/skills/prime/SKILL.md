@@ -90,23 +90,40 @@ Brief statement: who the user is, what 31C is, where we are (post-launch, deploy
 Summary of active deals, investor conversations, and partnership discussions from pipeline.md. Flag anything requiring immediate attention.
 
 ### 2.1 Previous Session Handoff
-Check if `outputs/operations/handoff.md` exists. If it does:
-- Read the file and extract the YAML frontmatter (`created`, `session_summary`, `task_progress`, `urgency`) and the `## Next Action` section body
-- Present to the user:
 
-> ## Previous Session Handoff
-> Created: {created}
-> Summary: {session_summary}
-> Progress: {task_progress} tasks
-> Next action: {next_action text from body}
+Read `outputs/operations/handoff-archive/.latest/summary.md`. It is the newest
+handoff in this workspace, written by the checkpoint hooks. If the file is
+absent, skip this section and do not mention handoffs.
+
+The file carries four things this section needs. A `Source:` line names the full
+archive. A `Generated:` line gives the ISO timestamp. A `Trigger:` line says what
+caused the save. A `## Next steps` list follows them. Present:
+
+> ## Previous session handoff
+> Generated: {Generated}
+> Trigger: {Trigger}
+> Next: {the first bullet under `## Next steps`}
+> Full record: {Source}
 >
 > Resume this work, or start fresh?
 
-- If user says **resume**: load the referenced plan file (from `plan` frontmatter field, if present) and pick up from the next action described in the handoff
-- If user says **fresh** or moves on to a different topic: move the handoff file to `outputs/operations/handoff-archive/YYYY-MM-DD-HHmm-{slug}.md`. Derive the slug from `session_summary` (lowercase, spaces to hyphens, truncated to 40 chars). Create the `handoff-archive/` directory if it doesn't exist.
-- If the `urgency` field is `high`, flag the handoff prominently: "**URGENT handoff from previous session - review before starting new work.**"
+On **resume**, read the archive named on the `Source:` line — that file is the
+record, and the summary here is a bounded copy of it. On **fresh**, say nothing
+further and move on. Archive NOTHING: the handoff already IS the archive, and
+`.latest/` holds pointers that the next save overwrites on its own.
 
-If `outputs/operations/handoff.md` does not exist, skip this section entirely (do not mention handoffs).
+This section covers a session started cold. After a compaction, a `/clear`, or a
+`--resume`, `.claude/hooks/checkpoint-inject.py` injects the same handoff at
+SessionStart. The compaction summary in context is fresher than the pointer.
+Do not repeat it.
+
+**This replaced a dead reader on 2026-08-20.** The section used to open a single
+flat `handoff` file at the operations root. It parsed frontmatter fields named
+`created`, `session_summary`, `task_progress`, `urgency` and `plan`. Nothing in
+the engine writes that file or those fields. Measured across every script and
+hook, the writer count was zero and the file was absent. So this section had
+done nothing since the mechanism moved to the dated archive, while reading like
+a working feature.
 
 ### 2.5-2.16 Parallel Health Block
 

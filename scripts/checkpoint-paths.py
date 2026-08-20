@@ -170,10 +170,14 @@ def auto_switch(value: str) -> int:
         print(f"session_slug={slug}")
         return 0
 
-    state["session_auto"] = value == "on"
-    state["session_auto_at"] = CP.utc_now().isoformat()
     try:
-        CP.write_json_atomic(path, state)
+        # The mutation happens INSIDE the lock, not merged into it
+        # afterwards. `update` cannot delete, and these paths delete:
+        # `lower_unattended` pops the keys it restored from, and a
+        # merge would leave them behind for the next lower to read.
+        with CP.locked_state(path) as state:
+            state["session_auto"] = value == "on"
+            state["session_auto_at"] = CP.utc_now().isoformat()
     except OSError as exc:
         print(f"checkpoint-paths: could not write the switch: {exc}", file=sys.stderr)
         return 1
@@ -255,12 +259,16 @@ def unattended_switch(value: str) -> int:
 
     # Both bodies moved into scripts/utils/checkpoint_paths.py on 2026-08-19, so
     # this CLI and the hook's fuse stop cannot drift apart. They already had.
-    if value == "on":
-        CP.raise_unattended(state)
-    else:
-        CP.lower_unattended(state)
     try:
-        CP.write_json_atomic(path, state)
+        # The mutation happens INSIDE the lock, not merged into it
+        # afterwards. `update` cannot delete, and this path deletes:
+        # `lower_unattended` pops the keys it restored from, and a
+        # merge would leave them behind for the next lower to read.
+        with CP.locked_state(path) as state:
+            if value == "on":
+                CP.raise_unattended(state)
+            else:
+                CP.lower_unattended(state)
     except OSError as exc:
         print(f"checkpoint-paths: could not write the switch: {exc}", file=sys.stderr)
         return 1
@@ -301,9 +309,12 @@ def done_marker(note: str) -> int:
         # switch it is told never to read.
         print(f"note: unattended is off for this session ({slug}); marker recorded anyway.")
 
-    CP.mark_unattended_done(state, note)
     try:
-        CP.write_json_atomic(path, state)
+        # Marked INSIDE the lock, on the current file. The statusline writes this
+        # same file on every render, so marking a copy read a moment earlier and
+        # then writing it back is how a marker goes missing.
+        with CP.locked_state(path) as state:
+            CP.mark_unattended_done(state, note)
     except OSError as exc:
         print(f"checkpoint-paths: could not write the marker: {exc}", file=sys.stderr)
         return 1

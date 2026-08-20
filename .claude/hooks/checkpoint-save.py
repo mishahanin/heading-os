@@ -601,39 +601,39 @@ Rules:
     state_dir = state_dir_for(payload)
     state_path = state_dir / f"checkpoint-{session_slug}.json"
     try:
-        if state_path.exists():
-            try:
-                cs = json.loads(state_path.read_text(encoding="utf-8"))
-            except Exception:
-                cs = {}
-        else:
-            cs = {}
-        # Close the statusline's running peak into a dated record BEFORE the
-        # reset below, because this is the only moment the level compaction
-        # fired at still exists anywhere: the next statusline render writes the
-        # post-compact reading and the pre-compact one is gone for good.
-        CP.record_compaction(cs, now.isoformat(), pointer_trigger)
-        cs.update(
-            {
-                "needs_compact_offer": False,
-                "offer_level": None,
-                "offer_bucket": None,
-                "last_offered_bucket": 0,
-                "last_compact_at": now.isoformat(),
-                "last_compact_trigger": pointer_trigger,
-                # The path that EXISTS. Recording the dated archive on the
-                # quarantine branch left a dangling pointer in state, naming a
-                # file no branch had written. On the lost path no body file
-                # exists at all, so the entry is cleared rather than pointed at
-                # either candidate.
-                "last_compact_summary_path": (
-                    None if lost_kind is not None
-                    else archive_ref if quarantine_kind is None
-                    else quarantine_ref
-                ),
-            }
-        )
-        write_json_atomic(state_path, cs)
+        # The whole read-modify-write sits inside the lock, and the mutation
+        # happens on the locked object rather than on a copy merged in
+        # afterwards. Two reasons, and the second is the one a merge cannot
+        # satisfy: the statusline writes this file on every render, so a copy
+        # read outside the lock is already stale; and `record_compaction`
+        # DELETES the statusline's running peak, which `update` has no way to
+        # express.
+        with CP.locked_state(state_path) as cs:
+            # Close the running peak into a dated record BEFORE the reset below.
+            # This is the only moment the level compaction fired at still exists
+            # anywhere: the next statusline render writes the post-compact
+            # reading and the pre-compact one is gone for good.
+            CP.record_compaction(cs, now.isoformat(), pointer_trigger)
+            cs.update(
+                {
+                    "needs_compact_offer": False,
+                    "offer_level": None,
+                    "offer_bucket": None,
+                    "last_offered_bucket": 0,
+                    "last_compact_at": now.isoformat(),
+                    "last_compact_trigger": pointer_trigger,
+                    # The path that EXISTS. Recording the dated archive on the
+                    # quarantine branch left a dangling pointer in state, naming
+                    # a file no branch had written. On the lost path no body file
+                    # exists at all, so the entry is cleared rather than pointed
+                    # at either candidate.
+                    "last_compact_summary_path": (
+                        None if lost_kind is not None
+                        else archive_ref if quarantine_kind is None
+                        else quarantine_ref
+                    ),
+                }
+            )
     except Exception as exc:
         # State reset failure is non-fatal
         print(f"checkpoint-save: state reset failed: {exc}", file=sys.stderr)

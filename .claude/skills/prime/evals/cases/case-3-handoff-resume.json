@@ -1,9 +1,9 @@
 {
   "id": "case-3-handoff-resume",
-  "description": "Confirms /prime checks for a previous-session handoff file and asks whether to resume or start fresh.",
-  "input": "What does /prime do if outputs/operations/handoff.md exists from a previous session?",
+  "description": "Confirms /prime reads the newest handoff pointer written by the checkpoint hooks and asks whether to resume or start fresh. The input named a flat handoff file at the operations root until 2026-08-20; nothing has ever written it, so the case rehearsed a contract the engine does not implement.",
+  "input": "What does /prime do when outputs/operations/handoff-archive/.latest/summary.md exists from a previous session?",
   "checks": {
-    "must_mention": ["resume", "handoff"],
+    "must_mention": ["resume", "handoff", "archive"],
     "min_words": 50,
     "hidden_chars_clean": true
   }

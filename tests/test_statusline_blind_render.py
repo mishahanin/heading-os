@@ -92,3 +92,43 @@ def test_a_readable_render_above_the_threshold_still_queues_one(tmp_path):
     after = _run(tmp_path, {"context_window": {"remaining_percentage": 8.0}}, pre)
     assert after.get("needs_compact_offer") is True
     assert after.get("offer_level") in ("soft", "hard")
+
+
+MEASURED = ("used_percentage", "remaining_percentage", "current_bucket",
+            "context_window_size", "context_input_tokens")
+
+
+@pytest.mark.parametrize("payload,label", [
+    ({}, "no context_window key at all"),
+    ({"context_window": {}}, "an empty context_window"),
+    ({"context_window": "not-a-mapping"}, "a context_window of the wrong type"),
+])
+def test_the_last_good_reading_survives_a_render_that_measured_nothing(
+    tmp_path, payload, label
+):
+    """Not a display detail.
+
+    `checkpoint-offer.py::_used_percentage` reads `used_percentage` out of this
+    file and returns None on a null, so a blind render that stamps null leaves
+    the next Stop with no reading and every threshold decision made blind.
+
+    Observed live on 2026-08-20 in the compaction watch log: the value went
+    51.0 -> null -> 52.0 inside three minutes, on a session sitting above the
+    hard threshold.
+    """
+    pre = dict(PENDING, used_percentage=51.0, remaining_percentage=49.0,
+               current_bucket=50, context_window_size=750000,
+               context_input_tokens=382500)
+    after = _run(tmp_path, payload, pre)
+    kept = {k: after.get(k) for k in MEASURED}
+    assert kept == {k: pre[k] for k in MEASURED}, (
+        f"{label}: a render that measured nothing overwrote the last reading"
+    )
+
+
+def test_a_readable_render_does_replace_the_reading(tmp_path):
+    """The negative half: a render that DID measure must update it."""
+    pre = dict(PENDING, used_percentage=51.0, current_bucket=50)
+    after = _run(tmp_path, {"context_window": {"remaining_percentage": 20.0}}, pre)
+    assert after.get("used_percentage") == 80.0
+    assert after.get("current_bucket") == 80

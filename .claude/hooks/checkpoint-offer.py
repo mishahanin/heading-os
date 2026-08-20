@@ -721,12 +721,18 @@ def _persist(state_path: Path, _mutate=None, **updates) -> None:
     keys; expressing that as keywords would have meant writing the popped names
     back as nulls.
     """
-    fresh = CP.read_json(state_path)
-    fresh.update(updates)
-    if _mutate is not None:
-        fresh = _mutate(fresh)
+    # Under `CP.locked_state`, not a bare read-then-write: the statusline writes
+    # this same file on every render, and the read-to-write span here is exposed
+    # in the same way its own was. `_mutate` may REPLACE the dict (that is what
+    # `CP.lower_unattended` does), so the result is applied back onto the locked
+    # object rather than rebound.
     try:
-        CP.write_json_atomic(state_path, fresh)
+        with CP.locked_state(state_path) as fresh:
+            fresh.update(updates)
+            if _mutate is not None:
+                mutated = _mutate(dict(fresh))
+                fresh.clear()
+                fresh.update(mutated)
     except Exception as exc:  # noqa: BLE001 - a lost note is not worth a broken turn
         print(f"checkpoint-offer: state write failed: {exc}", file=sys.stderr)
 

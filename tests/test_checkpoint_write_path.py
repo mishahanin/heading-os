@@ -63,9 +63,19 @@ def _roots(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
 
 
 def _written_files(data: Path, project: Path) -> set[Path]:
-    """Every file the hook could have produced, in both roots it writes to."""
-    found = {p for p in data.rglob("*") if p.is_file()}
-    found |= {p for p in (project / ".claude" / "state").rglob("*") if p.is_file()}
+    """Every file the hook could have produced, in both roots it writes to.
+
+    `.lock` sidecars are excluded, and the exclusion is narrow on purpose. They
+    are created by `CP.locked_state` with a plain `open(..., "a+")`, which is not
+    atomic and does not need to be: a lock file carries NO data. Nothing reads
+    its contents, it is never replaced, and a torn or empty one costs nothing
+    because the guarantee lives in `flock` on the descriptor rather than in the
+    bytes. Excluding the whole state directory instead would have hidden the
+    state JSON, which does need the guarantee.
+    """
+    found = {p for p in data.rglob("*") if p.is_file() and p.suffix != ".lock"}
+    found |= {p for p in (project / ".claude" / "state").rglob("*")
+              if p.is_file() and p.suffix != ".lock"}
     return found
 
 

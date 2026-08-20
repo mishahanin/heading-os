@@ -328,3 +328,37 @@ def test_the_state_path_is_the_canonical_one_on_both_branches():
     assert 'archive_name = f"{stamp}_handoff_compact-{trigger_slug}_{session_slug}.md"' in text, (
         "the archive name no longer uses the quarantine-safe slug"
     )
+
+
+# ============================================================
+# An instrument that names a key nobody writes reports nothing
+# ============================================================
+
+def test_the_compaction_watcher_watches_keys_that_are_actually_written():
+    """`scripts/dev/compact-watch.py` watched `compact_request_at` for its first
+    hour. The writer spells it `compact_requested_at`, so the log said no request
+    had been made through a run where one had fired at 07:41:02 and been
+    recorded. A misspelled key is indistinguishable from a quiet mechanism, which
+    is the same failure shape as a gate that reports green while doing nothing.
+    """
+    import re
+
+    watcher = (ROOT / "scripts" / "dev" / "compact-watch.py").read_text(encoding="utf-8")
+    block = watcher[watcher.index("WATCHED = ("):]
+    block = block[:block.index("\n)")]
+    watched = set(re.findall(r'"([a-z_]+)"', block))
+    assert len(watched) >= 15, "the watch list shrank; re-derive this guard"
+
+    writers = ""
+    for rel in (".claude/hooks/checkpoint-offer.py",
+                ".claude/hooks/checkpoint-save.py",
+                ".claude/hooks/checkpoint-statusline.py",
+                "scripts/utils/checkpoint_paths.py"):
+        writers += (ROOT / rel).read_text(encoding="utf-8")
+
+    orphans = sorted(k for k in watched
+                     if f'"{k}"' not in writers and f"{k}=" not in writers)
+    assert not orphans, (
+        f"the watcher names {len(orphans)} key(s) no writer produces, so it "
+        f"would report their absence as silence: {orphans}"
+    )

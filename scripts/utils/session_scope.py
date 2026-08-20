@@ -67,26 +67,44 @@ def files_written(transcript: Path | str | None) -> set[Path] | None:
     if not transcript:
         return None
     path = Path(transcript)
+
+    # Streamed, never `read_text().splitlines()`, for TWO reasons - and the
+    # second is a correctness bug, not a resource one.
+    #
+    # Memory: that shape held the whole file AND the list of lines it was split
+    # into, so peak ran to roughly two copies. Measured 2026-08-20 on this
+    # workspace's largest transcript, 88 MB: 795 MB peak RSS, against 19 MB
+    # streamed. `checkpoint-precompact.py` calls this inside a 20-second
+    # PreCompact budget, so time was never the problem - memory was, on a hook
+    # that runs while the session is already at its ceiling.
+    #
+    # Correctness: `str.splitlines()` breaks on eight characters a file handle
+    # does not - U+000B, U+000C, U+001C, U+001D, U+001E, U+0085, U+2028, U+2029.
+    # A JSONL record carrying any of them inside a string was shredded into
+    # fragments that no longer parsed, so every `tool_use` block on that record
+    # was invisible. The same transcript holds 11 U+2028, 9 U+2029 and 2 U+0085,
+    # and streaming recovered a write the old reader had silently dropped. A
+    # missed write here is a write `turn-check.py` attributes to nobody.
+    found: set[Path] = set()
     try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
+        handle = path.open(encoding="utf-8", errors="replace")
     except OSError:
         return None
-
-    found: set[Path] = set()
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        for block in _blocks(line):
-            if not isinstance(block, dict) or block.get("type") != "tool_use":
+    with handle:
+        for line in handle:
+            if not line.strip():
                 continue
-            if block.get("name") not in WRITING_TOOLS:
-                continue
-            data = block.get("input")
-            if not isinstance(data, dict):
-                continue
-            target = data.get("file_path")
-            if isinstance(target, str) and target:
-                found.add(Path(target))
+            for block in _blocks(line):
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") not in WRITING_TOOLS:
+                    continue
+                data = block.get("input")
+                if not isinstance(data, dict):
+                    continue
+                target = data.get("file_path")
+                if isinstance(target, str) and target:
+                    found.add(Path(target))
     return found
 
 

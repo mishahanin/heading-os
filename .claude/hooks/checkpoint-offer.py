@@ -480,7 +480,13 @@ def _operator_spoke(fresh: str, session: str) -> bool:
     that most `user` lines are tool results rather than the operator, so the
     check is for a text block and never for the role alone.
     """
-    for line in fresh.splitlines():
+    # `split("\n")`, not `splitlines()`. The latter also breaks on U+0085,
+    # U+2028 and U+2029, which `json.dumps` writes into a transcript literally -
+    # the live 88 MB transcript here holds 22 of them. A record cut on one of
+    # those parses as neither half, so the enqueue this function exists to see
+    # would be invisible and the hook would continue over a message the operator
+    # had already typed.
+    for line in fresh.split("\n"):
         line = line.strip()
         if not line:
             continue
@@ -531,29 +537,37 @@ def _queue_pending(path: Path, session: str) -> bool:
     its fixture was captured from a session before that session's own first
     dequeue.
     """
+    # Streamed, and split on newlines only. This runs on EVERY Stop, not just at
+    # a compaction, so materialising the transcript costs the peak twice over on
+    # the largest ones (795 MB measured on the 88 MB file, against 19 MB
+    # streamed). `splitlines()` was also cutting records on U+0085 / U+2028 /
+    # U+2029, which appear 22 times in that same transcript - and a cut record
+    # is a `queue-operation` this counter never sees, which is the difference
+    # between halting for the operator and talking over them.
     try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
+        handle = path.open(encoding="utf-8", errors="replace")
     except OSError:
         return True
     pending = 0
-    for line in raw.splitlines():
-        if '"queue-operation"' not in line:
-            continue
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(entry, dict) or entry.get("type") != "queue-operation":
-            continue
-        if session and entry.get("sessionId") not in (None, session):
-            continue
-        operation = entry.get("operation")
-        if operation == "enqueue":
-            pending += 1
-        elif operation == "popAll":
-            pending = 0
-        elif operation in ("remove", "dequeue"):
-            pending -= 1
+    with handle:
+        for line in handle:
+            if '"queue-operation"' not in line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict) or entry.get("type") != "queue-operation":
+                continue
+            if session and entry.get("sessionId") not in (None, session):
+                continue
+            operation = entry.get("operation")
+            if operation == "enqueue":
+                pending += 1
+            elif operation == "popAll":
+                pending = 0
+            elif operation in ("remove", "dequeue"):
+                pending -= 1
     return pending > 0
 
 

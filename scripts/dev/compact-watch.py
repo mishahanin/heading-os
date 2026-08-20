@@ -39,7 +39,16 @@ WATCHED = (
     "offer_level",
     "last_offer_at",
     "last_compact_at",
-    "compact_request_at",
+    # `compact_requested_at`, NOT `compact_request_at`. The first spelling is
+    # what `_request_compaction` writes; this file watched the second for its
+    # first hour and therefore reported "no request" through a run where the
+    # request had fired at 07:41:02. An instrument that names a key nobody
+    # writes reads exactly like an instrument reporting nothing happened.
+    "compact_requested_at",
+    "compact_requested_bucket",
+    "compact_request_count",
+    "compact_requests",
+    "compact_host",
     "compact_request_error_at",
     "compact_host_checked_at",
     "unattended_continuations",

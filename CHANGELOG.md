@@ -4,7 +4,68 @@ All notable changes to HEADING OS are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims at [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0, interfaces may change between minor versions; see [ROADMAP.md](ROADMAP.md).
 
-## [Unreleased]
+## [0.12.0] - 2026-08-21
+
+The release about switches the operator can reach, and gates that turned out
+never to have been armed. One new control ships: the compaction threshold is now
+a per-session number he sets mid-flight, in the running window, with no restart.
+Behind it, a closing sweep found four mechanisms that existed, passed review, and
+were wired to nothing - a push hook that had silently stopped uploading Git LFS
+content since June, a data overlay whose own tests ran in no gate at all, a
+plugin bundle shipping a skill without the two commands that skill tells you to
+run, and a frontmatter rewrite that has emitted unparseable YAML since the
+generator first shipped. Written for a reader rather than for a diff:
+[docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md).
+
+### Added
+
+- **`/compact-at N` sets the compaction threshold for THIS session.** The
+  quality of long reasoning depends on how full the context window is, and the
+  useful band is 30-40%, so the operator fixes the number at the start of
+  important work instead of restarting into a different environment. It takes
+  effect in the RUNNING session: the Stop hook and the status line are both fresh
+  processes per event and both re-read the session's own state file. The soft
+  reminder is always `SOFT_OFFSET` (5) below the hard threshold, never a second
+  setting. Bounds are 15-90 - under 15 the derived soft threshold lands below 10%,
+  where the trigger sits at the always-loaded context floor and cascades, and over
+  90 there is no window left to write the handoff that must precede the
+  compaction. A number at or below the last rendered fill is refused, and the
+  refusal names that reading as one render old rather than as the present fill.
+  Stored under `session_hard_threshold`, never `hard_threshold`: the status line
+  rewrites that key on every render as its echo of the resolved config, so a
+  choice recorded there would survive about one turn. The value dies with the
+  session, because the state file is keyed by session and pruned with it. The
+  switch raises neither `auto` nor `unattended`, and says so when both are off -
+  with both down the hook ASKS at the threshold and compacts nothing.
+  `--compact-at status` reports the resolved pair and its source;
+  `--compact-at off` returns the session to `CLAUDE_HANDOFF_HARD_THRESHOLD`.
+  39 tests in `tests/test_session_compaction_threshold.py`.
+
+- **The status line renders the resolved threshold** in every state that CAN fire
+  the driven compaction (`⏵ unattended 35%`, `⏵ auto 35%`,
+  `⏸ unattended paused 35%`) and omits it on `manual`, where the hook only asks.
+  It is shown whether the number came from the session or from the environment: a
+  number that appeared only once overridden would leave "not set" and "not
+  working" looking identical, which is the ambiguity that segment exists to
+  remove.
+
+- **A data overlay's own tests now block its push.** Measured 2026-08-20:
+  `tests/` in the private overlay sat in no gate at all, because the engine's
+  pre-push hook runs the ENGINE suite and `push-all` called the DATA attempt with
+  `test_gate` unset. The first run of the new gate found two tests that had been
+  failing unnoticed. The mechanism is the existing one rather than a second one -
+  a versioned hook in `.githooks/`, installed machine-locally, with `push-all`
+  refusing to push a repository whose gate is not armed. The two gates carry
+  distinct markers, so DATA can never borrow the engine's and demand the engine
+  suite on a repository that holds no engine. An executive's overlay carries no
+  `tests/` directory, and that absence passes rather than fails closed.
+
+- **Plugin bundles ship `.claude/commands/`.** `build-plugins.py` had no field
+  for them, so `heading-core` shipped the `/checkpoint` skill and neither
+  `/unattended` nor `/compact-at` - the two commands that skill's own body tells
+  the operator to run. A `commands:` list in `config/plugin-bundles.yaml` now
+  ships them through the same completeness gate and the same
+  `${CLAUDE_PLUGIN_ROOT}` rewrite the skills get.
 
 ### Fixed
 
@@ -42,10 +103,77 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `tests/test_checkpoint_unattended_contract.py`, and the record carries
   `retired_sha` at the last commit where it stood as approved.
 
+- **The engine's pre-push hook had silently broken Git LFS since 2026-06-29.**
+  `.githooks/pre-push` occupies the slot git-lfs installs into and ended in
+  `exec run-tests.py` with no delegation, while `.gitattributes` routes ten binary
+  extensions through LFS. The next `.png` or `.pdf` added to the repository would
+  have pushed as a pointer with no object behind it - green for the pusher, broken
+  for the next fresh clone. It never bit only because all nine existing LFS objects
+  were added the day the hook first replaced the stock one, and absence of a
+  symptom is not coverage. The review that diagnosed this exact hazard FOR the data
+  overlay, and wrote the delegation into `.githooks/pre-push-data`, left the engine
+  hook carrying the identical defect. Two guards now hold it: the delegation is
+  present, and it runs AFTER the suite, because exec-ing git-lfs first would pass a
+  presence check while skipping every test.
+
+- **The data gate resolved the engine by guessing a directory name.**
+  `.githooks/pre-push-data` looked for "the sibling named `.heading-os`", a name
+  this workspace nowhere promises - a public clone is `heading-os` - and then fell
+  through to a bare `python3`, which on this machine carries pytest 9.0.3. A wrong
+  guess therefore ran the overlay's tests GREEN under none of the pinned
+  dependencies. `install-git-hooks.py` already knew the real path and threw it
+  away; it now stamps it in, and `check_pre_push_data` resolves the stamp so a
+  relocation shows red instead of quietly passing.
+
+- **Every built `SKILL.md` has shipped unparseable frontmatter since the plugin
+  generator first ran.** The `${CLAUDE_PLUGIN_ROOT}` rewrite substituted into the
+  double-quoted `allowed-tools` scalar without escaping, injecting a bare `"` that
+  `yaml.safe_load` refuses. The rewrite now splits frontmatter from body and
+  escapes inside the quoted scalar, keeping the quotes in the PARSED value where
+  they protect a cache path containing a space. The guard parses what was written
+  rather than trusting the substitution, and the old form was falsified by
+  reproduction before the guard was accepted. Replayed over all 96 in-repo skills,
+  the original defect broke exactly two - `checkpoint` and `queue-draft` - and only
+  `checkpoint` shipped in a bundle, so the real blast radius was `heading-core`
+  alone.
+
+- **That frontmatter guard covered one bundle out of five.** It rode a fixture
+  that builds `heading-core` alone, while four other bundles ship eleven more
+  skills through the same rewrite, so a broken shape only they carried would have
+  passed every test in the file. It now builds `--all` and parses every `SKILL.md`
+  and every bundled command, asserting that at least one file was actually
+  rewritten - a guard that runs over untouched files proves nothing about the
+  rewrite it exists to check. Measured while widening it: 5 bundles, 14 skill and
+  command files, 10 rewritten, 0 bad.
+
+- **A done marker written during a turn did not survive the Stop that ended it.**
+  `unattended_turn` cleared the whole window whenever the Stop's `prompt_id`
+  differed from the recorded `unattended_turn_id`, four lines before it read the
+  marker. That comparison is on turn IDENTITY and never on age, so it could not
+  tell last night's marker from one written seconds earlier in the turn now
+  ending - and the operator's own turn is the common case, being the first pause
+  after any instruction he gives. `checkpoint-paths.py --done` printed
+  `done recorded` and the hook continued the stretch anyway; it worked only from
+  the second consecutive continuation onward. `unattended_paused_at` now separates
+  the two cases, because it is stamped when the hook ACTS on a marker.
+
+- **`--compact-at` was documented nowhere in `docs/`**, and the `/checkpoint`
+  catalogue card still stated 25/30 as absolutes rather than as the defaults a
+  session can now override.
+
 ### Note
 
 - One CI failure needed no fix: a Pages deployment returned HTTP 500 from
   GitHub's own service and the next deployment succeeded.
+
+- **CodeGraph is on trial over this repository and ships nothing into it.** A
+  structural index of the engine's 829 Python files (872 files, 17,748 symbols,
+  46,498 edges, built in 2.3 s) answers "who calls this" and "what breaks if I
+  change it" in one query. It is a third-party MIT tool, installed per-machine,
+  and the only trace it leaves in the engine is the `.gitignore` line that keeps
+  its 53 MB cache out of the repository. Adopt-or-remove is decided 2026-09-04.
+  See [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md) § 6 for what it measured and
+  the three caveats its README omits.
 
 ## [0.11.0] - 2026-08-20
 
@@ -2313,7 +2441,7 @@ Initial public release.
 - **Memory and ODIN**: a local associative-memory index behind `/recall` and a persistent knowledge brain.
 - The published documentation site at [mishahanin.github.io/heading-os](https://mishahanin.github.io/heading-os/), the deployment guide, and the focused setup guides for models, integrations, and personalization.
 
-[Unreleased]: https://github.com/mishahanin/heading-os/compare/v0.11.0...HEAD
+[0.12.0]: https://github.com/mishahanin/heading-os/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/mishahanin/heading-os/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/mishahanin/heading-os/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/mishahanin/heading-os/compare/v0.8.0...v0.9.0

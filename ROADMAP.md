@@ -1,6 +1,6 @@
 # Roadmap
 
-HEADING OS is `v0.11.0`. The architecture, the security model, and the engine/data seam are stable and load-bearing. This roadmap sketches direction, not dates. Interfaces may change between minor versions while the project is pre-1.0.
+HEADING OS is `v0.12.0`. The architecture, the security model, and the engine/data seam are stable and load-bearing. This roadmap sketches direction, not dates. Interfaces may change between minor versions while the project is pre-1.0.
 
 Last reviewed against the code on 2026-08-17. Items below are marked from what the tree actually holds, not from memory of having done them.
 

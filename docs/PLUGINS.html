@@ -204,6 +204,10 @@ and the compact-and-resume flow, but no proactive offer.</p>
 </tr>
 </tbody>
 </table>
+<p>These two thresholds are the workspace default, not the last word. Since v0.12 a
+single session overrides the pair with <code>/compact-at N</code> and keeps it for that
+window only; see the section below. A session that sets nothing keeps the
+environment pair untouched.</p>
 <p>Auto mode is off until you turn it on. With it on, crossing the threshold saves
 the checkpoint without asking, and the session carries on. After a compaction the
 SessionStart hook tells the assistant to continue on its own. Keep your

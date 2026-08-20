@@ -95,6 +95,11 @@ and the compact-and-resume flow, but no proactive offer.
 | `CLAUDE_HANDOFF_REMIND_STEP` | 5 | how far context must move before it asks again |
 | `CLAUDE_HANDOFF_AUTO` | off | save silently and resume, with no prompt |
 
+These two thresholds are the workspace default, not the last word. Since v0.12 a
+single session overrides the pair with `/compact-at N` and keeps it for that
+window only; see the section below. A session that sets nothing keeps the
+environment pair untouched.
+
 Auto mode is off until you turn it on. With it on, crossing the threshold saves
 the checkpoint without asking, and the session carries on. After a compaction the
 SessionStart hook tells the assistant to continue on its own. Keep your

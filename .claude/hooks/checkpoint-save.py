@@ -573,8 +573,18 @@ Rules:
     # pointer rather than through a path built from unredacted text.
     pointers_kind = None
     try:
-        write_text_atomic(latest_dir / "summary.md", summary_pointer)
-        write_text_atomic(latest_dir / "prompt.md", prompt_pointer)
+        # The SHARED pair goes under one lock. Each file is written atomically on
+        # its own, which is not the same as the two of them landing together:
+        # they are two `os.replace` calls back to back, and two sessions
+        # compacting at once can interleave between them. The result is
+        # `summary.md` naming one session's archive while `prompt.md` names
+        # another's - a state neither session ever held, and the one a resumed
+        # session reads. Reproduced in tests/test_checkpoint_state_lock.py.
+        #
+        # The per-session pair below needs no lock: one session writes it.
+        with CP.file_lock(latest_dir / ".pointers.lock"):
+            write_text_atomic(latest_dir / "summary.md", summary_pointer)
+            write_text_atomic(latest_dir / "prompt.md", prompt_pointer)
         write_text_atomic(latest_dir / session_slug / "summary.md", summary_pointer)
         write_text_atomic(latest_dir / session_slug / "prompt.md", prompt_pointer)
     except Exception as exc:  # noqa: BLE001 - the systemMessage must still report
@@ -588,18 +598,31 @@ Rules:
     # A shared state file here reset a sibling session's bucket too, which is
     # half of why the offer landed in the wrong session.
     #
-    # On the QUARANTINE branch `session_slug` is the fixed literal "unredacted",
-    # so this writes `checkpoint-unredacted.json` and the session's own state file
-    # is neither reset nor given its compaction record. Measured, not inferred: a
-    # save run with a raising redactor produced `.claude/state/checkpoint-
-    # unredacted.json` and left the real session file untouched. Left as is on
-    # purpose. Keying this path off the RAW session id would put an unredacted
-    # string into a filename, which is the exact door the archive name was closed
-    # against, and the branch only reaches here when the redactor is broken -
-    # a state the systemMessage and the shared pointer both shout about, and one
-    # where a stale hysteresis flag costs one extra offer rather than a handoff.
+    # `CP.session_slug(payload)`, NOT the artifact slug above. The two answer
+    # different questions and were the same variable until 2026-08-20.
+    #
+    # The artifact slug is deliberately not the raw one: on the success branch it
+    # comes from the REDACTED id, and on the quarantine branch it is the literal
+    # "unredacted". That is right for a TRACKED path, where a poisoned string
+    # would ride the filename into the data repo and the push scan.
+    #
+    # It is wrong here, and the cost was measured: a save with a raising redactor
+    # wrote `.claude/state/checkpoint-unredacted.json` and left the real session's
+    # file untouched, so its hysteresis was never reset and its compaction never
+    # recorded. The success branch has the same shape whenever redaction alters
+    # the id.
+    #
+    # The argument for keeping the literal was that a raw-derived name puts an
+    # unredacted string into a filename. It does not close that door: the
+    # statusline, the Stop hook and `scripts/checkpoint-paths.py` ALL key off
+    # `safe_slug(raw session id)` unconditionally, so that name is already on
+    # disk and rewritten on every render. This hook writing somewhere else
+    # prevents nothing; it only means the reset lands on a file nobody reads. And
+    # `.claude/state/` is gitignored (`.gitignore:224`), so nothing here reaches
+    # a repository at all - which is the door the archive name closed, and a
+    # different one.
     state_dir = state_dir_for(payload)
-    state_path = state_dir / f"checkpoint-{session_slug}.json"
+    state_path = state_dir / f"checkpoint-{CP.session_slug(payload)}.json"
     try:
         # The whole read-modify-write sits inside the lock, and the mutation
         # happens on the locked object rather than on a copy merged in

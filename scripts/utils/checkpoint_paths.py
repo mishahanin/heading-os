@@ -707,6 +707,70 @@ LOCK_POLL_SECONDS = 0.01
 
 
 @contextlib.contextmanager
+def file_lock(lock_path: Path, *, wait: float = LOCK_WAIT_SECONDS):
+    """Hold an exclusive lock on `lock_path` for the duration of the block.
+
+    Yields True when the lock is held and False when it is not, so a caller that
+    wants to say something different in the degraded case can. Most callers
+    ignore the value: the block runs either way.
+
+    **Bounded, never blocking.** A hook that waits forever is worse than a hook
+    that races - the Stop hook has a 90-second budget and the statusline runs on
+    every turn - so the wait expires, the block proceeds unlocked, and a line
+    goes to stderr saying which happened. Where `fcntl` is unavailable (Windows)
+    the lock is skipped entirely and behaviour is what it was before this
+    existed.
+
+    Separate from `locked_state` because not everything that needs serialising
+    is a JSON dict. The `.latest` pointer PAIR is two text files written back to
+    back, and two sessions interleaving there leave `summary.md` naming one
+    session's archive while `prompt.md` names another's - a state neither
+    session ever held.
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - non-POSIX
+        fcntl = None
+
+    if fcntl is None:
+        yield False
+        return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = None
+    held = False
+    deadline = time.monotonic() + wait
+    try:
+        handle = open(lock_path, "a+")  # noqa: SIM115 - released in the finally
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    print(
+                        f"checkpoint: {lock_path.name} busy for {wait:.0f}s; "
+                        "writing unlocked",
+                        file=sys.stderr,
+                    )
+                    break
+                time.sleep(LOCK_POLL_SECONDS)
+    except OSError as exc:
+        print(f"checkpoint: could not open {lock_path.name}: {exc}", file=sys.stderr)
+
+    try:
+        yield held
+    finally:
+        if handle is not None:
+            if held:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                handle.close()
+
+
+@contextlib.contextmanager
 def locked_state(path: Path, *, wait: float = LOCK_WAIT_SECONDS):
     """Read-modify-write one state file under an exclusive lock.
 
@@ -736,47 +800,11 @@ def locked_state(path: Path, *, wait: float = LOCK_WAIT_SECONDS):
     locking the file a writer is about to `os.replace` would lock an inode that
     stops being the file.
     """
-    try:
-        import fcntl
-    except ImportError:  # pragma: no cover - non-POSIX
-        fcntl = None
-
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_name(path.name + ".lock")
-    handle = None
-    held = False
-    if fcntl is not None:
-        deadline = time.monotonic() + wait
-        try:
-            handle = open(lock_path, "a+")  # noqa: SIM115 - released in the finally
-            while True:
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    held = True
-                    break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        print(
-                            f"checkpoint: {lock_path.name} busy for {wait:.0f}s; "
-                            "writing unlocked",
-                            file=sys.stderr,
-                        )
-                        break
-                    time.sleep(LOCK_POLL_SECONDS)
-        except OSError as exc:
-            print(f"checkpoint: could not open {lock_path.name}: {exc}", file=sys.stderr)
-
-    try:
+    with file_lock(path.with_name(path.name + ".lock"), wait=wait):
         state = read_json(path)
         yield state
         write_json_atomic(path, state)
-    finally:
-        if handle is not None:
-            if held:
-                with contextlib.suppress(OSError):
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            with contextlib.suppress(OSError):
-                handle.close()
 
 
 def write_text_atomic(path: Path, content: str) -> None:

@@ -216,3 +216,115 @@ def test_the_writer_list_is_not_empty():
     assert len(WRITERS) >= 4
     for rel in WRITERS:
         assert (ROOT / rel).is_file(), f"{rel} moved; update this guard"
+
+
+# ============================================================
+# The shared .latest pointer PAIR is two files, written as one
+# ============================================================
+
+def test_the_shared_pointer_pair_cannot_be_torn(tmp_path):
+    """`summary.md` and `prompt.md` must always name the same archive.
+
+    They are two separate text files written back to back. Two sessions
+    compacting at once can interleave between them and leave `summary.md`
+    naming session A's archive while `prompt.md` names session B's - a state
+    neither session ever held, and the one a resumed session reads.
+
+    The tear is reproduced by widening the gap with a sleep, not by racing and
+    hoping. `file_lock` closes it.
+    """
+    base = tmp_path / ".latest"
+    base.mkdir()
+    summary, prompt = base / "summary.md", base / "prompt.md"
+    lock = base / ".pointers.lock"
+
+    def writer(tag: str, gap: float, delay: float):
+        time.sleep(delay)
+        with CP.file_lock(lock):
+            summary.write_text(f"summary-{tag}", encoding="utf-8")
+            time.sleep(gap)
+            prompt.write_text(f"prompt-{tag}", encoding="utf-8")
+
+    threads = [
+        threading.Thread(target=writer, args=("A", 0.10, 0.0)),
+        threading.Thread(target=writer, args=("B", 0.0, 0.02)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    got = (summary.read_text(encoding="utf-8").split("-")[1],
+           prompt.read_text(encoding="utf-8").split("-")[1])
+    assert got[0] == got[1], (
+        f"the pair is torn: summary names {got[0]}, prompt names {got[1]}"
+    )
+
+
+def test_the_unlocked_pair_really_does_tear(tmp_path):
+    """Pins the premise of the test above."""
+    base = tmp_path / ".latest"
+    base.mkdir()
+    summary, prompt = base / "summary.md", base / "prompt.md"
+
+    def writer(tag: str, gap: float, delay: float):
+        time.sleep(delay)
+        summary.write_text(f"summary-{tag}", encoding="utf-8")
+        time.sleep(gap)
+        prompt.write_text(f"prompt-{tag}", encoding="utf-8")
+
+    threads = [
+        threading.Thread(target=writer, args=("A", 0.10, 0.0)),
+        threading.Thread(target=writer, args=("B", 0.0, 0.02)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    got = (summary.read_text(encoding="utf-8").split("-")[1],
+           prompt.read_text(encoding="utf-8").split("-")[1])
+    assert got[0] != got[1], (
+        "the unlocked pair stayed consistent, so this file's premise no longer holds"
+    )
+
+
+def test_the_save_hook_writes_the_shared_pair_under_a_lock():
+    """A source guard, for the same reason as the state one: the tear needs two
+    sessions overlapping and cannot be driven end to end deterministically."""
+    text = (ROOT / ".claude" / "hooks" / "checkpoint-save.py").read_text(encoding="utf-8")
+    assert "CP.file_lock(" in text, (
+        "the .latest pointer pair is written without the shared lock"
+    )
+
+
+# ============================================================
+# The state file a compaction resets must be the one everyone reads
+# ============================================================
+
+def test_the_state_path_is_the_canonical_one_on_both_branches():
+    """The artifact slug and the state slug answer different questions.
+
+    The archive FILENAME is a tracked path, so it uses the redacted id on the
+    success branch and the literal `unredacted` when redaction failed - a
+    poisoned string must not ride a filename into the data repo.
+
+    The STATE path is not tracked (`.claude/state/` is gitignored) and is read by
+    the statusline, the Stop hook and the CLI, all of which key off
+    `safe_slug(raw session id)` unconditionally. Keying it off the artifact slug
+    meant a quarantined compaction reset `checkpoint-unredacted.json` and left
+    the real session's hysteresis untouched and its compaction unrecorded.
+    """
+    text = (ROOT / ".claude" / "hooks" / "checkpoint-save.py").read_text(encoding="utf-8")
+    assert 'f"checkpoint-{CP.session_slug(payload)}.json"' in text, (
+        "the state path is not derived from the canonical session slug"
+    )
+    assert 'f"checkpoint-{session_slug}.json"' not in text, (
+        "the state path is still keyed off the artifact slug, which is the "
+        "literal 'unredacted' whenever redaction fails"
+    )
+    # And the artifact name must NOT have been switched to the raw slug by the
+    # same edit - that is the tracked path the quarantine protects.
+    assert 'archive_name = f"{stamp}_handoff_compact-{trigger_slug}_{session_slug}.md"' in text, (
+        "the archive name no longer uses the quarantine-safe slug"
+    )

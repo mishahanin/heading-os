@@ -252,6 +252,34 @@ def test_every_built_frontmatter_still_parses_as_yaml(built):
         assert isinstance(parsed, dict), f"{path.name} frontmatter is not a mapping"
 
 
+def test_every_bundle_parses_not_only_heading_core(tmp_path):
+    """The same guard, across `--all`, because one bundle is not the corpus.
+
+    The check above rides the `built` fixture, which builds `heading-core` alone.
+    Four other bundles ship eleven more skills through the same rewrite, and a
+    frontmatter shape that only they carry would pass every test in this file
+    while shipping broken. Measured 2026-08-21: 5 bundles, 14 skill and command
+    files, 10 of them rewritten.
+    """
+    mod = _load_builder()
+    assert mod.main(["--all", "--out", str(tmp_path)]) == 0
+    plugins = tmp_path / "plugins"
+    targets = sorted(plugins.rglob("SKILL.md")) + sorted(plugins.rglob("commands/*.md"))
+    assert len(targets) >= 10, f"only {len(targets)} files reached the guard"
+    rewritten = 0
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        if "CLAUDE_PLUGIN_ROOT" in text:
+            rewritten += 1
+        try:
+            parsed = yaml.safe_load(text.split("---", 2)[1])
+        except yaml.YAMLError as exc:
+            rel = path.relative_to(plugins)
+            raise AssertionError(f"{rel} frontmatter is not YAML: {exc}") from exc
+        assert isinstance(parsed, dict), f"{path.relative_to(plugins)} is not a mapping"
+    assert rewritten, "no file was rewritten - the guard proved nothing about the rewrite"
+
+
 def test_the_quoted_scalar_keeps_its_quotes_after_the_rewrite(built):
     """Escaped, not dropped. The quotes protect a cache path containing a space,
     so the fix must keep them in the PARSED value, not only in the file."""

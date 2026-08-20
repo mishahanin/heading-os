@@ -248,6 +248,10 @@ outputs/operations/fundraising/**/_build/
 .memory-index/
 # Engine-side code index (skill/rule layers; rebuildable cache, per-machine)
 .memory-index-code/
+# CodeGraph structural index over the Python sources (symbols, call edges,
+# FTS5). Rebuildable cache, per-machine, ~100s of MB -- `codegraph init`
+# recreates it. Never source-of-truth. Remove with `codegraph uninit`.
+.codegraph/
 
 # Odin /odin collect recency marker (per-machine, rebuildable -- absence widens the --since window)
 knowledge/odin-brain/.last-collect

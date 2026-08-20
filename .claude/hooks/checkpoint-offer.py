@@ -1068,9 +1068,32 @@ def unattended_turn(
     # tell a fresh instruction from a continuation, and the fail-safe direction is
     # to leave the counters alone: clearing on every Stop would retire the ceiling
     # altogether, which is the one bound with no other backstop behind it.
+    #
+    # The DONE MARKER is the exception, and it cost two turns of a live session on
+    # 2026-08-20 to find. The comparison above is on turn IDENTITY, never on age,
+    # so it cannot tell last night's marker from one the assistant wrote seconds
+    # ago in the very turn now ending - and the operator's own turn is the common
+    # case, being the first pause after any instruction he gives. The marker was
+    # cleared here and gone by the time line ~1090 looked for it, so `--done`
+    # continued the stretch while the CLI printed `done recorded`. The one command
+    # the hook offers for ending a run worked only from the second consecutive
+    # continuation onward.
+    #
+    # `unattended_paused_at` separates the two, because `_pause_unattended` stamps
+    # it when this hook ACTS on a marker. Carrying that stamp means the marker has
+    # had its effect and its stretch is over; lacking it means this hook has never
+    # seen it, so it was written during the turn now ending. Retiring the consumed
+    # kind is kept rather than left wholly to `unattended-resume.py`, which clears
+    # at the prompt boundary where staleness is knowable directly: that hook is the
+    # primary path, this is the backstop for a session where it never ran.
     if turn and state.get("unattended_turn_id") != turn:
         def _new_window(fresh: dict) -> dict:
+            carry = None
+            if fresh.get("unattended_done_at") and not fresh.get("unattended_paused_at"):
+                carry = (fresh["unattended_done_at"], fresh.get("unattended_done_note"))
             CP.clear_unattended_window(fresh)
+            if carry:
+                fresh["unattended_done_at"], fresh["unattended_done_note"] = carry
             return fresh
 
         _persist(state_path, _mutate=_new_window)

@@ -1,4 +1,4 @@
-<!-- version: 1.4.0 | last-updated: 2026-07-09 -->
+<!-- version: 1.5.0 | last-updated: 2026-08-20 -->
 # HEADING OS — Deployment & Setup
 
 The complete, zero-to-running guide for standing up a HEADING OS workspace from a
@@ -213,6 +213,21 @@ The identity file is small and non-secret. It MUST have this exact shape:
 > `"exec"` silently breaks detection — backups then target the wrong repo. If yours
 > reads anything other than `exec-workspace`, fix it before first backup.
 
+**Confirm both files landed. A missing one is silent.** Both names start with a
+dot, and a copy through a Windows file dialog can drop it or append `.txt`:
+
+```bash
+cd <engine>
+ls -la .workspace-identity.json .env
+```
+
+> A MISSING identity file is worse than a wrong one. The engine does not stop. It
+> falls back to a single-user CEO workspace and keeps running. `/prime` then
+> reports "No workspace-identity.json found — treating as CEO workspace".
+> `sync-corporate.py` becomes a no-op. Your first backup aims at the read-only
+> engine. Fix the file before you continue. Then restart `claude`, because the
+> engine caches the identity for the life of the process.
+
 ### Managed deploy — option B: migrate from a prior workspace
 
 If you already ran a prior workspace, both files usually exist there and copy across:
@@ -307,12 +322,24 @@ already-installed plugin.
 # add the marketplace first (one time)
 claude plugin marketplace add anthropics/claude-plugins-official
 
-# then install each enabled plugin by name
+# then install each enabled plugin by name, one command per line
 claude plugin install superpowers@claude-plugins-official --scope project
 claude plugin install skill-creator@claude-plugins-official --scope project
 claude plugin install claude-md-management@claude-plugins-official --scope project
 claude plugin install frontend-design@claude-plugins-official --scope project
+claude plugin install mattpocock-skills@claude-plugins-official --scope project
+claude plugin install code-review@claude-plugins-official --scope project
+claude plugin install code-simplifier@claude-plugins-official --scope project
 ```
+
+The authoritative list is `enabledPlugins` in the engine's `.claude/settings.json`.
+Install the entries set to `true`; the ones set to `false` are deliberately off.
+
+> **Paste one line at a time.** Do not fold these into a `for` loop with `\`
+> continuations. Windows Terminal can insert a blank line inside a pasted block.
+> That blank line breaks the continuation. Bash then prints
+> `syntax error near unexpected token`, and one install runs with an empty plugin
+> name.
 
 > **Do not use `@latest`.** `plugin@latest` makes Claude look for a *marketplace*
 > named "latest" and fails with "not found in marketplace latest". The form is
@@ -428,7 +455,12 @@ the engine, stop — see the troubleshooting table.
 | Claude trust prompt shows a system path | Don't trust `/mnt/c/WINDOWS/system32`. Exit, `cd <engine>`, relaunch `claude`, trust that. |
 | `git clone` → "repository not found" | Wrong name or no access. `gh repo list <org> | grep heading-os`; watch for look-alike characters; confirm access with the administrator. |
 | Plugin install → "not found in marketplace latest" | `@latest` is wrong. Add `anthropics/claude-plugins-official`, then install `<plugin>@claude-plugins-official`. |
+| Plugin install → `Plugin "" not found in marketplace` | The plugin name reached the command empty, because a pasted multi-line block broke. Run that single install line on its own. |
+| `bash: syntax error near unexpected token` right after a paste | The terminal inserted a blank line inside a `\` line continuation, so bash read two broken commands. Paste one physical line at a time. |
 | "No marketplaces configured" | `claude plugin marketplace add anthropics/claude-plugins-official` first. |
+| `/prime` reports "No workspace-identity.json found — treating as CEO workspace" | On a managed deploy the identity file is missing from the engine root, or its leading dot was dropped on copy. Re-place it (§6), then restart `claude` — the identity is cached per process. |
+| `sync-corporate.py` prints "CEO workspace — … nothing to consume" on a managed deploy | Same cause as the row above: the engine does not know this is a managed workspace. Fix the identity file first. |
+| `sync-corporate.py` fails on `gh repo clone /heading-os-corporate` | The GitHub org resolved to an empty string. Set `github_org` in `<data-root>/config/operator.yaml`. Note that putting `HEADING_OS_OPERATOR_GITHUB_ORG` in `.env` does not help — the org is read before `.env` is loaded. |
 | `get_data_root()` prints a path under `…/examples` | Data sibling not found. Set `HEADING_OS_DATA=/abs/path/.heading-os-data` in `.env`. |
 | `push-all.py`: "data overlay resolves to the engine clone" | Sibling not found — set `HEADING_OS_DATA` and retry. |
 | `push-all.py` exits `3` and prints "Partial: N of M" | One repository was not pushed, for the reason printed beside its name. This is not a failed backup: everything else went, and the skipped repo is committed locally. Resolve the reason (usually: merge your branch into `main`) and run it again. |

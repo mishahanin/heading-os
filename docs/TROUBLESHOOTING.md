@@ -35,6 +35,24 @@ Run it once per clone or relocation. Verify with `python scripts/install-hooks.p
 
 **A file landed in the engine that should be private.** The classifier fails closed, but if you wrote through an unusual path, check `config/routing-map.yaml` and run `scripts/classification-health.py`. Real data belongs in the data overlay; see [data overlay structure](data-structure.html) and [configuration](CONFIGURATION.html).
 
+## Managed workspace identity
+
+These bite only on a managed (administrator-provisioned) workspace. All three share one root cause: the engine does not know who it is running as.
+
+**`/prime` says "No workspace-identity.json found — treating as CEO workspace".** The engine reads exactly one path, `<engine-root>/.workspace-identity.json`, and the name starts with a dot. A copy that drops the dot, or appends `.txt`, or lands in the data repository instead of the engine, leaves the engine with nothing to read. It does not stop: it falls back to a single-user workspace and keeps running, which is why this failure is quiet. Confirm the file with `ls -la .workspace-identity.json` in the engine root, replace it, then restart `claude` — the identity is cached for the life of the process. The required shape is in [deployment](DEPLOYMENT.html) section 6.
+
+**`sync-corporate.py` prints "CEO workspace — nothing to consume".** Same cause. The script is a deliberate no-op for the CEO, who publishes corporate content rather than consuming it. Seeing it on an executive workspace means the identity file is missing or its `type` is not `exec-workspace`.
+
+**`sync-corporate.py` fails on `gh repo clone /heading-os-corporate`.** The organisation name resolved to an empty string, so the repository argument has nothing before the slash. Set `github_org` in `<data-root>/config/operator.yaml`. A freshly scaffolded data repository ships no `config/` directory, so a new managed workspace has no such file until someone adds it. Setting `HEADING_OS_OPERATOR_GITHUB_ORG` in `.env` does not substitute: the script reads the organisation before it loads `.env`.
+
+**A backup pushed into the engine and got a 403.** The engine is read-only on a managed workspace, so the 403 is the safety net working. Check that `push-all.py --dry-run` prints "Exec workspace — pushing the data overlay only". Any other first line points back at the identity file.
+
+## Plugins
+
+**An install reports `Plugin "" not found in marketplace`.** The plugin name arrived empty. A pasted multi-line block broke just before it. The terminal inserted a blank line inside a `\` continuation, so bash read two broken commands, and one of them ran with no argument. The paste usually also prints `bash: syntax error near unexpected token`. Install plugins one physical line at a time, never as a `for` loop pasted from a document.
+
+**An install reports "not found in marketplace latest".** The form `plugin@latest` makes Claude search for a marketplace named "latest". Use `<plugin>@<marketplace>`, and add the marketplace first with `claude plugin marketplace add anthropics/claude-plugins-official`.
+
 ## Memory and recall
 
 **`/recall` returns nothing or errors on the embedder.** Recall uses a local `bge-m3` embedder served by Ollama, on-machine at zero API cost. Confirm Ollama is installed and running and the model is pulled. See [AI models](MODELS-SETUP.html).

@@ -78,7 +78,7 @@
 <main class="content">
   <h1>HEADING OS — Deployment &amp; Setup</h1>
   <p class="page-meta">The complete, zero-to-running guide for standing up a HEADING OS workspace from a</p>
-  <!-- version: 1.4.0 | last-updated: 2026-07-09 -->
+  <!-- version: 1.5.0 | last-updated: 2026-08-20 -->
 
 <p>The complete, zero-to-running guide for standing up a HEADING OS workspace from a
 clean machine. Every command is generalized — substitute the <code>&lt;placeholders&gt;</code> for
@@ -290,6 +290,19 @@ matching <code>"type": "exec-workspace"</code> exactly. An older or hand-typed v
 <code>"exec"</code> silently breaks detection — backups then target the wrong repo. If yours
 reads anything other than <code>exec-workspace</code>, fix it before first backup.</p>
 </blockquote>
+<p><strong>Confirm both files landed. A missing one is silent.</strong> Both names start with a
+dot, and a copy through a Windows file dialog can drop it or append <code>.txt</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>&lt;engine&gt;
+ls<span class="w"> </span>-la<span class="w"> </span>.workspace-identity.json<span class="w"> </span>.env
+</code></pre></div>
+<blockquote>
+<p>A MISSING identity file is worse than a wrong one. The engine does not stop. It
+falls back to a single-user CEO workspace and keeps running. <code>/prime</code> then
+reports &ldquo;No workspace-identity.json found — treating as CEO workspace&rdquo;.
+<code>sync-corporate.py</code> becomes a no-op. Your first backup aims at the read-only
+engine. Fix the file before you continue. Then restart <code>claude</code>, because the
+engine caches the identity for the life of the process.</p>
+</blockquote>
 <h3 id="managed-deploy-option-b-migrate-from-a-prior-workspace">Managed deploy — option B: migrate from a prior workspace</h3>
 <p>If you already ran a prior workspace, both files usually exist there and copy across:</p>
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>&lt;old-workspace&gt;/.env<span class="w">                    </span>&lt;engine&gt;/.env
@@ -392,13 +405,23 @@ already-installed plugin.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># add the marketplace first (one time)</span>
 claude<span class="w"> </span>plugin<span class="w"> </span>marketplace<span class="w"> </span>add<span class="w"> </span>anthropics/claude-plugins-official
 
-<span class="c1"># then install each enabled plugin by name</span>
+<span class="c1"># then install each enabled plugin by name, one command per line</span>
 claude<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>superpowers@claude-plugins-official<span class="w"> </span>--scope<span class="w"> </span>project
 claude<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>skill-creator@claude-plugins-official<span class="w"> </span>--scope<span class="w"> </span>project
 claude<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>claude-md-management@claude-plugins-official<span class="w"> </span>--scope<span class="w"> </span>project
 claude<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>frontend-design@claude-plugins-official<span class="w"> </span>--scope<span class="w"> </span>project
+claude<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>mattpocock-skills@claude-plugins-official<span class="w"> </span>--scope<span class="w"> </span>project
+claude<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>code-review@claude-plugins-official<span class="w"> </span>--scope<span class="w"> </span>project
+claude<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>code-simplifier@claude-plugins-official<span class="w"> </span>--scope<span class="w"> </span>project
 </code></pre></div>
+<p>The authoritative list is <code>enabledPlugins</code> in the engine&rsquo;s <code>.claude/settings.json</code>.
+Install the entries set to <code>true</code>; the ones set to <code>false</code> are deliberately off.</p>
 <blockquote>
+<p><strong>Paste one line at a time.</strong> Do not fold these into a <code>for</code> loop with <code>\</code>
+continuations. Windows Terminal can insert a blank line inside a pasted block.
+That blank line breaks the continuation. Bash then prints
+<code>syntax error near unexpected token</code>, and one install runs with an empty plugin
+name.</p>
 <p><strong>Do not use <code>@latest</code>.</strong> <code>plugin@latest</code> makes Claude look for a <em>marketplace</em>
 named &ldquo;latest&rdquo; and fails with &ldquo;not found in marketplace latest&rdquo;. The form is
 always <code>&lt;plugin&gt;@&lt;marketplace&gt;</code> — here <code>@claude-plugins-official</code>. List registered
@@ -551,8 +574,28 @@ the engine, stop — see the troubleshooting table.</p>
 <td><code>@latest</code> is wrong. Add <code>anthropics/claude-plugins-official</code>, then install <code>&lt;plugin&gt;@claude-plugins-official</code>.</td>
 </tr>
 <tr>
+<td>Plugin install → <code>Plugin "" not found in marketplace</code></td>
+<td>The plugin name reached the command empty, because a pasted multi-line block broke. Run that single install line on its own.</td>
+</tr>
+<tr>
+<td><code>bash: syntax error near unexpected token</code> right after a paste</td>
+<td>The terminal inserted a blank line inside a <code>\</code> line continuation, so bash read two broken commands. Paste one physical line at a time.</td>
+</tr>
+<tr>
 <td>&ldquo;No marketplaces configured&rdquo;</td>
 <td><code>claude plugin marketplace add anthropics/claude-plugins-official</code> first.</td>
+</tr>
+<tr>
+<td><code>/prime</code> reports &ldquo;No workspace-identity.json found — treating as CEO workspace&rdquo;</td>
+<td>On a managed deploy the identity file is missing from the engine root, or its leading dot was dropped on copy. Re-place it (§6), then restart <code>claude</code> — the identity is cached per process.</td>
+</tr>
+<tr>
+<td><code>sync-corporate.py</code> prints &ldquo;CEO workspace — … nothing to consume&rdquo; on a managed deploy</td>
+<td>Same cause as the row above: the engine does not know this is a managed workspace. Fix the identity file first.</td>
+</tr>
+<tr>
+<td><code>sync-corporate.py</code> fails on <code>gh repo clone /heading-os-corporate</code></td>
+<td>The GitHub org resolved to an empty string. Set <code>github_org</code> in <code>&lt;data-root&gt;/config/operator.yaml</code>. Note that putting <code>HEADING_OS_OPERATOR_GITHUB_ORG</code> in <code>.env</code> does not help — the org is read before <code>.env</code> is loaded.</td>
 </tr>
 <tr>
 <td><code>get_data_root()</code> prints a path under <code>…/examples</code></td>

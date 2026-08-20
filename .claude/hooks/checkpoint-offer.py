@@ -497,10 +497,17 @@ def _operator_spoke(fresh: str, session: str) -> bool:
         if not isinstance(entry, dict):
             continue
         if entry.get("type") == "queue-operation":
-            if entry.get("operation") == "enqueue" and (
-                not session or entry.get("sessionId") in (None, session)
+            if (
+                entry.get("operation") == "enqueue"
+                and entry.get("content") != HA.COMPACT_COMMAND
+                and (not session or entry.get("sessionId") in (None, session))
             ):
                 return True
+            # `content != HA.COMPACT_COMMAND` because `_request_compaction`
+            # submits that literal through HERDR on this very Stop, and the
+            # harness records the queueing as an ordinary enqueue. Without the
+            # test the hook hands the turn back the instant it asks for its own
+            # compaction, reading its own request as the operator speaking.
             continue
         if entry.get("type") != "user" or entry.get("isMeta"):
             continue
@@ -560,6 +567,17 @@ def _queue_pending(path: Path, session: str) -> bool:
             if not isinstance(entry, dict) or entry.get("type") != "queue-operation":
                 continue
             if session and entry.get("sessionId") not in (None, session):
+                continue
+            if entry.get("content") == HA.COMPACT_COMMAND:
+                # OUR OWN submission. `_request_compaction` sends this literal
+                # through HERDR, and the harness records the queueing as an
+                # ordinary `queue-operation`, indistinguishable from the operator
+                # pressing Enter mid-turn. Counting it means the hook reads its
+                # own request as a waiting message from him - and because the
+                # request only clears at a turn boundary the block prevents, the
+                # miscount is permanent. Observed live 2026-08-20: two such
+                # enqueues, no matching remove, and `_queue_pending` true from
+                # then on.
                 continue
             operation = entry.get("operation")
             if operation == "enqueue":
@@ -840,7 +858,7 @@ def _driven_pending(state: dict) -> bool:
 
 def _request_compaction(
     payload: dict, state: dict, state_path: Path, project: Path, used: float
-) -> None:
+) -> bool:
     """Ask the harness to compact, from outside, once the handoff is on disk.
 
     This is the whole point of the plan this function came from. Claude Code has
@@ -855,19 +873,19 @@ def _request_compaction(
     - the native auto-compact is armed behind this for exactly that reason.
     """
     if not (CP.auto_mode(state) or CP.unattended_mode(state)):
-        return
+        return False
     if used < CP.config(state)["hard"]:
-        return
+        return False
     bucket = int(state.get("offer_bucket") or state.get("current_bucket") or 0)
     if state.get("compact_requested_bucket") == bucket:
-        return
+        return False
 
     session = CP.session_id(payload)
     # Ordering is the point: handoff first, boundary second. `last_offer_at` is
     # the field the save path stamps when it marks the offer delivered, and it
     # is the only recorded moment of the hard-threshold crossing.
     if not _handoff_since(project, session, state.get("last_offer_at")):
-        return
+        return False
 
     try:
         pane = HA.resolve_pane(session)
@@ -879,7 +897,7 @@ def _request_compaction(
             compact_request_error=str(exc),
             compact_request_error_at=CP.utc_now().isoformat(),
         )
-        return
+        return False
 
     if pane is None:
         _persist(
@@ -887,7 +905,7 @@ def _request_compaction(
             compact_host="not-hosted",
             compact_host_checked_at=CP.utc_now().isoformat(),
         )
-        return
+        return False
 
     try:
         HA.submit_compact(pane)
@@ -897,7 +915,7 @@ def _request_compaction(
             compact_request_error=str(exc),
             compact_request_error_at=CP.utc_now().isoformat(),
         )
-        return
+        return False
 
     now = CP.utc_now().isoformat()
 
@@ -921,6 +939,7 @@ def _request_compaction(
         compact_host=pane,
         _mutate=_record,
     )
+    return True
 
 
 def _pause_unattended(state: dict, state_path: Path, reason: str) -> int:
@@ -1130,8 +1149,28 @@ def main() -> int:
     # the unattended branch returns for the whole unattended path, and the
     # `needs_compact_offer` check returns for auto mode on precisely the turn
     # after a save - which is the turn this block exists for.
-    _request_compaction(payload, state, state_path, project, used)
+    submitted = _request_compaction(payload, state, state_path, project, used)
     if compaction_only:
+        return 0
+
+    # A submitted compaction ENDS this Stop, and that is the whole mechanism
+    # rather than a courtesy.
+    #
+    # `HA.submit_compact` does not compact. It queues the literal `/compact` into
+    # this session's own input, and the harness runs a queued prompt when the
+    # current turn ENDS. Printing a block decision below is what stops the turn
+    # from ending, so a hook that submits and then blocks has just guaranteed its
+    # own request will never run - and the next Stop, on the next bucket,
+    # submits another one behind it.
+    #
+    # Observed live on 2026-08-20 before this line existed: `compact_requests`
+    # held two entries (07:41:02 bucket 55, 08:07:10 bucket 60), both to pane
+    # w39:p1, neither with an error, and `compact_history` still ended at the
+    # previous day's `trigger=auto` boundary. The transcript showed both
+    # `enqueue` records with no matching `remove`, while every operator message
+    # in the same file cleared within seconds. The mechanism could not compact
+    # itself in auto mode, by construction, and reported success twice.
+    if submitted:
         return 0
 
     if unattended:

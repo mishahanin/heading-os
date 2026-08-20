@@ -323,11 +323,18 @@ def test_the_whole_stop_fits_under_the_registered_timeout_with_a_slow_herdr(env)
 
     This is the shape that produced 92.0s at the 60s ceiling: an unattended
     session at the hard threshold whose bucket is already consumed, with a
-    handoff on disk and no compaction submitted yet, so `_request_compaction`
-    spends two HERDR calls and THEN the grace period runs. `herdr` answers just
-    inside each of its own timeouts, which is worse than one that times out - a
-    timeout raises and costs one budget, an answer costs the budget in full and
-    lets the next call start.
+    handoff on disk. `herdr` answers just inside each of its own timeouts, which
+    is worse than one that times out - a timeout raises and costs one budget, an
+    answer costs the budget in full and lets the next call start.
+
+    `compact_requested_bucket` is pre-set to the current bucket so
+    `_request_compaction` returns early WITHOUT submitting. That is not a
+    convenience: since 2026-08-20 a Stop that submits a compaction returns 0
+    immediately, because a block decision prevents the turn boundary the queued
+    `/compact` needs. So the submit path no longer reaches the wait at all, and
+    the longest surviving path - the one this measures - is the pane lookup plus
+    the countdown plus the grace period. The submit path's own exit is held by
+    tests/test_compaction_is_not_self_strangling.py.
 
     Run against a 30s registered budget rather than the shipped 90s, with the
     herdr latencies scaled to match, so the suite pays 23 seconds instead of 86
@@ -356,6 +363,7 @@ def test_the_whole_stop_fits_under_the_registered_timeout_with_a_slow_herdr(env)
         offer_bucket=45, last_offered_bucket=45,
         last_offer_at="2020-01-01T00:00:00+00:00",
         unattended_turn_id="t1",
+        compact_requested_bucket=45,
     )
     archive = env["data"] / "outputs" / "operations" / "handoff-archive"
     archive.mkdir(parents=True, exist_ok=True)

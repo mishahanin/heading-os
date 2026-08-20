@@ -1,145 +1,123 @@
-<!-- version: 3.0.0 | last-updated: 2026-08-17 -->
-# HEADING OS v0.10
+<!-- version: 3.1.0 | last-updated: 2026-08-20 -->
+# HEADING OS v0.11
 
-**A session that does not stop for nothing.**
+**Green lights nobody had wired.**
 
-Long work does not fail all at once. It fails at 23:40, at a pause, when the assistant finishes a step and asks a question nobody is awake to answer. By morning nothing has moved. The automatic compaction that would have freed the context never fired either, because context does not grow while nobody works. This release is about that pause. Who owns it, what a compaction keeps when one finally happens, and what a blinded review found after the work was declared finished.
+A workspace tells you it is healthy through its own instruments. Tests pass. Gates run. A hook reports that it did the thing. Three days of reading the code against what it actually does found eight places where the instrument was reporting on nothing at all: tests that could not fail, a validator that had never once validated, a compaction that recorded success twice while executing nothing, a detector whose branch had never run in the workspace's entire recorded history. None of this was a broken feature. Every one of them was a green light wired to no circuit, and the suite, the gates and the review had all passed over them.
 
 | | |
 |---|---|
-| **7** | commits since v0.9.0 |
-| **5,496** | automated tests across 363 test files |
-| **554** | security tests, run on every commit |
-| **28 of 44** | real sessions in which the new mode would have silently halted, before a review found why |
+| **43** | commits since v0.10 |
+| **5,941** | automated tests across 400 test files |
+| **25** | tests that had never been able to fail |
+| **182 of 326** | CRM records corrupted by the workspace's own merge tool |
 | **0** | messages sent without a human click |
 
-Released 17 August 2026. Every figure on this page comes from the engine's own records, measurements, and test suite. None are estimates. The full commit-level record is in [CHANGELOG.md](https://github.com/mishahanin/heading-os/blob/main/CHANGELOG.md).
+Released 20 August 2026. Every figure on this page comes from the engine's own records, measurements, and test suite. None are estimates. The full commit-level record is in [CHANGELOG.md](https://github.com/mishahanin/heading-os/blob/main/CHANGELOG.md).
 
 ---
 
-## 1. What could not be built, and what was built instead
+## 1. Twenty-five tests that could not fail
 
-*The constraint that shaped everything else*
+*The most transferable finding in this release*
 
-Only two actors can start a compaction: the operator, by typing the command, and Claude Code itself, when the context reaches its threshold. No hook can. That was verified against the harness binary, not assumed. Five open requests in the vendor's own tracker ask for exactly this capability, and none has received it.
+Three test files were written in the same shape. A helper, `_check(name, condition)`, returned a boolean. Each test called it a dozen times, collected the results in a variable named `ok`, and ended with `return ok`.
 
-So this release does not automate compaction. It does three other things.
+Under pytest, a test that RETURNS a value passes. The return produces a warning. It never produces a failure.
 
-- It takes the engine's own hook **out of the way** when something else already drives a pause.
-- It steers **what the harness's own compaction preserves**.
-- It removes the reason a session **halts**, so that a compaction happens mid-work at all rather than never.
+So 25 test functions, holding 78 conditions across the operational signals engine, the ops radar, and the action queue's synchronous send, had been green since the day each was written. Some of the conditions were false. Nobody could have known, because the only channel through which they could have said so was closed.
 
-The third is the one that matters at three in the morning. A halted session is not merely idle; it is a session that will never reach the threshold that would have kept it going.
+The fix is small and the guard matters more than the fix. `_check` now asserts. The accumulators and the hand-rolled `main()` runners are gone. And `pyproject.toml` promotes `PytestReturnNotNoneWarning` to an error, so the shape cannot come back quietly the next time someone reaches for it.
 
----
-
-## 2. What a compaction keeps
-
-*Before this release, a compaction kept whatever it happened to keep*
-
-A compaction replaces the detail of a conversation with a summary of it. That is always a loss. Until now it was a **random** loss, including on the automatic compactions that fire overnight with nobody present to notice what went missing.
-
-A new hook now runs immediately before every compaction and states what must survive verbatim:
-
-- the objective, in the operator's own words wherever they were used;
-- the acceptance criteria, and which are already met;
-- every decision **with the reason it was taken**, because a decision that arrives without its reason gets re-litigated by the next turn;
-- exact file paths and the exact commands that matter;
-- the next concrete action, stated precisely enough to begin it;
-- the last instruction the operator gave, and any question of theirs left open.
-
-And what to drop: the contents of files still sitting on disk, the searches that located something, discussion of work already finished, abandoned drafts.
-
-Below that, it appends six facts read off the repository at compaction time, so the summary does not have to carry them at all. The branch, the uncommitted changes, the last five commits, the files this session wrote, the session's handoff pointer, and the newest plan file.
-
-!!! note "Three properties that are load-bearing"
-    The hook **always exits zero**. The exit code that would block a compaction turns a context problem into a stuck session. It **writes nothing**, because a later hook owns the write, and two writers on one event produce a half-formed record. And it **redacts before it truncates**. Cutting first can split a credential into a fragment the pattern no longer matches, which reads as clean output and is not.
+!!! note "Why review does not catch this"
+    The shape reads correctly. `_check` looks like an assertion helper, `ok` looks like a result, and `return ok` looks like a test reporting its verdict. Every one of those readings is what the author intended. The defect lives in the contract between the file and the runner, which is not visible anywhere in the file.
 
 ---
 
-## 3. Who owns a pause
+## 2. The gate that had never run
 
-*A switch named after its precondition, not after compaction*
+*A validator, a hook, and a flag that cancelled both*
 
-`unattended` mode changes exactly one thing: what happens when the session pauses above the context threshold and nobody answers. It waits a grace period. Type anything inside it and the turn comes straight back within one poll. Stay silent and the assistant is told to carry on.
+The CRM records carry a schema. A script validates them against it. A commit hook runs the script. All three existed, all three had existed for months, and in all that time the chain of them had never once executed from end to end.
 
-It is deliberately a **separate switch** from the existing silent-save mode, never a third value inside it. Two independent decisions live there. Whether a checkpoint saves without asking, and whether the session halts when nobody is present. One field holding both would put every later change to either in the same code path.
+`validate-crm-schema.py` skipped when the `jsonschema` library was absent — reasonable — and printed a line saying so. But `--quiet`, the flag the hook passes, suppressed exactly that line. The hook printed nothing and exited 0, which is indistinguishable from a clean pass.
 
-Two bounds stop a run that goes nowhere, and they catch different failures.
+Behind it, the hook itself was dead by construction. Its `files:` pattern was `^crm/contacts/.*\.md$`, and CRM records live in the private data overlay, so no commit in the engine repository can ever match it. It could not have fired.
 
-- **The no-progress fuse** compares a fingerprint of the committed head and of the size and modification time of every file **this session** wrote. Work that stopped moving while still answering "yes, there is more to do" trips it.
-- **The ceiling** stops the mode after a fixed number of continuations. Work that keeps moving and never converges trips that instead.
+Three changes: the dependency is pinned in the core set, the skip line prints on every path including `--json` and `--quiet`, and the hook is `always_run: true`. First run: 326 of 326 valid. One record needed correcting — `status: inactive`, where the schema says `dormant`.
 
-A stopped run is silent by design. It records which fuse fired and when, readable from the terminal, and sends one notification when a target is configured.
-
-!!! note "What the mode does not do"
-    It writes no checkpoint of its own at a pause. The handoff is written by the post-compaction hook, whatever the switches say. The menu and the documentation both claimed otherwise until the review below; both were wrong and both are corrected.
+The same sweep found the merge tool that writes those records was corrupting 182 of the 326 on every run — block lists flattened to empty strings, quoted scalars silently unquoted so `"2026-08-17"` became a date object. The parser now carries the shape through and round-trips all 326 byte-for-byte.
 
 ---
 
-## 4. The review that found the mode did not work
+## 3. A compaction that reported success while doing nothing
 
-*Nine defects, in work that had already passed a full suite and every gate*
+*Measured on a live overnight session, not reconstructed*
 
-The implementation was finished, tested, and committed. Then three reviewers read the commit with no access to the reasoning behind it. Each had a different lens. Races and fail-open paths, leaks and robustness, and the gap between what was promised and what shipped.
+The engine cannot compact a session from inside. No hook can; that was verified against the harness rather than assumed. What it can do is submit the text `/compact` to the pane hosting the session, through the terminal manager, and let the harness read it as if it had been typed.
 
-The first finding is the reason this section exists.
+That submission is a QUEUE operation. The harness runs a queued prompt when the current turn ends, and not one moment before.
 
-The hook decides whether the operator has already typed by counting queue operations in the session transcript. It counted two of them. The harness emits four. Measured across all 44 transcripts for this project. 660 of the first and 422 of the second. Then **231 of a third the code did not know about**, and one of a fourth. The arithmetic is therefore falsely positive in **28 of the 44 sessions**.
+The hook submitted the text and then printed a block decision, which is the one thing in the whole protocol that stops a turn from ending, so the queue it had written to a moment earlier could never be reached. It had guaranteed its own request would never run. On the next threshold it queued a second one behind the first. Both were recorded as successful.
 
-In each of those, the hook reads a message that is not there. It returns at once and halts the very run it was turned on to keep going. No continuation. No stall record. No notification. The failure is silent, and it looks exactly like the mode working correctly with nothing to do.
+The evidence is on disk and it is unambiguous. Two requests, 07:41:02 and 08:07:10, neither carrying an error. A compaction history whose newest entry was still the previous day. Two `enqueue` records in the transcript with no matching `remove`, while every real operator message in the same file cleared within seconds.
 
-The second finding was in the fuse the design leans on hardest. It was wrong in both directions at once. It hashed the repository's working-tree status, which reports that a file changed and never who changed it. So a second session or a background daemon writing one file between two pauses reset the counter. An overnight run with nothing left to do would then never stall. It would reach its ceiling inventing work. In the other direction it counted files as a set. A second edit of a file already in that set moved nothing, so genuine progress read as a dead run.
+The second half of the same defect is worse. The harness records that queueing as an ordinary queue operation, which is the signal the hook uses to notice the operator typing mid-turn. With no removal ever arriving, that check returned true permanently: **the hook was reading its own request as a message waiting from the operator.** It could not tell its own voice from his.
 
-The remaining seven, in one line each.
+Both ends are fixed and both are held by tests that fail on the mutation. A submitted compaction now ends the turn, and both readers ignore the literal the hook itself submits. Confirmed end to end the following morning: request stamped at 08:26:06, boundary executed at 08:28:24, recorded as operator-driven.
 
-- A grace period that accepted a value larger than the hook's own timeout, while telling the operator it was in force.
-- A completed background task that claimed every pause for the rest of the session.
-- A stall record re-stamped at every later pause, so a 03:00 stall reported whatever time the operator looked.
-- A whole-copy state write racing the status line.
-- Absolute paths carrying a home directory into a summary that later becomes a file.
-- A label asserting which plan was in force, from a sort that establishes only which is newest.
-- An exception handler narrow enough that a syntax error in one module would discard the entire compaction brief.
-
-All nine are fixed, each with a test that fails without the fix.
+!!! note "The accepted cost, stated rather than hidden"
+    The suppression keys on the literal text, so an operator who types `/compact` himself mid-turn is also ignored, and loses one grace period. The terminal manager gives the hook no marker of its own, and the alternative costs the mechanism its only path to a boundary.
 
 ---
 
-## 5. The test that was green and useless
+## 4. What else was claiming more than it knew
 
-*The most transferable thing in this release*
+*Four tools, one shape*
 
-The queue defect above had a test. The test passed. It was written before the code, frozen under an approval commit, and it asserted the correct property in the correct place.
+- **A hook refused to let anything READ six documentation files.** The check gated on one tool name and let every other tool fall through to a path test, so an ordinary Read returned a block, which the harness renders as a permission denial. The denial log records a real one on 11 August, eight days before anyone noticed.
+- **A repeat detector had never fired in the workspace's whole recorded history.** It keyed on Python's builtin `hash`, which is randomised per process, and every hook invocation is a fresh process. The live state held 344 tool-history entries and 344 distinct signatures. Now a stable digest — and the guard is a subprocess test, because the in-process version passes against the broken implementation too.
+- **The harness audit called a disabled plugin "running in this session".** It read what had been fetched and nothing read whether the loader starts it.
+- **The compaction watcher written to investigate section 3 watched a key nobody writes**, and reported "no request" through a run in which one had fired. An instrument that names a missing key reads exactly like an instrument reporting that nothing happened. Its key list is now held against the writer by a test.
 
-Its fixture was captured from a real session transcript. That session had not yet produced the third operation at the moment of capture.
-
-**A test built from a recording inherits the blind spots of the recording.** Not the author's blind spots, which review can catch, and not the code's, which a different test can catch. The recording's. The instrument that made the fixture trustworthy is the same instrument that made it incomplete, and nothing inside the test can see the difference.
-
-There is no clever fix, and this release does not claim one. What it claims is narrower and worth stating plainly: a frozen contract raises the cost of self-deception, and it does not remove it. The nine defects were found by reading the code against reality, by three readers who had not written it, after every gate had already passed.
+Three per-OS install templates carried an empty environment block, so every machine built from one ran the stock compaction window instead of the tuned one, and registered the hidden-character and injection scans on two of the four write tools.
 
 ---
 
-## 6. Nothing sends itself
+## 5. What was removed
 
-*The control that has not changed*
+*Deletion is a release note item*
 
-An assistant becomes dangerous to the person it serves when three things are true at once. It can reach private data. It reads content written by outsiders. And it can send messages to the outside world. The first two cannot be removed without removing the point of the assistant. So the third is permanently held by a human.
+- **Specs, plans and architecture decision records left the public repository.** The engine is published; how it was built is not. They moved to the private overlay, 84 back-pointers in engine code were repointed, and a test now resolves every one of them.
+- **Three dead functions and nine dead constants**, after a sweep of 1,428 files. One was proven unreachable at its own birth commit rather than merely unused today. Three constants were kept, each with the reason written into the code, and one gained the test its comment had promised.
+- **A context-monitoring hook and its four registrations**, superseded and duplicating a measurement the status line already owns.
+- **Thirty rows of live status quoted in the always-on memory index**, which is injected at every session start. The block was 27% of the file, it rebuilt the cached prefix on each of 66 commits in 30 days, and on the day it was removed it was already wrong: 30 threads active on disk, 29 listed, one of those closed.
 
-Every outbound message is drafted, queued, and waits. A human approves each one, individually. Approving one does not approve the next. Code enforces this, not policy prose. A message type that could send anything outbound is forced into the gated tier, even if a configuration file claims otherwise. An unrecognised type is gated too, so forgetting also fails safe.
+---
 
-This release adds an autonomous mode that continues a session's work without being asked. It grants no send capability whatever. A session running unattended overnight can write files, run tests, and commit; it cannot send a message to anyone. The one notification it can produce goes to the operator's own configured channel and reports that the run stopped.
+## 6. Smaller, faster, quieter
 
-The complete control set is documented in the [security model](SECURITY-MODEL.html) and the [threat model](THREAT-MODEL.html).
+*Measured before and after, in the same conditions*
+
+| | Before | After |
+|---|---|---|
+| Always-on rule text, loaded every session | 119,896 bytes | 71,076 bytes |
+| Peak memory reading a session transcript | 795 MB | 19 MB |
+| Full suite | 5,643 tests, 426 s serial | 5,941 tests, 126 s parallel |
+| State writers holding a lock | 0 of 6 | 6 of 6 |
+| Transcript records shredded by the readers | 22 | 0 |
+
+Two of these deserve their own sentence. The transcript readers used `str.splitlines()`, which breaks on eight characters a file handle does not — three of which survive JSON encoding unescaped and appear 22 times in the live 88 MB transcript. Three readers were cutting records in half. And the overnight continuation message, which the operator re-reads at every pause of a long run, is now 372 characters on the first pause of a turn and 155 on each one after it.
 
 ---
 
 ## 7. What this means for you
 
-- **Long work survives the night.** A session with work left does not halt because the engine's own hook halted it. When the harness compacts at its threshold, the session is still running to be compacted.
-- **A compaction keeps the objective rather than the trivia.** What crosses is chosen, not accidental: the goal, the decisions with their reasons, the exact next action.
-- **A loop is not interrupted by a question nobody asked.** When something else drives a pause, the engine stays out of its way.
-- **A build is not blocked by a test that is red on purpose.** The end-of-turn check skips frozen contracts, and counts them out loud rather than dropping them in silence.
-- **You can read what happened while you were asleep.** One terminal command reports which fuse stopped a run, and when.
+- **A passing suite means more than it did.** Twenty-five tests that could never have reported a problem now can, and the shape that produced them fails the build.
+- **The CRM validator actually validates**, on every commit, and the tool that writes those records no longer corrupts them.
+- **An overnight session can compact itself.** The mechanism that reported success while doing nothing now reaches a real boundary, and there is a command that shows which one fired.
+- **Your terminal is quieter.** The unattended continuation prose is less than half the size, and repeats carry only what changed.
+- **Nothing about what the engine publishes has loosened.** Specs and plans left the public repository in this release; nothing moved the other way.
 
 ---
 
@@ -147,12 +125,11 @@ The complete control set is documented in the [security model](SECURITY-MODEL.ht
 
 *What this release does not do, stated here rather than discovered later*
 
-- **The overnight run is unproven.** The suite shows four things. The hook waits. It tells silence from input. It bounds a run that makes no progress, and it survives the harness's anti-loop flag on a turn it continued itself. That a turn really continues at four in the morning will be shown by four in the morning, and by nothing else.
-- **A second session's commit still resets the no-progress fuse.** The committed head stays in the fingerprint because committing is the most common form of real progress that touches no file's timestamp. The window is narrower than the one it replaced, and it is not closed.
-- **One harness feature remains invisible.** A goal-driven run holds its state in the harness's memory rather than in a file, so no hook can detect it. The harness bounds the cost itself.
-- **An edit made through a shell command is not attributed.** The transcript records a file path only for the write tools, so such a file enters neither the authored list nor the progress fingerprint. This is a named limit, not an oversight.
-- **Below the soft threshold the mode does nothing.** It removes halts only where the context is already pressing. It is not a general-purpose autonomy switch and is not described as one.
-- **This page is not inside the style gate.** That gate covers the twelve pages a reader executes plus the skill instruction bodies, and a release narrative is neither. Sections 1 to 8 were measured with the same checker anyway, and carry no error. The notice below is approved legal wording and stays verbatim, long sentences included.
+- **The fixes in sections 1 and 2 say nothing about the conditions they restored.** Twenty-five tests can now fail. Whether they should have been failing all along is a separate question, answered one at a time, and this release does not claim it is finished.
+- **A driven compaction is indistinguishable from a typed one at the surface.** It renders as the same local-command block. To tell them apart, read the state file — documented, but not something the interface shows.
+- **Hook registration is read when a session starts.** A hook added mid-session is on disk, is in the settings, and does not run until a restart. That is the harness's behaviour, not a defect this release closes.
+- **The sweep was three days, not a proof.** It read the code against reality in the areas it reached. Areas it did not reach are not thereby clean, and no measurement here should be read as coverage of the whole tree.
+- **This page is not inside the style gate.** That gate covers the twelve pages a reader executes plus the skill instruction bodies, and a release narrative is neither. Sections 1 to 8 were measured with the same checker anyway. The notice below is approved legal wording and stays verbatim, long sentences included.
 
 ---
 

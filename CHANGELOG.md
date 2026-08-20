@@ -8,6 +8,89 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **Twenty-five tests could not fail.** Three files built their assertions as
+  `_check(name, cond)` returning a bool, accumulated the results into `ok`, and
+  closed with `return ok`. Under pytest a test that RETURNS a value passes: the
+  return is a warning, never a failure. 25 functions and 78 conditions had been
+  green since the day they were written, over `ops-signals`, `ops-radar` and the
+  action queue's synchronous send. `_check` now asserts, the accumulators and the
+  hand-rolled `main()` runners are gone, and `filterwarnings =
+  ["error::pytest.PytestReturnNotNoneWarning"]` in `pyproject.toml` makes the
+  shape impossible to reintroduce quietly.
+
+- **`merge-contacts.py` corrupted 182 of 326 CRM records** every time it ran. Its
+  frontmatter parser flattened YAML block lists to `''` (7 records lost their
+  tags outright) and dropped the quotes from quoted scalars (175 records, 981
+  values), so `status: "active"` came back as `status: active` and a date-shaped
+  string became a date. The parser now carries the shape through: `_BlockList`
+  holds its indent, `_Quoted` holds its quote character, and the serialiser
+  round-trips all 326 records byte-for-byte.
+
+- **The CRM schema gate had never run at all.** `validate-crm-schema.py` skipped
+  silently when `jsonschema` was absent, and `--quiet` — the flag the pre-commit
+  hook passes — suppressed the one line that said so, so the hook printed nothing
+  and exited 0. The dependency is now pinned in the core set, the skip message
+  prints on every path including `--json`, and the hook's `files:` pattern
+  (`^crm/contacts/.*\.md$`, which can never match in an engine-only repo) is
+  replaced by `always_run: true`. First live run: 326 of 326 valid, after one
+  record's `status: inactive` was corrected to the schema's `dormant`.
+
+- **The Stop hook strangled its own compaction request, and recorded success.**
+  `submit_compact` does not compact; it queues the literal `/compact` into the
+  session's input through HERDR, and the harness runs a queued prompt when the
+  turn ENDS. The hook then printed a block decision, which is exactly what stops
+  a turn from ending. Measured live: `compact_requests` held two entries, 07:41:02
+  at bucket 55 and 08:07:10 at bucket 60, neither carrying an error, while
+  `compact_history` still ended at the previous day's boundary, and the transcript
+  showed both `enqueue` records with no matching `remove`. A submitted compaction
+  now ends the Stop.
+
+- **The same hook read its own request as the operator speaking.** The harness
+  records that queueing as an ordinary `queue-operation` / `enqueue`, which is the
+  signal `_queue_pending` and `_operator_spoke` use to detect a mid-turn message.
+  With no removal ever coming, `_queue_pending` returned True permanently. Both
+  readers now skip `content == "/compact"`.
+
+- **Handoff filenames were stamped in UTC**, so between 00:00 and 04:00 local
+  every archive carried the previous day's date. Filenames and calendar-day
+  decisions now use `CP.local_now()`; stored timestamps stay UTC. The first fix
+  broke `_handoff_since`, which compared the new local stamp against a UTC floor
+  and would have accepted a handoff up to four hours stale — a compaction firing
+  over unsaved work. Held by `tests/test_checkpoint_stamp_timezone.py`.
+
+- **A blind status-line render decided things it could not see.** When the payload
+  carried no usage figure, the hook still wrote the offer keys, clearing a pending
+  checkpoint offer and overwriting the last good measurement with nothing. The
+  measurement keys now move only when a measurement exists.
+
+- **Six state writers raced.** Every hook read the checkpoint state, mutated a
+  copy, and wrote it back whole, so the status line's per-render write could
+  silently drop a done marker written a moment earlier. All six now go through
+  `CP.locked_state` / `CP.file_lock` (`fcntl.flock`, bounded wait, honest
+  degradation to an unlocked write with a stderr line). The shared `.latest`
+  pointer pair is written under one lock, because two `os.replace` calls back to
+  back are not atomic together.
+
+- **`str.splitlines()` shredded transcript records.** It breaks on eight
+  characters a file handle does not, and three of them (U+0085, U+2028, U+2029)
+  survive `json.dumps` unescaped — 22 of them in the live 88 MB transcript. Three
+  readers were cutting JSONL records in half. All three now iterate the handle.
+
+- **`files_written` read the whole transcript into memory**: 795 MB peak RSS on
+  that same file, in a hook that runs at every turn boundary. Streaming brought it
+  to 19 MB.
+
+- **The compaction watcher watched a key nobody writes.** It read
+  `compact_request_at` while the writer spells it `compact_requested_at`, and
+  reported "no request" through a run where one had fired. An instrument that
+  names a missing key reads exactly like an instrument reporting nothing happened;
+  a test now holds its key list against the writer.
+
+- **The pointer lock leaked into the data overlay.** `.pointers.lock` is an empty
+  file whose only meaning is the `flock` held on it at runtime, and it sat
+  untracked in `git status`, one `git add -A` from a commit. Ignored now, with a
+  guard that asks git rather than reading `.gitignore`.
+
 - **`check_protect_docs` refused to let anything READ six files in `docs/`.** The
   check gated on `tool_name == "Bash"` and let every other tool fall through to a
   path test, so a `Read` of `docs/EMERGENCY-PROCEDURES.md` returned
@@ -64,7 +147,55 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   never a widening to "anywhere in the repo" — and three tests hold it, including
   one proving a declaration is not a blanket exemption.
 
+### Added
+
+- **`.claude/hooks/unattended-resume.py`** (UserPromptSubmit). Clears a paused
+  unattended stretch when the operator sends an instruction, which is what
+  `clear_unattended_window` and `--done` have always promised. The clearing used
+  to happen at the next Stop — the END of the turn that instruction opened — so
+  the status bar read `unattended paused` through a turn that had already resumed.
+  Never blocks, never prints, never touches the switch; ~30 ms, and a session with
+  no pause marker writes nothing. The literal `/compact` is ignored, because the
+  Stop hook queues that text itself. Registered in all three per-OS templates, not
+  only in the gitignored live settings file.
+
+- **`scripts/dev/compact-watch.py`.** Records who compacts a session and how, one
+  JSONL line per observed CHANGE rather than per poll, into the data overlay so
+  the evidence survives the compaction it is recording. An instrument for one
+  question, not a daemon and not scheduled.
+
+- **`jsonschema==4.26.0`** in the core dependency set, with the measured reason:
+  without it the CRM schema gate skipped silently on every run.
+
+- **Locking primitives in `scripts/utils/checkpoint_paths.py`** — `file_lock` and
+  `locked_state`, plus `local_now()` for filename stamps, with the `get_default_tz`
+  import deferred because five hooks import this module on every turn.
+
+### Changed
+
+- **The unattended continuation message is half the size, and repeats are one
+  line.** It prints to the operator's transcript at every pause of an overnight
+  run, so each sentence is one he re-reads forever. The full form went from 467
+  characters to 372; from the second continuation of a window onward a 155-character
+  form carries only what changes — the counter and the one command that can end the
+  stretch. A compaction inside the window puts the full text back, because that is
+  the one event which makes "you already read it" false.
+
+- **`--done` names both halves of the state**: the stretch is over and the bar will
+  say so, while the switch stays up. Only the operator lowers it.
+
+- **Specs, plans and ADRs moved to the private data overlay** and were removed from
+  the public engine repository, on the operator's decision: the engine is public,
+  how it was built is not. `docs/design/` is gitignored and routed `private`; 84
+  back-pointers in engine code were repointed at `.heading-os-data/docs/`, and a
+  test now resolves every one of them.
+
 ### Removed
+
+- **Three dead functions and nine dead constants**, after a tree-wide sweep of
+  1,428 files. `bootstrap_root` was proven unreachable at its own birth commit,
+  not merely unused today. Three constants were KEPT with the reason written down,
+  and one of them gained the test its comment had promised.
 
 - **`.claude/hooks/context-monitor.py`**, and its four registrations. It read
   `remaining_percentage` from the PostToolUse payload, a key the payload does not

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# heading-os-data-test-gate
+#
+# Versioned pre-push gate for a DATA overlay repository. Installed into
+# <data-repo>/.git/hooks/pre-push by `python scripts/install-git-hooks.py`.
+#
+# Two things this hook has to get right that the engine's does not:
+#
+#   1. It REPLACES the stock git-lfs pre-push hook, and a data overlay really does
+#      track LFS objects. So it delegates to `git lfs pre-push` at the end. Drop
+#      that line and pushes stop uploading LFS content.
+#   2. An executive's data overlay carries no tests/ directory. Absence is normal
+#      and must pass, not fail closed. Only the CEO overlay carries admin tests.
+#
+# Never bypass with --no-verify.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+if [ -d "$ROOT/tests" ]; then
+    # The data overlay has no interpreter of its own. Borrow the sibling engine's.
+    ENGINE="$(cd "$ROOT/.." 2>/dev/null && pwd)/.heading-os"
+    if [ -x "$ENGINE/.venv/bin/python" ]; then
+        PY="$ENGINE/.venv/bin/python"
+    else
+        PY="python3"
+    fi
+    echo "data overlay test gate: $ROOT/tests"
+    if ! "$PY" -m pytest "$ROOT/tests" -q; then
+        echo "data overlay tests failed - push blocked" >&2
+        exit 1
+    fi
+fi
+
+# Hand off to git-lfs, which owned this hook slot before the gate did. Git calls a
+# pre-push hook with <remote> <url>; `git lfs pre-push` needs them, so a call with
+# no arguments is not a real push and there is nothing to hand over.
+if [ "$#" -gt 0 ] && command -v git-lfs >/dev/null 2>&1; then
+    exec git lfs pre-push "$@"
+fi
+exit 0

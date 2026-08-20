@@ -270,13 +270,23 @@ def test_a_skipped_data_overlay_also_exits_three(tmp_path, monkeypatch):
 def test_the_suite_gate_is_required_at_both_engine_pushing_call_sites(
         tmp_path, monkeypatch):
     """The two-repo ENGINE call and the pre-cutover single-repo call both reach
-    the engine remote, so both must carry test_gate. Neither DATA call may."""
+    the engine remote, so both must carry test_gate.
+
+    Until 2026-08-20 this test also asserted that the DATA call carried NO gate,
+    which was true and is no longer: the data overlay now has a gate of its own,
+    running that overlay's tests through .githooks/pre-push-data. What still must
+    not happen is DATA borrowing the ENGINE's marker, because that would demand
+    the engine suite on a repository that has no engine in it.
+    """
     calls = _wire(tmp_path, monkeypatch, {})
     _code(push_all.main)
     by_name = dict(calls)
 
     assert by_name["ENGINE"].get("test_gate") is True
-    assert "test_gate" not in by_name["DATA"]
+    assert by_name["ENGINE"].get("gate_marker", push_all.ENGINE_GATE_MARKER) == \
+        push_all.ENGINE_GATE_MARKER
+    assert by_name["DATA"].get("test_gate") is True
+    assert by_name["DATA"].get("gate_marker") == push_all.DATA_GATE_MARKER
 
 
 def test_a_stop_the_world_exit_is_never_absorbed(tmp_path, monkeypatch):

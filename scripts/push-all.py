@@ -242,8 +242,17 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
         sys.exit(2)
 
 
-def _pre_push_gate_armed(repo: Path) -> bool:
+ENGINE_GATE_MARKER = "run-tests.py"
+DATA_GATE_MARKER = "heading-os-data-test-gate"
+
+
+def _pre_push_gate_armed(repo: Path, marker: str = ENGINE_GATE_MARKER) -> bool:
     """True if repo's pre-push hook is installed and runs the regression gate.
+
+    `marker` selects which gate to look for. The engine's hook runs the engine
+    suite; a DATA overlay's hook runs that overlay's own tests and then hands off
+    to git-lfs. The stock git-lfs hook carries neither marker, so it correctly
+    reads as "no gate".
 
     The pre-push hook (installed by scripts/install-git-hooks.py) is the single
     authoritative test gate -- it runs the suite on EVERY push to the engine, not
@@ -254,7 +263,7 @@ def _pre_push_gate_armed(repo: Path) -> bool:
     module is kebab-named and not importable)."""
     hook = repo / ".git" / "hooks" / "pre-push"
     try:
-        return hook.is_file() and "run-tests.py" in hook.read_text(encoding="utf-8")
+        return hook.is_file() and marker in hook.read_text(encoding="utf-8")
     except OSError:
         return False
 
@@ -280,7 +289,8 @@ def gh_token() -> str | None:
 
 def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: bool,
               push_env: dict, is_engine: bool = False, data_root: Path | None = None,
-              test_gate: bool = False) -> None:
+              test_gate: bool = False,
+              gate_marker: str = ENGINE_GATE_MARKER) -> None:
     """Commit + push one repo to origin/main, then verify ahead/behind == 0 0."""
     print(f"\n{BOLD}{CYAN}== {name}: {repo} =={RESET}")
 
@@ -396,9 +406,10 @@ def push_repo(name: str, repo: Path, message: str, do_commit: bool, dry_run: boo
     # files are tracked legitimately there and engine_clean_scan would flag all of
     # them. Keying this raise on is_engine would therefore have narrowed a check
     # from two modes to one while looking like a pure move. Hence two flags.
-    if test_gate and not _pre_push_gate_armed(repo):
+    if test_gate and not _pre_push_gate_armed(repo, marker=gate_marker):
+        which = "data overlay" if gate_marker == DATA_GATE_MARKER else "engine"
         raise RepoNotPushable(
-            "the engine pre-push test gate is not installed, so a push would skip "
+            f"the {which} pre-push test gate is not installed, so a push would skip "
             "the suite. Arm it once with: python scripts/install-git-hooks.py"
         )
 
@@ -561,7 +572,8 @@ def main() -> None:
         # ENGINE's files, while the DATA overlay runs its own content_scan over
         # its own files and legitimately carries private content. No engine
         # refusal carries any information about whether DATA is safe to push.
-        _attempt(skipped, "DATA", data, message, not args.no_commit, args.dry_run, push_env)
+        _attempt(skipped, "DATA", data, message, not args.no_commit, args.dry_run, push_env,
+                 test_gate=True, gate_marker=DATA_GATE_MARKER)
         _attempt(skipped, "ENGINE", engine, message, not args.no_commit, args.dry_run,
                  push_env, is_engine=True, data_root=data, test_gate=True)
 

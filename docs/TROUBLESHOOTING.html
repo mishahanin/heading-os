@@ -117,7 +117,13 @@
 <p><strong>An outbound message will not send on its own.</strong> That is the design, not a bug. Every outbound send is human-gated by the <a href="SECURITY-MODEL.html">lethal-trifecta control</a>: an agent drafts and queues, a human approves. Approve from the terminal with the Action Queue (<code>scripts/action-queue.py approve &lt;id&gt;</code>), which sends synchronously in that command.</p>
 <h2 id="pushing-and-backup">Pushing and backup</h2>
 <p><strong>A push is blocked with a secret-scan hit.</strong> The push-time content scan is the unbypassable wall, with no skip flag. Remove the secret from the file, move it to <code>.env</code> or a password manager, then push again. Never reach for <code>--no-verify</code>; it does not bypass the push scan and it is forbidden.</p>
-<p><strong>A push seems to hang.</strong> The engine&rsquo;s pre-push gate runs the regression suite before it lets a push through, which takes a few minutes. Give it time (or run the push in the background) rather than killing it. The data repository has no such gate.</p>
+<p><strong>A push seems to hang.</strong> The engine&rsquo;s pre-push gate runs the regression suite before it lets a push through, which takes a few minutes. Give it time (or run the push in the background) rather than killing it. The data overlay&rsquo;s own gate is much faster: it runs only that overlay&rsquo;s tests, and a data overlay with no <code>tests/</code> directory passes straight through.</p>
+<p><strong>A push is refused with &ldquo;the pre-push test gate is not installed&rdquo;.</strong> Git hooks are machine-local, so a fresh clone or a relocated workspace has none. Arm both repositories at once:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/install-git-hooks.py
+</code></pre></div>
+<p>Verify with <code>--check</code>. It reports the engine and the data overlay separately, and a workspace with no separate data overlay says so instead of failing.</p>
+<p><strong>The data overlay push started failing tests it never ran before.</strong> That is the gate working, not a regression it caused. Before 2026-08-20 the data overlay pushed with no test gate at all, so a broken test there stayed broken and silent. Fix the failures; do not disarm the hook.</p>
+<p><strong>The data overlay&rsquo;s pre-push hook replaced the git-lfs one.</strong> By design, and the replacement delegates: <code>.githooks/pre-push-data</code> ends by handing off to <code>git lfs pre-push</code>. A test holds it to that, because a hook that forgets the hand-off silently stops uploading LFS objects.</p>
 <h2 id="related">Related</h2>
 <ul>
 <li><a href="EMERGENCY-PROCEDURES.html">Emergency procedures</a>: the full outage and incident playbook.</li>

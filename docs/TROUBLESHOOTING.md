@@ -73,7 +73,19 @@ These bite only on a managed (administrator-provisioned) workspace. All three sh
 
 **A push is blocked with a secret-scan hit.** The push-time content scan is the unbypassable wall, with no skip flag. Remove the secret from the file, move it to `.env` or a password manager, then push again. Never reach for `--no-verify`; it does not bypass the push scan and it is forbidden.
 
-**A push seems to hang.** The engine's pre-push gate runs the regression suite before it lets a push through, which takes a few minutes. Give it time (or run the push in the background) rather than killing it. The data repository has no such gate.
+**A push seems to hang.** The engine's pre-push gate runs the regression suite before it lets a push through, which takes a few minutes. Give it time (or run the push in the background) rather than killing it. The data overlay's own gate is much faster: it runs only that overlay's tests, and a data overlay with no `tests/` directory passes straight through.
+
+**A push is refused with "the pre-push test gate is not installed".** Git hooks are machine-local, so a fresh clone or a relocated workspace has none. Arm both repositories at once:
+
+```bash
+uv run python scripts/install-git-hooks.py
+```
+
+Verify with `--check`. It reports the engine and the data overlay separately, and a workspace with no separate data overlay says so instead of failing.
+
+**The data overlay push started failing tests it never ran before.** That is the gate working, not a regression it caused. Before 2026-08-20 the data overlay pushed with no test gate at all, so a broken test there stayed broken and silent. Fix the failures; do not disarm the hook.
+
+**The data overlay's pre-push hook replaced the git-lfs one.** By design, and the replacement delegates: `.githooks/pre-push-data` ends by handing off to `git lfs pre-push`. A test holds it to that, because a hook that forgets the hand-off silently stops uploading LFS objects.
 
 ## Related
 

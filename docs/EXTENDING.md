@@ -138,6 +138,11 @@ uv run python scripts/run-tests.py                      # the suite
 - **The pre-push gate.** `push-all.py` runs the full regression suite (parallelized
   with `pytest-xdist`) before a push is allowed, plus the unbypassable secret content
   scan. Budget time for it; do not work around it.
+- **The data overlay's own gate.** A data overlay that carries a `tests/` directory
+  gets its own pre-push hook, which runs those tests and then hands off to git-lfs.
+  Arm both repositories with `uv run python scripts/install-git-hooks.py`; verify
+  with `--check`. An overlay with no `tests/` passes straight through, which is the
+  normal case on a managed workspace.
 - **CodeQL** runs on the repository for static security analysis; address what it
   flags on a pull request.
 

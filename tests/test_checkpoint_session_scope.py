@@ -114,6 +114,36 @@ def _inject(env, session, source="resume"):
     })
 
 
+def _registered_stop_timeout() -> int:
+    """The Stop timeout `checkpoint-offer.py` is ACTUALLY registered with.
+
+    Read from the tracked per-platform settings templates, not written as a
+    literal. It was the literal `90` in two tests until 2026-08-20, and the
+    docstrings around it said "the registered timeout" - a claim the method did
+    not establish. Lowering the registration to 30 in
+    `.claude/settings.local.linux.json` left both bounds green while the harness
+    would discard every continuation, which is the exact silent failure those
+    two tests exist to prevent (.claude/rules/scope-claims.md).
+
+    `.claude/settings.local.json` itself is gitignored and machine-local, so the
+    three tracked `settings.local.<platform>.json` templates are the authority,
+    and the SMALLEST of them is the bound: a wait safe on Linux and discarded on
+    macOS is still a defect.
+    """
+    timeouts = []
+    for path in sorted(ROOT.glob(".claude/settings.local.*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for entry in (data.get("hooks") or {}).get("Stop", []):
+            for hook in entry.get("hooks", []):
+                if "checkpoint-offer.py" in (hook.get("command") or ""):
+                    timeouts.append(int(hook["timeout"]))
+    assert timeouts, (
+        "no tracked settings template registers checkpoint-offer.py on Stop, so "
+        "the grace-period bound below would be measured against nothing"
+    )
+    return min(timeouts)
+
+
 def _archive_dir(env) -> Path:
     return env["data"] / "outputs" / "operations" / "handoff-archive"
 
@@ -157,6 +187,67 @@ def test_each_session_keeps_its_own_state_file(env):
     assert len(files) == 2, f"expected one state file per session, got {files}"
     assert not (_state_dir(env) / "checkpoint-state.json").exists(), (
         "the shared state file is back; it is what made two sessions one"
+    )
+
+
+# --------------------------------------------------------------------------
+# Hysteresis: one offer per band, and the band reopens at a compaction
+# --------------------------------------------------------------------------
+#
+# Added 2026-08-20. THREE separate mutations of this chain survived all 198
+# checkpoint tests, and the chain spans three files, which is why none of the
+# per-file tests could see it:
+#
+#   statusline `if bucket > previous_last_offered` -> `if True`   (nag every turn)
+#   the offer's own delivered-marker `_persist` dropped           (nag every turn)
+#   checkpoint-save's `"last_offered_bucket": 0` -> a large number
+#                                                (silence for the rest of the run)
+#
+# The first two are what the operator experiences as the offer interrupting every
+# single turn; the third is the opposite and worse, because it is silent - the
+# threshold notice never fires again after the first compaction and nothing says
+# so. Both ends are asserted through the real three hooks in sequence.
+
+
+def _spoke(result) -> bool:
+    return bool(result.stdout.strip())
+
+
+def test_the_offer_fires_once_per_band_and_again_in_the_next_one(env):
+    """Soft 40 / hard 45, step 5. 46% and 47% are one band; 51% is the next."""
+    _statusline(env, SESSION_A, 46)
+    assert _spoke(_stop(env, SESSION_A)), "the first crossing produced no offer"
+
+    _statusline(env, SESSION_A, 47)
+    again = _stop(env, SESSION_A)
+    assert not _spoke(again), (
+        f"the offer repeated inside the same 5% band:\n{again.stdout}"
+    )
+
+    _statusline(env, SESSION_A, 51)
+    assert _spoke(_stop(env, SESSION_A)), (
+        "crossing into the next band produced no offer, so the notice fires once "
+        "per session rather than once per band"
+    )
+
+
+def test_a_compaction_reopens_the_band_it_was_offered_in(env):
+    """A compaction actually frees context, so the same band must ask again.
+
+    Without the reset in checkpoint-save.py the recorded band survives the
+    compaction, every later reading falls at or below it, and the offer is dead
+    for the remainder of the session with nothing reporting it.
+    """
+    _statusline(env, SESSION_A, 46)
+    assert _spoke(_stop(env, SESSION_A)), "the first crossing produced no offer"
+
+    _compact(env, SESSION_A, "plain summary, nothing secret in it")
+
+    _statusline(env, SESSION_A, 46)
+    after = _stop(env, SESSION_A)
+    assert _spoke(after), (
+        "after a compaction the same band stayed marked as already offered, so "
+        "this session will never be offered a checkpoint again"
     )
 
 
@@ -208,6 +299,90 @@ def test_compact_source_injects_no_stale_body(env):
     out = _inject(env, SESSION_A, source="compact").stdout
     assert "SESSION-A-WORK" not in out, (
         f"a handoff body was injected on top of the compaction summary:\n{out}"
+    )
+
+
+def test_the_compact_resume_claims_nothing_about_what_is_on_disk(env):
+    """scope-claims, on the one path that never looks in the archive.
+
+    On `source=compact` the hook returns before resolving any pointer: the
+    `compact` source is its whole evidence. Until 2026-08-20 the text it printed
+    there said "this session's saved handoffs are under the handoff archive" and
+    named the compaction summary "the fresher of the two", two claims about disk
+    from a branch that reads none. Measured that day: a session with ZERO pointer
+    dirs printed both sentences unchanged, which is this test's fixture.
+    """
+    env["env"].pop("CLAUDE_HANDOFF_AUTO", None)
+    never_saved = "dddddddd-0000-0000-0000-000000000000"
+    _auto(env, never_saved, "on")
+    out = _inject(env, never_saved, source="compact").stdout
+
+    assert "AUTO MODE" in out, f"the auto resume did not fire at all:\n{out}"
+    pointer_dir = _archive_dir(env) / ".latest" / never_saved[:32]
+    assert not pointer_dir.exists(), "fixture broken: this session saved a pointer"
+    assert "saved handoffs are under" not in out, (
+        f"the compact resume asserts handoffs it never looked for:\n{out}"
+    )
+    assert "fresher of the two" not in out, (
+        f"the compact resume ranks two things it only counted one of:\n{out}"
+    )
+
+
+@pytest.mark.parametrize("raw", ['[1, 2, 3]', '"a string"', "17"])
+def test_neither_read_hook_dies_on_a_payload_that_is_not_an_object(env, raw):
+    """Valid JSON that is not an object parses fine and then dies on `.get`.
+
+    Measured 2026-08-20 against both shipped hooks: exit 1 with an uncaught
+    AttributeError. For the statusline that means NO status line, which is
+    indistinguishable from a hook that stopped running - the exact ambiguity the
+    autonomy segment exists to remove, and the module docstring said "Never
+    raises" while it did. For the inject hook it loses the whole SessionStart
+    injection, though the session id survives in the environment.
+    """
+    for hook in (STATUSLINE, INJECT):
+        result = subprocess.run(
+            [sys.executable, str(hook)],
+            input=raw, capture_output=True, text=True, env=env["env"],
+        )
+        assert result.returncode == 0, (
+            f"{hook.name} exited {result.returncode} on a non-object payload:\n"
+            f"{result.stderr}"
+        )
+        assert "Traceback" not in result.stderr, (
+            f"{hook.name} raised on a non-object payload:\n{result.stderr}"
+        )
+
+
+@pytest.mark.parametrize("field", ["context_window", "workspace", "model"])
+def test_the_statusline_still_renders_when_a_payload_field_is_the_wrong_shape(
+    env, field
+):
+    """"Never raises" is a claim in this hook's docstring, and it was false.
+
+    One malformed sub-object took the whole bar out: the operator lost the
+    context percentage AND the autonomy switch, and saw nothing to say why.
+    Degrading the unreadable field is the answer, not degrading the line.
+    """
+    payload = {
+        "session_id": SESSION_A,
+        "cwd": str(env["project"]),
+        "workspace": {"project_dir": str(env["project"])},
+        "model": {"display_name": "M"},
+        "context_window": {"used_percentage": 46.0, "remaining_percentage": 54.0},
+    }
+    payload[field] = "not an object"
+    result = subprocess.run(
+        [sys.executable, str(STATUSLINE)],
+        input=json.dumps(payload), capture_output=True, text=True, env=env["env"],
+    )
+    assert result.returncode == 0, f"{field}: exit {result.returncode}\n{result.stderr}"
+    assert result.stdout.strip(), (
+        f"{field} of the wrong shape printed no status line at all; a blank bar "
+        "is what a dead hook looks like"
+    )
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
+    assert "manual" in plain, (
+        f"{field}: the autonomy segment went missing with the bad field:\n{plain!r}"
     )
 
 
@@ -493,12 +668,23 @@ def test_the_grace_period_cannot_be_set_past_the_registered_timeout(
     The bound is enforced by REFUSAL, not by clamping - `env_int` answers with
     the default when the value is out of range - so an over-large setting lands
     at 60 rather than at the ceiling. Either answer is safe; what matters is that
-    no reachable value crosses the registered 90-second timeout.
+    no reachable value crosses the registered timeout.
+
+    That timeout is READ from the tracked settings templates since 2026-08-20,
+    not written as the literal 90 it was before. See `_registered_stop_timeout`.
     """
     CP = _cp()
+    registered = _registered_stop_timeout()
     monkeypatch.setenv("CLAUDE_HANDOFF_UNATTENDED_WAIT", configured)
     assert CP.wait_seconds() <= CP.UNATTENDED_WAIT_MAX
-    assert CP.UNATTENDED_WAIT_MAX < 90
+    # Operand order is not style: ruff's SIM300 reads the natural spelling here
+    # (`CP.UNATTENDED_WAIT_MAX < registered`) as a Yoda condition, and
+    # lint-ratchet turns that into a blocked commit. Measured on this line.
+    assert registered > CP.UNATTENDED_WAIT_MAX, (
+        f"the ceiling is {CP.UNATTENDED_WAIT_MAX}s and checkpoint-offer.py is "
+        f"registered on Stop with a {registered}s timeout, so a wait at the "
+        "ceiling has its output discarded and the continuation is lost silently"
+    )
 
 
 def test_a_grace_period_inside_the_bound_is_honoured(monkeypatch):
@@ -1195,8 +1381,10 @@ def test_the_wait_plus_its_overhead_cannot_reach_the_registered_timeout(env):
     """Claude Code DISCARDS the output of a hook that times out.
 
     So the failure this guards is silent and total: the operator is told the
-    session will carry on, the registration's 90 seconds pass, the continuation
-    is thrown away, and the session halts anyway. Nothing reports it.
+    session will carry on, the registered timeout passes, the continuation is
+    thrown away, and the session halts anyway. Nothing reports it. That timeout
+    is READ from the tracked settings templates since 2026-08-20, not written as
+    the literal 90 it was before - see `_registered_stop_timeout`.
 
     Two other tests cover the neighbouring properties and neither covers this
     one. `test_the_configured_wait_is_bounded` checks the PARAMETER, which is
@@ -1223,9 +1411,10 @@ def test_the_wait_plus_its_overhead_cannot_reach_the_registered_timeout(env):
     assert overhead >= 0, f"the wait did not run at all: {elapsed:.1f}s"
 
     CP = _cp()
+    registered = _registered_stop_timeout()
     projected = CP.UNATTENDED_WAIT_MAX + overhead
-    assert projected < 90, (
+    assert projected < registered, (
         f"at the {CP.UNATTENDED_WAIT_MAX}s ceiling this hook would take about "
-        f"{projected:.1f}s against a registered 90s timeout, so Claude Code "
-        f"would discard the continuation. Measured overhead: {overhead:.1f}s."
+        f"{projected:.1f}s against a registered {registered}s timeout, so Claude "
+        f"Code would discard the continuation. Measured overhead: {overhead:.1f}s."
     )

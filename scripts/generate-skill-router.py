@@ -125,13 +125,39 @@ def parse_frontmatter(skill_md: Path) -> tuple[dict, str]:
 # Row loading
 # ============================================================
 
-def _as_list(value) -> list[str]:
-    """Coerce a triggers/exclusions frontmatter value to a list of strings."""
+def _as_list(value, *, field: str) -> list[str]:
+    """Coerce a triggers/exclusions frontmatter value to a list of strings.
+
+    Raises ``ValueError`` on an entry that is not a string. That case is not
+    hypothetical and the coercion is what made it dangerous: an unquoted
+    ``colon-space`` inside a YAML list item makes the whole item parse as a
+    MAPPING, and the old ``str(v)`` rendered the mapping's Python ``repr`` -
+    braces, quoted key, quoted value - straight into the generated router row.
+
+    Measured 2026-08-20 on `.claude/skills/checkpoint/SKILL.md`: one such
+    sentence put a Python dict literal into `.claude/rules/skill-router.md`, an
+    ALWAYS-ON rule injected into every session, and grew that row from 804 to
+    867 characters. Both gates stayed green through it - `--check` compared a
+    corrupt generation against a corrupt file and found them equal, and
+    `skill-metadata-check.py` never inspects the item type. A coercion that can
+    turn a structural mistake into valid-looking output is a gate that reports
+    on nothing.
+    """
     if value is None:
         return []
     if isinstance(value, str):
         return [value]
-    return [str(v) for v in value]
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(
+                f"{field}: entry is a {type(item).__name__}, not a string: "
+                f"{str(item)[:80]!r}. A YAML list item containing an unquoted "
+                f"'colon space' parses as a mapping - quote the whole item, or "
+                f"replace the colon with a dash."
+            )
+        out.append(item)
+    return out
 
 
 def load_routing_rows() -> tuple[list[dict], list[str]]:
@@ -172,13 +198,19 @@ def load_routing_rows() -> tuple[list[dict], list[str]]:
                 f"{rel}: '{ROUTING_KEY}.category' is {category!r}; must be one of {CATEGORY_ORDER}"
             )
             continue
+        try:
+            triggers = _as_list(routing.get("triggers"), field=f"{ROUTING_KEY}.triggers")
+            exclusions = _as_list(routing.get("exclusions"), field=f"{ROUTING_KEY}.exclusions")
+        except ValueError as exc:
+            errors.append(f"{rel}: {exc}")
+            continue
         rows.append(
             {
                 "name": name,
                 "category": category,
                 "label": routing.get("label") or f"/{name}",
-                "triggers": _as_list(routing.get("triggers")),
-                "exclusions": _as_list(routing.get("exclusions")),
+                "triggers": triggers,
+                "exclusions": exclusions,
                 "compound": str(routing.get("compound", "No")),
                 "router": routing.get("router", "auto"),
             }

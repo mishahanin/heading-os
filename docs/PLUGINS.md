@@ -98,8 +98,14 @@ and the compact-and-resume flow, but no proactive offer.
 Auto mode is off until you turn it on. With it on, crossing the threshold saves
 the checkpoint without asking, and the session carries on. After a compaction the
 SessionStart hook tells the assistant to continue on its own. Keep your
-compaction point above the soft threshold, so the checkpoint always lands first.
-Nothing here triggers compaction; only Claude Code's own auto-compact does.
+compaction point above the soft threshold, so the checkpoint lands first.
+
+No hook can start a compaction from inside Claude Code, and none tries. The Stop
+hook reaches the same end from outside. Above the hard threshold, once the
+checkpoint is on disk, it submits the literal text `/compact` to the terminal
+hosting the session. It reaches that terminal through HERDR, a terminal manager.
+Without HERDR hosting your session none of that happens. Claude Code's own
+auto-compact then frees the context instead.
 
 The environment variable is the workspace default, decided before launch. The
 decision you actually make is a running one, taken part-way into a long piece of

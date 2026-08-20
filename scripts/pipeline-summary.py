@@ -36,16 +36,14 @@ STAGE_WEIGHTS = {
     "lost": 0.00,
 }
 
-# Investor stage weights (different lifecycle)
-INVESTOR_STAGE_WEIGHTS = {
-    "lead": 0.05,
-    "qualified": 0.15,
-    "demo/poc": 0.30,
-    "proposal": 0.50,
-    "negotiation": 0.75,
-    "won": 1.00,
-    "lost": 0.00,
-}
+# An `INVESTOR_STAGE_WEIGHTS` dict stood here, commented "different lifecycle".
+# It was byte-identical to STAGE_WEIGHTS above and referenced nowhere, so it
+# claimed a difference it did not carry. Removed 2026-08-20.
+#
+# The intent behind it is real and is NOT implemented: investor rows are only
+# COUNTED today (`len(investor_rows)` at the summary and metrics lines), never
+# weighted, so a weighted investor pipeline needs both a distinct weight table
+# and a caller. Recorded here rather than left as a dict nothing reads.
 
 STAGE_ORDER = ["Lead", "Qualified", "Demo/POC", "Proposal", "Negotiation", "Won", "Lost"]
 

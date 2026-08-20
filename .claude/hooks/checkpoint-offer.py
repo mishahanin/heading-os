@@ -21,7 +21,10 @@ pause hands the turn back to the operator at all:
   - auto on: drive the assistant to save the checkpoint silently and resume.
   - unattended on: ask nothing. Save at a hard-threshold bucket crossing, then
     wait out a grace period, hand the turn back the moment the operator types,
-    and otherwise tell the assistant to carry on.
+    and otherwise tell the assistant to carry on. It engages ABOVE the soft
+    threshold, or below it once this session has compacted at least once - a
+    session that has not filled up yet still halts at a pause, and one that
+    emptied itself by compacting does not.
 
 The offer prompt names `unattended` as its one standing option, because
 `--unattended on` already sets `session_auto` - the two are nested, not siblings,
@@ -56,6 +59,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 _BOOT = Path(__file__).resolve()
@@ -90,6 +94,63 @@ LABEL_REFRESH_SECONDS = 5
 SKILL_REF = ".claude/skills/checkpoint/SKILL.md"
 
 
+# The Stop timeout this hook is REGISTERED with in .claude/settings.local.json.
+# Claude Code discards the output of a hook that outruns its timeout, so a
+# continuation printed at 92s is a continuation the operator never receives: no
+# block decision, no state write, no stall notice, and a session that halts in
+# silence having been told in writing that it would carry on.
+#
+# `CP.UNATTENDED_WAIT_MAX` (60) exists to keep the GRACE PERIOD under this
+# number, and its comment justifies 60 by adding three out-of-loop HERDR calls
+# to it - the pane lookup, the final label overrun, the `clear_label` - for a
+# worst case "near 79 seconds". That arithmetic omits the two HERDR calls
+# `_request_compaction` makes BEFORE the wait on the same Stop. Measured
+# 2026-08-20 with a `herdr` answering just inside each of its own timeouts
+# (`agent list` 9.5s, `agent prompt` 9.5s, `agent rename` 1.9s) and the wait at
+# its 60s ceiling: the hook took 92.0s end to end. Two seconds over, and the
+# whole continuation lost.
+#
+# So the wait is bounded against the hook's OWN clock rather than against the
+# configured number alone. Everything upstream - both compaction calls, the
+# pane lookup, the state reads - is charged automatically, because the budget is
+# measured from process start and not from the moment the wait begins.
+#
+# Read from the environment because the number is DATA, not a property of this
+# file: the 90 lives in the `Stop` registration in .claude/settings.local.json,
+# and a plugin bundle registering this hook with a different budget would leave
+# a hardcoded constant quietly describing somebody else's timeout. The default
+# is the shipped registration.
+HOOK_TIMEOUT_SECONDS = CP.env_int(
+    "CLAUDE_HANDOFF_HOOK_TIMEOUT", 90, minimum=10, maximum=600
+)
+
+# What has to happen AFTER the wait returns and still fit: the final in-loop
+# `set_label` can overrun the deadline by `HA.LABEL_TIMEOUT` (2s), the `finally`
+# spends another `HA.LABEL_TIMEOUT` on `clear_label`, and the state write plus
+# the print follow. Measured worst case for that tail is about 4.1s; 8 leaves
+# room for a slower disk without eating a wait an operator can otherwise have.
+POST_WAIT_RESERVE_SECONDS = 8
+
+# Process start, as close to it as this module can observe. Read only by
+# `_effective_wait`.
+_HOOK_STARTED = time.monotonic()
+
+
+def _effective_wait(configured: float, started: float, now: float) -> float:
+    """The part of the configured grace period that still fits in the timeout.
+
+    Pure arithmetic on three numbers so the boundary is testable without
+    spending a minute of wall time proving it.
+
+    Returning 0 means "no room left": the caller then skips the wait and prints
+    its continuation immediately, which is the direction that keeps the run
+    alive. Halting instead would trade a discarded continuation for a silent
+    one, which is the same loss with better paperwork.
+    """
+    room = HOOK_TIMEOUT_SECONDS - POST_WAIT_RESERVE_SECONDS - (now - started)
+    return max(0.0, min(float(configured), room))
+
+
 # The four options are IDENTICAL in both bodies and only the framing line above
 # them differs. They are two-tiered on purpose: option 2 carries five facts the
 # operator needs before choosing it, and written inline it ran seven lines and
@@ -113,13 +174,13 @@ automatically, at this threshold and every one after.
 # looking at a threshold offer he had already read four times that evening.
 OPTIONS_DETAIL = """
 
-About option 2: at this threshold and every one after, the hook waits 60 seconds \
+About option 2: at this threshold and every one after, the hook waits {wait} seconds \
 and shows a countdown. Type anything and the turn comes back to you in about two \
 seconds. Stay silent and it saves the handoff, compacts by itself, and stops \
 asking. From then on the session also works through ordinary pauses instead of \
 halting to ask you something. Outbound sends still wait for your approval - that \
 gate is code, not this switch. The mode stays on until you turn it off; the status \
-line shows whether it is live. Only the stall and ceiling fuses lower it for you.
+line shows whether it is live. Only the continuation ceiling lowers it for you; the done marker ends the work and leaves the switch up.
 
 How the hook compacts: {compaction}"""
 
@@ -310,8 +371,13 @@ def build_reason(
     if state.get("offer_detail_shown"):
         detail = ""
     else:
+        # `wait` is interpolated, never written as a literal: this tree runs
+        # CLAUDE_HANDOFF_UNATTENDED_WAIT=10 while the text said 60, so the one
+        # paragraph the operator reads to decide was wrong by 50 seconds about
+        # the thing it was explaining.
         detail = OPTIONS_DETAIL.format(
-            compaction=_compaction_sentence(state, state_path, session)
+            wait=CP.wait_seconds(),
+            compaction=_compaction_sentence(state, state_path, session),
         )
         _persist(state_path, offer_detail_shown=True)
     return REASON_WRAPPER.format(
@@ -491,28 +557,36 @@ def _queue_pending(path: Path, session: str) -> bool:
     return pending > 0
 
 
-def _wait_out_the_grace(payload: dict, session: str) -> bool:
-    """True when the operator spoke, False when the window passed in silence.
+def _wait_out_the_grace(payload: dict, session: str) -> tuple[bool, float]:
+    """(spoke, seconds actually granted).
+
+    True when the operator spoke, False when the window passed in silence.
 
     Unknown counts as spoke. An absent or unreadable transcript means silence
     cannot be told from a message, and the safe direction there is to hand the
     turn back rather than to continue blind.
+
+    The second element is what the continuation message reports. It is the wait
+    this call actually granted, never `CLAUDE_HANDOFF_UNATTENDED_WAIT`: the two
+    differ whenever `_effective_wait` had to shorten the window, and a sentence
+    saying "60s grace passed with no input" after a 31-second wait would be the
+    same class of defect as the rest of this file exists to keep out.
     """
     raw_path = payload.get("transcript_path")
     if not raw_path:
-        return True
+        return (True, 0.0)
     path = Path(raw_path)
     if not path.is_file():
-        return True
+        return (True, 0.0)
     if _queue_pending(path, session):
-        return True
+        return (True, 0.0)
 
     wait = CP.wait_seconds()
     poll = CP.env_int("CLAUDE_HANDOFF_UNATTENDED_POLL", 2, minimum=1, maximum=60)
     try:
         offset = path.stat().st_size
     except OSError:
-        return True
+        return (True, 0.0)
 
     # The countdown surface. Sixty seconds of an unchanging terminal reads as a
     # hang, and an operator who believes the session hung interrupts it - which
@@ -525,16 +599,37 @@ def _wait_out_the_grace(payload: dict, session: str) -> bool:
     # Never load-bearing. Any failure here leaves the wait running its full
     # duration unchanged; a missing countdown is a worse experience, a shortened
     # wait would be a defect.
+    #
+    # Charged against the same budget as the wait itself, and skipped when there
+    # is none left: `resolve_pane` costs up to `HA.LIST_TIMEOUT` (10s), and ten
+    # seconds spent resolving a pane for a countdown that has no time left to
+    # draw is ten seconds taken off a continuation that is already at the edge.
+    #
+    # `> 0` and not `> HA.LIST_TIMEOUT`, deliberately, and this was tried the
+    # other way on 2026-08-20. The review claim was that a lookup started with
+    # 0 < room < 10s can spend all ten and push the hook past its timeout. It
+    # cannot: `granted` is recomputed from the process clock AFTER this block
+    # (see the next paragraph), so the lookup's cost comes OUT of the wait
+    # rather than on top of it, and the total stays bounded either way.
+    # Tightening the gate to `HA.LIST_TIMEOUT` only removed the countdown from
+    # every wait of 10 seconds or less — including the 10 this workspace
+    # configures — which `test_the_wait_shows_a_countdown_and_always_clears_it`
+    # caught immediately. The bound is the recomputation, not this gate.
     pane = None
-    try:
-        pane = HA.resolve_pane(session)
-    except HA.HerdrUnavailable as exc:
-        print(f"checkpoint-offer: countdown unavailable: {exc}", file=sys.stderr)
+    if _effective_wait(wait, _HOOK_STARTED, time.monotonic()) > 0:
+        try:
+            pane = HA.resolve_pane(session)
+        except HA.HerdrUnavailable as exc:
+            print(f"checkpoint-offer: countdown unavailable: {exc}", file=sys.stderr)
 
     labels_alive = pane is not None
     next_label = 0.0
 
-    deadline = time.monotonic() + wait
+    # Recomputed here rather than reused from above, so the pane lookup's own
+    # cost is inside the budget instead of on top of it.
+    now = time.monotonic()
+    granted = _effective_wait(wait, _HOOK_STARTED, now)
+    deadline = now + granted
     try:
         while time.monotonic() < deadline:
             now = time.monotonic()
@@ -558,7 +653,7 @@ def _wait_out_the_grace(payload: dict, session: str) -> bool:
             try:
                 size = path.stat().st_size
             except OSError:
-                return True
+                return (True, granted)
             if size <= offset:
                 continue
             try:
@@ -566,11 +661,11 @@ def _wait_out_the_grace(payload: dict, session: str) -> bool:
                     handle.seek(offset)
                     fresh = handle.read()
             except OSError:
-                return True
+                return (True, granted)
             offset = size
             if _operator_spoke(fresh, session):
-                return True
-        return False
+                return (True, granted)
+        return (False, granted)
     finally:
         # Both exits, always. A label frozen at "12s" outlives the wait and is
         # worse than never having shown one.
@@ -642,8 +737,32 @@ def _stamp(iso: str) -> str:
     Filenames, never mtime: `checkpoint-save.py` truncates its stamp to %H%M%S,
     and mtime moves with any later touch, so the name is the only stable record
     of when an archive was written.
+
+    **Converted into the filename's clock first.** The stored timestamps this is
+    fed (`last_offer_at`) are UTC by convention; since 2026-08-20 the archive
+    FILENAME is stamped in the operator's local zone, because a filename is a
+    calendar day a person reads. Stripping the offset and comparing the two wall
+    clocks as strings therefore compares a local clock against a UTC one, and on
+    a UTC+4 operator that accepts a handoff written up to four hours BEFORE the
+    offer as one written after it. The consequence is not cosmetic: the driven
+    compaction is gated on this, so a stale handoff would let the boundary fire
+    with the session's real work unsaved.
+
+    Falls back to the old string surgery when the input carries no parseable
+    offset - a naive timestamp has no zone to convert from, and refusing it
+    outright would return "" and block the compaction forever.
     """
-    raw = str(iso or "").replace("Z", "")
+    raw = str(iso or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = None
+    if parsed is not None and parsed.tzinfo is not None:
+        return parsed.astimezone(CP.local_now().tzinfo).strftime("%Y-%m-%d-%H%M%S")
+
+    raw = raw.replace("Z", "")
     try:
         date, clock = raw.split("T", 1)
     except ValueError:
@@ -826,7 +945,11 @@ def unattended_turn(
 ) -> int:
     """Wait for the operator, then either hand the turn back or continue it.
 
-    Two things end a stretch, and only these two.
+    Two things end a stretch FROM INSIDE THIS FUNCTION. The sentence used to
+    read "two things end a stretch, and only these two", and that was measurably
+    false: `main()`'s soft-threshold gate is a third, it leaves no record at
+    all, and this docstring is what a reader consults before trusting the pair
+    below to be exhaustive. See the gate's own comment in `main()`.
 
     The DONE MARKER is the primary one, and it is explicit: the assistant writes
     it with `scripts/checkpoint-paths.py --done "<note>"` when the plan is
@@ -885,7 +1008,8 @@ def unattended_turn(
         )
 
     session = CP.session_id(payload)
-    if _wait_out_the_grace(payload, session):
+    spoke, granted = _wait_out_the_grace(payload, session)
+    if spoke:
         return 0
 
     done += 1
@@ -899,9 +1023,13 @@ def unattended_turn(
     # `remaining` and `compaction` were dropped from the template on 2026-08-19
     # and their arguments went with them, rather than staying as dead kwargs
     # `str.format` would silently accept.
+    #
+    # `wait` is what the wait ACTUALLY granted, not `CP.wait_seconds()`. The two
+    # part company whenever `_effective_wait` shortened the window against the
+    # registered hook timeout, and the sentence is read by the operator.
     reason = UNATTENDED_WRAPPER.format(
         used=used,
-        wait=CP.wait_seconds(),
+        wait=int(granted),
         done=done,
         maximum=maximum,
     )
@@ -991,7 +1119,36 @@ def main() -> int:
         # A bucket fires once per 5%, so a session would halt at the very next
         # pause and sleep until morning; the purpose of this mode is not to
         # announce a threshold once, it is to not halt.
-        if used < CP.config(state)["soft"]:
+        #
+        # And the floor is SPENT once this session has actually compacted. The
+        # skill documents the mode as engaging above the soft threshold, which
+        # is right for a session that has not filled up yet and wrong for one
+        # that already has. Measured end to end on 2026-08-20 with SOFT=40 /
+        # HARD=45: the mode saved at 46%, drove its own compaction through
+        # HERDR, the PostCompact hook reset the hysteresis, the statusline then
+        # read 11% used - and the very next pause returned HERE, silently. No
+        # `unattended_paused_at`, no `unattended_stop_reason`, no Telegram
+        # notice, nothing for `--unattended status` to report. The mode died at
+        # the exact moment it succeeded, and `OPTIONS_DETAIL` had told the
+        # operator that from that threshold on "the session also works through
+        # ordinary pauses".
+        #
+        # `last_compact_at` is the signal because it is the one that SURVIVES:
+        # checkpoint-save.py resets `last_offered_bucket` to 0 and clears the
+        # offer keys, and `clear_unattended_window` pops the continuation count
+        # on the new prompt_id that the submitted `/compact` creates, so every
+        # in-window counter is back to zero by the time this line runs again.
+        #
+        # What is deliberately NOT done here: the remaining pre-compaction case
+        # still returns SILENTLY, without `_pause_unattended`'s record and
+        # notice. Measured before deciding: this gate is reached at every Stop
+        # of every unattended session below soft, and routing it through
+        # `_pause_unattended` would fire one Telegram notice and stamp
+        # `unattended_stop_reason` on a stretch that has not begun, which
+        # `--unattended status` would then report all evening. Silence is
+        # correct for a stretch that never started; it was only wrong for one
+        # that had.
+        if used < CP.config(state)["soft"] and not state.get("last_compact_at"):
             return 0
 
         # The one thing this mode never did. Until 2026-08-19 the line below
@@ -1007,6 +1164,17 @@ def main() -> int:
         # fire once per 5% band.
         if state.get("needs_compact_offer") and used >= CP.config(state)["hard"]:
             level = state.get("offer_level")
+            # An `offer_level` that is neither falls through to the continuation
+            # below WITHOUT consuming the bucket, so the save is retried at the
+            # next pause and at every pause after. Measured 2026-08-20 with a
+            # hand-set `offer_level: "bogus"` at 46% used: three consecutive
+            # Stops all continued, `needs_compact_offer` stayed true, and
+            # `last_offer_at` stayed unset - which also keeps `_handoff_since`
+            # false, so the driven compaction never fires either. Left as is.
+            # Only the statusline writes this key and it writes "soft" or "hard"
+            # whenever it sets `needs_compact_offer`, so the state is reachable
+            # only by hand-editing; and the alternative - picking a level here -
+            # would invent the one fact the corrupt state failed to record.
             if level in ("soft", "hard"):
                 bucket = int(
                     state.get("offer_bucket") or state.get("current_bucket") or 0

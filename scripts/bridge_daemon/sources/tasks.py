@@ -197,7 +197,6 @@ _ACTIVE_RE = re.compile(
 
 _DUE_RE = re.compile(r"\bDue:\s*(?P<due>\d{4}-\d{2}-\d{2})\b")
 _KIND_RE = re.compile(r"\*(?P<kind>[A-Za-z][A-Za-z \+/]*?)\*")
-_SOURCE_RE = re.compile(r"\bSource:\s*([^|]+?)(?=\s*\||$)")
 
 
 def _parse_iso_date(s: str | None) -> date | None:

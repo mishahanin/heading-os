@@ -28,10 +28,6 @@ from scripts.utils.colors import BOLD, GREEN, RED, RESET, YELLOW
 from scripts.utils.paths import DATA_SCHEMA_VERSION
 from scripts.utils.workspace import get_routing_destination, get_workspace_root
 
-# Destinations that belong in the data overlay (everything that is NOT engine).
-_DATA_DESTS = {"private", "corporate"}
-
-
 def _tracked_files(root: Path) -> list[str]:
     out = subprocess.run(
         ["git", "-c", "core.quotepath=false", "ls-files"],

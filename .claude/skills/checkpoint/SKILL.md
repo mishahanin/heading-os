@@ -31,7 +31,7 @@ x-heading-routing:
   category: Operations
   label: /checkpoint [note]
   triggers:
-    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries two session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown 60-second countdown instead of halting, and it already includes `auto`. Only the stall and ceiling fuses lower the mode; the assistant never does, and the status line shows its state on every render.
+    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries two session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown countdown instead of halting, and it already includes `auto`. Nothing lowers the mode except the operator - the assistant's done marker and the continuation ceiling stop a stretch and leave the switch up, and the status line shows its state on every render.
   exclusions:
     - Auto-resume after /compact handled by checkpoint-save.py (PostCompact)
     - reflective end-of-session -> /calibrate
@@ -108,9 +108,12 @@ data-root-relative, which is the form the `@`-reference resolves. Use them
 verbatim - never rebuild a path by hand, and never write into another session's
 pointer directory.
 
-If the script is unavailable, get the stamp from `date -u +'%Y-%m-%d-%H%M%S'`.
-Get the session id from `echo "$CLAUDE_CODE_SESSION_ID"`. Take the slug as the
-first 32 characters of that id.
+If the script is unavailable, get the stamp from `date +'%Y-%m-%d-%H%M%S'`. Local
+time, never `-u`. The script stamps the archive in the operator's own zone since
+2026-08-20. A UTC fallback would file the night's work under yesterday.
+Read the session id from the `CLAUDE_CODE_SESSION_ID` environment variable, which
+Claude Code exports to every child process. Take the slug as the first 32
+characters of that id.
 
 ### Step 2 - Write the combined handoff file
 
@@ -147,9 +150,11 @@ Do NOT continue implementation, do NOT call `/compact`, do NOT clear the session
 ## Auto mode
 
 Auto mode makes the Stop hook run this skill's procedure with no prompt. Auto
-mode is OFF by default. Nothing here triggers compaction on its own. Claude
-Code's own auto-compact still decides when to free the context. Auto mode only
-guarantees that the checkpoint lands first.
+mode is OFF by default. The hook also drives the compaction. It does that at or
+above the hard threshold, once your `_handoff_auto_` archive is on disk, through
+the same HERDR path unattended mode uses. When HERDR does not host this session
+the hook cannot compact it at all. Claude Code's own auto-compact then frees the
+context instead.
 
 **For one session,** flip the switch while you work:
 
@@ -169,8 +174,10 @@ python scripts/checkpoint-paths.py --auto on
 }
 ```
 
-Keep `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` ABOVE the soft threshold. The checkpoint
-then always lands before compaction frees the context.
+Keep the native compaction point ABOVE the soft threshold, so the checkpoint
+lands before compaction frees the context. Where the harness actually fires
+against a window is unmeasured here; `--compact-history` prints the configured
+point and every firing recorded on this tree.
 
 Read `references/mode-mechanics.md` for the hysteresis band, the post-compaction
 resume instruction, and why the threshold offer stopped naming this switch.
@@ -243,9 +250,11 @@ number with `CLAUDE_HANDOFF_UNATTENDED_MAX`.
 when, in the session state. It also sends one Telegram notice when you configured
 a target. Read that state with `--unattended status`.
 
-The mode stays quiet whenever something else already drives the Stop event.
-Three signals claim it. A scheduled `/loop` wakeup claims it. In-flight
-background work claims it. A ralph-loop that names this session claims it.
+Below the hard threshold the mode stays quiet whenever something else already
+drives the Stop event. Three signals claim it. A scheduled `/loop` wakeup claims
+it. In-flight background work claims it. A ralph-loop that names this session
+claims it. At or above the hard threshold the hook records the claimant and runs
+anyway. That save is the last one before compaction frees the context.
 
 `/goal` is the one case the mode cannot see. The harness holds that state in
 memory, so no hook reaches it. Claude Code limits the cost itself. After the
@@ -263,10 +272,15 @@ Environment defaults, for the whole workspace rather than one session:
 }
 ```
 
-**The wait is clamped at 60 seconds, whatever you set.** Raise the hook's own
-registered timeout first if you need a longer grace period. Read
-`references/mode-mechanics.md` for the cost of a long wait and for the clamp's
-reasoning.
+**A wait outside 1 to 60 seconds is ignored, and you get 60.** This is not a
+clamp: `env_int` returns the DEFAULT on any invalid value, so `WAIT=600` gives
+60 and `WAIT=0` also gives 60, not the nothing you asked for. Measured
+2026-08-20. Raise the hook's own registered timeout first if you need a longer
+grace period. Read `references/mode-mechanics.md` for the cost of a long wait.
+
+**The wait can also be SHORTER than you set.** The hook bounds the grace period
+against its own registered timeout, so a Stop that already spent time on other
+work grants less. The continuation prints the number it actually gave you.
 
 ## NEVER
 

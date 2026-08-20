@@ -61,7 +61,6 @@ try:
 except (ImportError, OSError):
     GITHUB_ORG = ""
 CORPORATE_REPO = "heading-os-corporate"
-CRM_CENTRAL_REPO = "31c-crm-central"
 
 # Colors
 GREEN = "\033[92m"

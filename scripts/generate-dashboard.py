@@ -49,7 +49,6 @@ METRICS_FILE = get_context_dir() / "current-data.md"
 PEOPLE_FILE = get_people_file()
 CALENDAR_FILE = get_outputs_dir() / "_sync" / "calendar" / "upcoming.md"
 EMAIL_FILE = get_outputs_dir() / "_sync" / "emails" / "inbox-latest.md"
-CRM_HEALTH_SCRIPT = SCRIPT_DIR / "crm-health.py"
 HTML_TO_PDF_SCRIPT = SCRIPT_DIR / "html-to-pdf.py"
 CONTEXT_DIR = get_context_dir()
 HIRING_FILE = get_context_dir() / "hiring-pipeline.md"

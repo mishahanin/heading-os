@@ -385,10 +385,6 @@ def _pipeline_file(corpus: CorpusPaths) -> Path:
     return corpus.context / "pipeline.md"
 
 
-def _crm_config(corpus: CorpusPaths) -> Path:
-    return corpus.crm.parent / "config.md"
-
-
 # ============================================================
 # Aggregating oracles -- the class /census is proposed for
 # ============================================================

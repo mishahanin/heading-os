@@ -53,7 +53,10 @@ def collect(kind: str = "manual") -> dict:
     handoff = CP.handoff_dir(project, CP.engine_root())
     sid = CP.session_id()
     slug = CP.safe_slug(sid)
-    stamp = CP.utc_now().strftime("%Y-%m-%d-%H%M%S")
+    # local_now, not utc_now: this stamp is the archive FILENAME, a calendar day
+    # the operator reads. See CP.local_now for the measurement that changed it.
+    # Stored timestamps in this file stay on utc_now and must.
+    stamp = CP.local_now().strftime("%Y-%m-%d-%H%M%S")
 
     root = CP.engine_root()
     if CP.is_engine_tree(root):
@@ -176,10 +179,20 @@ def auto_switch(value: str) -> int:
         return 1
 
     if value == "on":
+        # The three lines below said the opposite until 2026-08-20: "no hook can
+        # trigger it, so Claude Code's own auto-compact still decides". True when
+        # written, false since the driven block landed in checkpoint-offer.py on
+        # 2026-08-19 - `_request_compaction` gates on `auto_mode OR
+        # unattended_mode`, so auto alone reaches the HERDR submit. A switch that
+        # under-reports what it turns on is the defect this workspace calls a
+        # scope claim (.claude/rules/scope-claims.md), and the operator was
+        # reading it every time he flipped the switch.
         print(f"auto=on for this session ({slug}).")
         print("Checkpoints now save silently at each threshold and you stop being asked.")
-        print("Compaction is unchanged: no hook can trigger it, so Claude Code's own")
-        print("auto-compact still decides when the context is freed.")
+        print("At or above the hard threshold, once that handoff is on disk, the Stop")
+        print("hook also submits /compact to this session's terminal through HERDR.")
+        print("Without HERDR hosting it, Claude Code's own auto-compact frees the")
+        print("context instead.")
     else:
         print(f"auto=off for this session ({slug}). The threshold offer comes back.")
     return 0
@@ -221,6 +234,12 @@ def unattended_switch(value: str) -> int:
                 f"continuations {int(state.get('unattended_continuations') or 0)}"
             )
         if state.get("unattended_done_at"):
+            # Measured 2026-08-20 and deliberately left alone: `--unattended off`
+            # does NOT clear the window keys, so this line still reports last
+            # night's DONE while the mode reads off. Confusing, never wrong - the
+            # marker did happen. The fix belongs in `CP.lower_unattended`, which
+            # would have to call `clear_unattended_window`, and that function is
+            # the hook's fuse path too. Not changed from this CLI alone.
             note = state.get("unattended_done_note") or "no note given"
             print(f"DONE: {note}")
             print(f"declared at: {state['unattended_done_at']}")

@@ -65,8 +65,6 @@ REQUIRED_METADATA = ["author", "version"]
 RECOMMENDED_FIELDS = ["argument-hint", "allowed-tools"]
 ORCHESTRATION_BLOCK = "x-heading-orchestration"
 
-VALID_PARALLEL_SAFE = {"true", "false", "partial", True, False}
-
 # Size budget (F-5.3). Hard caps fail the check; the warn threshold is advisory.
 LINE_HARD_CAP = 500
 BYTE_HARD_CAP = 18432  # 18 KB

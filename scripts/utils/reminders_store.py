@@ -123,19 +123,13 @@ def _prev_month_date(today: date) -> date:
     return date(today.year, today.month - 1, 1)
 
 
-def _recurring_candidates(rule: str, today: date) -> list[date]:
-    """Both the current-month and next-month target dates for `rule`.
-
-    A recurring target computed for month M can land in month M-1 (e.g.
-    first-friday-minus-1 when the first Friday is the 1st). Evaluating only
-    `today`'s own month therefore misses that boundary day. Checking both
-    candidates against `today` closes the gap without special-casing any
-    rule by name.
-    """
-    return [
-        _recurring_due_date(rule, today),
-        _recurring_due_date(rule, _next_month_date(today)),
-    ]
+# `_recurring_candidates(rule, today)` stood here and returned TWO candidates,
+# the current month's target and the next month's. `_current_recurring_target`
+# below supersedes it with three - previous, current and next - and its docstring
+# says why the third is needed. The two-candidate version was left behind and
+# called by nothing: its name appears exactly once in the whole tree, at its own
+# `def`, across every .py, .md, .json, .yaml, .toml, .sh and .html file. Removed
+# 2026-08-20.
 
 
 def _current_recurring_target(record: dict, today: date) -> date | None:

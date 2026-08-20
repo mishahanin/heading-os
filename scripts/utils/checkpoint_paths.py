@@ -65,17 +65,21 @@ def engine_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
-def bootstrap_root(start: Path) -> Path | None:
-    """Find the tree a HOOK can import this module from.
-
-    Hooks sit at `.claude/hooks/x.py` in the monorepo and at `hooks/x.py` inside
-    a built bundle, so a fixed number of `.parent` calls is wrong in one of the
-    two layouts. Walk instead, and let the marker answer.
-    """
-    for candidate in [start, *start.parents]:
-        if (candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
-            return candidate
-    return None
+# `bootstrap_root(start)` lived here from 04e6707 (2026-08-16) until 2026-08-20.
+# It walked up from a hook's path looking for `scripts/utils/checkpoint_paths.py`
+# and returned the tree that owned it — to answer, in its own words, "find the
+# tree a HOOK can import this module from".
+#
+# It could never be called. Reaching it requires importing THIS module, which
+# requires already knowing the answer it computes. The five hooks each inline the
+# identical walk in their own preamble, before their import line, because that is
+# the only place it can run. Removed after checking both halves: `grep` across
+# every file type finds no reference outside the definition, and `git show`
+# on the commit that introduced it shows the name appearing exactly once, as the
+# `def`. It was never wired, not even at birth.
+#
+# The five inline copies are real duplication and are NOT removable the same way,
+# for the same chicken-and-egg reason. Left in place deliberately.
 
 
 def is_engine_tree(root: Path) -> bool:
@@ -330,7 +334,47 @@ def newest_session_id(project: Path) -> str | None:
 
 
 def utc_now() -> datetime:
+    """A SERIALIZED timestamp. Use for anything stored: JSON state, audit lines.
+
+    Not for a filename or a header the operator reads — see `local_now`.
+    """
     return datetime.now(timezone.utc)
+
+
+def local_now() -> datetime:
+    """A DISPLAY / calendar-day timestamp, in the operator's own zone.
+
+    The workspace convention (`.lint-baseline.json` DTZ ruleset, at zero since
+    F-3.1) splits the two cases and names this one explicitly: "Display /
+    calendar-day (formatting, 'today' for a filename/header, building a calendar
+    range): datetime.now(get_default_tz())". A handoff filename is exactly that.
+
+    The mechanism stamped filenames with `utc_now()` until 2026-08-20, and the
+    cost was visible on the night it was found: the operator is on Asia/Dubai
+    (UTC+4), so a handoff written at 02:56 local was filed as
+    `2026-08-19-225625` — under the PREVIOUS calendar day. Every artifact
+    written between midnight and 04:00 local landed on yesterday's date, which
+    is exactly when this operator works.
+
+    Nothing reads the stamp back: every consumer of the archive orders by
+    `st_mtime` (`scripts/next-signal.py`, `newest_transcript`,
+    `prune_pointer_dirs`). So the stamp is a human label, the change is
+    forward-only, and it cannot reorder anything. The shift is also monotonic
+    (+4h here, never negative), so a new name still sorts after every older one.
+
+    The import is deferred rather than module-scope on purpose. Five hooks
+    import this module on every turn, `get_default_tz` reads the gitignored
+    `.env` through `load_env()`, and that costs 50 ms in a cold process. Only
+    the two callers that build a filename should pay it.
+    """
+    try:
+        from scripts.utils.workspace import get_default_tz
+    except Exception:
+        # A hook running outside a resolvable engine tree still needs a stamp.
+        # UTC is the wrong calendar day, not a wrong instant, so degrade rather
+        # than fail the save — losing the handoff is the worse outcome.
+        return datetime.now(timezone.utc)
+    return datetime.now(get_default_tz())
 
 
 def env_int(name: str, default: int, *, minimum: int = 0, maximum: int = 100) -> int:
@@ -407,12 +451,24 @@ def unattended_mode(state: dict | None = None) -> bool:
 # The wait now renders a countdown through `herdr agent rename`, and three of
 # those calls are ADDITIVE to the wait rather than absorbed by it: the
 # `resolve_pane` lookup before the loop (10s ceiling), the `clear_label` in the
-# `finally` (2s), and the final iteration's overrun (2s). At a 60-second wait the
-# worst case lands near 79 seconds and fits under 90. At 75 it reaches about 94,
-# the harness discards the hook's output, and the continuation is lost in
-# silence - which is the exact failure the clamp was introduced to prevent. The
-# alternative, dropping the countdown above 60, would remove it precisely when
-# the wait is longest and a still terminal is most likely to be read as a hang.
+# `finally` (2s), and the final iteration's overrun (2s). The alternative,
+# dropping the countdown above 60, would remove it precisely when the wait is
+# longest and a still terminal is most likely to be read as a hang.
+#
+# **The "near 79 seconds, fits under 90" this comment claimed until 2026-08-20
+# was wrong by 13 seconds.** It counted the three calls above and omitted the two
+# `_request_compaction` makes EARLIER on the same Stop (`resolve_pane` and
+# `submit_compact`, 10s each). Measured with a HERDR answering just inside each
+# of its own timeouts and the wait at this ceiling: 92.0 seconds end to end,
+# past the 90 the hook is registered with, so the continuation was discarded in
+# exactly the way the ceiling exists to prevent.
+#
+# The number below is therefore an upper limit on what may be CONFIGURED, and no
+# longer a proof that the hook fits. The proof now lives in
+# `.claude/hooks/checkpoint-offer.py::_effective_wait`, which measures the
+# remaining budget from the hook's own process start and shortens the grace
+# period so every upstream cost is charged automatically. Do not re-derive a
+# worst case from this comment; measure the hook.
 UNATTENDED_WAIT_MAX = 60
 
 

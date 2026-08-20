@@ -559,12 +559,6 @@ STATUS_SYMBOLS = {
     "accepted": f"{GRAY} OK {RESET}",
 }
 
-STATUS_SYMBOLS_PLAIN = {
-    "pass": "PASS",
-    "warn": "WARN",
-    "fail": "FAIL",
-    "accepted": " OK ",
-}
 
 
 def print_report(artifact_path, artifact_type, checks, plan_criteria=None):

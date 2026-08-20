@@ -43,8 +43,20 @@ import sys
 from pathlib import Path
 
 _BOOT = Path(__file__).resolve()
+# The tree this hook was LOADED from, kept rather than discarded. `handoff_dir()`
+# takes it as an argument for a measured reason recorded in its own docstring: it
+# used to ask `engine_root()`, which reads the imported module's `__file__`, and
+# the copy a hook ends up importing is not always the copy beside it. In a venv
+# where the engine is installed as a package, an editable-install finder runs
+# ahead of `sys.path` and a bundled hook imports the ENGINE's checkpoint_paths -
+# and is then told it is in an engine tree. The sibling hooks checkpoint-save.py
+# and checkpoint-inject.py both pass their own walked root for that reason; this
+# one asked `CP.engine_root()` until 2026-08-20 and was the last caller of the
+# shape the seam exists to remove.
+_ROOT = _BOOT.parent.parent.parent
 for _candidate in [_BOOT.parent, *_BOOT.parents]:
     if (_candidate / "scripts" / "utils" / "checkpoint_paths.py").is_file():
+        _ROOT = _candidate
         sys.path.insert(0, str(_candidate))
         break
 from scripts.utils import checkpoint_paths as CP  # noqa: E402
@@ -229,9 +241,8 @@ def _written(payload: dict, project: Path) -> str:
 def _handoff_pointer(payload: dict, project: Path) -> str:
     """Where the last handoff for this session sits, if one was written."""
     try:
-        root = CP.engine_root()
         pointer = CP.latest_dir(
-            CP.handoff_dir(project, root), CP.session_slug(payload)
+            CP.handoff_dir(project, _ROOT), CP.session_slug(payload)
         ) / "summary.md"
     except Exception as exc:  # noqa: BLE001 - an unresolvable overlay is a missing fact
         print(f"checkpoint-precompact: handoff path unresolved: {exc}",

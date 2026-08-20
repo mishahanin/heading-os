@@ -195,6 +195,22 @@ def _ralph(tmp: Path, session: str) -> None:
 # ---------------------------------------------------------------------------
 # SC-1 - the offer goes silent for a live continuation loop
 # ---------------------------------------------------------------------------
+#
+# Six tests in this file carry no `assert` of their own - the three below, plus
+# `test_unattended_stops_at_the_continuation_ceiling`,
+# `test_bails_on_stop_hook_active` and `test_silent_below_the_soft_threshold`.
+# They were checked on 2026-08-20 for the "a test that cannot fail" shape and
+# LEFT UNCHANGED, because each delegates to `_assert_silent`, which carries three
+# asserts. Measured rather than reasoned: each of the six was driven red by a
+# mutation of the product code it covers, with PYTHONDONTWRITEBYTECODE=1 and the
+# caches cleared -
+#   session_crons dropped from `continuation_claimant`  -> line 199 red
+#   background_tasks dropped from `continuation_claimant` -> line 217 red
+#   the ralph-loop branch disabled                      -> line 234 red
+#   `if done >= maximum` disabled                       -> the ceiling test red
+#   the `stop_hook_active` guard disabled               -> that test red
+#   the unattended soft-threshold gate removed          -> that test red
+# so the delegation is real and moving the asserts inline would buy nothing.
 
 def test_silent_when_a_wakeup_is_scheduled(tmp_path):
     """SC-1. A scheduled `/loop` wakeup means the session continues on its own.
@@ -274,6 +290,34 @@ def _precompact_module():
     return mod
 
 
+_DROP_MARKERS = ("drop the following", "discard the following")
+
+
+def _split_keep_set(out: str) -> tuple[str, str]:
+    """The keep half and the drop half of the rendered keep-set, lowercased.
+
+    Both halves are asserted separately because a word present anywhere in the
+    output proves nothing about the half that is supposed to carry it. Two
+    spellings of the divider are accepted so renaming the header is not a false
+    failure; a header that matches neither returns an empty drop half, which
+    fails loudly in the caller rather than silently passing.
+    """
+    body = out.lower()
+    for marker in _DROP_MARKERS:
+        head, found, tail = body.partition(marker)
+        if found:
+            return head, tail
+    return body, ""
+
+
+def _keep_section(out: str) -> str:
+    return _split_keep_set(out)[0]
+
+
+def _drop_section(out: str) -> str:
+    return _split_keep_set(out)[1]
+
+
 def _precompact_payload(tmp: Path, trigger: str) -> dict:
     """PreCompact's real field set: no stop fields, a trigger, and instructions."""
     return {
@@ -299,9 +343,29 @@ def test_keep_set_on_either_trigger(tmp_path, trigger):
         PRECOMPACT_HOOK, _precompact_payload(tmp_path, trigger), _env(), tmp_path
     )
     assert res.code == 0, f"trigger {trigger}: exited {res.code}\n{res.err}"
-    body = res.out.lower()
-    for wanted in ("objective", "acceptance", "decision", "next", "path"):
-        assert wanted in body, (
+    keep = _keep_section(res.out)
+    # Scoped to the KEEP half and phrased distinctively, both since 2026-08-20.
+    # The probe was five bare words against the WHOLE output, and two of them
+    # could not fail: deleting the "next concrete action" bullet outright left
+    # `"next" in body` satisfied by "re-litigated by the next turn" three bullets
+    # up, and `"path"` by any mention of paths anywhere. Measured - that deletion
+    # kept all 198 checkpoint tests green. The single most operationally
+    # important line of the keep-set could be removed with the contract passing.
+    #
+    # The cost is deliberate and is the smaller one: these phrases pin WORDING,
+    # so re-writing a bullet fails this test. That is the right trade here
+    # because the wording IS the product - a summariser reads these exact
+    # sentences - and a rewrite should be a decision, not a silent loss.
+    for wanted in (
+        "objective",
+        "acceptance",
+        "decision",
+        "next concrete action",
+        "exact file path",
+        "last instruction",
+        "constraint",
+    ):
+        assert wanted in keep, (
             f"trigger {trigger}: keep-set omits {wanted!r}:\n{res.out}"
         )
 
@@ -311,17 +375,25 @@ def test_keep_set_names_what_to_drop(tmp_path):
 
     A summariser told only what to preserve keeps everything it is unsure about,
     which spends the budget the compaction was run to reclaim.
+
+    Both bullets are asserted INSIDE the drop section since 2026-08-20. Against
+    the whole output the probe was `"file" in body and "output" in body`, and
+    "file" is satisfied by the KEEP section's "Exact file paths", so the message
+    "the two bulk items are not named" claimed more than the method established.
+    Measured: deleting the file-contents bullet, and separately the
+    command-output bullet, each left all 198 checkpoint tests green.
     """
     _seed(tmp_path, _state())
     res = _run(
         PRECOMPACT_HOOK, _precompact_payload(tmp_path, "auto"), _env(), tmp_path
     )
-    body = res.out.lower()
-    assert "drop" in body or "discard" in body, (
-        f"nothing is named droppable:\n{res.out}"
+    drop = _drop_section(res.out)
+    assert drop, f"nothing is named droppable:\n{res.out}"
+    assert "contents of file" in drop, (
+        f"the drop list does not name file contents:\n{res.out}"
     )
-    assert "file" in body and "output" in body, (
-        f"the two bulk items (file contents, command output) are not named:\n{res.out}"
+    assert "output of" in drop, (
+        f"the drop list does not name command output:\n{res.out}"
     )
 
 
@@ -510,6 +582,39 @@ def test_a_consumed_queue_is_not_a_pending_one(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "break_it", ["absent-file", "no-field"],
+    ids=["transcript_deleted", "transcript_path_missing"],
+)
+def test_unattended_yields_when_the_transcript_cannot_be_read(tmp_path, break_it):
+    """SC-4. Unknown counts as spoke: an unreadable transcript hands the turn back.
+
+    Added 2026-08-20 after a mutation survived the whole suite. The transcript is
+    the ONLY channel by which the operator's typing reaches this hook - pressing
+    Enter clears the input line, so the screen is indistinguishable from silence.
+    Flip `_wait_out_the_grace`'s missing-file branch from True to False and the
+    hook continues blind: it can no longer see any interruption, so the run keeps
+    going past every attempt to stop it until the ceiling fires 100 continuations
+    later. All 198 checkpoint tests stayed green on that mutation.
+
+    Both entry doors are covered because they are different lines: a payload with
+    no `transcript_path` at all, and a path naming a file that is not there.
+    """
+    transcript = _seed(tmp_path, _state(session_unattended=True), [])
+    payload = _payload(tmp_path, transcript)
+    if break_it == "absent-file":
+        transcript.unlink()
+    else:
+        payload.pop("transcript_path")
+
+    res = _run(OFFER_HOOK, payload, _env(), tmp_path)
+    _assert_silent(res, f"the transcript was unreadable ({break_it})")
+    assert res.seconds < 3, (
+        f"waited {res.seconds:.1f}s on a transcript it could not read; an "
+        "unreadable channel must end the wait, not serve it"
+    )
+
+
 def test_unattended_yields_to_an_enqueue_during_the_wait(tmp_path):
     """SC-4. Typing inside the minute hands the turn back within one poll.
 
@@ -538,6 +643,20 @@ def test_unattended_yields_to_an_enqueue_during_the_wait(tmp_path):
 # ---------------------------------------------------------------------------
 # SC-5 - silence continues the work
 # ---------------------------------------------------------------------------
+#
+# Timing, measured 2026-08-20 and left as it is. This file runs in 15.5s and four
+# tests serve the 4s grace wait for 14.2s of that, 92%. The two below are the
+# duplicated pair: identical fixture, identical hook invocation, and they assert
+# on different halves of the SAME output, so merging them would return 4.04s -
+# 26% of the file - and hold every property that is held today.
+#
+# NOT merged, deliberately. The two claims fail for different reasons and a
+# merged test would name only the first one it hit, which costs more on the day
+# it goes red than the four seconds cost on every green day. The cheaper lever if
+# the file ever needs to be faster is `CLAUDE_HANDOFF_UNATTENDED_WAIT` in `_env`:
+# at 4s with a 1s poll the wait is served four times over, and 2s would still
+# poll twice while halving all four tests. Not taken either, because the margins
+# in `assert res.seconds >= 3.5` are what keep these from flaking under load.
 
 def test_unattended_continues_after_silence(tmp_path):
     """SC-5. A silent wait ends in a continuation, not a question.
@@ -646,6 +765,46 @@ def test_a_stopped_stretch_leaves_the_operator_switch_alone(tmp_path):
     )
 
 
+def test_a_turn_with_no_prompt_id_does_not_retire_the_ceiling(tmp_path):
+    """SC-6. An EMPTY turn id clears nothing, so the one hard bound survives.
+
+    Added 2026-08-20 after a mutation survived the whole suite. Drop the `turn
+    and` half of the new-window guard and a Stop that carries no `prompt_id`
+    compares "" against the recorded id, finds them different, and clears the
+    window - the continuation count AND the done marker - on EVERY such Stop. The
+    ceiling then resets before it is ever read and bounds nothing at all, which
+    is the failure it is the last backstop against: the marker may never be
+    written, and nothing else stops a run that keeps moving.
+
+    `test_an_operator_turn_starts_a_new_window` is the other side and cannot see
+    this: its payload carries a prompt_id, so the guard's two halves are
+    indistinguishable there. All 198 checkpoint tests stayed green on the
+    mutation.
+    """
+    transcript = _seed(
+        tmp_path,
+        _state(
+            session_unattended=True,
+            unattended_turn_id="an-older-turn",
+            unattended_continuations=100,
+        ),
+        [],
+    )
+    payload = _payload(tmp_path, transcript)
+    payload.pop("prompt_id")
+
+    res = _run(
+        OFFER_HOOK, payload, _env(CLAUDE_HANDOFF_UNATTENDED_MAX=100), tmp_path
+    )
+    _assert_silent(res, "the ceiling was reached on a turn carrying no prompt_id")
+    assert res.state.get("unattended_continuations") == 100, (
+        f"a turn with no prompt_id reset the continuation count: {res.state}"
+    )
+    assert res.state.get("unattended_paused_at"), (
+        f"the ceiling did not fire, so it bounds nothing: {res.state}"
+    )
+
+
 def test_unattended_stops_at_the_continuation_ceiling(tmp_path):
     """SC-6. The continuation count has a hard ceiling, independent of the marker.
 
@@ -702,6 +861,26 @@ def test_mode_on_still_saves_silently(tmp_path):
     reason = res.decision["reason"]
     assert "AUTO MODE is on" in reason, f"the auto text changed:\n{reason}"
     assert res.seconds < 3, f"mode on waited {res.seconds:.1f}s; it must not wait"
+
+
+def test_the_auto_reason_forbids_the_assistant_from_compacting(tmp_path):
+    """SC-7. Auto mode tells the assistant to save and NOT to compact.
+
+    Added 2026-08-20 after a mutation survived the whole suite: delete the
+    sentence and all 198 checkpoint tests stay green. It is not decoration. The
+    driven path's whole guarantee is the ORDER - handoff on disk first, boundary
+    second - and the hook enforces it by refusing to submit until an
+    `_handoff_auto_` archive newer than `last_offer_at` exists. An assistant that
+    runs /compact itself on reading this text compacts BEFORE its own save, which
+    is the ordering failure `_handoff_since` exists to prevent, and then the
+    hook's own submit lands on top as a second compaction.
+    """
+    transcript = _seed(tmp_path, _state(session_auto=True), [])
+    res = _run(OFFER_HOOK, _payload(tmp_path, transcript), _env(), tmp_path)
+    reason = res.decision["reason"].lower()
+    assert "not run /compact" in reason, (
+        f"auto mode no longer forbids the assistant its own /compact:\n{reason}"
+    )
 
 
 def test_bails_on_stop_hook_active(tmp_path):

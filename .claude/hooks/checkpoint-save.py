@@ -16,6 +16,20 @@ Also updates TWO pointer surfaces, because they answer different questions:
     scripts/next-signal.py for /next. Here last-writer-wins is the right
     answer, not a race, so this pair stays.
 
+    Last-writer-wins holds PER FILE and not for the pair, and the difference was
+    measured on 2026-08-20 rather than reasoned about: two hook processes were
+    run concurrently with one of them delayed between its two shared writes, and
+    the result was a shared summary.md naming session B's archive beside a shared
+    prompt.md naming session A's - a mixed state neither writer produced. The
+    per-session dirs stayed correct throughout, which is the 2026-08-16 fix
+    doing its job. Left unlocked deliberately: the only shared file with a reader
+    is summary.md (grepped - scripts/next-signal.py reads it, nothing in the
+    engine reads .latest/prompt.md), and that file's single write IS atomic, so
+    the torn pair has no consumer today. A lock here would add a failure mode to
+    a hook whose one rule is that it must never lose a handoff. If a reader of
+    the shared prompt.md is ever added, this becomes a real defect and the pair
+    needs writing under one lock or collapsing into one file.
+
 Resets hysteresis state in .claude/state/checkpoint-<session-slug>.json so the
 post-compact session starts fresh, and prunes the per-session artifacts of
 sessions that are long gone.
@@ -178,8 +192,22 @@ def main() -> int:
     raw_transcript_path = payload.get("transcript_path", "")
     compact_summary = (payload.get("compact_summary") or "").strip()
 
+    # Two clocks, on purpose, per the workspace's datetime split.
+    #
+    # `now` is SERIALIZED: it goes into the `Generated:` header (an ISO string
+    # that carries its own offset, parsed by scripts/next-signal.py and
+    # documented as UTC in the skill's handoff-template.md) and into
+    # `last_compact_at` in the state JSON. UTC is right for all of those.
+    #
+    # `stamp` is DISPLAY: it becomes the archive FILENAME, which is a calendar
+    # day the operator reads and browses. It used `now` until 2026-08-20, and on
+    # an operator at UTC+4 that filed a handoff written at 02:56 local as
+    # `2026-08-19-2256..` — under the previous day. Midnight to 04:00 local is
+    # when this operator works, so it was most nights. Nothing reads the stamp
+    # back (every consumer orders by st_mtime), so the change is forward-only
+    # and cannot reorder the archive.
     now = datetime.now(timezone.utc)
-    stamp = now.strftime("%Y-%m-%d-%H%M%S")
+    stamp = CP.local_now().strftime("%Y-%m-%d-%H%M%S")
 
     # Redact BEFORE the text reaches any file. The archive is tracked, and a
     # credential-shaped string reaching it blocks push-all's content scan and
@@ -235,7 +263,14 @@ def main() -> int:
     # file the quarantine exists to keep clean.
     if quarantine_kind is None:
         session_slug = safe_slug(session_id)
-        trigger_slug = safe_slug(trigger, max_len=12) or "unknown"
+        # `safe_slug("")` returns "session", never "", so the `or "unknown"` this
+        # line carried until 2026-08-20 could not fire: measured by calling
+        # safe_slug("") directly, and by a payload carrying `"trigger": ""`,
+        # which named the file `..._handoff_compact-session_...`. A trigger slug
+        # reading "session" says nothing about the trigger and reads like the
+        # session field one column over, so the fallback is applied to the VALUE,
+        # where it is reachable, instead of to a return that is never falsy.
+        trigger_slug = safe_slug(trigger or "unknown", max_len=12)
         pointer_trigger = trigger
     else:
         session_slug = "unredacted"
@@ -552,6 +587,17 @@ Rules:
     # Reset THIS session's hysteresis so the post-compact session starts clean.
     # A shared state file here reset a sibling session's bucket too, which is
     # half of why the offer landed in the wrong session.
+    #
+    # On the QUARANTINE branch `session_slug` is the fixed literal "unredacted",
+    # so this writes `checkpoint-unredacted.json` and the session's own state file
+    # is neither reset nor given its compaction record. Measured, not inferred: a
+    # save run with a raising redactor produced `.claude/state/checkpoint-
+    # unredacted.json` and left the real session file untouched. Left as is on
+    # purpose. Keying this path off the RAW session id would put an unredacted
+    # string into a filename, which is the exact door the archive name was closed
+    # against, and the branch only reaches here when the redactor is broken -
+    # a state the systemMessage and the shared pointer both shout about, and one
+    # where a stale hysteresis flag costs one extra offer rather than a handoff.
     state_dir = state_dir_for(payload)
     state_path = state_dir / f"checkpoint-{session_slug}.json"
     try:

@@ -265,3 +265,93 @@ def test_missing_markers_errors(tmp_path, monkeypatch):
     _write_skill(skills, "alpha", "x-heading-routing:\n  category: Intel\n  triggers:\n    - a\n  exclusions:\n    - N/A\n  compound: \"No\"\n  router: auto\n")
     rows, _ = gen.load_routing_rows()
     assert gen.cmd_split_check(rows) == 2  # markers absent -> ValueError -> exit 2
+
+
+# ============================================================
+# A non-string trigger must FAIL the gate, not render as a repr
+# ============================================================
+
+_COLON_TRIGGER = (
+    "x-heading-routing:\n"
+    "  category: Operations\n"
+    "  triggers:\n"
+    "    - Nothing lowers the mode except the operator: the done marker leaves it up\n"
+    "  exclusions:\n"
+    "    - N/A\n"
+    '  compound: "No"\n'
+    "  router: manual\n"
+)
+
+
+def _load(skills, tmp_path, monkeypatch):
+    monkeypatch.setattr(gen, "ROOT", tmp_path)
+    monkeypatch.setattr(gen, "SKILLS_DIR", skills)
+    return gen.load_routing_rows()
+
+
+def test_an_unquoted_colon_in_a_trigger_is_an_error_not_a_dict_repr(tmp_path, monkeypatch):
+    """The exact 2026-08-20 corruption, in miniature.
+
+    A YAML list item carrying an unquoted `colon space` parses as a MAPPING. The
+    generator used to `str()` whatever it got, so the mapping's Python repr -
+    braces, quoted key, quoted value - was written into
+    `.claude/rules/skill-router.md`, an always-on rule injected into every
+    session. Both gates stayed green: `--check` compared a corrupt generation
+    against the corrupt file and found them equal.
+    """
+    skills = tmp_path / ".claude" / "skills"
+    skills.mkdir(parents=True)
+    _write_skill(skills, "alpha", _COLON_TRIGGER)
+
+    rows, errors = _load(skills, tmp_path, monkeypatch)
+
+    assert rows == [], "a skill with a malformed trigger must not produce a row"
+    assert len(errors) == 1
+    assert "not a string" in errors[0]
+    assert "unquoted 'colon space'" in errors[0], (
+        "the message must name the cause; a bare type error sends the reader "
+        "hunting through YAML"
+    )
+
+
+def test_the_same_rule_holds_for_exclusions(tmp_path, monkeypatch):
+    skills = tmp_path / ".claude" / "skills"
+    skills.mkdir(parents=True)
+    _write_skill(skills, "alpha", (
+        "x-heading-routing:\n"
+        "  category: Operations\n"
+        "  triggers:\n"
+        "    - fine\n"
+        "  exclusions:\n"
+        "    - some signal: goes to /other\n"
+        '  compound: "No"\n'
+        "  router: manual\n"
+    ))
+    rows, errors = _load(skills, tmp_path, monkeypatch)
+    assert rows == []
+    assert "exclusions" in errors[0]
+
+
+def test_a_well_formed_skill_is_unaffected(tmp_path, monkeypatch):
+    """The guard must not reject the ordinary case, including a QUOTED colon,
+    which is how the sentence is written correctly."""
+    skills = tmp_path / ".claude" / "skills"
+    skills.mkdir(parents=True)
+    _write_skill(skills, "alpha", (
+        "x-heading-routing:\n"
+        "  category: Operations\n"
+        "  triggers:\n"
+        '    - "Nothing lowers it except the operator: the marker leaves it up"\n'
+        "    - a second plain trigger\n"
+        "  exclusions:\n"
+        "    - N/A\n"
+        '  compound: "No"\n'
+        "  router: manual\n"
+    ))
+    rows, errors = _load(skills, tmp_path, monkeypatch)
+    assert errors == []
+    assert len(rows) == 1
+    assert rows[0]["triggers"] == [
+        "Nothing lowers it except the operator: the marker leaves it up",
+        "a second plain trigger",
+    ]

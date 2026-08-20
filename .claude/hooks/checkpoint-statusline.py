@@ -22,7 +22,12 @@ Thresholds (env-vars, optional):
 Auto-compact is NOT disabled (last-resort policy). This hook only signals
 the Stop hook to offer a checkpoint.
 
-Stdlib only. Atomic JSON writes. Never raises.
+Stdlib only. Atomic JSON writes. Does not raise on a malformed payload: an
+unparseable one prints "Claude Code", and a field of the wrong shape degrades to
+`context: n/a` - never to a blank bar, which is what a dead hook looks like. That
+sentence read "Never raises." until 2026-08-20 and was false: six of eight
+malformed payloads exited 1 with an uncaught AttributeError and printed nothing.
+Held by tests/test_checkpoint_session_scope.py.
 """
 
 import json
@@ -69,6 +74,12 @@ _USE_ANSI = _supports_ansi()
 
 
 def c(code: str, text: str) -> str:
+    # UNUSED. Measured 2026-08-20: no call site in this file, none anywhere under
+    # scripts/ .claude/ or tests/ - every colour in this module is applied by the
+    # C_* constants directly. Left in place rather than deleted, because it is
+    # pre-existing dead code and not something this change orphaned
+    # (.claude/rules/development-standards.md, Surgical changes). Surfaced here so
+    # the next reader does not take it for a live seam.
     if _USE_ANSI:
         return f"{code}{text}\033[0m"
     return text
@@ -82,6 +93,22 @@ C_GREEN = "\033[32m" if _USE_ANSI else ""
 C_GREEN_B = "\033[1;32m" if _USE_ANSI else ""
 C_YELLOW = "\033[33m" if _USE_ANSI else ""
 C_RED = "\033[31m" if _USE_ANSI else ""
+
+
+def _mapping(value) -> dict:
+    """A payload sub-object, or an empty dict when it is not one.
+
+    "Never raises" was in this module's docstring and was false. Measured on
+    2026-08-20 against the shipped hook: a payload whose `context_window`,
+    `workspace` or `model` is a string or a list, and a payload that is itself a
+    JSON list or string, each ended in an uncaught AttributeError - six of eight
+    malformed inputs exited 1 and printed NO status line at all. A blank bar is
+    the worst answer this hook has, because it is exactly what a hook that has
+    stopped running looks like, and telling those two apart is why the autonomy
+    segment exists. So the shape is checked rather than assumed, and a payload
+    this hook cannot read degrades to `context: n/a` instead of to nothing.
+    """
+    return value if isinstance(value, dict) else {}
 
 
 def coerce_used(cw: dict) -> float | None:
@@ -121,17 +148,31 @@ def progress_bar(used: float) -> str:
     return "[" + "█" * filled + "░" * empty + "]"
 
 
-def autonomy_segment(auto: bool, unattended: bool) -> str:
+def autonomy_segment(auto: bool, unattended: bool, ended: bool = False) -> str:
     """One always-present segment naming which autonomy switches are live.
 
-    Always rendered, in all three states, on purpose. Until 2026-08-19 the only
+    Always rendered, in all four states, on purpose. Until 2026-08-19 the only
     hint was an `auto-` prefix inside the checkpoint tag, which appeared solely
     when a checkpoint was already due. So `off` and `on` looked identical for
     most of a session, and the operator could not tell a switch that was off
     from a mechanism that had failed. Showing `off` costs nine characters and
     removes that ambiguity, which is the whole point of putting it here.
+
+    `ended` is the fourth state and it was missing until 2026-08-20. The done
+    marker and the ceiling fuse both END a stretch WITHOUT lowering the switch -
+    deliberately, because the switch is the operator's - so `session_unattended`
+    stays true while the next pause hands the turn back instead of continuing.
+    Measured that morning: a stretch stopped by `--done` rendered
+    `⏵ unattended` byte-identically to one still running, while
+    `--unattended status` reported `DONE:` and `PAUSED:` for the same state. The
+    bar was the surface the operator reads first and it was the one that could
+    not tell a working night from a finished one, which is the same ambiguity
+    the segment was added to remove.
     """
     if unattended:
+        if ended:
+            # Two spaces after the glyph, for the reason given on `manual` below.
+            return f"{C_YELLOW}⏸  unattended paused{C_RESET}"
         return f"{C_GREEN_B}⏵ unattended{C_RESET}"
     if auto:
         return f"{C_YELLOW}⏵ auto{C_RESET}"
@@ -148,10 +189,11 @@ def build_status_line(
     level: str | None,
     auto: bool,
     unattended: bool = False,
+    stretch_ended: bool = False,
 ) -> str:
     parts: list[str] = []
 
-    workspace = payload.get("workspace") or {}
+    workspace = _mapping(payload.get("workspace"))
     cwd_str = workspace.get("current_dir") or payload.get("cwd") or str(project)
     dir_name = Path(cwd_str).name or str(project)
     parts.append(f"{C_CYAN_B}{dir_name}{C_RESET}")
@@ -179,9 +221,9 @@ def build_status_line(
         remaining = max(0, min(100, round(100 - used)))
         parts.append(f"{color}{bar} {remaining}%{C_RESET}{tail}")
 
-    parts.append(autonomy_segment(auto, unattended))
+    parts.append(autonomy_segment(auto, unattended, stretch_ended))
 
-    model = (payload.get("model") or {}).get("display_name") or "Claude"
+    model = _mapping(payload.get("model")).get("display_name") or "Claude"
     parts.append(f"{C_DIM}{model}{C_RESET}")
 
     return " ".join(parts)
@@ -197,7 +239,8 @@ def main() -> int:
         print("Claude Code")
         return 0
 
-    cw = payload.get("context_window") or {}
+    payload = _mapping(payload)
+    cw = _mapping(payload.get("context_window"))
     used = coerce_used(cw)
 
     # Compute level + bucket
@@ -229,6 +272,14 @@ def main() -> int:
     # the update below: this dict is written every turn, so listing the
     # operator's choice here would erase it on the next render.
     unattended = CP.unattended_mode(state)
+    # The two window keys that say the STRETCH ended while the SWITCH stayed up.
+    # Read here rather than in `build_status_line`, which is handed values and
+    # never the state file. Both are cleared together by
+    # `CP.clear_unattended_window`, so a resumed run drops the marker on its own
+    # and the bar goes back to green without anything else to run.
+    stretch_ended = bool(
+        state.get("unattended_done_at") or state.get("unattended_paused_at")
+    )
 
     now_iso = CP.utc_now().isoformat()
     state.update(
@@ -245,7 +296,7 @@ def main() -> int:
             # settle an argument about where compaction fires. The harness
             # sends these in the same payload; nothing here derives them.
             "context_window_size": cw.get("context_window_size"),
-            "context_input_tokens": (cw.get("current_usage") or {}).get("input_tokens"),
+            "context_input_tokens": _mapping(cw.get("current_usage")).get("input_tokens"),
             "current_bucket": bucket,
             "updated_at": now_iso,
         }
@@ -256,7 +307,21 @@ def main() -> int:
     # reading on the next render - which is the defect being fixed, not the fix.
     CP.record_peak(state, used, now_iso)
 
-    if level is not None:
+    if used is None:
+        # The payload carried no readable context reading, so this render
+        # measured NOTHING about the window. Leave the three offer keys exactly
+        # as they are on disk.
+        #
+        # This branch exists because of the malformed-payload hardening added on
+        # 2026-08-20. Before it, such a payload raised and the hook wrote no
+        # state at all, so a pending hard-threshold offer survived. Afterwards
+        # the same payload fell through to the below-threshold branch below and
+        # CLEARED it: `needs_compact_offer` went False and the queued save was
+        # dropped in silence, one render before the Stop hook would have taken
+        # it. "I could not measure" is not "below the threshold"
+        # (.claude/rules/scope-claims.md § fail toward over-reporting).
+        pass
+    elif level is not None:
         if bucket > previous_last_offered:
             state["needs_compact_offer"] = True
             state["offer_level"] = level
@@ -274,13 +339,29 @@ def main() -> int:
         state["offer_level"] = None
         state["offer_bucket"] = None
 
+    # NOT converted to the read-modify-write of `checkpoint-offer.py::_persist`,
+    # which applies only its own keys to what is on disk NOW. Measured
+    # 2026-08-20: the exposed span between the read above and this write is 0.814
+    # ms median (3.686 ms max), of which 0.239 ms is the read and the atomic write
+    # themselves, so re-reading here would shrink the window about 3x and close
+    # nothing. A concurrent `scripts/checkpoint-paths.py --unattended on` was lost
+    # in 1 of 60 forced-overlap trials, silently, while the CLI printed
+    # "unattended=on". Closing it needs one exclusive lock around read-modify-write
+    # shared by every writer of this file, which belongs in
+    # scripts/utils/checkpoint_paths.py - outside this hook. Reported rather than
+    # half-fixed here, because a 0.24 ms window that looks handled is worse than a
+    # 0.81 ms one that is known.
     try:
         CP.write_json_atomic(state_path, state)
     except Exception as exc:
         # State write failure should not break the status line
         print(f"checkpoint-statusline: state write failed: {exc}", file=sys.stderr)
 
-    print(build_status_line(payload, project, used, level, auto, unattended))
+    print(
+        build_status_line(
+            payload, project, used, level, auto, unattended, stretch_ended
+        )
+    )
     return 0
 
 

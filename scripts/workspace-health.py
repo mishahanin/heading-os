@@ -33,7 +33,6 @@ from scripts.utils.workspace import (
 WORKSPACE = get_workspace_root()
 
 CONTEXT_DIR = get_context_dir()
-REFERENCE_DIR = WORKSPACE / "reference"
 OUTPUTS_DIR = get_outputs_dir()
 COMMANDS_DIR = WORKSPACE / ".claude" / "commands"
 SKILLS_DIR = WORKSPACE / ".claude" / "skills"

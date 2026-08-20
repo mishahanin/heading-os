@@ -53,7 +53,6 @@ THEME_VARIANTS = {
 FONTS_DIR = SKILL_DIR / "themes" / "fonts"
 SAMPLE_DECK = SKILL_DIR / "examples" / "sample-deck.md"
 VERSION_PIN_FILE = WORKSPACE_ROOT / "scripts" / ".marp-version"
-MARP_SOURCE_DIR = get_outputs_dir() / "deliverables" / "presentations" / "marp-source"
 DEFAULT_OUTPUT_DIR = get_outputs_dir() / "deliverables" / "presentations"
 WATCH_STATE_FILE = Path.home() / ".marp" / "watch.json"
 WORD_OVERFLOW_THRESHOLD = 150

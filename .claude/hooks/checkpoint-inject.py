@@ -16,7 +16,13 @@ Two rules keep the injection honest:
     "the newest handoff on disk": with several sessions open, the newest is
     usually somebody else's work, and no handoff beats a foreign one.
   - No body on `compact`. The harness has just put a summary of THIS session
-    into context; re-injecting a pointer only competes with it. The shared
+    into context; re-injecting a pointer only competes with it. The text printed
+    on that path says what this hook DID and never what is on disk: it takes the
+    `compact` source as its whole evidence and never looks in the archive, and
+    until 2026-08-20 it asserted "this session's saved handoffs are under the
+    handoff archive" all the same. Measured that day: with zero pointer dirs for
+    the session, the sentence printed unchanged (.claude/rules/scope-claims.md).
+    The shared
     `.latest/summary.md` still exists for scripts/next-signal.py, which asks a
     different question ("the newest handoff in this workspace") where
     last-writer-wins is the right answer.
@@ -67,8 +73,8 @@ operator. That step describes the end of the turn the harness compacted, so it
 is already done. Do not read it as a current instruction. Go on to the next
 step that is still open.
 
-This session's saved handoffs are under the handoff archive; the compaction
-summary already in context is the fresher of the two, so none is re-injected.
+No saved handoff is re-injected here: the compaction summary already in context
+supersedes the pointer, so this hook does not add a second copy.
 """
 
 
@@ -82,6 +88,15 @@ def read_limited(path: Path, limit: int) -> str:
         return ""
     if len(text) <= limit:
         return text
+    # Left in place, and measured 2026-08-20 rather than assumed: the writer's
+    # own bound (CP.MAX_POINTER_SUMMARY = 6000 plus a ~800-character header) caps
+    # what checkpoint-save.py can produce at 6801 characters, which is what all 7
+    # live pointers hold and what a synthetic 40 KB summary produced. So this
+    # branch is unreachable from the CURRENT writer and is a guard against a
+    # pointer written before that bound landed (2026-08-16), when the live one
+    # reached 32261 bytes. The margin is 1199 characters, not much: raise
+    # MAX_POINTER_SUMMARY or grow the pointer header and the blind mid-sentence
+    # cut is back, which is why the cap is not being removed as dead.
     return text[:limit] + "\n\n[Truncated by checkpoint-inject]\n"
 
 
@@ -98,6 +113,13 @@ def main() -> int:
             payload = json.loads(raw)
         except Exception:
             payload = {}
+    # A well-formed JSON list or string parses fine and then dies on the first
+    # `.get`. Measured 2026-08-20 against the shipped hook: both exited 1 with an
+    # uncaught AttributeError, which on SessionStart loses the whole injection.
+    # An unreadable payload still has CLAUDE_CODE_SESSION_ID to fall back on, so
+    # degrading to the empty payload recovers the handoff rather than dropping it.
+    if not isinstance(payload, dict):
+        payload = {}
 
     # Resolved from THIS session's state file, so a switch the operator flipped
     # mid-work is still in force on the other side of the compaction that ended

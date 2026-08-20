@@ -35,8 +35,9 @@ A prior checkpoint almost always left the four pointer files in place. The
 session, and it answers with `Error writing file`. On a first-ever checkpoint,
 ignore the not-found result of the `Read`.
 
-The inject hook truncates the summary at 8000 characters, so it writes anything
-past that and no session ever reads it.
+The inject hook truncates the summary at 8000 characters, so anything past that
+is written to disk and never read into a session. The hook's own saves bound the
+pointer lower still, at the 6000 of `checkpoint_paths.MAX_POINTER_SUMMARY`.
 
 ## Auto mode - hysteresis and scope
 
@@ -52,8 +53,16 @@ the better answer for the operator who leaves. Auto mode keeps one property that
 `unattended` gives up: it hands the turn back immediately, with no wait. The
 choice belongs to the current window and dies with it.
 
-Keep the compaction percentage ABOVE the soft threshold. The checkpoint then
-always lands before compaction frees the context.
+Auto mode also reaches the driven compaction. `_request_compaction` gates on
+`auto_mode(state) OR unattended_mode(state)`, so the switch alone is enough. The
+Stop hook submits `/compact` through HERDR at or above the hard threshold, with
+an `_handoff_auto_` archive on disk. The two modes differ at the pause, never at
+the compaction.
+
+Keep the compaction percentage ABOVE the soft threshold, so the checkpoint lands
+before compaction frees the context. Where the harness fires against a token
+window is unmeasured on this tree; `--compact-history` prints the configured
+point beside every firing it has recorded.
 
 ## Unattended mode - what was false, and what is true
 
@@ -93,7 +102,7 @@ Measure one night before you move the ceiling with
 `CLAUDE_HANDOFF_UNATTENDED_MAX`. No run has yet reached the end of its work, so
 the count a real night needs is unknown.
 
-## Why the wait is short, and why it is clamped
+## Why the wait is short, and why 60 is the ceiling
 
 The wait costs you time on every pause of a long run. Sixty seconds against
 fifty pauses is fifty minutes of a night spent waiting. This workspace runs 10
@@ -102,6 +111,15 @@ moment, and the hook reads that queue.
 
 Claude Code discards the output of a hook that times out. A wait at or above the
 registered timeout therefore loses the continuation in silence. The shipped
-registration allows 90 seconds, and the 60-second clamp leaves room for the work
-that follows the wait. Raise the registration first if you need a longer grace
-period.
+registration allows 90 seconds, and the 60-second ceiling leaves room for the
+work that follows the wait. Raise the registration first if you need a longer
+grace period.
+
+Two corrections to how that ceiling was described until 2026-08-20. It is not a
+clamp: `env_int` returns the DEFAULT on any value outside 1 to 60, so `WAIT=600`
+gives 60 and `WAIT=0` gives 60 as well, not the nothing you asked for. And 60
+plus the work after it does not fit on its own — measured end to end with a slow
+HERDR, a full 60-second wait produced a 92.0-second hook against a 90-second
+registration. The hook now bounds the grace period against its own process
+clock, so the ceiling is an upper limit and the number you actually get can be
+lower. The continuation prints the one it gave you.

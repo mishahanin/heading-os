@@ -195,7 +195,7 @@
 <tr>
 <td><code>checkpoint-offer.py</code></td>
 <td><code>Stop</code></td>
-<td>Offers to save a checkpoint at rising context-usage thresholds. Stays silent when something already drives the Stop event: a scheduled wakeup, in-flight background work, or a ralph-loop that names this session. In unattended mode it waits for the operator instead of asking, then continues the turn if the wait passes in silence.</td>
+<td>Offers to save a checkpoint at rising context-usage thresholds. Below the hard threshold it stays silent when something already drives the Stop event: a scheduled wakeup, in-flight background work, or a ralph-loop that names this session. At or above it, that save is the last one before compaction, so the hook records the claimant and runs anyway. In unattended mode it waits for the operator instead of asking, then continues the turn if the wait passes in silence. In either autonomous mode, once the handoff is on disk above the hard threshold, it submits <code>/compact</code> to the session&rsquo;s own terminal through HERDR.</td>
 </tr>
 <tr>
 <td><code>checkpoint-precompact.py</code></td>

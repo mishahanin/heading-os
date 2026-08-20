@@ -10,7 +10,7 @@ The other half of this release is the closing sweep that shipped with it. Four m
 | | |
 |---|---|
 | **7** | commits since v0.11 |
-| **6,017** | automated tests across 403 test files |
+| **6,016** | automated tests across 403 test files |
 | **39** | tests holding the new threshold switch |
 | **53** | days the engine's push hook had not uploaded a Git LFS object |
 | **4** | gates that existed and had never been armed |

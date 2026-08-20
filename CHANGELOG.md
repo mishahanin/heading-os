@@ -6,7 +6,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **CI had been red on every push for three days**, 23 consecutive runs from
+  2026-08-17 18:13, and each one mailed the operator. Three causes, all found by
+  reading the CI logs rather than by another local run. Local green never
+  implied CI green, because the runner has no private data overlay.
+
+- **`merge-contacts.py` inserted a blank line after the frontmatter.** The
+  closing `---\s*\n` in `FRONTMATTER_RE` is greedy over whitespace, so it also
+  swallowed every blank line that followed, and the writer put exactly one back.
+  A record with one blank line survived that round trip; a record with none
+  gained one, and a record with two lost one - a rewrite of a file the tool was
+  asked to merge one field into. All 326 of the operator's records carry exactly
+  one, so the corpus test could not see it; `examples/crm/contacts/EXAMPLE-contact.md`
+  carries none, which is how CI found it. Now `[ \t]*\n`, the writer no longer
+  adds a separator, and three parametrised cases hold the gap at zero, one and
+  two blank lines.
+
+- **The spec back-pointer guard skipped nothing and failed everything.** It
+  tested for a private overlay with `get_data_root().exists()`, and that call
+  never returns a missing path: with no overlay it falls back to the bundled
+  `examples/` tree, which exists and holds no specs. So all 84 pointers resolved
+  against `examples/`, all 84 failed, and the assertion printed "0 skipped:
+  private overlay absent" in the same breath. Now `data_overlay_present()`,
+  which exists for exactly this and answers False for a demo clone.
+
+- **A shipped Canopus slice was never retired**, so its frozen contract kept
+  being held to bytes approved on 2026-08-17 while the product deliberately
+  moved past them: the no-progress stall fuse became an explicit done marker on
+  2026-08-19 and the continuation prose was rewritten twice. Restoring the
+  approved bytes leaves four tests red against behaviour that was changed on
+  purpose, so the frozen form asserts a product that no longer exists. The
+  contract is promoted into the ordinary suite as
+  `tests/test_checkpoint_unattended_contract.py`, and the record carries
+  `retired_sha` at the last commit where it stood as approved.
+
+### Note
+
+- One CI failure needed no fix: a Pages deployment returned HTTP 500 from
+  GitHub's own service and the next deployment succeeded.
 
 ## [0.11.0] - 2026-08-20
 

@@ -320,7 +320,14 @@ def done_marker(note: str) -> int:
         return 1
 
     print(f"done recorded for this session ({slug}): {state['unattended_done_note']}")
-    print("The next pause hands the turn back. The unattended switch is untouched.")
+    # Names BOTH halves of the state, because they are not the same thing and
+    # the operator asked for the distinction: the STRETCH is over, and the bar
+    # will say so, while the SWITCH stays up. A line that mentioned only the
+    # switch left him reading `unattended paused` on the bar without a sentence
+    # anywhere that connected the two.
+    print("Stretch ended, so the bar now reads `unattended paused`.")
+    print("The switch itself stays on - only you lower it - and your next "
+          "instruction resumes the stretch.")
     return 0
 
 

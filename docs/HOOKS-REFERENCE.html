@@ -90,7 +90,7 @@
 <li><strong><code>PreToolUse</code></strong> runs before a tool call and can deny it. This is where blocking guards live (secret detection, the engine/data boundary, path redirection).</li>
 <li><strong><code>PostToolUse</code></strong> runs after a tool call. It cannot un-write a file, so its guards are advisory or corrective (hidden-character scan, injection detection).</li>
 <li><strong><code>SessionStart</code></strong>, <strong><code>Stop</code></strong>, <strong><code>PreCompact</code></strong>, <strong><code>PostCompact</code></strong>, and <strong><code>statusLine</code></strong> run around the session lifecycle: priming context, offering checkpoints, steering what a compaction keeps, saving handoffs, rendering the status line.</li>
-<li><strong><code>UserPromptSubmit</code></strong> runs on every prompt, before the model starts to think, and by protocol can block the prompt (exit code 2, or <code>{"decision": "block"}</code>). The hook wired here (<code>recall-inject.py</code>) never exercises that: it only adds context, and on any error it stays silent and exits 0.</li>
+<li><strong><code>UserPromptSubmit</code></strong> runs on every prompt, before the model starts to think, and by protocol can block the prompt (exit code 2, or <code>{"decision": "block"}</code>). Neither hook wired here exercises that: <code>recall-inject.py</code> only adds context and <code>unattended-resume.py</code> only touches state, and both stay silent and exit 0 on any error.</li>
 </ul>
 <h2 id="pretooluse-can-block">PreToolUse (can block)</h2>
 <table>
@@ -173,6 +173,10 @@
 <tr>
 <td><code>recall-inject.py</code></td>
 <td>Surfaces pointers (title, layer, path) to memory relevant to what the CEO just typed, ranked by the <a href="CONFIGURATION.html">recall</a> index rather than by date. It does NOT block the prompt, does NOT read file content, and on any error, timeout, or missing index it stays silent and exits 0. Its internal 3.5-second timeout sits under the harness&rsquo;s own 8-second timeout for the hook, so it gives up on a cold model load rather than stall the prompt. Toggled off entirely via <code>recall_inject.enabled</code> in <code>config/memory-index.yaml</code>; a config it cannot read is treated as an unconfirmed switch, so it stays silent then too. Short conversational prompts (under <code>recall_inject.min_prompt_chars</code>, 25 by default) skip the backend entirely, and a below-threshold result is capped at three pointers. Supersedes the date-ordered <code>inject</code> snapshot (<code>memory-inject.py</code>, <code>SessionStart</code>), which stays in the codebase behind its own flag but defaults off.</td>
+</tr>
+<tr>
+<td><code>unattended-resume.py</code></td>
+<td>Clears a PAUSED unattended stretch the moment the operator sends an instruction, which is what <code>clear_unattended_window</code> and <code>checkpoint-paths.py --done</code> both promise (&ldquo;your next instruction resumes it&rdquo;). Before 2026-08-20 the clearing happened at the next <code>Stop</code> — the end of the turn that instruction opened — so the status bar read <code>⏸ unattended paused</code> for the whole of a turn that had already resumed. It never blocks, never prints, and never touches <code>session_unattended</code>: the switch is the operator&rsquo;s, and only the WINDOW is cleared. A session with no pause marker is one JSON read and an exit, so the common path writes nothing. The literal <code>/compact</code> is ignored, because the Stop hook queues that text itself to drive a compaction and counting it as the operator speaking would reset the continuation ceiling at every boundary. The Stop hook keeps its own <code>prompt_id</code> comparison as the fallback for clones where this hook is not wired.</td>
 </tr>
 </tbody>
 </table>

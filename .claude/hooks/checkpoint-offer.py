@@ -434,17 +434,59 @@ def build_auto_reason(
 # stops has said nothing the mechanism can hear, and the next pause continues it
 # again. The sentence it replaced told the assistant to do exactly that.
 UNATTENDED_WRAPPER = """\
-{used:.0f}% used, unattended on, {wait}s grace passed with no input, so the turn \
-continues.
+{used:.0f}% used, unattended on, {wait}s grace passed, so the turn continues. \
+Resume the unfinished task. Decide alone. Never invent work. \
+Do not touch the unattended switch, and do not run /compact.
 
-Decide alone, ask nobody. Resume the unfinished task. Never invent work.
+Finished, or left only a judgement the operator owns? Run `python \
+scripts/checkpoint-paths.py --done "<one line>"` and stop; this hook reads \
+state, never prose. Continuation {done} of {maximum}."""
 
-Finished the plan, or left only a judgement the operator owns? Run `python \
-scripts/checkpoint-paths.py --done "<one line>"` and stop. That command is the \
-only thing this hook can hear; prose cannot reach it.
+# The repeat form, from the second continuation of a window onward.
+#
+# The full text above is four instructions, and three of them are standing rules
+# that do not change between one pause and the next. The assistant read them at
+# continuation 1 of THIS window and they are still in its context; reprinting
+# them buys nothing and costs the operator another screen of prose, which is the
+# complaint that shortened this template twice already.
+#
+# What the repeat keeps is the two things that DO change - the counter, and the
+# one command the mechanism can hear. A stretch that cannot be ended is worse
+# than a verbose one.
+#
+# `_context_was_rebuilt` puts the full form back after a compaction, which is
+# the one moment inside a window when "you already read it" stops being true:
+# the block message the assistant read at continuation 1 is gone with the rest
+# of the pre-compaction context, and only the summary remains.
+UNATTENDED_WRAPPER_REPEAT = """\
+{used:.0f}% used, unattended on, continuation {done} of {maximum}. Resume the \
+task, or end the stretch with `python scripts/checkpoint-paths.py --done \
+"<one line>"` and stop."""
 
-Do not touch the unattended switch, and do not run /compact. The hook owns both. \
-Continuation {done} of {maximum}."""
+
+def _context_was_rebuilt(state: dict, previous_at: str | None) -> bool:
+    """Did a compaction land between the previous continuation and this one?
+
+    The repeat form leans on "the assistant already read the standing rules this
+    window". A compaction is the one event inside a window that makes that
+    false: the block message carrying them is discarded with the rest of the
+    pre-compaction context, and the summary that replaces it is not obliged to
+    keep hook prose.
+
+    Unparseable or missing timestamps answer YES. The two failure directions are
+    not symmetric - printing the full text when it was not needed costs the
+    operator four lines, while withholding it can leave a post-compaction
+    assistant unable to name the command that ends the stretch.
+    """
+    compacted_at = state.get("last_compact_at")
+    if not compacted_at:
+        return False
+    if not previous_at:
+        return True
+    try:
+        return datetime.fromisoformat(str(compacted_at)) > datetime.fromisoformat(str(previous_at))
+    except (TypeError, ValueError):
+        return True
 
 
 def _used_percentage(state: dict) -> float | None:
@@ -1051,6 +1093,10 @@ def unattended_turn(
     if spoke:
         return 0
 
+    # Read BEFORE the persist below overwrites it: the question is whether a
+    # compaction landed between the PREVIOUS continuation and this one.
+    rebuilt = _context_was_rebuilt(state, state.get("unattended_last_at"))
+
     done += 1
     _persist(
         state_path,
@@ -1066,12 +1112,21 @@ def unattended_turn(
     # `wait` is what the wait ACTUALLY granted, not `CP.wait_seconds()`. The two
     # part company whenever `_effective_wait` shortened the window against the
     # registered hook timeout, and the sentence is read by the operator.
-    reason = UNATTENDED_WRAPPER.format(
-        used=used,
-        wait=int(granted),
-        done=done,
-        maximum=maximum,
-    )
+    # The standing rules go out once per window, not once per pause. See the
+    # comment on UNATTENDED_WRAPPER_REPEAT.
+    if done == 1 or rebuilt:
+        reason = UNATTENDED_WRAPPER.format(
+            used=used,
+            wait=int(granted),
+            done=done,
+            maximum=maximum,
+        )
+    else:
+        reason = UNATTENDED_WRAPPER_REPEAT.format(
+            used=used,
+            done=done,
+            maximum=maximum,
+        )
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0
 

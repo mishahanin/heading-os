@@ -15,6 +15,11 @@
 #   session_start_env - when true, the build emits a SessionStart hook that
 #                       exports WORKSPACE_ROOT and HEADING_OS_DATA into
 #                       $CLAUDE_ENV_FILE (plugin-cache root resolution + data seam)
+#   commands          - .claude/commands/<file> slash commands to include. Copied
+#                       with the same ${CLAUDE_PLUGIN_ROOT} script-path rewrite
+#                       the SKILL.md bodies get, and scanned by the completeness
+#                       gate. Ship a command whenever a bundled skill's body tells
+#                       the operator to run it.
 #   scripts           - EXPLICIT list of scripts/<path> the bundle needs.
 #                       scripts/utils/ is implied and always copied.
 #
@@ -77,6 +82,12 @@ bundles:
           hooks:
             - checkpoint-offer.py
     session_start_env: true
+    commands:
+      # The /checkpoint skill's own body tells the operator to run both of these.
+      # Until 2026-08-21 the bundle shipped the skill and neither command, so a
+      # consumer read instructions naming slash commands the plugin did not carry.
+      - unattended.md
+      - compact-at.md
     scripts:
       # Scripts referenced by the three skills' SKILL.md (enumerated, not
       # grep-discovered at build time). scripts/utils/ is always bundled.

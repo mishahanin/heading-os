@@ -88,6 +88,55 @@ def test_installed_data_hook_is_executable(tmp_path):
     assert mode & stat.S_IXUSR
 
 
+def test_shipped_data_hook_carries_the_engine_root_token(tmp_path):
+    """The engine path is a token in the repository, resolved only at install.
+
+    Guessing it as the sibling named `.heading-os` was the previous shape, and it
+    failed in the quiet direction: a clone under any other name fell through to a
+    bare `python3`, which on a machine with pytest on PATH runs the overlay's
+    tests green under none of the pinned dependencies.
+    """
+    assert install_git_hooks.ENGINE_ROOT_PLACEHOLDER in SHIPPED_HOOK.read_text(
+        encoding="utf-8")
+
+
+def test_installed_data_hook_has_the_real_engine_path_stamped_in(tmp_path):
+    repo = _init_repo(tmp_path)
+    engine = _make_git_repo(tmp_path / "engine-named-anything-else")
+
+    install_git_hooks.install_pre_push_data(repo, SHIPPED_HOOK, engine)
+
+    body = (repo / ".git" / "hooks" / "pre-push").read_text(encoding="utf-8")
+    assert install_git_hooks.ENGINE_ROOT_PLACEHOLDER not in body
+    assert str(engine.resolve()) in body
+
+
+def test_check_fails_when_the_stamped_engine_is_gone(tmp_path):
+    """Stamping the path created a staleness the marker cannot see.
+
+    Relocate the workspace and the ENGINE= line points at nothing while the gate
+    marker stays exactly where it was, so a check reading only the marker would
+    call a gate healthy after it had fallen back to a bare `python3`.
+    """
+    repo = _init_repo(tmp_path)
+    engine = _make_git_repo(tmp_path / "engine-then-moved")
+    install_git_hooks.install_pre_push_data(repo, SHIPPED_HOOK, engine)
+    assert install_git_hooks.check_pre_push_data(repo) is True
+
+    engine.rename(tmp_path / "engine-somewhere-else")
+
+    assert install_git_hooks.check_pre_push_data(repo) is False
+
+
+def test_check_fails_on_an_unstamped_hook(tmp_path):
+    """A hook copied by hand, token and all, never resolved its engine."""
+    repo = _init_repo(tmp_path)
+    (repo / ".git" / "hooks" / "pre-push").write_text(
+        SHIPPED_HOOK.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert install_git_hooks.check_pre_push_data(repo) is False
+
+
 def test_installing_the_data_hook_does_not_lose_lfs(tmp_path):
     """Installing over the stock git-lfs hook must keep LFS delegation."""
     repo = _init_repo(tmp_path)

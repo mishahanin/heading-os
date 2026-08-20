@@ -55,6 +55,20 @@ OWNER = {"name": "Misha Hanin", "email": "misha.hanin@odinix.com"}
 _REWRITE_RE = re.compile(r"\b(python3?|bash)(\s+)scripts/")
 _REWRITE_SUB = r'\1\2"${CLAUDE_PLUGIN_ROOT}"/scripts/'
 
+# The same rewrite, with the quotes ESCAPED for a double-quoted YAML scalar.
+#
+# `allowed-tools` is a double-quoted scalar in every skill and command this
+# workspace ships, and it carries `Bash(python scripts/...:*)` patterns. Applying
+# the plain substitution there closes the scalar early and the frontmatter stops
+# being YAML at all. Measured 2026-08-21 on the built heading-core bundle:
+# `yaml.safe_load` raised ParserError on checkpoint/SKILL.md, and had done since
+# the generator shipped - a bundle whose skill frontmatter does not parse. The
+# body keeps the plain form; only the frontmatter is escaped.
+_REWRITE_SUB_YAML = r'\1\2\\"${CLAUDE_PLUGIN_ROOT}\\"/scripts/'
+
+# The frontmatter block, when the file opens with one.
+_FRONTMATTER_RE = re.compile(r"\A(---\r?\n.*?\r?\n---\r?\n)(.*)\Z", re.DOTALL)
+
 # Reference scanners for the completeness gate.
 _SCRIPT_REF_RE = re.compile(r"scripts/([\w./-]+\.py)")
 _HOOK_REF_RE = re.compile(r"\.claude/hooks/([\w./-]+\.py)")
@@ -87,7 +101,14 @@ def collect_bundled_scripts(spec: dict, root: Path) -> set[str]:
 
 
 def completeness_gate(spec: dict, root: Path) -> list[str]:
-    """Return a list of missing targets referenced by the bundle's skills/hooks."""
+    """Return a list of missing targets referenced by the bundle's skills, hooks
+    and slash commands.
+
+    Commands joined the scan on 2026-08-21, with the field that ships them. A
+    command body is one or two `python scripts/...` lines, so a bundled command
+    whose script was not bundled is the same broken reference a skill would be,
+    and it should fail the build for the same reason.
+    """
     bundled_scripts = collect_bundled_scripts(spec, root)
     bundled_script_names = {Path(p).name for p in bundled_scripts}
     bundled_hooks = set(spec.get("hooks", []))
@@ -102,6 +123,10 @@ def completeness_gate(spec: dict, root: Path) -> list[str]:
         hp = root / ".claude" / "hooks" / hook
         if hp.exists():
             sources.append(hp)
+    for command in spec.get("commands", []):
+        cp = root / ".claude" / "commands" / command
+        if cp.exists():
+            sources.append(cp)
 
     for src in sources:
         text = src.read_text(encoding="utf-8")
@@ -174,8 +199,45 @@ if env_file and plugin_root:
 '''
 
 def rewrite_script_paths(text: str) -> tuple[str, int]:
-    new, n = _REWRITE_RE.subn(_REWRITE_SUB, text)
-    return new, n
+    """Point every `python scripts/...` line at the plugin cache.
+
+    Frontmatter and body are rewritten differently, because the frontmatter is
+    YAML and the body is prose. See `_REWRITE_SUB_YAML` for what the single-form
+    version broke and for how long.
+    """
+    match = _FRONTMATTER_RE.match(text)
+    if not match:
+        return _REWRITE_RE.subn(_REWRITE_SUB, text)
+
+    front, body = match.group(1), match.group(2)
+    front_new, front_n = _rewrite_frontmatter(front)
+    body_new, body_n = _REWRITE_RE.subn(_REWRITE_SUB, body)
+    return front_new + body_new, front_n + body_n
+
+
+def _rewrite_frontmatter(front: str) -> tuple[str, int]:
+    """Rewrite the frontmatter line by line, escaping only inside a quoted scalar.
+
+    A double-quoted value takes the escaped form. Anything else takes the bare
+    `${CLAUDE_PLUGIN_ROOT}` with no quotes at all, since adding a quote to a plain
+    scalar is the defect this function exists to avoid. The bare form loses the
+    protection against a plugin-cache path containing a space, which is the price
+    of staying parseable; the quoted-scalar case, which is every case in this
+    workspace today, keeps it.
+    """
+    out: list[str] = []
+    total = 0
+    for line in front.splitlines(keepends=True):
+        if not _REWRITE_RE.search(line):
+            out.append(line)
+            continue
+        _, _, value = line.partition(":")
+        quoted = value.lstrip().startswith('"')
+        sub = _REWRITE_SUB_YAML if quoted else r"\1\2${CLAUDE_PLUGIN_ROOT}/scripts/"
+        new, n = _REWRITE_RE.subn(sub, line)
+        out.append(new)
+        total += n
+    return "".join(out), total
 
 
 def build_bundle(name: str, spec: dict, out_root: Path, root: Path) -> None:
@@ -215,6 +277,24 @@ def build_bundle(name: str, spec: dict, out_root: Path, root: Path) -> None:
         if n:
             skill_md.write_text(new, encoding="utf-8")
             rewrites += n
+
+    # Slash commands, with the same script-path rewrite the skills get.
+    #
+    # There was no field for these until 2026-08-21, so heading-core shipped the
+    # `/checkpoint` skill while `/unattended` and `/compact-at` - the two switches
+    # that skill's own body tells the operator to run - stayed behind in
+    # `.claude/commands/`. The consumer got instructions naming commands the
+    # plugin does not carry. `commands/` is a first-class plugin component, so
+    # the fix is a field, not a note in the docs.
+    for command in spec.get("commands", []):
+        src = root / ".claude" / "commands" / command
+        if not src.is_file():
+            raise SystemExit(f"[{name}] command not found: .claude/commands/{command}")
+        dst = bundle / "commands" / command
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        text, n = rewrite_script_paths(src.read_text(encoding="utf-8"))
+        dst.write_text(text, encoding="utf-8")
+        rewrites += n
 
     # Hooks (verbatim) + generated hooks.json + session-env hook.
     hooks_dir = bundle / "hooks"

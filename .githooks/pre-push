@@ -2,6 +2,16 @@
 # Versioned pre-push gate. Installed into .git/hooks/pre-push by
 # `python scripts/install-git-hooks.py`. Runs the regression test gate;
 # a non-zero result blocks the push. Never bypass with --no-verify.
+#
+# This hook OCCUPIES the slot git-lfs installs into, and the engine really does
+# track LFS objects - see the `filter=lfs` block at the top of .gitattributes. So
+# it hands off to `git lfs pre-push` at the end, for exactly the reason
+# .githooks/pre-push-data spells out: drop that line and a newly added .png,
+# .pdf, .pptx or .docx pushes as a POINTER with no object behind it, and the next
+# fresh clone's `git lfs pull` fails on it. The gap was silent between 2026-06-29
+# and 2026-08-21 only because every one of the engine's nine LFS files was added
+# on the day the hook first replaced the stock one, so none needed uploading
+# afterwards. Absence of a symptom was not coverage.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 if [ -x "$ROOT/.venv/bin/python" ]; then
@@ -9,4 +19,14 @@ if [ -x "$ROOT/.venv/bin/python" ]; then
 else
     PY="python3"
 fi
-exec "$PY" "$ROOT/scripts/run-tests.py"
+"$PY" "$ROOT/scripts/run-tests.py"
+
+# Hand off to git-lfs, which owned this hook slot before the gate did. Git calls a
+# pre-push hook with <remote> <url>; `git lfs pre-push` needs them, so a call with
+# no arguments is not a real push and there is nothing to hand over. Verified
+# 2026-08-21 that the ref lines git writes to stdin survive the test run intact,
+# so git-lfs still sees what it needs to decide which objects to upload.
+if [ "$#" -gt 0 ] && command -v git-lfs >/dev/null 2>&1; then
+    exec git lfs pre-push "$@"
+fi
+exit 0

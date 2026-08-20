@@ -122,6 +122,35 @@ from the prompt instead of remembering it. It overrides the environment default
 in both directions. It needs no cleanup either. The state that holds it is keyed
 by session, and the pruner removes it with the session.
 
+The same argument applies to the threshold itself, so since 2026-08-21 that is a
+per-session switch too. The two variables in the table above are the workspace
+default. A session that sets its own number uses that number instead, from the
+next pause onward, with no restart:
+
+```
+python scripts/checkpoint-paths.py --compact-at 35      # this session compacts at 35%
+python scripts/checkpoint-paths.py --compact-at status  # report, change nothing
+python scripts/checkpoint-paths.py --compact-at off     # back to the environment default
+```
+
+`/compact-at 35` is the same thing as a slash command. The soft reminder is
+always 5 points below the hard threshold rather than a second setting, so one
+number moves the pair. The accepted range is 15 to 90. Below 15 the derived soft
+threshold lands under the always-loaded context floor, and the trigger cascades.
+Above 90 there is no window left in which to write the handoff. The command
+refuses a number at or below what the session has already used, because that
+number would fire at the very next pause.
+
+This switch moves the threshold and nothing else. It raises neither `auto` nor
+`unattended`. With both off, the hook asks at your number and compacts nothing by
+itself, and the command says so when it lands in that state.
+
+Both slash commands, `/unattended` and `/compact-at`, ship inside the
+`heading-core` bundle. They did not until 2026-08-21. The generator had no field
+for `.claude/commands/`, so the plugin carried the `/checkpoint` skill and neither
+command that skill tells you to run. Add a command to a bundle through the
+`commands:` list in `config/plugin-bundles.yaml`, beside `skills:` and `hooks:`.
+
 **[Mahmoud Maatuq](https://github.com/mmaatuq)** contributed the proactive offer
 and the hands-off auto mode, and found the concurrent-session collision that the
 per-session keying fixes. Thank you.

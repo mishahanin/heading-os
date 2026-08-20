@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "dev" / "build-plugins.py"
@@ -185,3 +186,76 @@ def test_cache_simulation_root_resolution(built, tmp_path):
         [sys.executable, str(paths_py)], capture_output=True, text=True, env=env2
     ).stdout.strip()
     assert out2 == str(cache.resolve())
+
+
+# --------------------------------------------------------------------------
+# Slash commands (2026-08-21). A bundle shipped `/checkpoint` while both of the
+# switches that skill documents - `/unattended` and `/compact-at` - lived in
+# `.claude/commands/`, which the builder had no field for and never copied. A
+# consumer installing heading-core got the skill and neither command, so the
+# skill's own instructions named a slash command the plugin does not carry.
+# --------------------------------------------------------------------------
+
+
+def test_declared_commands_are_bundled(built):
+    bundle, _ = built
+    for name in ("unattended.md", "compact-at.md"):
+        assert (bundle / "commands" / name).is_file(), f"{name} missing from the bundle"
+
+
+def test_a_missing_command_fails_the_build(tmp_path):
+    mod = _load_builder()
+    spec = {"description": "x", "skills": [], "hooks": [], "hook_events": {},
+            "commands": ["no-such-command.md"], "scripts": []}
+    with pytest.raises(SystemExit):
+        mod.build_bundle("probe", spec, tmp_path, ROOT)
+
+
+def test_command_script_paths_are_rewritten(built):
+    """Same rewrite the SKILL.md bodies get: a bare `python scripts/...` resolves
+    against the consumer's cwd in a plugin cache, not against the bundle."""
+    bundle, _ = built
+    text = (bundle / "commands" / "compact-at.md").read_text(encoding="utf-8")
+    assert "${CLAUDE_PLUGIN_ROOT}" in text
+    assert "python scripts/checkpoint-paths.py" not in text
+
+
+def test_in_repo_command_unchanged():
+    """The monorepo copy keeps the plain path. The rewrite happens on the way
+    into the bundle and never in the source tree."""
+    text = (ROOT / ".claude" / "commands" / "compact-at.md").read_text(encoding="utf-8")
+    assert "${CLAUDE_PLUGIN_ROOT}" not in text
+    assert "python scripts/checkpoint-paths.py" in text
+
+
+def test_every_built_frontmatter_still_parses_as_yaml(built):
+    """The rewrite must not break the file it rewrites.
+
+    `allowed-tools` is a double-quoted scalar carrying `Bash(python scripts/...)`
+    patterns. The single-form substitution closed that scalar early, so every
+    built SKILL.md shipped frontmatter that is not YAML - measured 2026-08-21,
+    present since the generator shipped. This is the guard: parse what was
+    written, rather than trust the substitution.
+    """
+    bundle, _ = built
+    targets = list((bundle / "skills").rglob("SKILL.md")) + \
+        list((bundle / "commands").glob("*.md"))
+    assert targets, "nothing to check - the bundle shipped no skills or commands"
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        assert text.startswith("---"), f"{path.name} lost its frontmatter"
+        front = text.split("---", 2)[1]
+        try:
+            parsed = yaml.safe_load(front)
+        except yaml.YAMLError as exc:  # noqa: PERF203 - one message per file is the point
+            raise AssertionError(f"{path.name} frontmatter is not YAML: {exc}") from exc
+        assert isinstance(parsed, dict), f"{path.name} frontmatter is not a mapping"
+
+
+def test_the_quoted_scalar_keeps_its_quotes_after_the_rewrite(built):
+    """Escaped, not dropped. The quotes protect a cache path containing a space,
+    so the fix must keep them in the PARSED value, not only in the file."""
+    bundle, _ = built
+    text = (bundle / "skills" / "checkpoint" / "SKILL.md").read_text(encoding="utf-8")
+    parsed = yaml.safe_load(text.split("---", 2)[1])
+    assert '"${CLAUDE_PLUGIN_ROOT}"/scripts/checkpoint-paths.py' in parsed["allowed-tools"]

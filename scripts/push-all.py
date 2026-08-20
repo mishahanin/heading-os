@@ -260,7 +260,16 @@ def _pre_push_gate_armed(repo: Path, marker: str = ENGINE_GATE_MARKER) -> bool:
     a redundant double-run, removed 2026-06-20); it only refuses to push when the
     hook is absent, so the gate can never be silently skipped on an un-provisioned
     clone. Mirrors install-git-hooks.check_pre_push (kept inline because that
-    module is kebab-named and not importable)."""
+    module is kebab-named and not importable).
+
+    It deliberately does NOT mirror install-git-hooks.check_pre_push_data, which
+    since 2026-08-21 also resolves the engine path stamped into the data hook.
+    The two answer different questions and both answers are true: this one asks
+    "will a gate run at all", and a data hook with a stale stamp still runs the
+    overlay's tests (under a fallback interpreter, saying so on stderr), so
+    refusing the push here would block a backup over a degraded gate rather than
+    an absent one. `--check` asks "is it correctly installed" and is the surface
+    that should go red. Do not collapse them into one predicate."""
     hook = repo / ".git" / "hooks" / "pre-push"
     try:
         return hook.is_file() and marker in hook.read_text(encoding="utf-8")

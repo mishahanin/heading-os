@@ -45,26 +45,65 @@ def check_pre_push(repo: Path) -> bool:
 DATA_GATE_MARKER = "heading-os-data-test-gate"
 
 
-def install_pre_push_data(repo: Path, src: Path) -> None:
+ENGINE_ROOT_PLACEHOLDER = "@@ENGINE_ROOT@@"
+
+
+def install_pre_push_data(repo: Path, src: Path, engine: Path | None = None) -> None:
     """Install the DATA overlay's pre-push gate, replacing the stock git-lfs hook.
 
     The replacement is deliberate and safe only because the shipped hook delegates
     to `git lfs pre-push` itself; tests/test_data_repo_test_gate.py holds it to
     that. A data overlay tracks LFS objects, so a hook that forgets the delegation
     silently stops uploading them.
+
+    The engine root is STAMPED IN here rather than guessed at run time. A data
+    overlay has no interpreter of its own and borrows the engine's `.venv`; the
+    hook used to find it as "the sibling named .heading-os", which is a layout
+    this workspace does not promise and which fails toward a bare `python3`
+    instead of toward an error. This function already knows the real path, so it
+    writes it.
     """
+    engine = Path(engine) if engine is not None else get_workspace_root()
     dest = _hooks_dir(repo) / "pre-push"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dest)
+    body = src.read_text(encoding="utf-8").replace(
+        ENGINE_ROOT_PLACEHOLDER, str(Path(engine).resolve()))
+    dest.write_text(body, encoding="utf-8")
     dest.chmod(0o755)
 
 
 def check_pre_push_data(repo: Path) -> bool:
-    """True if the DATA overlay's pre-push gate is installed."""
+    """True if the DATA overlay's pre-push gate is installed AND still resolves.
+
+    The marker alone is not enough once the engine path is stamped in at install
+    time. Relocate the workspace and the stamp goes stale while the marker stays
+    put, so a check that reads only the marker would report a gate that has
+    quietly fallen back to a bare `python3`. That is the shape
+    `.claude/rules/scope-claims.md` names: a sentence asserting more than the
+    method established. So the stamp is resolved here too.
+    """
     dest = _hooks_dir(repo) / "pre-push"
     if not dest.is_file():
         return False
-    return DATA_GATE_MARKER in dest.read_text(encoding="utf-8")
+    body = dest.read_text(encoding="utf-8")
+    if DATA_GATE_MARKER not in body:
+        return False
+    return _stamped_engine_exists(body)
+
+
+def _stamped_engine_exists(body: str) -> bool:
+    """True if the installed hook's ENGINE= line points at a directory."""
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("ENGINE="):
+            continue
+        value = stripped[len("ENGINE="):].strip().strip('"').strip("'")
+        if value == ENGINE_ROOT_PLACEHOLDER:
+            return False
+        return Path(value).is_dir()
+    # No ENGINE= line at all: an older hook that guessed the path at run time.
+    # Nothing to resolve, so nothing to call stale.
+    return True
 
 
 def data_repo_to_gate(data_root: Path, engine: Path) -> Path | None:
@@ -123,7 +162,7 @@ def main() -> int:
     ensure_pre_commit(engine)
     print(f"{GREEN}installed engine pre-push test gate + ensured pre-commit hooks{RESET}")
     if data is not None:
-        install_pre_push_data(data, data_src)
+        install_pre_push_data(data, data_src, engine)
         ensure_pre_commit(data)
         print(f"{GREEN}installed data overlay pre-push test gate at {data}{RESET}")
     return 0

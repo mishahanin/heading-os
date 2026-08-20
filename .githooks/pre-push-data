@@ -18,12 +18,25 @@ set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 if [ -d "$ROOT/tests" ]; then
-    # The data overlay has no interpreter of its own. Borrow the sibling engine's.
-    ENGINE="$(cd "$ROOT/.." 2>/dev/null && pwd)/.heading-os"
+    # The data overlay has no interpreter of its own, so it borrows the engine's.
+    # That path is STAMPED IN at install time by scripts/install-git-hooks.py,
+    # which already resolved it with get_workspace_root(). It was guessed here
+    # until 2026-08-21, as "the sibling directory named .heading-os" - a name this
+    # workspace nowhere promises. A public clone is `heading-os`, and every other
+    # installer under scripts/ self-locates rather than assume a layout.
+    #
+    # A wrong guess did not fail loudly, which is the part that mattered: it fell
+    # through to a bare `python3`, and a machine with pytest on PATH (9.0.3 here)
+    # then ran the overlay's tests green under an interpreter carrying none of the
+    # pinned dependencies. Hence the warning below rather than a silent fallback.
+    ENGINE="@@ENGINE_ROOT@@"
     if [ -x "$ENGINE/.venv/bin/python" ]; then
         PY="$ENGINE/.venv/bin/python"
     else
         PY="python3"
+        echo "data overlay test gate: no engine venv at '$ENGINE' - falling back to" \
+             "$(command -v python3 || echo python3), which is NOT the pinned" \
+             "toolchain. Re-arm with: python scripts/install-git-hooks.py" >&2
     fi
     echo "data overlay test gate: $ROOT/tests"
     if ! "$PY" -m pytest "$ROOT/tests" -q; then

@@ -487,6 +487,46 @@ def wait_seconds() -> int:
     )
 
 
+# The soft reminder is always this far below the hard threshold, never a second
+# setting. The operator fixed the relationship: "софт напоминание (порог) было на
+# 30% (всегда на 5% меньше чем жёсткий порог)".
+SOFT_OFFSET = 5
+
+# Below 15 the derived soft threshold lands under 10%, where the trigger sits at
+# or under the always-loaded context floor and cascades - the confirmed cause of
+# the 2026-08-19 incident. Above 90 there is no window left to write the handoff
+# that has to precede the compaction.
+HARD_THRESHOLD_MIN = 15
+HARD_THRESHOLD_MAX = 90
+
+
+def _session_hard(state: dict | None) -> int | None:
+    """This session's own hard threshold, or None to use the environment.
+
+    An unparseable or out-of-range value returns None rather than raising. The
+    CLI refuses both at the door, so a bad value arriving here means the file was
+    hand-edited or written by an older build - and a status line that crashes on
+    it is worse than one that falls back to the workspace default. This mirrors
+    `env_int`, which already treats an invalid value as absent.
+
+    Read from `session_hard_threshold` and NEVER from `hard_threshold`: the
+    status line rewrites that key on every render as its echo of what `config()`
+    resolved, so an operator choice stored there would survive about one turn.
+    """
+    if not state:
+        return None
+    raw = state.get("session_hard_threshold")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value < HARD_THRESHOLD_MIN or value > HARD_THRESHOLD_MAX:
+        return None
+    return value
+
+
 def config(state: dict | None = None) -> dict:
     """Thresholds and mode.
 
@@ -494,11 +534,21 @@ def config(state: dict | None = None) -> dict:
     activation is a switch they flip, never a default they discover. Pass the
     session's state file to let its own switch answer instead of the workspace
     default.
+
+    The same applies to the thresholds since 2026-08-21. A session that carries
+    `session_hard_threshold` uses it, with the soft reminder derived SOFT_OFFSET
+    below; a session that carries nothing keeps the environment pair untouched.
+    The environment branch below is unchanged, including its `soft >= hard`
+    fallback.
     """
-    soft = env_int("CLAUDE_HANDOFF_SOFT_THRESHOLD", 25)
-    hard = env_int("CLAUDE_HANDOFF_HARD_THRESHOLD", 30)
-    if soft >= hard:
-        soft, hard = 25, 30
+    hard = _session_hard(state)
+    if hard is not None:
+        soft = hard - SOFT_OFFSET
+    else:
+        soft = env_int("CLAUDE_HANDOFF_SOFT_THRESHOLD", 25)
+        hard = env_int("CLAUDE_HANDOFF_HARD_THRESHOLD", 30)
+        if soft >= hard:
+            soft, hard = 25, 30
     return {
         "soft": soft,
         "hard": hard,

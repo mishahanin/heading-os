@@ -2,11 +2,11 @@
 name: checkpoint
 description: "Сохранить manual checkpoint текущей сессии в outputs/operations/handoff-archive/ без выполнения /compact. Используй когда хочешь зафиксировать состояние работы и иметь возможность вернуться позже с чистым контекстом. NEVER auto-trigger - вызывается ТОЛЬКО явной командой /checkpoint."
 allowed-tools: "Write, Read, Bash(date:*), Bash(python scripts/checkpoint-paths.py:*), Bash(python3 scripts/checkpoint-paths.py:*)"
-argument-hint: "[заметка] | auto on|off|status | unattended on|off|status"
+argument-hint: "[заметка] | auto on|off|status | unattended on|off|status | compact-at N|status|off"
 metadata:
   author: Misha Hanin
   email: misha.hanin@odinix.com
-  version: "1.5"
+  version: "1.6"
 x-heading-orchestration:
   parallel_safe: false
   shared_state: ["outputs/operations/handoff-archive/", ".claude/state/"]
@@ -31,7 +31,7 @@ x-heading-routing:
   category: Operations
   label: /checkpoint [note]
   triggers:
-    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries two session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown countdown instead of halting, and it already includes `auto`. Nothing lowers the mode except the operator - the assistant's done marker and the continuation ceiling stop a stretch and leave the switch up, and the status line shows its state on every render.
+    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries three session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown countdown instead of halting, and it already includes `auto`. `compact-at N|status|off` moves the hard threshold where this session compacts, with the soft reminder derived 5 below; it raises neither `auto` nor `unattended`. Nothing lowers the mode except the operator - the assistant's done marker and the continuation ceiling stop a stretch and leave the switch up, and the status line shows its state on every render.
   exclusions:
     - Auto-resume after /compact handled by checkpoint-save.py (PostCompact)
     - reflective end-of-session -> /calibrate
@@ -67,10 +67,11 @@ Save a manual session checkpoint without running `/compact` or clearing context.
 
 ### Step 0 - Handle a switch argument first
 
-Split `$ARGUMENTS` on whitespace. If the FIRST token is exactly `auto` or exactly
-`unattended`, this is a switch. It is not a checkpoint. Anything else is a note,
-including a word that merely begins with one of them. Match the whole token,
-never a prefix.
+Split `$ARGUMENTS` on whitespace. If the FIRST token is exactly `auto`, exactly
+`unattended`, or exactly `compact-at`, this is a switch. It is not a checkpoint.
+Anything else is a note, including a word that merely begins with one of them.
+Match the whole token, never a prefix. `compact-at` takes the SECOND token as its
+value.
 
 Run one of these, then stop. Do not write any file.
 
@@ -81,12 +82,23 @@ python scripts/checkpoint-paths.py --auto status
 python scripts/checkpoint-paths.py --unattended on
 python scripts/checkpoint-paths.py --unattended off
 python scripts/checkpoint-paths.py --unattended status
+python scripts/checkpoint-paths.py --compact-at 35
+python scripts/checkpoint-paths.py --compact-at off
+python scripts/checkpoint-paths.py --compact-at status
 ```
 
 Report the command output in one line. For `auto on`, continue to Step 1 and
 write the checkpoint as well. The operator asked at a threshold and expects this
 one on disk. For `unattended on`, stop after the report. The operator is about to
 leave, so a question here defeats the switch.
+
+`compact-at` is also a one-word slash command, `/compact-at 35`, which is the
+shorter route. The operator usually asks for it in prose. "Делаем compact на
+пороге 35%" means `--compact-at 35`. The hard threshold moves to 35, and the
+command derives the soft reminder at 30. It raises neither `auto` nor
+`unattended`. With both off the hook asks at the threshold and compacts nothing,
+and the command says so itself. Report the output and stop. The threshold takes
+effect at the next pause, and nothing restarts.
 
 Both switches apply to this session only. Each one overrides its own environment
 default in both directions. Neither needs cleanup. The state file carries a

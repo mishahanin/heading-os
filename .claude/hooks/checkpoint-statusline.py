@@ -19,6 +19,10 @@ Thresholds (env-vars, optional):
   CLAUDE_HANDOFF_REMIND_STEP      default 5   (bucket size for hysteresis)
   CLAUDE_HANDOFF_AUTO             default off (hands-off save, no prompt)
 
+A session may override the pair with `scripts/checkpoint-paths.py --compact-at N`;
+`CP.config(state)` prefers `session_hard_threshold` and derives soft SOFT_OFFSET
+below it, so the env-vars above are the workspace DEFAULT, not the mechanism.
+
 Auto-compact is NOT disabled (last-resort policy). This hook only signals
 the Stop hook to offer a checkpoint.
 
@@ -51,10 +55,11 @@ CP.force_utf8()
 # from "was already absent".
 _UNSET = object()
 
-_CFG = CP.config()
-SOFT_THRESHOLD = _CFG["soft"]
-HARD_THRESHOLD = _CFG["hard"]
-REMIND_STEP = _CFG["step"]
+# Thresholds are deliberately NOT read at module scope. They are now a
+# per-session decision the operator can set mid-work with `--compact-at`, so they
+# are resolved in main() from the session's own state file - which has to be read
+# BEFORE the level is computed. Same reason `auto` moved down on 2026-08-16.
+#
 # Auto is deliberately NOT read at module scope. It is now a per-session
 # decision the operator can flip mid-work, so it is resolved in main() from the
 # session's own state file and passed down.
@@ -154,7 +159,9 @@ def progress_bar(used: float) -> str:
     return "[" + "█" * filled + "░" * empty + "]"
 
 
-def autonomy_segment(auto: bool, unattended: bool, ended: bool = False) -> str:
+def autonomy_segment(
+    auto: bool, unattended: bool, ended: bool = False, hard: int | None = None
+) -> str:
     """One always-present segment naming which autonomy switches are live.
 
     Always rendered, in all four states, on purpose. Until 2026-08-19 the only
@@ -174,14 +181,26 @@ def autonomy_segment(auto: bool, unattended: bool, ended: bool = False) -> str:
     bar was the surface the operator reads first and it was the one that could
     not tell a working night from a finished one, which is the same ambiguity
     the segment was added to remove.
+
+    `hard` is the threshold where the driven compaction fires, added 2026-08-21.
+    It is rendered in every state that CAN fire it and in none that cannot. The
+    gate is `_request_compaction`, which requires `auto_mode OR unattended_mode`:
+    a paused stretch still qualifies, because the STRETCH ended and the SWITCH did
+    not, and `manual` never does. The operator asked for the point at which
+    compaction happens, not the point at which he is asked, so a number on
+    `manual` would describe something that does not happen. It is shown whether it
+    came from the session or from the environment - a number that appeared only
+    once overridden would leave "not set" and "not working" looking the same,
+    which is the ambiguity this segment exists to remove.
     """
+    at = f" {hard}%" if hard is not None else ""
     if unattended:
         if ended:
             # Two spaces after the glyph, for the reason given on `manual` below.
-            return f"{C_YELLOW}⏸  unattended paused{C_RESET}"
-        return f"{C_GREEN_B}⏵ unattended{C_RESET}"
+            return f"{C_YELLOW}⏸  unattended paused{at}{C_RESET}"
+        return f"{C_GREEN_B}⏵ unattended{at}{C_RESET}"
     if auto:
-        return f"{C_YELLOW}⏵ auto{C_RESET}"
+        return f"{C_YELLOW}⏵ auto{at}{C_RESET}"
     # Two spaces after the glyph, not one. U+23F8 renders narrower than U+23F5 in
     # the operator's terminal, so a single space left `manual` visually crowding
     # the pause mark while `unattended` sat clear of the play mark.
@@ -196,6 +215,7 @@ def build_status_line(
     auto: bool,
     unattended: bool = False,
     stretch_ended: bool = False,
+    hard: int | None = None,
 ) -> str:
     parts: list[str] = []
 
@@ -227,7 +247,7 @@ def build_status_line(
         remaining = max(0, min(100, round(100 - used)))
         parts.append(f"{color}{bar} {remaining}%{C_RESET}{tail}")
 
-    parts.append(autonomy_segment(auto, unattended, stretch_ended))
+    parts.append(autonomy_segment(auto, unattended, stretch_ended, hard))
 
     model = _mapping(payload.get("model")).get("display_name") or "Claude"
     parts.append(f"{C_DIM}{model}{C_RESET}")
@@ -249,21 +269,16 @@ def main() -> int:
     cw = _mapping(payload.get("context_window"))
     used = coerce_used(cw)
 
-    # Compute level + bucket
-    if used is None:
-        level = None
-        bucket = 0
-    else:
-        if used >= HARD_THRESHOLD:
-            level = "hard"
-        elif used >= SOFT_THRESHOLD:
-            level = "soft"
-        else:
-            level = None
-        bucket = int(used // REMIND_STEP) * REMIND_STEP
-
     # Update THIS session's state file with hysteresis. A shared file here is
     # what let one session's context usage block another session's turns.
+    #
+    # Read BEFORE the level is computed, which is the reverse of the order this
+    # function used until 2026-08-21. The thresholds now come from the session's
+    # own file, and this hook is the SOLE producer of `needs_compact_offer` - the
+    # flag that eventually stamps `last_offer_at`, the floor `_request_compaction`
+    # hands to `_handoff_since`. Computing the level from the environment while
+    # the Stop hook read the session's number would queue no offer at that
+    # number: the threshold would look set and do nothing.
     project = CP.project_root(payload)
     state_path = CP.state_path(project, CP.session_slug(payload))
     state = CP.read_json(state_path)
@@ -271,6 +286,22 @@ def main() -> int:
     # instead of the whole dict it read. See the write for why.
     state_at_read = dict(state)
     previous_last_offered = int(state.get("last_offered_bucket") or 0)
+
+    # Resolved from the session's own state, exactly as `auto` below is.
+    cfg = CP.config(state)
+
+    # Compute level + bucket
+    if used is None:
+        level = None
+        bucket = 0
+    else:
+        if used >= cfg["hard"]:
+            level = "hard"
+        elif used >= cfg["soft"]:
+            level = "soft"
+        else:
+            level = None
+        bucket = int(used // cfg["step"]) * cfg["step"]
 
     # Resolved from the session's own switch when it has one, from the workspace
     # environment otherwise. `session_auto` is NOT in the update below and must
@@ -295,9 +326,9 @@ def main() -> int:
         {
             "session_id": CP.session_id(payload),
             "transcript_path": payload.get("transcript_path"),
-            "soft_threshold": SOFT_THRESHOLD,
-            "hard_threshold": HARD_THRESHOLD,
-            "remind_step": REMIND_STEP,
+            "soft_threshold": cfg["soft"],
+            "hard_threshold": cfg["hard"],
+            "remind_step": cfg["step"],
             "auto": auto,
             "updated_at": now_iso,
         }
@@ -389,7 +420,7 @@ def main() -> int:
 
     print(
         build_status_line(
-            payload, project, used, level, auto, unattended, stretch_ended
+            payload, project, used, level, auto, unattended, stretch_ended, cfg["hard"]
         )
     )
     return 0

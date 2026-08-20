@@ -331,6 +331,117 @@ def done_marker(note: str) -> int:
     return 0
 
 
+def compact_at_switch(value: str) -> int:
+    """Set the threshold where THIS session compacts, or report it.
+
+    The operator says "делаем compact на пороге 35%" at the start of important
+    work, and the number has to take effect in the RUNNING window - a restart is
+    the thing being avoided. It does: the Stop hook and the status line are both
+    fresh processes per event and both re-read this file, so the value is in
+    force at the next pause.
+
+    Stored under `session_hard_threshold`, never under `hard_threshold`. The
+    status line rewrites that key on every render as its echo of the resolved
+    config, so a choice recorded there would last about one turn. Same reason
+    `--auto` writes `session_auto`.
+
+    The soft threshold is NOT stored. It is always `CP.SOFT_OFFSET` below the
+    hard one, which is the relationship the operator fixed.
+
+    No cleanup path is needed. The state file is keyed by session and pruned with
+    it, so the number dies with the window - which is the right lifetime for a
+    choice made about one piece of work.
+    """
+    project = CP.project_root()
+    slug = CP.safe_slug(CP.session_id())
+    path = CP.state_path(project, slug)
+    state = CP.read_json(path)
+
+    if value == "status":
+        cfg = CP.config(state)
+        chosen = state.get("session_hard_threshold")
+        source = "this session" if chosen is not None else "the environment"
+        print(f"compact-at={cfg['hard']}% hard - {cfg['soft']}% soft (set by {source})")
+        when = state.get("session_hard_threshold_at")
+        if when:
+            print(f"set at: {when}")
+        used = state.get("used_percentage")
+        print(f"last status-line render read {used}% used" if used is not None
+              else "this session has not reported its context usage yet")
+        print(f"session_slug={slug}")
+        return 0
+
+    if value == "off":
+        try:
+            # Inside the lock, and `pop` rather than a merged update: `update`
+            # cannot delete, so a merge would leave the key behind.
+            with CP.locked_state(path) as fresh:
+                fresh.pop("session_hard_threshold", None)
+                fresh.pop("session_hard_threshold_at", None)
+        except OSError as exc:
+            print(f"checkpoint-paths: could not clear the threshold: {exc}", file=sys.stderr)
+            return 1
+        cfg = CP.config(CP.read_json(path))
+        print(f"compact-at cleared for this session ({slug}).")
+        print(f"Back to the workspace default: {cfg['hard']}% hard, {cfg['soft']}% soft.")
+        return 0
+
+    try:
+        hard = int(value)
+    except (TypeError, ValueError):
+        print(f"checkpoint-paths: --compact-at takes a whole number, `status` or `off`, "
+              f"not {value!r}", file=sys.stderr)
+        return 2
+
+    if hard < CP.HARD_THRESHOLD_MIN or hard > CP.HARD_THRESHOLD_MAX:
+        print(f"checkpoint-paths: refused. {hard} is outside {CP.HARD_THRESHOLD_MIN}-"
+              f"{CP.HARD_THRESHOLD_MAX}. Under {CP.HARD_THRESHOLD_MIN} the soft reminder "
+              f"lands below 10% and the trigger cascades against the context floor; over "
+              f"{CP.HARD_THRESHOLD_MAX} there is no window left to write the handoff.",
+              file=sys.stderr)
+        return 2
+
+    # Guarded for the same reason `_session_hard` is: this file is hand-editable,
+    # and a CLI that tracebacks on a bad sample is worse than one that says it
+    # could not check (.claude/rules/scope-claims.md).
+    raw_used = state.get("used_percentage")
+    try:
+        used = None if raw_used is None else float(raw_used)
+    except (TypeError, ValueError):
+        used = None
+    if used is not None and hard <= used:
+        # The reading is named as one render old, not as the present fill. Only
+        # `checkpoint-statusline.py` writes it, and only on a render that
+        # measured, so inside one long turn the true fill has already outrun it.
+        print(f"checkpoint-paths: refused. This session read {used}% used at its last "
+              f"status-line render, so a hard threshold of {hard} would fire at the very "
+              f"next pause. The reading is one render old and the window only grows. "
+              f"Pick a number above {used}, or run --compact-at off.", file=sys.stderr)
+        return 2
+
+    try:
+        with CP.locked_state(path) as fresh:
+            fresh["session_hard_threshold"] = hard
+            fresh["session_hard_threshold_at"] = CP.utc_now().isoformat()
+    except OSError as exc:
+        print(f"checkpoint-paths: could not write the threshold: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"compact-at={hard}% for this session ({slug}). "
+          f"Soft reminder at {hard - CP.SOFT_OFFSET}%.")
+    if used is None:
+        print("This session has not reported a usable context reading, so the value was "
+              "not checked against the current fill.")
+    if not (CP.auto_mode(state) or CP.unattended_mode(state)):
+        # Says what it does NOT do, rather than raising a switch the operator did
+        # not ask for. `_request_compaction` gates on auto OR unattended, so with
+        # both off this threshold moves the QUESTION and compacts nothing.
+        print(f"auto and unattended are both off, so the hook will ask at {hard}% and "
+              "compact nothing by itself.")
+        print("Turn the driven compaction on: python scripts/checkpoint-paths.py --auto on")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Print this session's checkpoint paths.")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of key=value")
@@ -350,6 +461,13 @@ def main(argv=None) -> int:
         metavar="NOTE",
         help="declare the plan finished: the unattended stretch stops at the next "
              "pause, and the switch is left alone for the operator to read",
+    )
+    ap.add_argument(
+        "--compact-at",
+        metavar="N|status|off",
+        help="hard threshold where THIS session offers, and compacts when auto or "
+             "unattended is on; 15-90, soft is always 5 below; `off` returns it to "
+             "CLAUDE_HANDOFF_HARD_THRESHOLD",
     )
     ap.add_argument(
         "--kind",
@@ -376,6 +494,9 @@ def main(argv=None) -> int:
 
     if args.done is not None:
         return done_marker(args.done)
+
+    if args.compact_at is not None:
+        return compact_at_switch(args.compact_at)
 
     paths = collect(args.kind)
     if args.json:

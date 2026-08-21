@@ -22,9 +22,10 @@ x-heading-orchestration:
 x-heading-capability:
   what: >
     Deterministic detector of overdue sovereign manual actions (backup, publish,
-    weekly-review, cold-sweep, Odin) and degraded machine-health (ollama,
-    memory-index). Tier A auto-heals silently; Tier B nudges only when objectively
-    overdue, counts-only. Never auto-executes a manual action.
+    weekly-review, cold-sweep, Odin) and degraded machine-health (ollama, the
+    accelerated ollama host, memory-index). Tier A auto-heals silently; Tier B
+    nudges only when objectively overdue, counts-only. Never auto-executes a
+    manual action.
   how: >
     Run /radar for the detailed due-items view; /radar ack <key> silences one
     signal until its TTL or it worsens; /radar crunch on|off toggles the
@@ -75,6 +76,7 @@ Read-only. It computes every signal, applies ack + crunch suppression, and print
 - `weekly_review` -> `/weekly-review`
 - `cold_sweep` -> `/cold-sweep`
 - `odin_cadence` -> `/odin collect` or `/odin reflect`
+- `ollama_accel` -> the accelerated ollama host does not answer. This machine cannot restart it, because it runs outside this OS. Work continues on the local daemon, more slowly. Tell the operator to restart it on its own host.
 - a critical `*_autoheal` line -> machine auto-heal has FAILED repeatedly; surface it, do not try to fix it inline.
 
 State the posture: "N item(s) due" or "all clear". Never invent an item the script did not report.
@@ -85,7 +87,7 @@ State the posture: "N item(s) due" or "all clear". Never invent an item the scri
 python scripts/ops-radar.py ack <key> [--ttl 24h|7d]
 ```
 
-Silences that one signal until the TTL expires OR its severity band worsens (worsening always re-surfaces it). Confirm what was acked and for how long. Valid keys: `backup`, `publish`, `weekly_review`, `cold_sweep`, `odin_cadence`, `ollama`, `memory_index`.
+Silences that one signal until the TTL expires OR its severity band worsens (worsening always re-surfaces it). Confirm what was acked and for how long. Valid keys: `backup`, `publish`, `weekly_review`, `cold_sweep`, `odin_cadence`, `ollama`, `ollama_accel`, `memory_index`, `router_accuracy`, `queue`.
 
 ## Phase 3 - Crunch-mode
 

@@ -285,8 +285,8 @@ Environment defaults, for the whole workspace rather than one session:
 ```
 
 **A wait outside 1 to 60 seconds is ignored, and you get 60.** This is not a
-clamp: `env_int` returns the DEFAULT on any invalid value, so `WAIT=600` gives
-60 and `WAIT=0` also gives 60, not the nothing you asked for. Measured
+clamp. `env_int` returns the DEFAULT on any invalid value, so `WAIT=600` gives
+60. `WAIT=0` also gives 60, not the nothing you asked for. Measured
 2026-08-20. Raise the hook's own registered timeout first if you need a longer
 grace period. Read `references/mode-mechanics.md` for the cost of a long wait.
 

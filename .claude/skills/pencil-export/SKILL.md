@@ -131,9 +131,9 @@ Background and full diagnosis: auto-memory `pencil-export-nodes-broken-wsl`.
 
 ## Phase 2 - Render + assemble (script)
 
-Run the renderer. It resolves/embeds fonts, renders each `Slide-*` frame in
-isolation (hiding siblings so overlapping absolutely-positioned frames cannot
-bleed - a real failure mode), and builds the formats:
+Run the renderer. It resolves and embeds fonts, then renders each `Slide-*` frame
+in isolation. It hides siblings so overlapping absolutely-positioned frames cannot
+bleed, a real failure mode. Last it builds the formats:
 
 ```bash
 python scripts/pencil-export.py \

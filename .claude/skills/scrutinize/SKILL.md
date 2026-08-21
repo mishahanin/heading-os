@@ -118,7 +118,7 @@ Apply the four phases from `references/viia-framework.md`:
 
 For any `SKILL.md`, `scripts/*.py`, rule, or reference file in scope: call `python3 scripts/artifact-evaluator.py --path <file> --json` first to pick up deterministic findings, then add qualitative VIIA layer on top.
 
-**Code targets - external code voice (auto-on unless `--no-code-review`):** on a code `file:`/`dir:`, or an `execution` whose diff touches code, dispatch the external code voice in parallel with Identify. Its candidates merge into the Identify set, de-duped, then face Phase 2.5 like any other. Skip silently for `plan`/`workspace`/`trajectory` and when the proxy is unavailable (note it, never fail the pass). Firing rules, dispatch, merge and logging: `references/code-review-voice.md`.
+**Code targets - external code voice (auto-on unless `--no-code-review`):** dispatch the external code voice in parallel with Identify. It fires on a code `file:` or `dir:`, and on an `execution` whose diff touches code. Its candidates merge into the Identify set, de-duped, then face Phase 2.5 like any other. Skip silently for `plan`/`workspace`/`trajectory` and when the proxy is unavailable (note it, never fail the pass). Firing rules, dispatch, merge and logging: `references/code-review-voice.md`.
 
 **Role lenses (auto, by path trigger):** `python scripts/scrutinize-dispatch.py --role-scan --paths <scope>` fires the ops, scheduler and boundary checklists whose globs match; each writes a `role` row. A lens finding citing neither its commands nor its artifacts is not a lens finding. Full taxonomies: `references/role-lenses.md`.
 
@@ -183,7 +183,7 @@ Produce the approval block inline per the exact layout in `references/approval-b
 For each approved finding, in order:
 
 1. Apply the fix using `Edit` or `Write`.
-2. Run post-apply checks on the edited file: hidden-chars (`python3 scripts/sanitize-text.py <file> --scan`); Python syntax (`python3 -m py_compile <file>`, `.py` only); frontmatter YAML parse + required fields (`SKILL.md` only, per `scripts/skill-metadata-check.py`).
+2. Run three post-apply checks on the edited file. Hidden characters: `python3 scripts/sanitize-text.py <file> --scan`. Python syntax, for `.py` only: `python3 -m py_compile <file>`. Frontmatter YAML parse and required fields, for `SKILL.md` only, per `scripts/skill-metadata-check.py`.
 3. If all checks pass, print `"[OK] <file> - applied and checks passed."`
 4. If any check fails, halt further applies. Print the failure, ask the user whether to continue or rollback.
 

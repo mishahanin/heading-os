@@ -10,6 +10,7 @@ Run: python3 -m pytest tests/test_ste_check.py
 import fnmatch
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -52,6 +53,53 @@ def test_checked_globs_are_authorised_by_the_rule(ste):
         assert any(fnmatch.fnmatch(glob, pattern) for pattern in authorised), (
             f"{glob} is checked but not listed in the rule's paths: frontmatter"
         )
+
+
+def excluded_page_names():
+    """The basenames the rule's exclusion paragraph names, read from the rule.
+
+    Parsed rather than duplicated here, because a second copy of the list is the
+    copy that stops being updated.
+    """
+    text = RULE.read_text(encoding="utf-8")
+    start = text.index("It does NOT apply to explanatory documentation")
+    paragraph = text[start:text.index("\n", start)]
+    return set(re.findall(r"`([A-Za-z0-9._-]+\.md)`", paragraph))
+
+
+def test_every_docs_page_is_classified(ste):
+    """No page under `docs/` may sit in neither the gate nor the exclusion list.
+
+    The failure this closes has a shape no gate on the gated set can see. On
+    2026-08-22 three pages -- EXTENDING.md, TELEGRAM-AND-ALERTS.md and
+    RULES-REFERENCE.md -- were absent from `CHECKED_GLOBS` AND absent from the
+    rule's "It does NOT apply to" sentence. `--all` was green over twelve pages
+    and stayed green, because a page nobody classified is a page nobody audits;
+    the three carried 32 errors between them. Two were pages a reader executes.
+
+    So the contract is total, not partial: every `docs/*.md` is gated or is
+    named as excluded, and a new page fails this test until someone decides.
+    """
+    checked = set(ste.CHECKED_GLOBS)
+    excluded = excluded_page_names()
+    root = ROOT / "docs"
+    unclassified = [
+        p.name
+        for p in sorted(root.glob("*.md"))
+        if f"docs/{p.name}" not in checked and p.name not in excluded
+    ]
+    assert not unclassified, (
+        f"these docs pages are in neither list: {unclassified}. Add each one to "
+        f"CHECKED_GLOBS in scripts/ste-check.py plus the rule's paths: "
+        f"frontmatter (a page a reader executes), or name it in the rule's "
+        f"'It does NOT apply to explanatory documentation' sentence."
+    )
+
+
+def test_the_two_classifications_do_not_overlap(ste):
+    """A page cannot be both gated and excluded; that pair reads as a decision."""
+    both = {g.split("/")[-1] for g in ste.CHECKED_GLOBS} & excluded_page_names()
+    assert not both, f"gated AND listed as out of scope: {sorted(both)}"
 
 
 def test_scope_resolves_to_existing_files(ste):
@@ -261,6 +309,45 @@ def test_the_split_does_not_fire_on_an_abbreviation(ste):
     """The guard that was already there must survive the widened lookahead."""
     assert len(ste.split_sentences("Read the SKILL.md file for the spec.")) == 1
     assert len(ste.split_sentences("It runs on v1.2 of the API.")) == 1
+
+
+def test_a_sentence_opening_with_inline_code_still_splits(ste):
+    """The fourth defect of the splitter family, found 2026-08-22.
+
+    Inline code was deleted outright, so a sentence that OPENS with a span began
+    with whitespace and a lowercase letter. The lookahead wants a capital, so the
+    sentence merged into the one above and the pair measured over the limit.
+    Three correct sentences on docs/EXTENDING.md reported as one 26-word run,
+    and the prose was on its way to being rewritten to satisfy the wrong number.
+    """
+    text = (
+        "The approval is a commit, not a lock file. `git show <sha>` reads the "
+        "frozen bytes. `git diff` answers whether the contract moved."
+    )
+    assert len(ste.split_sentences(ste.strip_noise(text))) == 3
+
+
+def test_a_code_span_costs_exactly_one_word(ste):
+    """A span is one thing the eye lands on, so it counts once.
+
+    Deleting it counted ZERO, which discounted every sentence in proportion to
+    how much code it carried -- the densest sentences got the largest pass. One
+    QUICKSTART line read 21 words to the checker and 27 to a person, and
+    reported clean. Adopted 2026-08-22 at a measured cost of 37 rewrites.
+    """
+    assert ste.word_count(ste.strip_noise("Run `--strict` on the file.")) == 5
+
+
+def test_a_multi_word_span_still_costs_one(ste):
+    """Never the words INSIDE the span.
+
+    Counting the interior would penalise naming the exact flag or path, which is
+    pressure in the wrong direction for reference documentation. Measured on the
+    fourteen gated pages: interior-words scores 32 errors against this rule's 15.
+    """
+    one = ste.word_count(ste.strip_noise("Pass `--base REF` here."))
+    other = ste.word_count(ste.strip_noise("Pass `scripts/crm-health.py` here."))
+    assert one == other == 3
 
 
 def test_all_does_not_claim_the_coverage_it_does_not_have(ste):

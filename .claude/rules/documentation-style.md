@@ -12,13 +12,15 @@ paths:
   - "docs/HOOKS-REFERENCE.md"
   - "docs/DOCS-PIPELINE.md"
   - "docs/GLOSSARY.md"
+  - "docs/EXTENDING.md"
+  - "docs/TELEGRAM-AND-ALERTS.md"
   - ".claude/skills/**/SKILL.md"
 ---
 
 # Documentation Style — ASD-STE100 Subset
 
-Last Updated: 2026-08-11
-Last Verified: 2026-08-11
+Last Updated: 2026-08-22
+Last Verified: 2026-08-22
 
 Path-scoped rule. Governs the pages a reader executes and the instruction bodies skills execute. Those pages are read by people whose first language is not English, on a bad day, while something is broken.
 
@@ -30,7 +32,7 @@ A subset of **Part 1 (Writing Rules)** of ASD-STE100 Simplified Technical Englis
 
 1. **Imperative in procedures.** `Run uv sync`, not `The dependencies should then be installed`.
 2. **Active voice.** Passive only where the actor is genuinely unknown or irrelevant.
-3. **Twenty words per procedural sentence, twenty-five per descriptive sentence.** Over the limit, split it.
+3. **Twenty words per procedural sentence, twenty-five per descriptive sentence.** Over the limit, split it. **An inline code span counts as ONE word**, never zero and never the words inside it. Until 2026-08-22 the checker deleted spans before counting, which discounted each sentence in proportion to the code it carried — the densest sentences drew the largest pass. One QUICKSTART line read 21 words to the checker and 27 to a person, and reported clean. Adopting the one-word count cost 37 rewrites, 15 on the gated pages and 22 in the skill bodies. Counting the interior instead would score 32 on the pages, and it would penalise naming the exact flag or path, which is pressure in the wrong direction for reference documentation.
 4. **One action per numbered step.** Two actions joined by `and then` are two steps.
 5. **Keep the articles and the linking verbs.** Telegraphic compression (`Open file, set value, restart`) is banned; it reads as a cable, not an instruction.
 6. **One term, one meaning, corpus-wide.** Pick `engine clone` or `engine repo` and use only that one. A synonym introduced for variety is a defect here, not style.
@@ -41,9 +43,11 @@ A subset of **Part 1 (Writing Rules)** of ASD-STE100 Simplified Technical Englis
 
 ## Where it applies
 
-The twelve pages in this file's `paths:` frontmatter, plus the instruction bodies of `.claude/skills/**/SKILL.md`. By convention but deliberately not path-scoped, so the rule is not loaded on every script edit: CLI `--help` text, argparse descriptions, and operator-facing error strings in `scripts/`.
+The fourteen pages in this file's `paths:` frontmatter, plus the instruction bodies of `.claude/skills/**/SKILL.md`. By convention but deliberately not path-scoped, so the rule is not loaded on every script edit: CLI `--help` text, argparse descriptions, and operator-facing error strings in `scripts/`.
 
-It does NOT apply to explanatory documentation, where the reasoning is the value and flattening it destroys the point: `ARCHITECTURE.md`, `THREAT-MODEL.md`, `SECURITY-MODEL.md`, `CANOPUS.md`, `DESIGN-CHECK.md`, `RELEASE-NOTES.md`, `memory-lifecycle.md`, `engine-data-segregation-contract.md`, README positioning prose, every file in `.claude/rules/` including this one, and commit messages. It NEVER applies to outbound prose of any kind — email, LinkedIn, Tribe messages, corporate documents — or to any non-English text.
+It does NOT apply to explanatory documentation, where the reasoning is the value and flattening it destroys the point: `ARCHITECTURE.md`, `THREAT-MODEL.md`, `SECURITY-MODEL.md`, `CANOPUS.md`, `DESIGN-CHECK.md`, `RELEASE-NOTES.md`, `RULES-REFERENCE.md`, `memory-lifecycle.md`, `engine-data-segregation-contract.md`, README positioning prose, every file in `.claude/rules/` including this one, and commit messages. It NEVER applies to outbound prose of any kind — email, LinkedIn, Tribe messages, corporate documents — or to any non-English text.
+
+**Every page under `docs/` sits in one of those two lists, and a test holds it there.** Until 2026-08-22 three did not: `EXTENDING.md`, `TELEGRAM-AND-ALERTS.md` and `RULES-REFERENCE.md` were absent from the frontmatter and absent from the exclusion sentence, so no one had ever decided about them. Two turned out to be pages a reader executes and joined the gate at a cost of 28 sentences; one is a catalogue and joined the exclusion list. The failure is worth naming because of its shape: a page fell through by being in NEITHER list, which no gate on the gated set can ever see. `test_every_docs_page_is_classified` reads this paragraph and the frontmatter together, so a new page under `docs/` fails the suite until someone decides which list it belongs to.
 
 ## How this composes with the prose rules
 
@@ -51,7 +55,7 @@ It does NOT apply to explanatory documentation, where the reasoning is the value
 
 ## The checker, and what it cannot see
 
-`python scripts/ste-check.py <file>` audits one file; `--all` audits the twelve gated pages; `--skills` audits the skill instruction bodies; `--strict` fails on warnings as well as errors; `--json` emits machine output; `--quiet` prints only the files that carry an error.
+`python scripts/ste-check.py <file>` audits one file; `--all` audits the fourteen gated pages; `--skills` audits the skill instruction bodies; `--strict` fails on warnings as well as errors; `--json` emits machine output; `--quiet` prints only the files that carry an error.
 
 **`--all` is narrower than this rule's scope, and the two flags exist to say so.** Until 2026-08-16 `--all` described itself as "every in-scope file" while resolving twelve pages out of a hundred and eight, so a clean `--all` read as a clean corpus. The first `--skills` measurement, the same day: **74 of 96 skills, 300 errors, 443 warnings.**
 

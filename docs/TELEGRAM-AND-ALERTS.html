@@ -78,7 +78,7 @@
 <main class="content">
   <h1>Telegram and alerts</h1>
   <p class="page-meta">Connect HEADING OS to Telegram, create your own capture and alert channels, and tune</p>
-  <!-- version: 1.3.0 | last-updated: 2026-08-07 -->
+  <!-- version: 1.3.1 | last-updated: 2026-08-22 -->
 
 <p>Connect HEADING OS to Telegram, create your own capture and alert channels, and tune
 what the Sentinel monitor sends you. Written for someone who has never touched an API.</p>
@@ -123,16 +123,16 @@ both, for different jobs. Getting this straight up front saves confusion later.<
 </tbody>
 </table>
 <p><strong>Reading and capturing always uses your user account.</strong> Viraid capture, Sentinel&rsquo;s chat
-monitoring, and anything you drive with <code>/telegram</code> runs through <em>your</em> Telegram, so it
-can reach <em>your</em> private channels without being added to them.</p>
+monitoring, and anything you drive with <code>/telegram</code> runs through <em>your</em> Telegram. It
+reaches <em>your</em> private channels without being added to them.</p>
 <p><strong>Sending system nudges now uses a bot, not your account.</strong> A message your own account
-sends to a channel it already owns does not reliably push-notify your phone - a bot
-message always does, since Telegram treats it like a message from any other contact. A
+sends to a channel it already owns does not reliably push-notify your phone. A bot
+message always does, because Telegram treats it like a message from any other contact. A
 second, personal notifications bot (section 7) is recommended even if you never touch
 Fireside, specifically so alerts actually reach your phone.</p>
-<p>The rest of this page: first wire your user account (sections 2 to 4), then create your
-channels (5 to 6), then the notifications bot (7), then point each feature at them (8 to
-10). The Fireside team bot is section 11.</p>
+<p>The rest of this page runs in that order. First wire your user account (sections 2 to 4).
+Then create your channels (5 to 6) and the notifications bot (7). Then point each feature
+at them (8 to 10). The Fireside team bot is section 11.</p>
 <hr />
 <h2 id="2-get-your-api_id-and-api_hash-one-time-five-minutes">2. Get your <code>api_id</code> and <code>api_hash</code> (one time, five minutes)</h2>
 <p>These two values are how a program proves it may act as your account. You get them once,
@@ -207,7 +207,7 @@ session, <code>/telegram</code> and <code>/viraid</code> now work.</p>
 <h2 id="5-create-your-channels-in-the-telegram-app">5. Create your channels in the Telegram app</h2>
 <p>HEADING OS uses ordinary Telegram channels as work surfaces. You create them the normal
 way, in the Telegram app, in about a minute each. A <strong>channel</strong> where you are the only
-member is the cleanest choice: it acts as a private notepad and alert board that only you
+member is the cleanest choice. It acts as a private notepad and alert board that only you
 can see.</p>
 <p>You will typically create two:</p>
 <ul>
@@ -215,22 +215,22 @@ can see.</p>
   tasks, and reminders here from your phone during the day; Viraid reads them later and
   files them.</li>
 <li><strong>An alerts channel</strong> (the maintainer&rsquo;s is named <code>Urgent Stuff for M</code>), if you want
-  urgent items collected in one board rather than in a direct chat. This is optional:
-  every alert and nudge in HEADING OS is delivered by the notifications bot of section 7,
-  and that bot can just as well message you directly. Point the <code>*_TELEGRAM_TARGET</code>
-  settings at your own user id for a direct chat, or at the channel&rsquo;s numeric id (with
-  the bot added as an admin) for a board.</li>
+  urgent items collected in one board rather than in a direct chat. This one is optional.
+  The notifications bot of section 7 delivers every alert and nudge in HEADING OS, and
+  that bot can just as well message you directly. For a direct chat, point the
+  <code>*_TELEGRAM_TARGET</code> settings at your own user id. For a board, point them at the
+  channel&rsquo;s numeric id, with the bot added as an admin.</li>
 </ul>
 <p>To create one on <strong>phone</strong>: tap the pencil / new-message icon, choose <strong>New Channel</strong>,
 give it a name, set it <strong>Private</strong>, and skip adding members. On <strong>desktop</strong>: hamburger
 menu, <strong>New Channel</strong>, same steps.</p>
 <p>Name them whatever you like. Two of the features (Viraid) currently expect a specific
-name, so either reuse the maintainer&rsquo;s names or note section 9, which shows where to
-change the expected name.</p>
+name. Reuse the maintainer&rsquo;s names, or read section 9, which shows where to change the
+expected name.</p>
 <hr />
 <h2 id="6-find-a-channels-numeric-id">6. Find a channel&rsquo;s numeric ID</h2>
-<p>Some settings can point at a channel by its name, but the most reliable way is its
-<strong>numeric ID</strong>, a number that never changes even if you rename the channel. Channel IDs
+<p>Some settings can point at a channel by its name. The most reliable way is its <strong>numeric
+ID</strong>, a number that never changes even if you rename the channel. Channel IDs
 look like <code>-1001234567890</code> (the leading <code>-100</code> is just Telegram&rsquo;s marker for a channel or
 group).</p>
 <p>The easy way to read it, once you are logged in (section 4):</p>
@@ -244,15 +244,16 @@ leading <code>-100</code>). You will paste it into a setting in sections 7 and 9
   fine);</li>
 <li><strong>@username</strong>, if you gave the channel a public username, for example <code>@my_alerts</code>;</li>
 <li><strong><code>me</code></strong>, which is your own <strong>Saved Messages</strong> - resolvable <strong>only</strong> for your user
-  account (<code>/telegram send me "..."</code>, <code>/viraid</code>, etc.). The notifications bot in section 7
-  cannot resolve <code>me</code>/<code>self</code>/<code>saved</code> (a bot has no concept of &ldquo;its own&rdquo; account the way
-  your user session does), so none of the <code>*_TELEGRAM_TARGET</code> settings below may use it.</li>
+  account (<code>/telegram send me "..."</code>, <code>/viraid</code>, and the like). The notifications bot in
+  section 7 cannot resolve <code>me</code>, <code>self</code> or <code>saved</code>. A bot has no concept of &ldquo;its own&rdquo;
+  account the way your user session does, so none of the <code>*_TELEGRAM_TARGET</code> settings
+  below may use it.</li>
 </ul>
 <hr />
 <h2 id="7-create-a-notifications-bot-for-reliable-alerts">7. Create a notifications bot for reliable alerts</h2>
-<p>Do this section even if you never touch Fireside. It fixes a real problem: a message your
-own account sends to a channel it already owns does not reliably trigger a phone push, so
-the system alert nudges in section 8 can go silently unnoticed. A dedicated bot always
+<p>Do this section even if you never touch Fireside. It fixes a real problem. A message your
+own account sends to a channel it already owns does not reliably trigger a phone push.
+The system alert nudges in section 8 can therefore go unnoticed. A dedicated bot always
 push-notifies, because Telegram treats a bot message like a message from any other
 contact.</p>
 <ol>
@@ -271,9 +272,9 @@ contact.</p>
    Add admin, search your bot&rsquo;s username, add it.</li>
 </ol>
 <p><em>Direct-message alternative:</em> instead of a channel you can have the bot message you
-   privately. Open the bot&rsquo;s chat and press <strong>Start</strong> once (a bot cannot DM you until you
-   do), then point the target (section 8) at your own numeric user id rather than a channel
-   id. A bot cannot resolve a <code>@username</code> to a private chat, so the DM target must be the
+   privately. Open the bot&rsquo;s chat and press <strong>Start</strong> once. A bot cannot DM you until you
+   do. Point the target (section 8) at your own numeric user id rather than a channel id.
+   A bot cannot resolve a <code>@username</code> to a private chat, so the DM target must be the
    numeric id.
 6. Smoke test it:</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from scripts.utils import telegram_notify; print(telegram_notify.notify(&#39;&lt;your channel id or @username&gt;&#39;, &#39;HEADING OS notify-bot smoke test&#39;))&quot;</span>
@@ -283,13 +284,13 @@ contact.</p>
 any Fireside bot token (section 11) - never reuse a token across them.</p>
 <hr />
 <h2 id="8-where-alerts-and-nudges-are-sent">8. Where alerts and nudges are sent</h2>
-<p>Several background scripts send you reminders: the Odin cadence nudge, the ops-radar
-nudge, the council model-freshness nudge, due reminders, critical daemon alerts, and the
-Sentinel monitor&rsquo;s urgency alerts and digests. Each
-reads an optional setting in <code>.env</code> that says which channel to send to, and all of them
-deliver through the notifications bot from section 7 - never to your account&rsquo;s own Saved
-Messages. If a target is unset (or would resolve to <code>me</code>/<code>self</code>/<code>saved</code>), no notification
-is sent; the miss is logged, and <code>/prime</code> backstops the same signal.</p>
+<p>Several background scripts send you reminders. They are the Odin cadence nudge, the
+ops-radar nudge and the council model-freshness nudge. So are due reminders, critical
+daemon alerts, and the Sentinel monitor&rsquo;s urgency alerts and digests. Each reads an optional
+setting in <code>.env</code> that says which channel to send to. All of them deliver through the
+notifications bot from section 7, never to your account&rsquo;s own Saved Messages. If a target
+is unset, or would resolve to <code>me</code>, <code>self</code> or <code>saved</code>, no notification is sent. The miss
+is logged, and <code>/prime</code> backstops the same signal.</p>
 <p>Add any of these lines to <code>.env</code> (all are optional; they ship commented out in
 <code>.env.example</code>):</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># where the weekly Odin nudge goes (also the fallback for ops-radar, council, reminders)</span>
@@ -312,8 +313,8 @@ everything else, so there is one delivery surface and one place to point it.</p>
 <hr />
 <h2 id="9-how-viraid-works-and-how-to-use-your-own-channel">9. How Viraid works, and how to use your own channel</h2>
 <p><strong>Viraid</strong> is a capture inbox. During the day you send yourself quick lines in your
-capture channel: &ldquo;follow up with Alex on the ISO cert&rdquo;, &ldquo;book the dentist&rdquo;, &ldquo;read that
-DPI paper&rdquo;. Later you run <code>/viraid</code> in a Claude Code session and it:</p>
+capture channel. Three examples: &ldquo;follow up with Alex on the ISO cert&rdquo;, &ldquo;book the
+dentist&rdquo;, &ldquo;read that DPI paper&rdquo;. Later you run <code>/viraid</code> in a Claude Code session and it:</p>
 <ol>
 <li>reads the new messages from the channel,</li>
 <li>sorts each one into a type (a task, a calendar item, a CRM note, a research item, or a
@@ -342,9 +343,10 @@ touches it (see <a href="MAKE-IT-YOURS.html#7-what-happens-when-you-update-the-e
 <hr />
 <h2 id="10-configure-the-sentinel-monitor">10. Configure the Sentinel monitor</h2>
 <p><strong>Sentinel</strong> is an always-on background watcher. Every so often (15 minutes by default) it
-checks your email inbox and chosen Telegram chats, scores each new item for urgency with a
-quick AI pass, and sends the urgent ones to your alerts channel. It can also auto-handle
-meeting invites against your calendar rules and send you a morning and evening digest.</p>
+checks your email inbox and chosen Telegram chats. It scores each new item for urgency
+with a quick AI pass, then sends the urgent ones to your alerts channel. It can also
+auto-handle meeting invites against your calendar rules. It sends a morning digest and an
+evening digest as well.</p>
 <h3 id="101-make-your-own-config-file">10.1 Make your own config file</h3>
 <p>Sentinel ships a template. Copy it into your private data overlay and edit the copy (never
 the template):</p>
@@ -424,13 +426,13 @@ change to take effect.</p>
 <hr />
 <h2 id="11-optional-create-a-bot-for-fireside">11. Optional: create a bot for Fireside</h2>
 <p>Skip this section unless you run the Fireside team daemon. Fireside posts to a team channel
-as a <strong>bot</strong>, which is the right choice for something shared, since a bot has its own
-identity and only sees the chats it is added to. This is a separate bot and token from the
+as a <strong>bot</strong>, which is the right choice for something shared. A bot has its own identity
+and only sees the chats it is added to. This is a separate bot and token from the
 personal notifications bot in section 7 - never reuse one token for both.</p>
 <ol>
 <li>In Telegram, open a chat with <strong>@BotFather</strong> (the official bot-maker).</li>
-<li>Send <code>/newbot</code>. Answer its two questions: a display name, then a username that must end
-   in <code>bot</code> (for example <code>my_fireside_bot</code>).</li>
+<li>Send <code>/newbot</code>. Answer its two questions: first a display name, and second a username
+   that must end in <code>bot</code> (for example <code>my_fireside_bot</code>).</li>
 <li>@BotFather replies with a <strong>token</strong>, a line like <code>123456789:AAE...</code>. Treat it like a
    password.</li>
 <li>Put the token and your team channel in <code>.env</code> (see the Fireside section of
@@ -438,8 +440,8 @@ personal notifications bot in section 7 - never reuse one token for both.</p>
 <li><strong>Add the bot to your team channel</strong> as an administrator, or it cannot post there. Open
    the channel, Administrators, Add admin, search your bot&rsquo;s username, add it.</li>
 </ol>
-<p>To get the team channel&rsquo;s numeric ID, use the same <code>info</code> command from section 6 (or add
-the bot and check the daemon&rsquo;s log, which prints the chat ID it sees).</p>
+<p>To get the team channel&rsquo;s numeric ID, use the same <code>info</code> command from section 6. You can
+also add the bot and read the daemon&rsquo;s log, which prints the chat ID it sees.</p>
 <hr />
 <h2 id="12-troubleshooting">12. Troubleshooting</h2>
 <table>

@@ -78,7 +78,7 @@
 <main class="content">
   <h1>Extending the engine</h1>
   <p class="page-meta">How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates</p>
-  <!-- version: 2.0.0 | last-updated: 2026-08-07 -->
+  <!-- version: 2.0.1 | last-updated: 2026-08-22 -->
 
 <p>How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
 before declaring it done. This is the developer how-to. The contribution policy (open
@@ -128,10 +128,10 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
 </table>
 <p>Before building anything: search for an existing pattern and reuse it. The standards
 below are summarized from the engine&rsquo;s own development rules.</p>
-<p>Editing the documentation site itself (<code>docs/</code>) has its own contract: every page is
-either Markdown-sourced (regenerated) or hand-authored HTML, and a drift guard fails
-the build if the two fall out of sync. See <a href="DOCS-PIPELINE.html">DOCS-PIPELINE.md</a>
-before editing anything under <code>docs/</code>.</p>
+<p>The documentation site itself (<code>docs/</code>) has its own contract. Every page is either
+Markdown-sourced (regenerated) or hand-authored HTML. A drift guard fails the build if
+the two fall out of sync. Read <a href="DOCS-PIPELINE.html">DOCS-PIPELINE.md</a> before you edit
+anything under <code>docs/</code>.</p>
 <hr />
 <h2 id="2-writing-a-skill">2. Writing a skill</h2>
 <p>A skill is a folder with a <code>SKILL.md</code>. The frontmatter is a contract:</p>
@@ -173,9 +173,9 @@ active; a rule with a <code>paths:</code> list loads only when work touches thos
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;scripts/**&quot;</span>
 <span class="nn">---</span>
 </code></pre></div>
-<p>Keep rules concise and single-purpose. Several existing rules encode security controls
-(the send-gate, the engine/data separation, the secret guards); adapt brand and voice
-rules freely, but leave the security ones in place.</p>
+<p>Keep rules concise and single-purpose. Several existing rules encode security controls:
+the send-gate, the engine/data separation, and the secret guards. Adapt brand and voice
+rules freely. Leave the security ones in place.</p>
 <hr />
 <h2 id="4-writing-a-script">4. Writing a script</h2>
 <div class="highlight"><pre><span></span><code><span class="ch">#!/usr/bin/env python3</span>
@@ -217,11 +217,11 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
   normal case on a managed workspace.</li>
 <li><strong>CodeQL</strong> runs on the repository for static security analysis; address what it
   flags on a pull request.</li>
-<li><strong>The prose path audit.</strong> <code>check-path-references.py --check</code> (pre-commit
-  <code>path-references</code>, plus a CI step) fails when tracked Markdown gains a NEW
-  reference to an engine path that does not exist — the rot you get when a script
-  is renamed and the docs that name it are not. Rename a script and this catches
-  the prose in the same commit. Paths that route to the private overlay are
+<li><strong>The prose path audit.</strong> <code>check-path-references.py --check</code> runs as the pre-commit
+  hook <code>path-references</code> and as a CI step. It fails when tracked Markdown gains a NEW
+  reference to an engine path that does not exist. That is the rot you get when
+  someone renames a script and leaves the docs that name it. Rename a script and this
+  catches the prose in the same commit. Paths that route to the private overlay are
   skipped: the overlay is absent on a public clone, so its absence proves nothing.
   Placeholders, regex fragments and correct prose about deleted things are frozen
   in the scanner&rsquo;s <code>BASELINE</code>, each with the reason it should not exist. To add
@@ -236,15 +236,15 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
   On a clone with no private overlay, a file documented only there reads as
   undocumented.</p>
 <h3 id="the-slice-standard">The slice standard</h3>
-<p>Non-trivial work runs on Canopus, the build standard: seven numbered steps, two
-of them the operator&rsquo;s own approval moments, and three instruments that measure
-whether the approval meant anything. <strong><a href="CANOPUS.html">Canopus, the build standard</a></strong>
-is the full page: the steps, the four <code>check</code> clauses, what <code>probe</code> reads, and
-the two places the standard reports rather than blocks.</p>
+<p>Non-trivial work runs on Canopus, the build standard. It has seven numbered steps. Two
+of them are the operator&rsquo;s own approval moments, and three instruments measure whether
+the approval meant anything. <strong><a href="CANOPUS.html">Canopus, the build standard</a></strong> is the full
+page. It carries the steps, the four <code>check</code> clauses, what <code>probe</code> reads, and the two
+places the standard reports rather than blocks.</p>
 <p>One criterion is worth carrying here rather than following a link for, because
-it is the one a builder acts on: <code>probe</code> runs the contract twice against
-null-stubbed modules carrying different values, and a test that never FAILS
-under either run is vacuous. Passing, skipping and erroring all leave a test
+it is the one a builder acts on. <code>probe</code> runs the contract twice against
+null-stubbed modules that carry different values. A test that never FAILS
+under either run is vacuous. A pass, a skip and an error all leave a test
 unproved; only a failure shows it read the value.</p>
 <p>The three commands you will actually type while contributing:</p>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>probe<span class="w"> </span>tests/contract/&lt;date&gt;-&lt;slug&gt;/<span class="w">   </span><span class="c1"># before approval</span>
@@ -252,8 +252,8 @@ python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>check<sp
 python<span class="w"> </span>scripts/canopus.py<span class="w"> </span>note<span class="w"> </span>&lt;slug&gt;<span class="w"> </span>...<span class="w">                       </span><span class="c1"># when it ships</span>
 </code></pre></div>
 <p>Two facts worth carrying here rather than looking up. The approval is a COMMIT,
-not a lock file: <code>git show &lt;sha&gt;:&lt;path&gt;</code> reads the frozen bytes, <code>git diff</code>
-answers whether the contract moved, and <code>git merge-base --is-ancestor</code> answers
+not a lock file. <code>git show &lt;sha&gt;:&lt;path&gt;</code> reads the frozen bytes. <code>git diff</code>
+answers whether the contract moved. <code>git merge-base --is-ancestor</code> answers
 whether the implementation descends from the approval. Nothing on this machine
 holds those bytes down, and the CI clause that reads them REPORTS a break rather
 than blocking one. Do not describe either as prevention.</p>
@@ -317,15 +317,38 @@ apply the fix, watch it pass.</p>
 </tbody>
 </table>
 <hr />
-<p><em>HEADING OS · Extending the engine · maintained by Misha Hanin · see also
-<a href="ARCHITECTURE.html">Architecture</a> for how the pieces compose and
-<a href="SECURITY-MODEL.html">Security model</a> for the controls your code inherits.</em></p>
+<p><em>HEADING OS · Extending the engine · maintained by Misha Hanin.</em> See also:</p>
+<ul>
+<li><a href="ARCHITECTURE.html">Architecture</a>: how the pieces compose.</li>
+<li><a href="SECURITY-MODEL.html">Security model</a>: the controls your code inherits.</li>
+</ul>
 <h2 id="9-trigger-regression-tests">9. Trigger regression tests</h2>
 <p>Moved here from <code>.claude/rules/skill-router.md</code> on 2026-08-20 — it is authoring
 guidance, never routing, and that rule loads on every session.</p>
-<p>The router is a markdown rule the model interprets, so a new skill&rsquo;s triggers can silently hijack another skill&rsquo;s queries. <code>scripts/skill-trigger-test.py</code> is an LLM-judge harness that regression-tests this: it feeds the router rules plus a target skill&rsquo;s description to a judge model and checks whether each query in <code>.claude/skills/{name}/triggers.json</code> routes as expected (<code>should_trigger</code>). Run <code>python scripts/skill-trigger-test.py --all</code> (or <code>--skill NAME</code>, or <code>--changed [--base REF]</code> to test only skills whose <code>SKILL.md</code>/<code>triggers.json</code> changed since the base, default <code>origin/main</code> - a <code>skill-router.md</code> change widens scope to all); it is <strong>advisory</strong> by default (non-deterministic judge) and gates only under <code>--strict --threshold</code>. <code>/push-updates</code> Phase 0 runs <code>--changed --strict --threshold 0.85</code> as a <strong>soft gate</strong> (surfaces routing regressions on changed skills; the CEO confirms to override; not a hard block yet, per audit #63-2). 69 routing-sensitive skills carry <code>triggers.json</code> today, holding 710 cases between them (counted 2026-08-03; the prior figure of 24 was stale). When adding or re-scoping a skill, add or update its <code>triggers.json</code> and re-run the harness.</p>
+<p>The router is a markdown rule the model interprets, so a new skill&rsquo;s triggers can
+silently hijack another skill&rsquo;s queries. <code>scripts/skill-trigger-test.py</code> is an LLM-judge
+harness that regression-tests this. It feeds the router rules plus a target skill&rsquo;s
+description to a judge model. It then checks whether each query in
+<code>.claude/skills/{name}/triggers.json</code> routes as expected (<code>should_trigger</code>).</p>
+<p>Run <code>python scripts/skill-trigger-test.py --all</code>. Use <code>--skill NAME</code> for one skill. Use
+<code>--changed [--base REF]</code> to test only the skills whose <code>SKILL.md</code> or <code>triggers.json</code>
+changed since the base, which defaults to <code>origin/main</code>. A <code>skill-router.md</code> change
+widens the scope to all skills. The harness is <strong>advisory</strong> by default, because the judge
+is not deterministic. It gates only under <code>--strict --threshold</code>.</p>
+<p><code>/push-updates</code> Phase 0 runs <code>--changed --strict --threshold 0.85</code> as a <strong>soft gate</strong>. It
+surfaces routing regressions on changed skills, and the CEO confirms to override. It is
+not a hard block yet, per audit #63-2.</p>
+<p>69 routing-sensitive skills carry <code>triggers.json</code> today, and they hold 710 cases between
+them. Both figures were counted on 2026-08-03; the prior figure of 24 was stale. When you
+add or re-scope a skill, update its <code>triggers.json</code> and re-run the harness.</p>
 <h2 id="10-archived-skills">10. Archived skills</h2>
-<p><code>.claude/skills/archive/{date-slug}/SKILL.md</code> is the workspace convention for retired skills. The parent <code>archive/</code> directory has no SKILL.md of its own and is intentionally inert - Claude Code&rsquo;s skill discovery is single-level and does not auto-load nested skills. Archived skills do not appear in the registry above and are never invoked unless explicitly retrieved (<code>git mv</code> back into <code>.claude/skills/{name}/</code>). Do NOT create a stub SKILL.md inside <code>archive/</code> itself; that would shadow the convention and risk false routing.</p>
+<p><code>.claude/skills/archive/{date-slug}/SKILL.md</code> is the workspace convention for retired
+skills. The parent <code>archive/</code> directory has no SKILL.md of its own and is intentionally
+inert. Claude Code&rsquo;s skill discovery is single-level and does not auto-load nested
+skills. Archived skills do not appear in the skill router registry. They are never
+invoked unless you retrieve one explicitly, with <code>git mv</code> back into
+<code>.claude/skills/{name}/</code>. Do NOT create a stub SKILL.md inside <code>archive/</code> itself; that
+would shadow the convention and risk false routing.</p>
   <footer class="foot">
     <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>

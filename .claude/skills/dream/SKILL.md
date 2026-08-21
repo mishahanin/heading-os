@@ -295,7 +295,7 @@ Index: {X} lines ({Y} files), within budget.
 
 ### Step 3: Append consolidation trace
 
-After the report, append one JSON line recording this run's actions. Fill `merged` and `retired` with the run's REAL actions (merged survivor filenames and retired filenames) - leave them as empty lists if nothing was merged or retired.
+After the report, append one JSON line recording this run's actions. Fill `merged` and `retired` with the run's REAL actions: merged survivor filenames, and retired filenames. Leave them as empty lists if nothing was merged or retired.
 
 ```bash
 python3 - <<'PY'

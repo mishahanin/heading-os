@@ -13,8 +13,8 @@ devcontainer: in VS Code, "Reopen in Container", or launch a **GitHub Codespace*
 from the repo page.
 
 The container defaults to read-only **demo mode**. It sets `HEADING_OS_DATA` to the
-bundled `examples/` tree, installs `uv`, runs a core `uv sync`, and prints demo
-output from `scripts/crm-health.py` (the engine behind `/crm radar`) on first build.
+bundled `examples/` tree, installs `uv`, and runs a core `uv sync`. On first build
+it prints demo output from `scripts/crm-health.py`, the engine behind `/crm radar`.
 No `.env`, no API key, no private data repository. Nothing can write, because demo
 mode refuses writes by design.
 

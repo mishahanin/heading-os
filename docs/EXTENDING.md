@@ -1,4 +1,4 @@
-<!-- version: 2.0.0 | last-updated: 2026-08-07 -->
+<!-- version: 2.0.1 | last-updated: 2026-08-22 -->
 # Extending the engine
 
 How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
@@ -35,10 +35,10 @@ Four kinds of artifact, each with its own home and conventions:
 Before building anything: search for an existing pattern and reuse it. The standards
 below are summarized from the engine's own development rules.
 
-Editing the documentation site itself (`docs/`) has its own contract: every page is
-either Markdown-sourced (regenerated) or hand-authored HTML, and a drift guard fails
-the build if the two fall out of sync. See [DOCS-PIPELINE.md](DOCS-PIPELINE.html)
-before editing anything under `docs/`.
+The documentation site itself (`docs/`) has its own contract. Every page is either
+Markdown-sourced (regenerated) or hand-authored HTML. A drift guard fails the build if
+the two fall out of sync. Read [DOCS-PIPELINE.md](DOCS-PIPELINE.html) before you edit
+anything under `docs/`.
 
 ---
 
@@ -92,9 +92,9 @@ paths:
 ---
 ```
 
-Keep rules concise and single-purpose. Several existing rules encode security controls
-(the send-gate, the engine/data separation, the secret guards); adapt brand and voice
-rules freely, but leave the security ones in place.
+Keep rules concise and single-purpose. Several existing rules encode security controls:
+the send-gate, the engine/data separation, and the secret guards. Adapt brand and voice
+rules freely. Leave the security ones in place.
 
 ---
 
@@ -145,11 +145,11 @@ uv run python scripts/run-tests.py                      # the suite
   normal case on a managed workspace.
 - **CodeQL** runs on the repository for static security analysis; address what it
   flags on a pull request.
-- **The prose path audit.** `check-path-references.py --check` (pre-commit
-  `path-references`, plus a CI step) fails when tracked Markdown gains a NEW
-  reference to an engine path that does not exist — the rot you get when a script
-  is renamed and the docs that name it are not. Rename a script and this catches
-  the prose in the same commit. Paths that route to the private overlay are
+- **The prose path audit.** `check-path-references.py --check` runs as the pre-commit
+  hook `path-references` and as a CI step. It fails when tracked Markdown gains a NEW
+  reference to an engine path that does not exist. That is the rot you get when
+  someone renames a script and leaves the docs that name it. Rename a script and this
+  catches the prose in the same commit. Paths that route to the private overlay are
   skipped: the overlay is absent on a public clone, so its absence proves nothing.
   Placeholders, regex fragments and correct prose about deleted things are frozen
   in the scanner's `BASELINE`, each with the reason it should not exist. To add
@@ -166,16 +166,16 @@ uv run python scripts/run-tests.py                      # the suite
 
 ### The slice standard
 
-Non-trivial work runs on Canopus, the build standard: seven numbered steps, two
-of them the operator's own approval moments, and three instruments that measure
-whether the approval meant anything. **[Canopus, the build standard](CANOPUS.html)**
-is the full page: the steps, the four `check` clauses, what `probe` reads, and
-the two places the standard reports rather than blocks.
+Non-trivial work runs on Canopus, the build standard. It has seven numbered steps. Two
+of them are the operator's own approval moments, and three instruments measure whether
+the approval meant anything. **[Canopus, the build standard](CANOPUS.html)** is the full
+page. It carries the steps, the four `check` clauses, what `probe` reads, and the two
+places the standard reports rather than blocks.
 
 One criterion is worth carrying here rather than following a link for, because
-it is the one a builder acts on: `probe` runs the contract twice against
-null-stubbed modules carrying different values, and a test that never FAILS
-under either run is vacuous. Passing, skipping and erroring all leave a test
+it is the one a builder acts on. `probe` runs the contract twice against
+null-stubbed modules that carry different values. A test that never FAILS
+under either run is vacuous. A pass, a skip and an error all leave a test
 unproved; only a failure shows it read the value.
 
 The three commands you will actually type while contributing:
@@ -187,8 +187,8 @@ python scripts/canopus.py note <slug> ...                       # when it ships
 ```
 
 Two facts worth carrying here rather than looking up. The approval is a COMMIT,
-not a lock file: `git show <sha>:<path>` reads the frozen bytes, `git diff`
-answers whether the contract moved, and `git merge-base --is-ancestor` answers
+not a lock file. `git show <sha>:<path>` reads the frozen bytes. `git diff`
+answers whether the contract moved. `git merge-base --is-ancestor` answers
 whether the implementation descends from the approval. Nothing on this machine
 holds those bytes down, and the CI clause that reads them REPORTS a break rather
 than blocking one. Do not describe either as prevention.
@@ -237,17 +237,42 @@ apply the fix, watch it pass.
 
 ---
 
-*HEADING OS · Extending the engine · maintained by Misha Hanin · see also
-[Architecture](ARCHITECTURE.html) for how the pieces compose and
-[Security model](SECURITY-MODEL.html) for the controls your code inherits.*
+*HEADING OS · Extending the engine · maintained by Misha Hanin.* See also:
+
+- [Architecture](ARCHITECTURE.html): how the pieces compose.
+- [Security model](SECURITY-MODEL.html): the controls your code inherits.
 
 ## 9. Trigger regression tests
 
 Moved here from `.claude/rules/skill-router.md` on 2026-08-20 — it is authoring
 guidance, never routing, and that rule loads on every session.
 
-The router is a markdown rule the model interprets, so a new skill's triggers can silently hijack another skill's queries. `scripts/skill-trigger-test.py` is an LLM-judge harness that regression-tests this: it feeds the router rules plus a target skill's description to a judge model and checks whether each query in `.claude/skills/{name}/triggers.json` routes as expected (`should_trigger`). Run `python scripts/skill-trigger-test.py --all` (or `--skill NAME`, or `--changed [--base REF]` to test only skills whose `SKILL.md`/`triggers.json` changed since the base, default `origin/main` - a `skill-router.md` change widens scope to all); it is **advisory** by default (non-deterministic judge) and gates only under `--strict --threshold`. `/push-updates` Phase 0 runs `--changed --strict --threshold 0.85` as a **soft gate** (surfaces routing regressions on changed skills; the CEO confirms to override; not a hard block yet, per audit #63-2). 69 routing-sensitive skills carry `triggers.json` today, holding 710 cases between them (counted 2026-08-03; the prior figure of 24 was stale). When adding or re-scoping a skill, add or update its `triggers.json` and re-run the harness.
+The router is a markdown rule the model interprets, so a new skill's triggers can
+silently hijack another skill's queries. `scripts/skill-trigger-test.py` is an LLM-judge
+harness that regression-tests this. It feeds the router rules plus a target skill's
+description to a judge model. It then checks whether each query in
+`.claude/skills/{name}/triggers.json` routes as expected (`should_trigger`).
+
+Run `python scripts/skill-trigger-test.py --all`. Use `--skill NAME` for one skill. Use
+`--changed [--base REF]` to test only the skills whose `SKILL.md` or `triggers.json`
+changed since the base, which defaults to `origin/main`. A `skill-router.md` change
+widens the scope to all skills. The harness is **advisory** by default, because the judge
+is not deterministic. It gates only under `--strict --threshold`.
+
+`/push-updates` Phase 0 runs `--changed --strict --threshold 0.85` as a **soft gate**. It
+surfaces routing regressions on changed skills, and the CEO confirms to override. It is
+not a hard block yet, per audit #63-2.
+
+69 routing-sensitive skills carry `triggers.json` today, and they hold 710 cases between
+them. Both figures were counted on 2026-08-03; the prior figure of 24 was stale. When you
+add or re-scope a skill, update its `triggers.json` and re-run the harness.
 
 ## 10. Archived skills
 
-`.claude/skills/archive/{date-slug}/SKILL.md` is the workspace convention for retired skills. The parent `archive/` directory has no SKILL.md of its own and is intentionally inert - Claude Code's skill discovery is single-level and does not auto-load nested skills. Archived skills do not appear in the registry above and are never invoked unless explicitly retrieved (`git mv` back into `.claude/skills/{name}/`). Do NOT create a stub SKILL.md inside `archive/` itself; that would shadow the convention and risk false routing.
+`.claude/skills/archive/{date-slug}/SKILL.md` is the workspace convention for retired
+skills. The parent `archive/` directory has no SKILL.md of its own and is intentionally
+inert. Claude Code's skill discovery is single-level and does not auto-load nested
+skills. Archived skills do not appear in the skill router registry. They are never
+invoked unless you retrieve one explicitly, with `git mv` back into
+`.claude/skills/{name}/`. Do NOT create a stub SKILL.md inside `archive/` itself; that
+would shadow the convention and risk false routing.

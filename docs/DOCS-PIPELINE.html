@@ -82,9 +82,9 @@
 <code>https://mishahanin.github.io/heading-os/</code>). Every <code>docs/*.html</code> page is either
 regenerated from a Markdown source or hand-authored HTML. This file says which,
 how to edit each, and how the drift guard keeps them honest.</p>
-<p>Consumed by: <code>.claude/rules/documentation.md</code> (the propagation rule points here for
-the fleet propagation chain and the shared-versus-CEO-only distribution list), and by
-anyone editing a page under <code>docs/</code>.</p>
+<p>Consumed by <code>.claude/rules/documentation.md</code>, whose propagation rule points here for
+the fleet propagation chain and the shared-versus-CEO-only distribution list. Also by
+anyone who edits a page under <code>docs/</code>.</p>
 <p>Last Updated: 2026-08-20</p>
 <h2 id="the-one-generator">The one generator</h2>
 <p><code>scripts/regenerate-docs-html.py</code> is the single docs generator. It has four modes:</p>
@@ -142,13 +142,13 @@ thereafter.</p>
 (or <code>--all</code>), commit both files.</p>
 <h3 id="2-hand-authored-html-navsearch-injected-14-pages">2. Hand-authored HTML (nav/search-injected) - 14 pages</h3>
 <p>There is no <code>.md</code>. The <code>.html</code> body IS the source of truth. The generator never
-rewrites the body; <code>--nav-sync</code> only rewrites the sidebar nav block and injects
-the search box, and <code>--search-index</code> re-reads the body into the search index.</p>
+rewrites the body. <code>--nav-sync</code> only rewrites the sidebar nav block and injects
+the search box. <code>--search-index</code> re-reads the body into the search index.</p>
 <p>Original 6 hand-authored pages: <code>index</code>, <code>prerequisites</code>, <code>daemons</code>,
 <code>memory-odin</code>, <code>data-structure</code>, <code>skills-mcp-plugins</code>.</p>
-<p>The 8 skills-catalog category pages, split out of the former 191 KB
-<code>skills-mcp-plugins.html</code> monolith by <code>scripts/dev/split-skills-catalog.py</code> (a
-one-time deterministic splitter kept for provenance): <code>skills-intel</code>,
+<p>The 8 skills-catalog category pages came out of the former 191 KB
+<code>skills-mcp-plugins.html</code> monolith. <code>scripts/dev/split-skills-catalog.py</code> split them,
+a one-time deterministic splitter kept for provenance. They are <code>skills-intel</code>,
 <code>skills-communication</code>, <code>skills-content-design</code>, <code>skills-crm</code>, <code>skills-strategy</code>,
 <code>skills-operations-daily</code>, <code>skills-operations-quality</code>,
 <code>skills-operations-infra</code>. Each carries the rich per-skill cards verbatim;
@@ -159,29 +159,29 @@ richer than the terse <code>x-heading-capability</code> frontmatter. Each card c
 is, What it does, How to use, an example, and Customize. Generating from frontmatter
 would gut the catalog. The cards are hand-authored HTML; their source of truth is the
 <code>.html</code>, exactly like the other hand-authored pages.</p>
-<p><strong>To edit:</strong> change the <code>.html</code> <code>&lt;main class="content"&gt;</code> body directly, then run
+<p><strong>To edit:</strong> change the <code>.html</code> <code>&lt;main class="content"&gt;</code> body directly. Then run
 <code>python scripts/regenerate-docs-html.py --nav-sync</code> so the nav, search box, and
-search index stay current (the <code>--nav-sync</code> mode rebuilds the index too). Commit the
+search index stay current; the <code>--nav-sync</code> mode rebuilds the index too. Commit the
 page plus <code>search-index.json</code>.</p>
 <h2 id="the-drift-guard">The drift guard</h2>
 <p>Two mechanical guards in CI (<code>.github/workflows/ci.yml</code> <code>guards</code> job) and the
 pre-commit hook set keep the published pages honest:</p>
 <ol>
 <li><strong>Docs HTML in sync (F-8.1):</strong> <code>regenerate-docs-html.py --all</code> then
-   <code>git diff --exit-code docs/</code>. The <code>--all</code> mode regenerates every md-sourced page,
-   nav-syncs and search-injects the hand-authored pages, and rebuilds the search
-   index in one pass. Fails on an md-sourced <code>.html</code> that was not
-   regenerated from its <code>.md</code>, a stale nav injection or missing search box on a
-   hand-authored page, or a stale <code>search-index.json</code>. Hand-authored page bodies
+   <code>git diff --exit-code docs/</code>. The <code>--all</code> mode regenerates every md-sourced page.
+   It also nav-syncs and search-injects the hand-authored pages, then rebuilds the
+   search index, all in one pass. Three things fail it. An md-sourced <code>.html</code> that
+   was not regenerated from its <code>.md</code>. A stale nav injection or a missing search box
+   on a hand-authored page. A stale <code>search-index.json</code>. Hand-authored page bodies
    are the source of truth, so a body edit that is committed as-is is correct and
    does not trip the guard.</li>
 <li><strong>README numbers in sync (F-8.3):</strong> <code>scripts/dev/check-readme-numbers.py</code>
    re-derives the security-test count and guard-layer count and fails if the
    README or <code>docs/index.html</code> &ldquo;By the numbers&rdquo; block disagrees.</li>
 </ol>
-<p>The matching pre-commit hook (<code>docs-html-drift</code>) runs the same regenerate +
-<code>git diff</code> locally on any <code>docs/*.md</code>, <code>docs/*.html</code>, or generator change, so
-drift is caught before it reaches CI.</p>
+<p>The matching pre-commit hook (<code>docs-html-drift</code>) runs the same regenerate and
+<code>git diff</code> locally. It fires on any <code>docs/*.md</code>, <code>docs/*.html</code>, or generator
+change, so drift is caught before it reaches CI.</p>
 <h2 id="adding-a-new-docs-page">Adding a new docs page</h2>
 <ul>
 <li><strong>Markdown-sourced:</strong> add <code>docs/&lt;NAME&gt;.md</code>, run <code>regenerate-docs-html.py &lt;md&gt;</code>,
@@ -208,10 +208,10 @@ pages that are exec-shared, and the list that stays CEO-only.</p>
 </ol>
 <p><code>AIOS-for-the-CEO</code> is not part of this chain (independent OSS repo <code>mishahanin/AIOS-for-the-CEO</code> since 2026-04-25; the old <code>/export-update</code> skill and <code>scripts/export-sync.py</code> are archived).</p>
 <h3 id="exec-side-manual-git-pull-on-each-exec-machine">Exec side (manual git pull on each exec machine)</h3>
-<p>The old auto-sync (<code>workspace-sync.py</code>, a destructive copy-and-orphan-delete
-engine) is retired; no <code>31C-Sync-{slug}</code> task / launchd agent / systemd timer is
-installed anymore (only the 15-min Sentinel schedule remains). Each exec syncs
-with plain git:</p>
+<p>The old auto-sync is retired. It was <code>workspace-sync.py</code>, a destructive
+copy-and-orphan-delete engine. No <code>31C-Sync-{slug}</code> task, launchd agent or systemd
+timer is installed anymore; only the 15-min Sentinel schedule remains. Each exec
+syncs with plain git:</p>
 <ul>
 <li><strong>Code down:</strong> <code>git pull --ff-only</code> on the engine clone (the exec&rsquo;s
   <code>.heading-os</code>). Engine code ships by cloning the engine repo, not by copying.</li>

@@ -74,10 +74,10 @@ message; never abort silently.
    If exit != 0: abort with "git not available or not in a repo. /calibrate
    cannot safely auto-commit."
 
-2. **Working tree state.** Run `git status --porcelain`. If any modified
-   files are present outside `outputs/`, `crm/aggregated/`, `.sessions/`,
-   `datastore/operations/tribe/fireside-state/` (the typical transient set):
-   warn: "Working tree has uncommitted changes that aren't typical transients.
+2. **Working tree state.** Run `git status --porcelain`. The typical transient
+   set is `outputs/`, `crm/aggregated/`, `.sessions/` and
+   `datastore/operations/tribe/fireside-state/`. If any modified file sits
+   outside it, warn: "Working tree has uncommitted changes that aren't typical transients.
    /calibrate's auto-commit will include them. Stage and commit first, or
    confirm to proceed? (proceed / cancel)". Wait for explicit answer.
 

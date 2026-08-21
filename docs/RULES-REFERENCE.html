@@ -269,7 +269,7 @@
 <tr>
 <td><code>documentation-style.md</code></td>
 <td>Path-scoped</td>
-<td>A subset of ASD-STE100 Simplified Technical English for the procedural pages and skill instruction bodies: imperative steps, active voice, a word limit per sentence, one action per step, and a warning that arrives before the step it guards. Audited by <code>scripts/ste-check.py</code>, which leaves its heuristic warnings advisory. The gate is narrower than the scope: <code>--all</code> fails a commit on errors in the twelve procedural pages, while <code>--skills</code> measures the skill bodies and gates nothing. Explanatory pages and all outbound prose stay out of scope, where <code>humanization.md</code> governs instead.</td>
+<td>A subset of ASD-STE100 Simplified Technical English for the procedural pages and skill instruction bodies: imperative steps, active voice, a word limit per sentence, one action per step, and a warning that arrives before the step it guards. Audited by <code>scripts/ste-check.py</code>, which leaves its heuristic warnings advisory. Both halves gate on errors: <code>--all</code> fails a commit on the fourteen procedural pages, <code>--skills</code> on the skill bodies. Every page under <code>docs/</code> is named in one list or the other, and a test fails until a new page is classified. Explanatory pages and all outbound prose stay out of scope, where <code>humanization.md</code> governs instead.</td>
 </tr>
 <tr>
 <td><code>persistence.md</code></td>

@@ -145,8 +145,8 @@ Worked per-command examples (screenshots, data extraction, form filling, PDF gen
 
 ## Output Location
 
-`pw.py` resolves its auto-output directory via `get_outputs_dir()`, so when you OMIT `-o` /
-`--output-dir` the file lands correctly under the DATA overlay's `browser/` tree -- never the engine.
+`pw.py` resolves its auto-output directory via `get_outputs_dir()`. So when you OMIT `-o` or
+`--output-dir`, the file lands under the DATA overlay's `browser/` tree, never the engine.
 **Prefer omitting the output flag** and let the script auto-place.
 
 When you DO pass an explicit `-o` / `--output-dir`, the script writes it literally relative to cwd

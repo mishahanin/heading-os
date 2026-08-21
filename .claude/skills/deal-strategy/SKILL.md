@@ -76,7 +76,7 @@ Before analyzing, read:
 
 A deal strategy is worked across many turns and often survives a context compaction. Keep an append-only working memory so a fresh session can resume without losing the decisions made so far.
 
-- **On start:** if `outputs/negotiations/[prospect-slug]/.memlog.md` is absent, `python scripts/memlog.py init --workspace outputs/negotiations/[prospect-slug] --field topic="[prospect] deal strategy" --field mode=deal`. If it already exists (incomplete prior session), do NOT re-run `init` (it errors by design) — read the file yourself to resume, then continue with `append`/`set`.
+- **On start:** if `outputs/negotiations/[prospect-slug]/.memlog.md` is absent, `python scripts/memlog.py init --workspace outputs/negotiations/[prospect-slug] --field topic="[prospect] deal strategy" --field mode=deal`. If it already exists, from an incomplete prior session, do NOT re-run `init`, which errors by design. Read the file yourself to resume, then continue with `append` and `set`.
 - **As you go:** record each material decision/insight at the moment it lands — `python scripts/memlog.py append --workspace outputs/negotiations/[prospect-slug] --text "anchor at 347,850, hold the discount" --type decision`. Keep entries one line and minimal; this is working memory, not the deliverable.
 - **On wrap-up:** `python scripts/memlog.py set --workspace outputs/negotiations/[prospect-slug] --key status --value complete`.
 

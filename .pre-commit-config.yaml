@@ -341,7 +341,7 @@ repos:
         name: Documentation style (ASD-STE100 subset, errors only)
         entry: python3 scripts/ste-check.py --all --quiet
         language: system
-        files: '^(docs/(QUICKSTART|DEPLOYMENT|INTEGRATIONS-SETUP|MODELS-SETUP|CONFIGURATION|TROUBLESHOOTING|EMERGENCY-PROCEDURES|MAKE-IT-YOURS|PLUGINS|HOOKS-REFERENCE|DOCS-PIPELINE|GLOSSARY)\.md|scripts/ste-check\.py)$'
+        files: '^(docs/(QUICKSTART|DEPLOYMENT|INTEGRATIONS-SETUP|MODELS-SETUP|CONFIGURATION|TROUBLESHOOTING|EMERGENCY-PROCEDURES|MAKE-IT-YOURS|PLUGINS|HOOKS-REFERENCE|DOCS-PIPELINE|GLOSSARY|EXTENDING|TELEGRAM-AND-ALERTS)\.md|scripts/ste-check\.py)$'
         pass_filenames: false
 
       # The other half of the rule's scope (2026-08-17). `--all` covered twelve

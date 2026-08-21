@@ -5,9 +5,9 @@ The source-of-truth map for the HEADING OS documentation site (`docs/`, served a
 regenerated from a Markdown source or hand-authored HTML. This file says which,
 how to edit each, and how the drift guard keeps them honest.
 
-Consumed by: `.claude/rules/documentation.md` (the propagation rule points here for
-the fleet propagation chain and the shared-versus-CEO-only distribution list), and by
-anyone editing a page under `docs/`.
+Consumed by `.claude/rules/documentation.md`, whose propagation rule points here for
+the fleet propagation chain and the shared-versus-CEO-only distribution list. Also by
+anyone who edits a page under `docs/`.
 
 Last Updated: 2026-08-20
 
@@ -55,15 +55,15 @@ thereafter.
 ### 2. Hand-authored HTML (nav/search-injected) - 14 pages
 
 There is no `.md`. The `.html` body IS the source of truth. The generator never
-rewrites the body; `--nav-sync` only rewrites the sidebar nav block and injects
-the search box, and `--search-index` re-reads the body into the search index.
+rewrites the body. `--nav-sync` only rewrites the sidebar nav block and injects
+the search box. `--search-index` re-reads the body into the search index.
 
 Original 6 hand-authored pages: `index`, `prerequisites`, `daemons`,
 `memory-odin`, `data-structure`, `skills-mcp-plugins`.
 
-The 8 skills-catalog category pages, split out of the former 191 KB
-`skills-mcp-plugins.html` monolith by `scripts/dev/split-skills-catalog.py` (a
-one-time deterministic splitter kept for provenance): `skills-intel`,
+The 8 skills-catalog category pages came out of the former 191 KB
+`skills-mcp-plugins.html` monolith. `scripts/dev/split-skills-catalog.py` split them,
+a one-time deterministic splitter kept for provenance. They are `skills-intel`,
 `skills-communication`, `skills-content-design`, `skills-crm`, `skills-strategy`,
 `skills-operations-daily`, `skills-operations-quality`,
 `skills-operations-infra`. Each carries the rich per-skill cards verbatim;
@@ -76,9 +76,9 @@ is, What it does, How to use, an example, and Customize. Generating from frontma
 would gut the catalog. The cards are hand-authored HTML; their source of truth is the
 `.html`, exactly like the other hand-authored pages.
 
-**To edit:** change the `.html` `<main class="content">` body directly, then run
+**To edit:** change the `.html` `<main class="content">` body directly. Then run
 `python scripts/regenerate-docs-html.py --nav-sync` so the nav, search box, and
-search index stay current (the `--nav-sync` mode rebuilds the index too). Commit the
+search index stay current; the `--nav-sync` mode rebuilds the index too. Commit the
 page plus `search-index.json`.
 
 ## The drift guard
@@ -87,20 +87,20 @@ Two mechanical guards in CI (`.github/workflows/ci.yml` `guards` job) and the
 pre-commit hook set keep the published pages honest:
 
 1. **Docs HTML in sync (F-8.1):** `regenerate-docs-html.py --all` then
-   `git diff --exit-code docs/`. The `--all` mode regenerates every md-sourced page,
-   nav-syncs and search-injects the hand-authored pages, and rebuilds the search
-   index in one pass. Fails on an md-sourced `.html` that was not
-   regenerated from its `.md`, a stale nav injection or missing search box on a
-   hand-authored page, or a stale `search-index.json`. Hand-authored page bodies
+   `git diff --exit-code docs/`. The `--all` mode regenerates every md-sourced page.
+   It also nav-syncs and search-injects the hand-authored pages, then rebuilds the
+   search index, all in one pass. Three things fail it. An md-sourced `.html` that
+   was not regenerated from its `.md`. A stale nav injection or a missing search box
+   on a hand-authored page. A stale `search-index.json`. Hand-authored page bodies
    are the source of truth, so a body edit that is committed as-is is correct and
    does not trip the guard.
 2. **README numbers in sync (F-8.3):** `scripts/dev/check-readme-numbers.py`
    re-derives the security-test count and guard-layer count and fails if the
    README or `docs/index.html` "By the numbers" block disagrees.
 
-The matching pre-commit hook (`docs-html-drift`) runs the same regenerate +
-`git diff` locally on any `docs/*.md`, `docs/*.html`, or generator change, so
-drift is caught before it reaches CI.
+The matching pre-commit hook (`docs-html-drift`) runs the same regenerate and
+`git diff` locally. It fires on any `docs/*.md`, `docs/*.html`, or generator
+change, so drift is caught before it reaches CI.
 
 ## Adding a new docs page
 
@@ -136,10 +136,10 @@ When Misha updates any shared content in ceo-main:
 
 ### Exec side (manual git pull on each exec machine)
 
-The old auto-sync (`workspace-sync.py`, a destructive copy-and-orphan-delete
-engine) is retired; no `31C-Sync-{slug}` task / launchd agent / systemd timer is
-installed anymore (only the 15-min Sentinel schedule remains). Each exec syncs
-with plain git:
+The old auto-sync is retired. It was `workspace-sync.py`, a destructive
+copy-and-orphan-delete engine. No `31C-Sync-{slug}` task, launchd agent or systemd
+timer is installed anymore; only the 15-min Sentinel schedule remains. Each exec
+syncs with plain git:
 
 - **Code down:** `git pull --ff-only` on the engine clone (the exec's
   `.heading-os`). Engine code ships by cloning the engine repo, not by copying.

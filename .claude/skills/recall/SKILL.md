@@ -120,10 +120,11 @@ Parse the JSON. It is one object:
      retrieval), say that honestly — "the closest sources touch the topic but
      don't answer it directly" — and name what they do cover. Never invent the
      missing fact.
-  4. **Reinforce cited auto-memory hits.** For each cited hit whose `layer` is
-     `memory` (auto-memory facts only — every other layer: `odin`, `thread`,
-     `crm`, `context`, `reference`, `plans`, `outputs`, `knowledge`,
-     `datastore-extract`, `chronicle`, `skill`, `rule`, is left untouched), once
+  4. **Reinforce cited auto-memory hits.** This covers auto-memory facts only.
+     Every other layer is left untouched: `odin`, `thread`, `crm`, `context`,
+     `reference`, `plans`, `outputs`, `knowledge`, `datastore-extract`,
+     `chronicle`, `skill` and `rule`. For each cited hit whose `layer` is
+     `memory`, once
      per unique file path, run:
 
      ```bash
@@ -180,7 +181,7 @@ send-capable contexts unless summoned.
 
 ## Phase 2 — Source list
 
-End with a one-line-per-source list of what you cited, each as a clickable
+End with a one-line-per-source list of what you cited. Give each as a clickable
 `path`, with its `layer` and `classification` tag, so the CEO can open the
 originals. Example:
 

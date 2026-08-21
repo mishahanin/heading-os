@@ -128,7 +128,7 @@ Every conversation gets a priority tag:
 
 ### Phase 1 -- Fetch & Process
 
-1. Fetch, saving the output to a file (`$OUTPUTS_DIR` resolves the DATA root -- a bare `outputs/...` in Bash misroutes into the engine clone):
+1. Fetch, and save the output to a file. `$OUTPUTS_DIR` resolves the DATA root; a bare `outputs/...` in Bash misroutes into the engine clone.
 
    ```bash
    OUTPUTS_DIR="$(python3 -c "import sys; sys.path.insert(0,'.'); from scripts.utils.workspace import get_outputs_dir; print(get_outputs_dir())")"
@@ -149,7 +149,7 @@ Every conversation gets a priority tag:
 Two parts, per `references/digest-format.md`:
 
 1. **Context blocks.** Group conversations by priority (P1, P2, P3, in that order). Render each with the per-conversation context block (CRM/pipeline/Viraid enrichment + summary + commitments). Emit one "internal-skipped" block for all-hands distribution-list (e.g. all-@) threads. These blocks carry NO per-conversation action numbers.
-2. **Numbered action list.** Pool EVERY proposed action across ALL conversations into one flat, sequentially-numbered list (1..N, single namespace -- no `P1-A`, no per-conversation `a,b`). Build it by writing the proposed actions to a JSON array and seeding the state machine:
+2. **Numbered action list.** Pool EVERY proposed action across ALL conversations into one flat list, numbered 1..N in a single namespace. No `P1-A`, and no per-conversation `a,b`. Build it by writing the proposed actions to a JSON array and seeding the state machine:
    ```bash
    python scripts/email-sweep.py propose --file <proposed.json> --date YYYY-MM-DD
    python scripts/email-sweep.py list --date YYYY-MM-DD
@@ -162,7 +162,7 @@ Present the numbered list (with the Part 3 recommendation stakes + recommended-s
 
 **STOP HERE. Wait for Misha's explicit response before proceeding to Phase 4.**
 
-Translate his reply into state-machine calls. The reply grammar is `ok`/`да` (the recommended set), `1,3,5`, `all crm`, `2 edit: <change>`, `skip 4`, `rest skip`, or `4 go`. A bare `ok` or `да` approves the recommended `[DO]` set exactly, minus any `[send-gated]` action the CEO did not separately confirm (the send-gate is never defaulted):
+Translate his reply into state-machine calls. The reply grammar is `ok`/`да` (the recommended set), `1,3,5`, `all crm`, `2 edit: <change>`, `skip 4`, `rest skip`, or `4 go`. A bare `ok` or `да` approves the recommended `[DO]` set exactly. It drops any `[send-gated]` action the CEO did not separately confirm, because the send-gate is never defaulted.
 ```bash
 python scripts/email-sweep.py approve <ids> --date YYYY-MM-DD
 python scripts/email-sweep.py edit <id> --note "<change>" --date YYYY-MM-DD

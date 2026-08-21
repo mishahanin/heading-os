@@ -122,7 +122,7 @@ python ".claude/skills/telegram/scripts/telegram_client.py" download "@username"
 ```
 
 When `--output` is OMITTED, `telegram_client.py` defaults the download dir to
-`get_outputs_dir()/downloads` (the data overlay), so the default is safe too -- but passing an
+`get_outputs_dir()/downloads`, in the data overlay. The default is safe too. Passing an
 explicit `$OUTPUTS_DIR/...` keeps the destination obvious.
 
 ## Full Command Reference

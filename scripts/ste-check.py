@@ -13,7 +13,7 @@ must not be claimed - see the rule file for why.
 
 Usage:
   python scripts/ste-check.py <file>              # Audit one file
-  python scripts/ste-check.py --all               # Audit the 12 gated pages
+  python scripts/ste-check.py --all               # Audit the 14 gated pages
   python scripts/ste-check.py --skills --quiet    # Audit skill bodies (ungated)
   python scripts/ste-check.py --strict <file>     # Fail on warnings too
   python scripts/ste-check.py --json <file>       # JSON output for CI
@@ -75,6 +75,14 @@ CHECKED_GLOBS = [
     "docs/HOOKS-REFERENCE.md",
     "docs/DOCS-PIPELINE.md",
     "docs/GLOSSARY.md",
+    # Added 2026-08-22. Both are pages a reader executes -- TELEGRAM-AND-ALERTS
+    # says so in its own opening ("written for someone who has never touched an
+    # API"), EXTENDING is the developer how-to and carries the commands you type.
+    # They sat in neither this list nor the rule's explicit exclusion paragraph,
+    # so nothing had ever decided about them; `test_every_docs_page_is_classified`
+    # now makes that state unreachable.
+    "docs/EXTENDING.md",
+    "docs/TELEGRAM-AND-ALERTS.md",
 ]
 
 STEP_WORD_LIMIT = 20      # ASD-STE100 procedural sentence limit
@@ -167,6 +175,30 @@ HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 # the same place -- `... both work." If two variants ...`, `(see below.) Next` --
 # so CLOSER is a character class, not a third enumerated shape. Enumerating cost
 # two rounds of this bug; a class covers the next closer somebody writes.
+# Inline code is not prose, but deleting it outright cost the fourth splitter
+# defect of this same family, found 2026-08-22. A sentence that OPENS with a code
+# span -- "`git diff` answers whether the contract moved." -- became " answers
+# whether ..." once the span went, so the split lookahead saw a lowercase letter
+# and merged the sentence into the one above it. Three correct sentences on
+# docs/EXTENDING.md measured as one 26-word run.
+#
+# So the span leaves a MARK rather than a hole, and the mark is one word. Deleting
+# it also under-counted every sentence that carries code, which is the wrong
+# direction: the denser the code, the larger the discount, so the hardest
+# sentences in the corpus got the biggest pass. One page read 21 words to this
+# checker and 27 to a person, and reported clean.
+#
+# The mark counts ONE word per span, never the words inside it. `--base REF` and
+# `scripts/crm-health.py` are each one thing the eye lands on, and counting their
+# interior would penalise naming the exact flag or path -- pressure in the wrong
+# direction for reference documentation. Measured on the fourteen gated pages
+# 2026-08-22: zero-word (old) 0 errors, one-word (this) 15, interior words 32.
+#
+# "Code" satisfies both jobs at once: `[A-Z(\[\"'`*_]` accepts it as a sentence
+# opener so the split fires, `\b[\w'-]+\b` counts it once, and it collides with
+# no banned phrase, bullet character, CLOSER member or non-imperative opener.
+CODE_MARK = "Code"
+
 CLOSER = r"[)\]\"'’”*_]"
 SENTENCE_SPLIT_RE = re.compile(
     r"(?<![A-Z0-9])"
@@ -247,7 +279,7 @@ def strip_noise(text):
     text = re.sub(r"^---\n.*?\n---\n", _blank_out, text, count=1, flags=re.DOTALL)
     text = re.sub(r"```[\s\S]*?```", _blank_out, text)
     text = re.sub(r"<!--[\s\S]*?-->", _blank_out, text)
-    text = re.sub(r"`[^`\n]+`", " ", text)
+    text = re.sub(r"`[^`\n]+`", f" {CODE_MARK} ", text)
     text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", " ", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"https?://\S+", " ", text)
@@ -591,7 +623,7 @@ def print_report(result, source):
 
 
 ALL_HELP = (
-    "Audit the 12 gated documentation pages (CHECKED_GLOBS). This is one half of "
+    "Audit the 14 gated documentation pages (CHECKED_GLOBS). This is one half of "
     "the rule's scope: skill instruction bodies are the other half, and they have "
     "their own gate - use --skills for those."
 )
@@ -605,7 +637,7 @@ SKILLS_HELP = (
 
 
 def resolve_scope():
-    """Return the twelve documentation pages that exist on disk.
+    """Return the fourteen documentation pages that exist on disk.
 
     Deliberately narrower than the rule's scope. The rule also governs skill
     instruction bodies, which `resolve_skill_scope` answers for. Both halves

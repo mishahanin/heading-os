@@ -85,9 +85,9 @@ Steps 4 and 7 are the operator's. The seven steps fall into four acts:
 ## Step 3 — what makes a plan worth committing
 
 Four properties, and a plan missing any of them buys nothing at step 4. The
-authoring detail behind properties 1 and 4 — the five contract-writing rules,
-each earned by a measured failure, and how to read `probe`'s table — is
-`references/planning-gate.md`. Read it before writing a contract.
+authoring detail behind properties 1 and 4 is `references/planning-gate.md`. It
+carries the five contract-writing rules, each earned by a measured failure, and
+how to read `probe`'s table. Read it before writing a contract.
 
 1. **Criteria derived from a partition of the input domain.** One row per value
    class, edges included, and the contract is real test files at

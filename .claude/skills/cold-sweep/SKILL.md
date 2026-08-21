@@ -50,7 +50,7 @@ x-heading-routing:
 
 # /cold-sweep
 
-Turn the overdue-contact backlog into prioritised, cited, voice-drafted nudges sitting in the Action Queue for one-click go/no-go. The deterministic routing (who, what priority) is done by `scripts/cold_sweep_core.py`; this skill does only the part that needs judgment and voice - writing the actual draft body.
+Turn the overdue-contact backlog into prioritised, cited, voice-drafted nudges sitting in the Action Queue for one-click go/no-go. `scripts/cold_sweep_core.py` does the deterministic routing: who, and at what priority. This skill does only the part that needs judgment and voice - the actual draft body.
 
 Split of responsibilities (plan 2026-06-03, Design Decision 5):
 

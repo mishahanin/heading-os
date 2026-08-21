@@ -192,7 +192,7 @@ Current strategic heading and any drift signals visible from context.
 ### 5. Data Freshness
 Check context file headers for `> Last verified: YYYY-MM-DD` dates. Flag any context file older than 30 days as stale. Note if DataStore has key documents loaded or is still sparse.
 
-Also check sync output files - any file in `outputs/_sync/calendar/`, `outputs/_sync/emails/`, or `outputs/operations/email-intelligence/state.json` whose mtime is older than 48 hours is flagged RED with the literal label "SYNC STALE". The line format is:
+Also check sync output files. Three of them count: `outputs/_sync/calendar/`, `outputs/_sync/emails/`, and `outputs/operations/email-intelligence/state.json`. Flag any whose mtime is older than 48 hours RED, with the literal label "SYNC STALE". The line format is:
 
 > SYNC STALE: outputs/_sync/calendar/upcoming.md last refreshed Ndays ago — run `python scripts/sync-exchange.py` (or expected automation has stopped).
 
@@ -204,7 +204,7 @@ The canonical skill registry lives in `.claude/rules/skill-router.md` (already l
 
 1. Pulling skill names + one-line triggers from the skill-router skill registry tables (Intel / Communication / Content / CRM / Design / Strategy / Operations).
 2. Suggest the 2-3 most contextually relevant skills for today, drawing on the pipeline pulse and active threads loaded earlier.
-3. For a state-aware next-step recommendation mid-session, point the CEO at `/next` (reads what just happened and names the logical next command).
+3. For a state-aware next-step recommendation mid-session, point the CEO at `/next`. It reads what just happened and names the logical next command.
 
 This section deliberately defers to the router rather than duplicating the catalog inline. The router is the single source of truth, and the only file that updates when a new skill is added. Drift between this catalog and the actual `.claude/skills/` directory is exactly the failure mode the workspace-deep-audit (2026-05-14) flagged. The registry tables are now generated from each skill's `x-heading-routing` frontmatter. In CI and pre-commit, `scripts/generate-skill-router.py --check` enforces that the router matches its source with no content drift.
 

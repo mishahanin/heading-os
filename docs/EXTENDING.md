@@ -145,6 +145,15 @@ uv run python scripts/run-tests.py                      # the suite
   normal case on a managed workspace.
 - **CodeQL** runs on the repository for static security analysis; address what it
   flags on a pull request.
+- **The prose path audit.** `check-path-references.py --check` (pre-commit
+  `path-references`, plus a CI step) fails when tracked Markdown gains a NEW
+  reference to an engine path that does not exist — the rot you get when a script
+  is renamed and the docs that name it are not. Rename a script and this catches
+  the prose in the same commit. Paths that route to the private overlay are
+  skipped: the overlay is absent on a public clone, so its absence proves nothing.
+  Placeholders, regex fragments and correct prose about deleted things are frozen
+  in the scanner's `BASELINE`, each with the reason it should not exist. To add
+  one, state the reason; to clean one up, delete the line.
 
 ### The slice standard
 

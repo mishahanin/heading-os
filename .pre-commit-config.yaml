@@ -296,6 +296,21 @@ repos:
         pass_filenames: false
         always_run: true
 
+  # Prose path-reference audit -- advisory baseline ratchet, sibling to the hook
+  # above. Fails when tracked Markdown gains a NEW reference to an engine-routed
+  # path that does not exist (a renamed or deleted script the prose still names).
+  # Overlay-routed paths are skipped: the overlay is absent on a public clone, so
+  # its absence proves nothing. Placeholders and correct prose about deleted
+  # things are frozen in the scanner's BASELINE, each with its reason.
+  - repo: local
+    hooks:
+      - id: path-references
+        name: HEADING OS prose path audit (no new dangling engine path)
+        entry: python3 scripts/check-path-references.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
+
   # Docs HTML drift guard (F-8.1) -- the early-catch sibling of the CI "Docs HTML in
   # sync" step. Regenerates docs/ (--all: md pairs + nav/search injection + search
   # index) and fails if the working tree drifts, so an edited .md or hand-authored

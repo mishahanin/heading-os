@@ -131,6 +131,8 @@ jobs:
         run: uv run python scripts/verify-skills-lock.py --check
       - name: Skill bash-path audit (F-9.3)
         run: uv run python scripts/audit-skill-bash-paths.py
+      - name: Prose path-reference audit
+        run: uv run python scripts/check-path-references.py --check
       - name: Classification health (F-9.3)
         run: uv run python scripts/classification-health.py
       - name: requirements.txt in sync with the lock (F-7.1)

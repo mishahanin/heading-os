@@ -3,7 +3,7 @@
 **Consumed by:** `.claude/skills/scrutinize/SKILL.md` (Phase 0, all subsequent phases)
 **Last Updated:** 2026-05-27
 
-Langfuse Cloud telemetry contract for /scrutinize. Closes R9 from the 2026-05-27 meta-review. Uses the existing `scripts/utils/observability.py` `@observe` decorator and is automatically disabled in vault mode per `.claude/rules/secure-projects.md`.
+Langfuse Cloud telemetry contract for /scrutinize. Closes R9 from the 2026-05-27 meta-review. Uses the existing `scripts/utils/observability.py` `@observe` decorator and is fail-closed on sensitivity: telemetry flows only when `SENSITIVE_MODE` is deliberately cleared, so an unset or garbage value keeps tracing off. This replaced the removed `_secure/` vault air-gap; see `docs/SECURITY-MODEL.md`.
 
 ## What gets traced
 

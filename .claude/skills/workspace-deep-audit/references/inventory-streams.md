@@ -153,7 +153,7 @@ All streams are READ-ONLY. None modifies workspace files. Each returns an inline
 > 3. **Pre-commit hooks** - read `.pre-commit-config.yaml`, count `- id:` entries, list workspace-specific (non-external) hooks.
 > 4. **Classification system** - verify `config/routing-map.yaml` parses. Count rule keys by destination (engine/private/corporate). Sample 3 random rules and verify the paths exist.
 > 5. **Read-only chmod enforcement** - RETIRED. This was `_set_readonly` in the now-deleted `scripts/workspace-sync.py` (the corporate-pull copied code into exec trees and chmod-ed it read-only). The destructive sync engine is gone (see `plans/2026-06-26-retire-workspace-sync-disk-import.md`); execs now `git pull` the engine clone, so there is no copied corporate/ tree to chmod. Skip this check.
-> 6. **Air-gapped vault** - check if `_secure/.active-project` exists (vault active?). Read `.claude/rules/secure-projects.md` and verify rule #6 (observability disable) is present.
+> 6. **Sensitivity air-gap** - RETIRED in its `_secure/` form. The vault and its `.claude/rules/secure-projects.md` are gone; the successor is the fail-closed `SENSITIVE_MODE` seam in `scripts/utils/sensitive.py`. Verify instead that `scripts/utils/observability.py` still calls `is_sensitive()` before enabling tracing.
 > 7. **Adversarial regression suite** - count `.json` files in `tests/security/prompt-injection/attacks/`. Confirm `run-adversarial-suite.py` exists and is executable.
 >
 > Also run a workspace-wide secret scan summary: `detect-secrets scan --baseline .secrets.baseline 2>&1 | tail -5` (if detect-secrets is installed). Report any new findings.

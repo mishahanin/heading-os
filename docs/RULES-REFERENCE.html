@@ -272,6 +272,11 @@
 <td>A subset of ASD-STE100 Simplified Technical English for the procedural pages and skill instruction bodies: imperative steps, active voice, a word limit per sentence, one action per step, and a warning that arrives before the step it guards. Audited by <code>scripts/ste-check.py</code>, which leaves its heuristic warnings advisory. The gate is narrower than the scope: <code>--all</code> fails a commit on errors in the twelve procedural pages, while <code>--skills</code> measures the skill bodies and gates nothing. Explanatory pages and all outbound prose stay out of scope, where <code>humanization.md</code> governs instead.</td>
 </tr>
 <tr>
+<td><code>persistence.md</code></td>
+<td>Always-on</td>
+<td>State lives in Markdown files or SQLite, and in nothing else. Postgres, Redis, Qdrant, Neo4j and every other server-process database are ruled out rather than weighed, because a store that outlives the process that wrote to it buys a daemon, a port and a backup story for a durability guarantee WSL2 does not document anyway. Rationale in <code>docs/ARCHITECTURE.md</code> § 4.</td>
+</tr>
+<tr>
 <td><code>trace-id.md</code></td>
 <td>Path-scoped</td>
 <td>One correlation ID per process tree, so a single grep answers &ldquo;what happened in this run?&rdquo; across the daemon logs.</td>

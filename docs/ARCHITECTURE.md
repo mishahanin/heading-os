@@ -78,6 +78,22 @@ operational state. They are explained together in **[Memory & ODIN](memory-odin.
 The recall index runs on a local embedder; connecting it is in
 **[AI models](MODELS-SETUP.html)**.
 
+**Every one of those layers is a Markdown file or a SQLite database, and that is a
+rule rather than an accident** (`.claude/rules/persistence.md`). No server database
+is permitted in this workspace.
+
+The reason is durability, not taste. A database that runs as its own process stakes
+its whole durability contract on `fsync` reaching physical media. On WSL2, where the
+filesystem is ext4 inside a VHDX inside a Hyper-V guest, whether a guest flush is
+passed through to the disk is undocumented by Microsoft. SQLite in the same VHDX
+inherits exactly the same uncertainty — but it inherits nothing else: no daemon to
+supervise, no port, no service account, no separate backup, no version upgrade, and
+nothing left running when the writing process exits. On a laptop whose only sleep
+state is hibernate, that difference is the whole argument.
+
+The constraint governs this workspace. It says nothing about what a product
+deployment may use.
+
 ---
 
 ## 5. Daemons: optional, console-first

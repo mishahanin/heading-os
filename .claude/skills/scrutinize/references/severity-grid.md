@@ -22,8 +22,8 @@ Trajectory-specific severity examples are listed at the end of the Examples sect
 **BLOCKER:**
 - Secret hardcoded in source file
 - `eval()` or `exec()` with user input
-- Plan step contradicts `.claude/rules/secure-projects.md`
-- Write to `_secure/` from outside the vault
+- Plan step contradicts `.claude/rules/security.md`
+- Sends data outward while the session is sensitive (`is_sensitive()` true)
 - `subprocess` call with `shell=True` and user-controlled input
 
 **HIGH:**

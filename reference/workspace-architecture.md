@@ -249,7 +249,7 @@ Before any factual claim about 31C in external-facing content: read `datastore/I
 The `_secure/` vault was removed in Plan 5. A sensitive session is now a fail-closed flag, `SENSITIVE_MODE` (`scripts/utils/sensitive.py` `is_sensitive()`): observability/Langfuse tracing is suppressed and design skills sanitize external-API prompts whenever sensitivity is not explicitly cleared. Telemetry is opt-in — a missing or garbage flag degrades to "no telemetry," never the reverse. Credentials live only in `.env` (gitignored).
 
 ### Secret detection
-Pre-commit hook scans every staged file for known secret patterns. `.claude/hooks/prevent-secrets.py` runs PreToolUse Write|Edit|Bash. Rotate credentials immediately on incident, scrub history, force-push.
+`scripts/secret-scanner.py` scans every staged file for known secret patterns at commit time, wired through the `secret-scanner-31c` pre-commit hook. The same block runs earlier as a PreToolUse guard inside `.claude/hooks/_dispatch.py`, registered on the write tools and on `Bash`. Rotate credentials immediately on incident, scrub history, force-push.
 
 ---
 
@@ -276,7 +276,8 @@ CEO /publish-corporate -> staging branch -> canary 4h soak (smoke + Layer 3 eval
 - Layer 1 CEO-side: implemented. `staging` branch exists on origin; `scripts/canary-smoke.py` ships to every exec workspace (M6 guard exits early on non-canary) and now owns the branch-switch via `ensure_on_staging()` (the retired `workspace-sync.py --branch` auto-track was replaced 2026-06-26, git-native); `scripts/provision-exec.py --canary` flag wired; the canary exec flagged in the fleet registry.
 - Layer 1 canary-side: pending. The canary exec's `.workspace-identity.json` needs `canary: true` set; their scheduled task needs `canary-smoke.py` invocation post-sync.
 - Layer 1 publish flip: deliberately deferred. `/publish-corporate` and `/push-updates` still push to `main` for now, so the non-canary execs continue to receive updates without interruption. The flip happens in the canary-side session, coordinated with Layer 2's `/promote-corporate` skill so the gate is in place before production traffic moves to staging.
-- Layers 2-4: pending (`/promote-corporate`, `/rollback-corporate`, `scripts/canary-eval.py`, dashboard surface).
+- Layer 2: shipped. `/promote-corporate` (`scripts/promote-corporate.py`) runs the soak, freshness and smoke gates and `--ff-only` merges `staging` into `main`; `/rollback-corporate` (`scripts/rollback-corporate.py`) forward-reverts `main` without a force-push.
+- Layers 3-4: pending. The Layer 3 canary evaluator was never built - no script exists for it yet - and the Layer 4 dashboard surface is unbuilt.
 
 ---
 

@@ -51,7 +51,7 @@ Full absorption of a source. No shortcuts - every page, every minute of video.
 
 | Source Type | Detection | Tool |
 |---|---|---|
-| YouTube | URL contains youtube.com or youtu.be | `python scripts/pw.py youtube [url]` for transcript + metadata |
+| YouTube | URL contains youtube.com or youtu.be | `python .claude/skills/playwright/scripts/pw.py youtube [url]` for transcript + metadata |
 | Web article | HTTP/HTTPS URL | WebFetch; if content is thin or JS-heavy, `python scripts/firecrawl.py scrape [url]` |
 | PDF file | .pdf extension | Read tool with pages parameter |
 | Image | .png/.jpg/.jpeg/.gif/.webp | Read tool (multimodal) |

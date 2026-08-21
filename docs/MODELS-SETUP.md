@@ -375,7 +375,6 @@ voice is live.
 | `scripts/gemini-consult.py` | Gemini council wrapper (`GEMINI_API_KEY`) |
 | `scripts/grok-consult.py` | Grok council wrapper (`XAI_API_KEY`) |
 | `scripts/kimi-consult.py` | Kimi council wrapper (`OLLAMA_API_KEY`, Ollama cloud) |
-| `scripts/utils/kimi_transport.py` | Research-only Kimi transport (no business context) |
 | `.claude/skills/council/SKILL.md` | `/council` orchestration, modes, flags, transcript |
 | `.claude/skills/recall/SKILL.md` | `/recall` retrieval and answer discipline |
 | `.claude/skills/deep-research-advance/SKILL.md` | Deep research flow and privacy guardrail |

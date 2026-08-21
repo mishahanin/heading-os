@@ -13,6 +13,7 @@ path, and it must NOT flag a path that lives in the private overlay (absent on a
 public clone, so its absence is not evidence -- see .claude/rules/scope-claims.md).
 """
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,6 +61,29 @@ def test_detector_skips_a_path_that_routes_to_the_overlay(tmp_path, monkeypatch)
     assert "reference/misha-voice.md" not in found
 
 
+def test_detector_skips_a_path_that_gitignore_covers(tmp_path, monkeypatch):
+    """Runtime state is on the operator's disk and in no clone; naming it is correct.
+
+    This is the 2026-08-21 CI break: `reference/scheduled-tasks.md` names
+    `.claude/scheduled_tasks.json`, which exists locally and never in a clone, so
+    the run failed on the runner while passing on the operator's machine. BASELINE
+    cannot hold such a path -- it reads stale in one place and dangling in the other.
+    """
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text(".claude/scheduled_tasks.json\n", encoding="utf-8")
+    monkeypatch.setattr(cpr, "tracked_markdown", lambda root: ["planted.md"])
+    (tmp_path / "planted.md").write_text(
+        "Active tasks live in `.claude/scheduled_tasks.json`.\n", encoding="utf-8"
+    )
+    found = cpr.scan(tmp_path)
+    assert ".claude/scheduled_tasks.json" not in found
+
+
+def test_gitignored_filter_stays_quiet_outside_a_git_repo(tmp_path):
+    """No repo means no evidence; filter nothing rather than hide a real dangling path."""
+    assert cpr.gitignored(tmp_path, ["scripts/whatever.py"]) == set()
+
+
 def test_every_baseline_entry_states_a_reason():
     """An entry without a reason is indistinguishable from rot someone gave up on."""
     unexplained = [p for p, reason in cpr.BASELINE.items() if not (reason or "").strip()]
@@ -74,3 +98,74 @@ def test_baseline_carries_no_entry_that_is_already_clean():
         "BASELINE lists path(s) the prose no longer names -- drop them:\n"
         + "\n".join(f"  {p}" for p in stale)
     )
+
+
+# --- coverage: which engine code no prose describes -------------------------
+#
+# Phase 3 of the semantic-index spec asked for a persisted (prose_file, line,
+# code_path) edge table in the DATA store. Measured before building it, that table
+# would hold 28,067 rows, 59% of them from `outputs/` and `plans/` -- handoff
+# summaries that MENTION a path rather than document it -- and would answer
+# nothing cheaper things do not: a point lookup is `grep -rn` at 0.33 s, and the
+# aggregate answer is a 57-line list computed in 0.6 s from the extraction this
+# file already tests. So Phase 3 ships as a report, and the operator approved the
+# reduction on 2026-08-21 on condition it was proved.
+#
+# Three properties carry the report's honesty and are tested rather than assumed.
+
+def test_a_file_named_only_in_an_archive_still_counts_as_undocumented(tmp_path, monkeypatch):
+    """A handoff summary quoting a filename does not document that file.
+
+    Without this exclusion the report reads "everything is documented", because
+    `outputs/` quotes nearly every path in the tree at some point.
+    """
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "lonely.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(cpr, "tracked_markdown",
+                        lambda root: ["outputs/operations/handoff.md", "docs/real.md"])
+    (tmp_path / "outputs" / "operations").mkdir(parents=True)
+    (tmp_path / "outputs" / "operations" / "handoff.md").write_text(
+        "Ran `scripts/lonely.py` during the session.\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "real.md").write_text("Nothing relevant here.\n", encoding="utf-8")
+
+    cov = cpr.coverage(tmp_path, None)
+    assert "scripts/lonely.py" in cov["undocumented"]
+
+
+def test_real_documentation_clears_a_file(tmp_path, monkeypatch):
+    """The other half: prose outside the archive trees DOES count."""
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "described.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(cpr, "tracked_markdown", lambda root: ["docs/EXTENDING.md"])
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "EXTENDING.md").write_text(
+        "Run `scripts/described.py` to do the thing.\n", encoding="utf-8")
+
+    assert cpr.coverage(tmp_path, None)["undocumented"] == []
+
+
+def test_package_markers_are_dropped_and_the_drop_is_counted(tmp_path, monkeypatch):
+    """A narrowed check that prints like a complete one is the defect
+    `.claude/rules/scope-claims.md` exists to stop. Report what was dropped."""
+    (tmp_path / "scripts" / "pkg").mkdir(parents=True)
+    (tmp_path / "scripts" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "scripts" / "pkg" / "real.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(cpr, "tracked_markdown", lambda root: [])
+
+    cov = cpr.coverage(tmp_path, None)
+    assert cov["package_markers_skipped"] == 1
+    assert cov["undocumented"] == ["scripts/pkg/real.py"]
+    assert cov["code_files"] == 1
+
+
+def test_the_report_says_whether_it_saw_the_overlay(tmp_path, monkeypatch):
+    """Absence of the overlay NARROWS the claim; it must not read as coverage.
+
+    On a public clone a file documented only in the private overlay reads as
+    undocumented, and a caller cannot tell unless the report says so.
+    """
+    (tmp_path / "scripts").mkdir()
+    monkeypatch.setattr(cpr, "tracked_markdown", lambda root: [])
+    assert cpr.coverage(tmp_path, None)["overlay_scanned"] is False
+    assert cpr.coverage(tmp_path, tmp_path)["overlay_scanned"] is True

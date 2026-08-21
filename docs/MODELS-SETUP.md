@@ -130,6 +130,45 @@ host: "http://localhost:11434"
 example a GPU box) is a single-line change. Everything else in that file tunes
 ranking, chunking, and which workspace layers get indexed; the defaults are sound.
 
+`host` also accepts `auto:<port>`. The engine then finds the current default
+gateway and uses that address on the named port. Use this form to reach an Ollama
+that runs on the Windows side of WSL2, where the gateway address changes on every
+WSL restart. An unreachable host falls back to `http://localhost:11434`.
+
+### 3.2.1 One embedder, or a split store
+
+> **Warning.** Vectors from two different models are not comparable. Cosine
+> similarity reports a plausible number for a mismatched pair and gives no hint
+> that the two do not match. A store with two embedders behind it returns
+> confident wrong answers.
+
+The engine records the provenance of every store and acts on it.
+
+- The store keeps three values in its `meta` table: `model`, `embed_host`, and
+  `model_digest`. The digest is the sha256 of the model weights.
+- A build refuses to run when the preferred host does not answer. Pass
+  `--allow-host-fallback` to accept a mixed-provenance store.
+- A query runs on the fallback host and prints a red banner on stderr. The banner
+  names the host you asked for and the host you got.
+- A build compares all three values against the store. Different weights under the
+  same model tag print `WEIGHTS CHANGED`.
+
+The digest matters because nothing synchronises two Ollama installations. Each one
+updates on its own. An update swaps the weights and leaves the model tag unchanged,
+so the tag alone cannot detect the change.
+
+Run this to read the provenance of a store:
+
+```bash
+uv run python -c "import sqlite3; print(dict(sqlite3.connect('.memory-index/index.db').execute('SELECT key, val FROM meta')))"
+```
+
+To make a mixed store one provenance again, start the preferred host and rebuild:
+
+```bash
+uv run python scripts/memory-index.py build --force
+```
+
 ### 3.3 Build and query
 
 ```bash

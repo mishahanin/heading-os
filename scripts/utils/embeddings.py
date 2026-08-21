@@ -20,6 +20,8 @@ import time
 import urllib.error
 import urllib.request
 
+from scripts.utils.ollama_host import is_http_url
+
 
 class EmbeddingError(RuntimeError):
     """Raised when the local embedder is unreachable or returns no vectors."""
@@ -66,6 +68,46 @@ def embed(
         out.extend(vectors)
 
     return out
+
+
+def model_digest(*, model: str, host: str, timeout: int = 10) -> str | None:
+    """The sha256 of the model weights this host would use. None if unknown.
+
+    A tag is not an identity. `bge-m3` on two hosts is the same NAME and can be
+    different WEIGHTS the moment one of them pulls an update -- and vectors from
+    two builds of a model are not comparable, while cosine reports a plausible
+    number either way. The digest is the only field that changes when the weights
+    do, so it is what a provenance check has to compare.
+
+    Returns None rather than raising: the digest is a diagnostic, and failing a
+    build because the tags endpoint hiccuped would cost more than the drift it
+    detects. A None is recorded as "unknown", never as "same".
+
+    `ValueError` is in the caught set for the same reason, and it is not
+    theoretical: a `host` with no scheme (`stub`, or a config typo like
+    `172.30.48.1:11436`) makes `urlopen` raise `unknown url type` before any
+    socket opens. Letting that through would abort a build with an opaque stack
+    trace instead of the clear "cannot reach embedder" the embed call itself
+    gives a moment later.
+    """
+    # `host` arrives from config or an env var, and `urlopen` honours whatever
+    # scheme it is handed -- `file:///etc/passwd` would be opened and read. Only
+    # http(s) can ever be an ollama endpoint, so the rest is refused before the
+    # opener sees it. Same guard, same reason, as `ollama_host.probe`.
+    if not is_http_url(host):
+        return None
+    url = f"{host.rstrip('/')}/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+            body = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError,
+            OSError, ValueError):
+        return None
+    want = model.split(":")[0]
+    for entry in body.get("models") or []:
+        if str(entry.get("name", "")).split(":")[0] == want:
+            return entry.get("digest") or None
+    return None
 
 
 def _post_with_retry(url: str, payload: bytes, timeout: int, attempts: int = 3):

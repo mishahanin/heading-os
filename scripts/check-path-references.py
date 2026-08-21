@@ -21,6 +21,12 @@ never a path (`action_queue.append(` truncates to `action_queue.appen`). Both
 classes live in BASELINE with a stated reason rather than being silently
 filtered, so the list of what this tool ignores is readable.
 
+One class is filtered instead of listed: a path `.gitignore` covers. Runtime
+state such as `.claude/scheduled_tasks.json` is present on the operator's
+machine and absent from every clone, so BASELINE cannot express it -- the entry
+reads stale locally and the path reads dangling in CI. Prose naming a gitignored
+path is correct by construction, so `scan()` drops it.
+
 BASELINE is a frozen ratchet, the same shape as `audit-skill-bash-paths.py`: a
 dangling path already listed is tolerated, a NEW one fails `--check`. Removing
 an entry (cleaning the prose) is welcome -- delete the line in the same change.
@@ -39,6 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_workspace_root, get_routing_destination  # noqa: E402
+from scripts.utils.paths import get_data_root, data_root_is_demo  # noqa: E402
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET  # noqa: E402
 
 # Repo-relative paths, anchored on the top-level directories the engine owns.
@@ -72,8 +79,6 @@ BASELINE = {
     "scripts/name.py": "stands for `scripts/<name>.py` in the naming rule",
     "scripts/dashboard.py": "hypothetical finding in the scrutinize eval template",
     "reference/playbook-gcc.md": "example of the per-region playbook naming",
-    "config/skill-custom/deep-think.user.toml": "file the operator creates, not shipped",
-    ".claude/skills/pptx-generator/.tmp/gen.py": "temp file the skill writes at runtime",
     "scripts/linkedin_archive.py": "quoted error message demonstrating a snake_case failure",
     # Correct prose about things deleted, retired, or not yet built.
     "scripts/export-sync.py": "named as archived",
@@ -83,6 +88,25 @@ BASELINE = {
     "config/classification.json": "named as replaced by routing-map.yaml",
     "scripts/telegram_client.py": "named as the WRONG path, to warn against it",
 }
+
+
+def gitignored(root: Path, paths: list[str]) -> set[str]:
+    """Of `paths`, those `.gitignore` covers -- absent from a clone by design.
+
+    Outside a git repo (a synthetic root in a test) git errors and stdout is
+    empty, so nothing is filtered: the tool over-reports rather than going
+    quiet, per `.claude/rules/scope-claims.md`.
+    """
+    if not paths:
+        return set()
+    out = subprocess.run(
+        ["git", "check-ignore", "--stdin"],
+        cwd=root,
+        input="\n".join(paths),
+        capture_output=True,
+        text=True,
+    )
+    return set(out.stdout.split())
 
 
 def tracked_markdown(root: Path) -> list[str]:
@@ -108,16 +132,134 @@ def scan(root: Path) -> dict[str, list[tuple[str, int]]]:
                 if get_routing_destination(path) != "engine":
                     continue  # lives in an overlay this tool cannot see
                 hits.setdefault(path, []).append((rel, lineno))
+    for path in gitignored(root, sorted(hits)):
+        hits.pop(path, None)
     return hits
+
+
+# ============================================================
+# Coverage: which engine code no prose describes
+# ============================================================
+#
+# The design spec's Phase 3 asked for a persisted `(prose_file, line, code_path)`
+# edge table in the DATA store. Measured 2026-08-21 before building it, the table
+# would hold 28,067 rows and answer nothing a cheaper thing does not:
+#
+#   - "who mentions scripts/foo.py?"  -- `grep -rn` over both roots: 0.33 s. A
+#     table saves a third of a second and costs a schema.
+#   - "what is undocumented?"         -- 19 files out of 364. A nineteen-line
+#     answer does not need a store; it needs the extraction that already exists
+#     five lines above this comment.
+#   - 16,530 of the 28,067 edges (59%) come from `outputs/` and `plans/` --
+#     handoff summaries and finished plans that MENTION a path in passing. A
+#     table that is more than half archive noise makes the signal harder to find.
+#
+# So Phase 3 ships as a report over the extraction, not as a table. Operator
+# approved the reduction on the condition it was proved, 2026-08-21.
+
+# Prose that MENTIONS a path is not prose that DOCUMENTS it. A handoff summary
+# quoting a filename does not make that file documented, so these trees are read
+# for reporting and excluded from the "is it documented" verdict.
+_ARCHIVE_PREFIXES = (
+    "outputs/",            # leak-guard: ok (prefix match on a repo-relative string)
+    "plans/archive/",      # leak-guard: ok (prefix match on a repo-relative string)
+    "chronicle/",          # leak-guard: ok (prefix match on a repo-relative string)
+    "docs/superpowers/",
+    "threads/",            # leak-guard: ok (prefix match on a repo-relative string)
+)
+
+# What "documented" is claimed ABOUT. Engine Python only: these are the files the
+# documentation-propagation rule governs, and the only tree present in every
+# clone. Nothing here says anything about .claude/ content or the overlay's code.
+_CODE_GLOB = "scripts/**/*.py"
+
+
+def code_files(root: Path) -> tuple[list[str], int]:
+    """(documentable engine Python paths, count of package markers dropped).
+
+    `__init__.py` is a package marker, not a unit anybody documents by name, so
+    counting it as undocumented would put permanent noise in the report. The drop
+    is RETURNED rather than swallowed, because a narrowed check that prints like a
+    complete one is the defect `.claude/rules/scope-claims.md` exists to stop.
+    """
+    every = [str(p.relative_to(root)) for p in root.glob(_CODE_GLOB)
+             if "__pycache__" not in p.parts]
+    keep = sorted(f for f in every if not f.endswith("__init__.py"))
+    return keep, len(every) - len(keep)
+
+
+def named_paths(root: Path, *, skip_archives: bool) -> dict[str, list[tuple[str, int]]]:
+    """Every repo path this root's tracked Markdown names -> where it is named."""
+    found: dict[str, list[tuple[str, int]]] = {}
+    for rel in tracked_markdown(root):
+        if skip_archives and rel.startswith(_ARCHIVE_PREFIXES):
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for path in _PATH.findall(line):
+                found.setdefault(path, []).append((rel, lineno))
+    return found
+
+
+def coverage(root: Path, data_root: Path | None) -> dict:
+    """Which engine code files no non-archive prose names.
+
+    `data_root` is the private overlay when it is on disk and None otherwise. Its
+    absence NARROWS the claim rather than failing: a public clone has no overlay,
+    so a file documented only there would read as undocumented. The return value
+    carries `overlay_scanned` so the caller can say which claim it is making
+    (`.claude/rules/scope-claims.md`).
+    """
+    named = named_paths(root, skip_archives=True)
+    if data_root is not None:
+        for path, sites in named_paths(data_root, skip_archives=True).items():
+            named.setdefault(path, []).extend(sites)
+    files, package_markers = code_files(root)
+    undocumented = [f for f in files if f not in named]
+    return {
+        "code_files": len(files),
+        "package_markers_skipped": package_markers,
+        "undocumented": undocumented,
+        "overlay_scanned": data_root is not None,
+    }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="exit 1 on a dangling path not in BASELINE")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--coverage", action="store_true",
+                    help="report engine code that no non-archive prose names (advisory)")
     args = ap.parse_args()
 
     root = get_workspace_root()
+
+    if args.coverage:
+        overlay = get_data_root()
+        if data_root_is_demo() or not (overlay / ".git").exists():
+            overlay = None
+        cov = coverage(root, overlay)
+        if args.json:
+            print(json.dumps(cov, indent=2))
+            return 0
+        scanned = "engine + private overlay" if cov["overlay_scanned"] else "engine ONLY"
+        print(f"{BOLD}{CYAN}Documentation coverage of engine code (advisory){RESET}")
+        print(f"{GRAY}Prose sources: {scanned}. Archive trees excluded "
+              f"({', '.join(_ARCHIVE_PREFIXES)}) -- a handoff that mentions a path")
+        print(f"does not document it. Claim is about {_CODE_GLOB} and nothing else.{RESET}")
+        if not cov["overlay_scanned"]:
+            print(f"{YELLOW}The overlay is absent, so a file documented only there "
+                  f"reads as undocumented here.{RESET}")
+        n = len(cov["undocumented"])
+        print(f"\n{BOLD}{n}{RESET} of {cov['code_files']} named in no prose "
+              f"{GRAY}({cov['package_markers_skipped']} __init__.py package markers "
+              f"not counted){RESET}:")
+        for f in cov["undocumented"]:
+            print(f"  {GRAY}{f}{RESET}")
+        return 0
     found = scan(root)
     new = {p: sites for p, sites in found.items() if p not in BASELINE}
 

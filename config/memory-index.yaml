@@ -129,6 +129,29 @@ layers:
   # path list in the embedded text, which answers "what touched the action queue"
   # by meaning but dilutes the vector with filenames. Measure both, keep the
   # winner, and record BOTH numbers.
+  # --- symbol corpus: BUILT, MEASURED, WITHDRAWN 2026-08-21 -------------------
+  # The layer below is deliberately commented out, not deleted. It embedded all
+  # 9,608 CodeGraph symbols and answered 6/13 = 46% of grep-blind intent queries
+  # at top-5, against a 70% bar and a 50% kill line agreed BEFORE the build. Raw
+  # cosine over every row, with no re-ranking and no threshold, gives the same
+  # 46%, so no knob here can recover it. Set B scored 92%, which says the plumbing
+  # works and that name-search is all it does -- what `git grep` and CodeGraph
+  # FTS5 already do for free, faster.
+  #
+  # It is commented rather than orphaned on purpose. A layer defined here but
+  # absent from every collection is neither built nor queried AND prints
+  # "layers in no collection" on every invocation -- including the recall hook
+  # that runs on each operator prompt. Restore these four lines and add `symbol`
+  # to the `code` collection to rebuild and re-measure; nothing else is needed.
+  # `scripts/utils/symbol_source.py` and its 12 tests stay in the tree so the next
+  # attempt starts from a measured negative rather than from nothing.
+  # Full measurement, and the two hypotheses that were refuted before the call:
+  # docs/superpowers/specs/2026-08-21-semantic-index-commits-and-symbols-design.md
+  #
+  # - layer: symbol
+  #   source: codegraph
+  #   graph_db: .codegraph/codegraph.db
+  #   threshold: 0.45
   - layer: commit-engine
     source: git-log
     repo_label: engine
@@ -166,6 +189,8 @@ layers:
 # both and fuses once). Both stores are gitignored, rebuildable caches.
 collections:
   content: [odin, thread, crm, linkedin, context, reference, plans, outputs, knowledge, datastore-extract, memory]
+  # `symbol` is deliberately absent here, and its layer definition above is
+  # commented out for the same reason -- see the block that carries the numbers.
   code: [skill, rule, commit-engine]
   # history: why a change was made. A DATA-side collection sharing the physical
   # content store (see _store_targets), queried SEPARATELY so the default

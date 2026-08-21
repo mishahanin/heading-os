@@ -154,6 +154,15 @@ uv run python scripts/run-tests.py                      # the suite
   Placeholders, regex fragments and correct prose about deleted things are frozen
   in the scanner's `BASELINE`, each with the reason it should not exist. To add
   one, state the reason; to clean one up, delete the line.
+- **The coverage report.** `check-path-references.py --coverage` lists the engine
+  Python files that no prose describes. Run it after you add a script, to see
+  whether your documentation landed. It is advisory and gates nothing.
+
+  It excludes archive trees from the verdict — `outputs/`, `plans/archive/`,
+  `chronicle/`, `docs/superpowers/` and `threads/`. A handoff summary that quotes a
+  filename does not document that file. It also prints which prose sources it read.
+  On a clone with no private overlay, a file documented only there reads as
+  undocumented.
 
 ### The slice standard
 

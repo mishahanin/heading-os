@@ -244,3 +244,107 @@ def test_a_layer_dropped_from_config_is_still_pruned(tmp_path, monkeypatch):
                    collections={"code": ["commit-engine"]})
     mi._build_store(dropped, root, ".idx/index.db", {"commit-engine"}, False)
     assert {r[2] for r in _rows(root, ".idx/index.db")} == {"commit-engine"}
+
+
+def _cg(root: Path, rows):
+    """A minimal CodeGraph stand-in, so the build path can be exercised."""
+    import sqlite3
+    db = root / ".codegraph" / "codegraph.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE nodes (id TEXT, kind TEXT, name TEXT, qualified_name TEXT, "
+                 "file_path TEXT, language TEXT, start_line INT, end_line INT, "
+                 "docstring TEXT, signature TEXT)")
+    conn.executemany("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_symbol_rows_build_beside_commit_and_file_rows(tmp_path, monkeypatch):
+    _stub_embed(monkeypatch)
+    root = _repo(tmp_path / "eng")
+    (root / "docs").mkdir()
+    (root / "docs" / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    (root / "m.py").write_text('def f():\n    """Doc."""\n    return 1\n', encoding="utf-8")
+    _commit(root, "docs/a.md", "feat: first")
+    _cg(root, [("n1", "function", "f", "m.f", "m.py", "python", 1, 3, "", "def f()")])
+
+    cfg = _cfg(layers=[
+        {"layer": "notes", "glob": "docs/*.md"},
+        {"layer": "commit-engine", "source": "git-log", "repo_label": "engine"},
+        {"layer": "symbol", "source": "codegraph", "graph_db": ".codegraph/codegraph.db"},
+    ], collections={"code": ["notes", "commit-engine", "symbol"]})
+    mi._build_store(cfg, root, ".idx/index.db", {"notes", "commit-engine", "symbol"}, False)
+    assert {r[2] for r in _rows(root, ".idx/index.db")} == {"notes", "commit-engine", "symbol"}
+
+
+def test_a_missing_codegraph_index_keeps_the_symbol_corpus(tmp_path, monkeypatch, capsys):
+    """A fresh clone has no .codegraph/. That must not empty the layer."""
+    _stub_embed(monkeypatch)
+    root = _repo(tmp_path / "eng")
+    (root / "m.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    _cg(root, [("n1", "function", "f", "m.f", "m.py", "python", 1, 2, "", "def f()")])
+    cfg = _cfg(layers=[{"layer": "symbol", "source": "codegraph",
+                        "graph_db": ".codegraph/codegraph.db"}],
+               collections={"code": ["symbol"]})
+    mi._build_store(cfg, root, ".idx/index.db", {"symbol"}, False)
+    before = _rows(root, ".idx/index.db")
+    assert before
+    capsys.readouterr()
+
+    (root / ".codegraph" / "codegraph.db").unlink()
+    mi._build_store(cfg, root, ".idx/index.db", {"symbol"}, False)
+    err = capsys.readouterr().err
+    assert _rows(root, ".idx/index.db") == before, "a missing graph wiped the corpus"
+    assert "symbol" in err
+
+
+# --- the seam, both directions ---------------------------------------------
+#
+# The design spec § Testing asks for "an engine commit never lands in the DATA
+# store, and the reverse". Only the first half was covered:
+# `test_a_commit_layer_not_in_this_store_is_not_built` builds an engine store and
+# asserts a commit layer outside its set stays out. The reverse -- a DATA commit
+# never reaching the ENGINE store -- was asserted nowhere, and it is the half that
+# carries the risk: `.memory-index-code/index.db` lives inside the PUBLIC engine
+# clone, so a routing slip there puts private commit subjects in a public tree.
+# The store is gitignored, which is one guard, and a gitignore is not the seam.
+
+def test_the_shipped_config_routes_each_commit_layer_to_its_own_side(tmp_path, monkeypatch):
+    """Read the REAL config, not a fixture: this is a claim about what ships."""
+    monkeypatch.setattr(mi, "get_data_root", lambda: tmp_path / "data-root")
+    cfg = mi.load_config(mi.get_workspace_root())
+    by_name = {t["name"]: t for t in mi._store_targets(cfg)}
+
+    assert "commit-engine" in by_name["code"]["layers"]
+    assert "commit-engine" not in by_name["content"]["layers"], (
+        "engine commit subjects would be written into the DATA store"
+    )
+    assert "commit-data" in by_name["content"]["layers"]
+    assert "commit-data" not in by_name["code"]["layers"], (
+        "DATA commit subjects would be written into .memory-index-code/, which "
+        "lives inside the PUBLIC engine clone"
+    )
+
+
+def test_a_data_commit_layer_is_skipped_when_the_engine_store_is_built(tmp_path, monkeypatch):
+    """The reverse direction, exercised through the real build loop.
+
+    Store membership is what decides, so the layer must be skipped even though the
+    repository under the builder has commits it could read.
+    """
+    _stub_embed(monkeypatch)
+    root = _repo(tmp_path / "eng")
+    (root / "docs").mkdir()
+    (root / "docs" / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    _commit(root, "docs/a.md", "feat: private-looking subject")
+
+    cfg = _cfg(layers=[
+        {"layer": "notes", "glob": "docs/*.md"},
+        {"layer": "commit-data", "source": "git-log", "repo_label": "data"},
+    ], collections={"code": ["notes"], "history": ["commit-data"]})
+
+    mi._build_store(cfg, root, ".code/index.db", {"notes"}, False)
+    layers = {r[2] for r in _rows(root, ".code/index.db")}
+    assert layers == {"notes"}, f"commit-data leaked into the engine store: {layers}"

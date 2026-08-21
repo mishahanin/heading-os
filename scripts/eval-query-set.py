@@ -16,8 +16,8 @@ The set file is Markdown on purpose. Misha edits it, and a bar he cannot read is
 a bar he did not agree to.
 
 Usage:
-  python scripts/eval-query-set.py --layer commit-engine
-  python scripts/eval-query-set.py --layer commit-engine --top-k 5 --json
+  python scripts/eval-query-set.py --phase 1
+  python scripts/eval-query-set.py --phase 2 --top-k 5 --json
 """
 import argparse
 import json
@@ -30,13 +30,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import get_data_root, get_workspace_root  # noqa: E402
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
 
-SET_REL = "docs/superpowers/specs/2026-08-21-semantic-index-query-set-phase-1.md"
+# Each phase has its own frozen set and its own bar, because the corpora differ.
+# Commits are 1,090 items of deliberate human prose; symbols are 9,562 items of
+# code, only half of which carry a docstring. The same number would not mean the
+# same thing, so it is not the same number.
+PHASES = {
+    "1": {"rel": "docs/superpowers/specs/2026-08-21-semantic-index-query-set-phase-1.md",
+          "layer": "commit-engine", "bar_a": 0.80},
+    "2": {"rel": "docs/superpowers/specs/2026-08-21-semantic-index-query-set-phase-2.md",
+          "layer": "symbol", "bar_a": 0.70},
+}
 
-# The bar, from the spec. Named here so a run prints pass/fail rather than a
-# number the reader has to go and compare by hand.
-BAR = {"A": 0.80, "B": None}   # B is "no regression", judged against a baseline run
-
-_ROW = re.compile(r"^\|\s*\d+\s*\|\s*(?P<q>.+?)\s*\|\s*`(?P<sha>[0-9a-f]{7,40})`\s*\|")
+# Phase 1 targets a commit sha; phase 2 targets `path:symbol`. One pattern for
+# both, because a second parser is a second thing to keep in step with the files.
+_ROW = re.compile(r"^\|\s*\d+\s*\|\s*(?P<q>.+?)\s*\|\s*`(?P<target>[^`]+)`\s*\|")
 
 
 def load_set(path: Path) -> list[dict]:
@@ -56,7 +63,7 @@ def load_set(path: Path) -> list[dict]:
             current = None
         m = _ROW.match(line)
         if m and current:
-            cases.append({"set": current, "q": m.group("q"), "sha": m.group("sha")})
+            cases.append({"set": current, "q": m.group("q"), "target": m.group("target")})
     return cases
 
 
@@ -78,20 +85,56 @@ def query(text: str, layer: str, top_k: int, threshold: float | None = None) -> 
     )
     if proc.returncode != 0:
         raise RuntimeError(f"query failed: {proc.stderr.strip()[:300]}")
-    payload = json.loads(proc.stdout)
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"the index did not answer in JSON for --layer {layer}.\n"
+            f"  stdout: {proc.stdout.strip()[:200]}\n"
+            f"Most likely the layer is not configured in config/memory-index.yaml. "
+            f"The `symbol` layer, for one, was withdrawn on 2026-08-21 after it "
+            f"measured 46% against a 70% bar; restore its four commented lines and "
+            f"its `code` collection entry to measure it again."
+        ) from exc
+    if payload.get("empty_index"):
+        raise SystemExit(
+            f"no rows for --layer {layer}: the store is empty or the layer is not "
+            f"configured. Run `python scripts/memory-index.py build` first."
+        )
     return payload.get("hits", [])
+
+
+def _matches(hit: dict, target: str) -> bool:
+    """Does this hit name the frozen target?
+
+    Phase 1 targets a short sha and rows carry `<label>@<full sha>`. Phase 2
+    targets `path:symbol` and rows carry `path:start-end` plus the qualified name
+    in the title, so the file must match AND the symbol must be the row's own
+    name -- matching on the path alone would credit any symbol in the right file.
+    """
+    path = hit.get("path") or ""
+    if "@" in path:
+        return path.split("@")[-1].startswith(target)
+    file_part, _, symbol = target.rpartition(":")
+    title = hit.get("title") or ""
+    return path.startswith(file_part + ":") and title.rsplit(".", 1)[-1] == symbol
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--layer", default="commit-engine", help="index layer to score")
+    ap.add_argument("--phase", choices=sorted(PHASES), default="1",
+                    help="which frozen set and bar to run")
+    ap.add_argument("--layer", default=None, help="override the phase's layer")
     ap.add_argument("--top-k", type=int, default=5, help="a hit counts if the target is in the top N")
     ap.add_argument("--threshold", type=float, default=None,
                     help="override the index threshold; omit to measure the operator's real path")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    set_path = get_data_root() / SET_REL
+    phase = PHASES[args.phase]
+    layer = args.layer or phase["layer"]
+    bar_a = phase["bar_a"]
+    set_path = get_data_root() / phase["rel"]
     if not set_path.exists():
         sys.stderr.write(f"{RED}query set not found:{RESET} {set_path}\n")
         sys.stderr.write(f"{YELLOW}It lives in the private overlay; a public clone has no bar to run.{RESET}\n")
@@ -104,13 +147,8 @@ def main() -> int:
 
     results = []
     for c in cases:
-        hits = query(c["q"], args.layer, args.top_k, args.threshold)
-        # A row's path is `<label>@<full sha>`; the set carries short shas.
-        rank = next(
-            (i + 1 for i, h in enumerate(hits)
-             if (h.get("path") or "").split("@")[-1].startswith(c["sha"])),
-            None,
-        )
+        hits = query(c["q"], layer, args.top_k, args.threshold)
+        rank = next((i + 1 for i, h in enumerate(hits) if _matches(h, c["target"])), None)
         results.append({**c, "rank": rank, "n_hits": len(hits)})
 
     out = {}
@@ -122,17 +160,17 @@ def main() -> int:
                   "mean_rank": (sum(r["rank"] for r in hit) / len(hit)) if hit else None}
 
     if args.json:
-        print(json.dumps({"layer": args.layer, "top_k": args.top_k,
+        print(json.dumps({"phase": args.phase, "layer": layer, "top_k": args.top_k,
                           "summary": out, "cases": results}, ensure_ascii=False, indent=2))
         return 0
 
     thr = "index default" if args.threshold is None else f"forced {args.threshold}"
-    print(f"{BOLD}{CYAN}Query set — layer {args.layer}, top-{args.top_k}, threshold {thr}{RESET}")
+    print(f"{BOLD}{CYAN}Phase {args.phase} — layer {layer}, top-{args.top_k}, threshold {thr}{RESET}")
     print(f"{GRAY}{set_path}{RESET}\n")
     for s, label in (("A", "Set A (grep-blind — the justification)"),
                      ("B", "Set B (grep already answers — the guard)")):
         d = out[s]
-        bar = BAR[s]
+        bar = bar_a if s == "A" else None
         verdict = ""
         if bar is not None:
             verdict = f"  {GREEN}PASS{RESET}" if d["rate"] >= bar else f"  {RED}FAIL{RESET} (bar {bar:.0%})"
@@ -140,11 +178,10 @@ def main() -> int:
         print(f"{BOLD}{label}{RESET}\n  {d['hits']}/{d['n']} = {d['rate']:.0%}{mr}{verdict}")
         for r in [x for x in results if x["set"] == s]:
             mark = f"{GREEN}{r['rank']}{RESET}" if r["rank"] else f"{RED}miss{RESET}"
-            print(f"    {mark:>14}  {GRAY}{r['sha']}{RESET}  {r['q'][:58]}")
+            print(f"    {mark:>14}  {GRAY}{r['target'][-40:]}{RESET}  {r['q'][:52]}")
         print()
 
-    a = out["A"]
-    return 0 if a["rate"] >= BAR["A"] else 1
+    return 0 if out["A"]["rate"] >= bar_a else 1
 
 
 if __name__ == "__main__":

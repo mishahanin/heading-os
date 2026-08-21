@@ -226,7 +226,15 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
   Placeholders, regex fragments and correct prose about deleted things are frozen
   in the scanner&rsquo;s <code>BASELINE</code>, each with the reason it should not exist. To add
   one, state the reason; to clean one up, delete the line.</li>
+<li><strong>The coverage report.</strong> <code>check-path-references.py --coverage</code> lists the engine
+  Python files that no prose describes. Run it after you add a script, to see
+  whether your documentation landed. It is advisory and gates nothing.</li>
 </ul>
+<p>It excludes archive trees from the verdict — <code>outputs/</code>, <code>plans/archive/</code>,
+  <code>chronicle/</code>, <code>docs/superpowers/</code> and <code>threads/</code>. A handoff summary that quotes a
+  filename does not document that file. It also prints which prose sources it read.
+  On a clone with no private overlay, a file documented only there reads as
+  undocumented.</p>
 <h3 id="the-slice-standard">The slice standard</h3>
 <p>Non-trivial work runs on Canopus, the build standard: seven numbered steps, two
 of them the operator&rsquo;s own approval moments, and three instruments that measure

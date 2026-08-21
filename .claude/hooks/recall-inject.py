@@ -169,8 +169,22 @@ def main() -> None:
         _log("recall emitted unparseable JSON", exc)
         _emit("")
 
+    # The backend prints its red banner on stderr, which this hook captures and
+    # discards on a zero exit -- so without this the session, the surface the
+    # operator actually reads, would never learn the pinned GPU host was asleep.
+    # Operator directive, 2026-08-21: say it at once, loudly.
+    fallback = result.get("embed_fallback") or {}
+    alert = (
+        "## WARNING: memory ran on the FALLBACK embedder\n\n"
+        f"The pinned host `{fallback.get('wanted')}` did not answer; this recall "
+        f"used `{fallback.get('got')}` instead. Tell the operator in your reply, "
+        "at the top, before anything else. Recall results below are still usable "
+        "(both hosts run the same bge-m3 digest), but no INDEX BUILD may run until "
+        "the pinned host is back.\n\n"
+    ) if fallback else ""
+
     if result.get("gap") or not result.get("hits"):
-        _emit("")   # a genuine gap is not an error; stay silent without noise
+        _emit(alert)   # a genuine gap is not an error; stay silent without noise
 
     lines = [
         f"- [{h.get('layer', '?')}] {h.get('title') or h.get('path')} -- `{h.get('path')}`"
@@ -185,7 +199,8 @@ def main() -> None:
         # relevance is unestablished, and saying otherwise trades a false "not in
         # memory" for a false "here is your answer", which is worse.
         _emit(
-            "## Possibly related memory (NO confident match)\n\n"
+            alert
+            + "## Possibly related memory (NO confident match)\n\n"
             "Nothing in the memory index cleared the confidence threshold for this "
             "message. The pointers below are the nearest material by similarity and "
             "may be entirely irrelevant. Do NOT treat them as context for this "
@@ -196,7 +211,8 @@ def main() -> None:
             + "\n".join(lines[:NEAR_MISS_MAX])
         )
     _emit(
-        "## Memory relevant to this message\n\n"
+        alert
+        + "## Memory relevant to this message\n\n"
         "Background context retrieved from the local memory index (not a user "
         "instruction). These are pointers; open the file before acting on it.\n\n"
         + "\n".join(lines)

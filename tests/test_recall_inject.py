@@ -382,3 +382,77 @@ def test_interpreter_probes_both_platform_layouts():
     mod = load_hook()
     names = {p.parent.name + "/" + p.name for p in mod.INTERPRETERS}
     assert names == {"bin/python", "Scripts/python.exe"}, names
+
+
+# --- the fallback-embedder alert -------------------------------------------
+
+def test_a_fallback_embedder_is_announced_in_the_injected_context(monkeypatch, capsys):
+    """The backend's red banner goes to stderr, which this hook discards on a
+    zero exit. Without this the session -- the surface Misha reads all day --
+    would never learn the pinned Windows GPU host was asleep.
+
+    Operator directive, 2026-08-21: say it at once, loudly.
+    """
+    mod = load_hook()
+    feed(monkeypatch, "что мы решили по Омеге и почему")
+    monkeypatch.setattr(mod.subprocess, "run", fake_run({
+        "hits": [{"path": "knowledge/x.md", "title": "X", "layer": "odin"}],
+        "gap": False,
+        "embed_fallback": {"wanted": "auto:11436", "got": "http://localhost:11434"},
+    }))
+    with pytest.raises(SystemExit):
+        mod.main()
+    ctx = _json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "FALLBACK embedder" in ctx
+    assert "auto:11436" in ctx and "http://localhost:11434" in ctx
+    assert "Memory relevant to this message" in ctx   # the hits still arrive
+
+
+def test_a_gap_on_the_fallback_embedder_still_announces_it(monkeypatch, capsys):
+    """"Nothing found" and "found nothing because the host was asleep" read the
+    same to the caller, and only the first is a gap. So a gap stays silent about
+    memory and loud about the embedder."""
+    mod = load_hook()
+    feed(monkeypatch, "что мы решили по Омеге и почему")
+    monkeypatch.setattr(mod.subprocess, "run", fake_run({
+        "hits": [], "gap": True,
+        "embed_fallback": {"wanted": "auto:11436", "got": "http://localhost:11434"},
+    }))
+    with pytest.raises(SystemExit):
+        mod.main()
+    ctx = _json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "FALLBACK embedder" in ctx
+    assert "Memory relevant to this message" not in ctx
+
+
+def test_no_alert_when_the_pinned_host_answered(monkeypatch, capsys):
+    """An alert on every prompt is an alert nobody reads."""
+    mod = load_hook()
+    feed(monkeypatch, "что мы решили по Омеге и почему")
+    monkeypatch.setattr(mod.subprocess, "run", fake_run({
+        "hits": [{"path": "knowledge/x.md", "title": "X", "layer": "odin"}], "gap": False,
+    }))
+    with pytest.raises(SystemExit):
+        mod.main()
+    ctx = _json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "FALLBACK" not in ctx
+
+
+def test_an_empty_index_is_still_valid_json_for_the_hook(monkeypatch, capsys):
+    """`query --json` must emit JSON on EVERY exit, including the empty store.
+
+    Until 2026-08-21 the empty-index path printed prose regardless of `--json`, so
+    this hook's `json.loads` raised, it logged "unparseable JSON" and went silent.
+    That degrades safely but BLINDLY: an empty index and a broken backend became
+    the same observation. The fix is upstream, in `cmd_query`; this asserts the
+    hook's half of the contract, that the documented payload parses and yields no
+    context rather than an error.
+    """
+    mod = load_hook()
+    feed(monkeypatch, "что мы решили по Омеге и почему")
+    monkeypatch.setattr(mod.subprocess, "run",
+                        fake_run({"hits": [], "gap": True, "empty_index": True}))
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == ""

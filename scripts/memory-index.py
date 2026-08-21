@@ -58,7 +58,8 @@ from scripts.utils import salience
 from scripts.utils.air_gap import is_denied
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.commit_source import iter_commits
-from scripts.utils.embeddings import EmbeddingError, embed
+from scripts.utils.symbol_source import iter_symbols
+from scripts.utils.embeddings import EmbeddingError, embed, model_digest
 from scripts.utils.ollama_host import resolve_ollama_host
 from scripts.utils.workspace import get_classification, get_data_root, get_workspace_root, load_env
 
@@ -115,9 +116,16 @@ def load_config(root: Path) -> dict:
     # silently. An unreachable host degrades to the local daemon, because a
     # slower index beats a stale one. HEADING_OS_OLLAMA_EMBED_HOST overrides
     # for a one-off run without editing config.
+    cfg["host_preferred"] = cfg.get("host")
     cfg["host"] = resolve_ollama_host(
         cfg.get("host"), env_var="HEADING_OS_OLLAMA_EMBED_HOST"
     )
+    # Every subcommand goes through here, so the announcement cannot be forgotten
+    # by a code path added later. Operator directive, 2026-08-21: a fallback is
+    # said out loud, at once, in red -- not left for someone to notice in `meta`.
+    banner = host_fallback_banner(cfg["host_preferred"], cfg["host"])
+    if banner:
+        sys.stderr.write(banner)
     cfg.setdefault("threshold", 0.55)
     cfg.setdefault("near_miss_margin", 0.12)
     cfg.setdefault("top_k", 8)
@@ -465,6 +473,24 @@ def _layer_store_map(cfg):
 
 def cmd_build(args) -> int:
     cfg = load_config(get_workspace_root())  # memory-index.yaml is engine config
+
+    # A build writes vectors that outlive the run. Embedding a few thousand of
+    # them on an unintended host is precisely the split brain the operator asked
+    # to prevent, and nothing downstream would ever surface it -- cosine compares
+    # mismatched vectors happily and returns a plausible number. So refuse, and
+    # name the override rather than hiding it. A QUERY does the opposite: it
+    # embeds one throwaway vector, the two hosts agree to cosine 0.99997 on the
+    # same bge-m3 digest, and refusing recall because Windows is asleep would
+    # trade a real capability for float noise.
+    if host_fell_back(cfg.get("host_preferred"), cfg["host"]) and not args.allow_host_fallback:
+        # load_config already printed the red banner naming wanted and got.
+        sys.stderr.write(
+            f"{RED}{BOLD}Refusing to build on a fallback embedder.{RESET}\n"
+            f"{YELLOW}Start the preferred host, or pass --allow-host-fallback to "
+            f"accept a mixed-provenance store.{RESET}\n"
+        )
+        return 1
+
     targets = _store_targets(cfg)
     rc = 0
     for t in targets:
@@ -473,8 +499,142 @@ def cmd_build(args) -> int:
     return rc
 
 
+def host_fell_back(preferred: str | None, resolved: str) -> bool:
+    """True when the operator asked for a host and got a different one.
+
+    `resolve_ollama_host` returns only the winner, so the drop is invisible to a
+    caller that did not keep the raw config value. A build needs to know: writing
+    a few thousand vectors from an unintended embedder is the split brain, and it
+    is silent unless someone compares the two hosts by hand.
+    """
+    want = (preferred or "").strip()
+    if not want:
+        return False                     # nothing asked for, nothing denied
+    if want.startswith("auto"):
+        _, _, port = want.partition(":")
+        return not (port and resolved.rstrip("/").endswith(f":{port}"))
+    return want.rstrip("/") != resolved.rstrip("/")
+
+
+def host_fallback_info(preferred: str | None, resolved: str) -> dict | None:
+    """The fallback as data, for a caller that renders instead of printing.
+
+    `recall-inject.py` captures stderr and discards it on a zero exit, so the
+    banner below never reaches the session -- the one surface the operator reads
+    all day. The JSON carries the same fact so the hook can show it.
+    """
+    if not host_fell_back(preferred, resolved):
+        return None
+    return {"wanted": preferred, "got": resolved}
+
+
+def host_fallback_banner(preferred: str | None, resolved: str) -> str | None:
+    """Loud, red, immediate. None when the preferred host answered.
+
+    Operator directive, 2026-08-21: *"если система на Windows (там где GPU) не
+    доступна, ты СРАЗУ говоришь об этом, громко, красным цветом"*. Before this the
+    drop was silent by construction -- `resolve_ollama_host` returns the winner
+    and says nothing about who lost, so a sleeping Windows box simply produced a
+    slower run that looked identical to a fast one.
+
+    The banner reports the drop; it does not decide what to do about it. A build
+    refuses (see `cmd_build`), a query proceeds -- the two hosts run the same
+    `bge-m3` digest and agree to cosine 0.99997, measured 2026-08-21, so blocking
+    recall would trade a live capability for float noise.
+    """
+    info = host_fallback_info(preferred, resolved)
+    if info is None:
+        return None
+    bar = "=" * 70
+    return (
+        f"\n{RED}{BOLD}{bar}\n"
+        f"  GPU EMBEDDER NOT AVAILABLE -- RUNNING ON THE FALLBACK HOST\n"
+        f"{bar}{RESET}\n"
+        f"{RED}{BOLD}  wanted:{RESET}{RED} {info['wanted']}   (Windows, GPU){RESET}\n"
+        f"{RED}{BOLD}  got:   {RESET}{RED} {info['got']}{RESET}\n"
+        f"{YELLOW}  Start Ollama on the Windows host, then re-run.{RESET}\n"
+        f"{RED}{BOLD}{bar}{RESET}\n"
+    )
+
+
+def record_provenance(conn, *, model: str, host: str, digest: str | None = None) -> None:
+    """Stamp WHICH embedder built this store, so split brain is detectable.
+
+    Vectors from two models are not comparable and cosine gives no hint -- it
+    returns a plausible number either way. Before this the `meta` table held the
+    model name alone, so "was this store built by one embedder?" had no answer on
+    disk and could only be reached by re-running both hosts and comparing.
+
+    The digest is stamped only when the host answered with one. An unknown digest
+    leaves the old value alone rather than overwriting it with a blank, so a
+    momentarily unreachable tags endpoint cannot erase the evidence.
+    """
+    for key, val in (("model", model), ("embed_host", host)):
+        conn.execute(
+            "INSERT INTO meta (key, val) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET val=excluded.val",
+            (key, val),
+        )
+    if digest:
+        conn.execute(
+            "INSERT INTO meta (key, val) VALUES ('model_digest', ?) "
+            "ON CONFLICT(key) DO UPDATE SET val=excluded.val",
+            (digest,),
+        )
+
+
+def provenance_mismatch(conn, *, model: str, host: str, digest: str | None = None) -> str | None:
+    """One line naming the drift, or None. Never raises, never blocks.
+
+    Three fields, three different meanings:
+
+    - **model name** -- a change genuinely breaks cosine and must be loud.
+    - **host** -- float noise with the same weights (measured 2026-08-21 at cosine
+      0.99997 between the Windows GPU and WSL CPU hosts), still reported, because
+      the operator asked to run on one host and a silent fallback is how that
+      stops being true.
+    - **digest** -- the one that answers Misha's 2026-08-21 question, "как будет
+      работать sync между инстанс?". Nothing syncs the two Ollama installs, so an
+      auto-update on one host swaps the weights under an unchanged tag: same name
+      `bge-m3`, different vectors, and no other field moves. The digest is the
+      only evidence that happened.
+
+    A missing stored digest is silence, not a match -- a store built before this
+    field existed cannot be judged, and saying "same" would be a claim the data
+    does not carry.
+    """
+    try:
+        meta = dict(conn.execute("SELECT key, val FROM meta"))
+    except sqlite3.Error:
+        return None
+    if not meta.get("model") and not meta.get("embed_host"):
+        return None                      # store predates this field
+    drift = []
+    if meta.get("model") and meta["model"] != model:
+        drift.append(f"model {meta['model']} -> {model}")
+    if meta.get("embed_host") and meta["embed_host"] != host:
+        drift.append(f"host {meta['embed_host']} -> {host}")
+    if digest and meta.get("model_digest") and meta["model_digest"] != digest:
+        drift.append(
+            f"WEIGHTS CHANGED: digest {meta['model_digest'][:12]} -> {digest[:12]} "
+            f"(same tag, different model -- the stored vectors are not comparable)"
+        )
+    if not drift:
+        return None
+    return "built by a different embedder: " + "; ".join(drift)
+
+
 def _build_store(cfg, root, store_rel, layers, force) -> int:
     conn = open_store(root, store_rel)
+
+    digest = model_digest(model=cfg["model"], host=cfg["host"])
+    drift = provenance_mismatch(conn, model=cfg["model"], host=cfg["host"], digest=digest)
+    if drift:
+        sys.stderr.write(
+            f"{YELLOW}warn:{RESET} {root / store_rel} {drift}\n"
+            f"{YELLOW}Rows already stored keep their old vectors. "
+            f"Re-run with --force to make the store one provenance.{RESET}\n"
+        )
 
     deny_prefixes = cfg["deny_prefixes"]
     deny_segments = cfg["deny_segments"]
@@ -507,6 +667,55 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
         # query answers from an empty layer. So a git failure keeps the layer's
         # existing paths claimed (see the except below) instead of degrading into
         # a delete.
+        if layer_cfg.get("source") == "codegraph":
+            graph = root / layer_cfg.get("graph_db", ".codegraph/codegraph.db")
+            try:
+                symbols = list(iter_symbols(
+                    graph, root,
+                    deny_prefixes=tuple(deny_prefixes),
+                    deny_segments=tuple(deny_segments),
+                ))
+            except (ValueError, sqlite3.Error) as exc:
+                # Same contract as the commit branch: degrade loudly, keep the
+                # corpus. CodeGraph's index is gitignored and rebuildable, so a
+                # fresh clone legitimately has none.
+                sys.stderr.write(
+                    f"{RED}symbol layer {layer} unavailable:{RESET} {exc}\n"
+                    f"{YELLOW}Its existing rows are kept, not pruned.{RESET}\n"
+                )
+                claimed.update(
+                    p for p, in conn.execute(
+                        "SELECT DISTINCT path FROM notes WHERE layer=?", (layer,)
+                    )
+                )
+                continue
+            for s in symbols:
+                rel = s["path"]
+                if rel in claimed:
+                    continue
+                claimed.add(rel)
+                # A symbol's path carries its line range, so a moved symbol is a
+                # NEW path and re-embeds; an edited one is caught by its file's
+                # mtime, exactly like a glob layer.
+                if (
+                    not force
+                    and rel in existing_by_path
+                    and abs(existing_by_path[rel] - s["mtime"]) < 1e-6
+                ):
+                    skipped_uptodate += 1
+                    continue
+                changed_paths.add(rel)
+                info = {
+                    "title": s["title"], "ntype": s["ntype"], "raw_body": s["body"],
+                    "embed_text": s["embed_text"], "created": "", "updated": "",
+                    "confidence": "", "status": "", "access_count": 0,
+                    "last_accessed": "",
+                }
+                pending.append(
+                    (s["id"], rel, layer, 0, s["mtime"], info, s["embed_text"])
+                )
+            continue
+
         if layer_cfg.get("source") == "git-log":
             label = layer_cfg.get("repo_label", "engine")
             try:
@@ -683,11 +892,7 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
     # incremental, prune, and pre-hybrid-migration cases in one cheap pass).
     resync_fts(conn)
 
-    conn.execute(
-        "INSERT INTO meta (key, val) VALUES ('model', ?) "
-        "ON CONFLICT(key) DO UPDATE SET val=excluded.val",
-        (cfg["model"],),
-    )
+    record_provenance(conn, model=cfg["model"], host=cfg["host"], digest=digest)
     conn.commit()
     total = conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
     conn.close()
@@ -1167,7 +1372,19 @@ def cmd_query(args) -> int:
             best = res["best"] if best is None else max(best, res["best"])
 
     if not metas:
-        print(f"{YELLOW}Index is empty.{RESET} Run: python3 scripts/memory-index.py build")
+        # `--json` must emit JSON on EVERY exit, including this one. Until
+        # 2026-08-21 this path printed prose regardless, so a machine caller got
+        # unparseable output and had to guess: `.claude/hooks/recall-inject.py`
+        # logs "unparseable JSON" and stays silent (degrades, but blind), and
+        # `scripts/eval-query-set.py` died on a raw JSONDecodeError traceback.
+        # An empty store is a normal state -- a fresh clone, or a layer whose
+        # definition was withdrawn -- not a reason to break the contract.
+        if want_json:
+            print(json.dumps({"hits": [], "gap": True, "empty_index": True},
+                             ensure_ascii=False))
+        else:
+            print(f"{YELLOW}Index is empty.{RESET} "
+                  f"Run: python3 scripts/memory-index.py build")
         _emit(gap=True, hits_list=[])
         return 0
 
@@ -1185,11 +1402,15 @@ def cmd_query(args) -> int:
         if not near_ids:
             best_val = best if best is not None else 0.0
             if want_json:
-                print(json.dumps(
-                    {"hits": [], "gap": True, "best": round(best_val, 4),
-                     "threshold": round(float(threshold), 4)},
-                    ensure_ascii=False,
-                ))
+                payload = {"hits": [], "gap": True, "best": round(best_val, 4),
+                           "threshold": round(float(threshold), 4)}
+                # A gap on the wrong embedder still has to say so: "nothing found"
+                # and "found nothing because the pinned host was asleep" read the
+                # same to the caller, and only one of them is a gap.
+                fallback = host_fallback_info(cfg.get("host_preferred"), cfg["host"])
+                if fallback:
+                    payload["embed_fallback"] = fallback
+                print(json.dumps(payload, ensure_ascii=False))
                 _emit(gap=True, hits_list=[])
                 return 0
             print(
@@ -1265,6 +1486,9 @@ def cmd_query(args) -> int:
         if near_miss:
             payload["near_miss"] = True
             payload["confident"] = False
+        fallback = host_fallback_info(cfg.get("host_preferred"), cfg["host"])
+        if fallback:
+            payload["embed_fallback"] = fallback
         print(json.dumps(payload, ensure_ascii=False))
         _emit(gap=False, hits_list=hits)
         return 0
@@ -1391,6 +1615,9 @@ def main() -> int:
 
     p_build = sub.add_parser("build", help="(re)build the index from allowlisted layers")
     p_build.add_argument("--force", action="store_true", help="re-embed all, ignore mtime")
+    p_build.add_argument("--allow-host-fallback", action="store_true",
+                         help="build even if the preferred embedder is unreachable "
+                              "(accepts a mixed-provenance store)")
     p_build.set_defaults(func=cmd_build)
 
     p_query = sub.add_parser("query", help="semantic recall over the index")

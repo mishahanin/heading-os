@@ -121,6 +121,55 @@ def test_ollama():
     _check("ollama dead port -> unreachable due", s["due"] and not s["value"]["reachable"])
 
 
+def test_ollama_accel():
+    """The accelerated host is a SECOND daemon, and `ollama_state` cannot see it.
+
+    Measured 2026-08-21: the Windows-side GPU daemon crash-looped for 16 hours
+    while `ollama_state` reported green the whole time, because it probes one
+    address and that one was healthy. Every caller degraded silently to the CPU
+    daemon. This signal is the eye on the other address.
+    """
+    s = ops.classify_ollama_accel(False, False)
+    _check("accel not configured -> not due", not s["due"] and s["severity"] == "ok")
+    s = ops.classify_ollama_accel(True, True)
+    _check("accel up -> not due", not s["due"] and s["severity"] == "ok")
+    s = ops.classify_ollama_accel(True, False)
+    _check("accel configured but down -> due warn", s["due"] and s["severity"] == "warn")
+    _check("accel tier B", s["tier"] == "B")
+    _check("accel key", s["key"] == "ollama_accel")
+    # Tier B is the point, not a detail: a Tier-A signal stays invisible until
+    # auto-heal has failed twice, and nothing on this side of the WSL boundary
+    # can restart a daemon on the other side of it.
+    _check("accel summary counts-only", "\n" not in s["summary"] and s["summary"].strip())
+
+
+def test_ollama_accel_state_fs():
+    with tempfile.TemporaryDirectory() as td:
+        engine = Path(td)
+        cfg_dir = engine / "config"
+        cfg_dir.mkdir(parents=True)
+
+        # No config file at all -> nothing is configured, nothing is due. This
+        # is the public-clone case: most operators have one daemon.
+        s = ops.ollama_accel_state(engine)
+        _check("accel no config -> not configured", not s["due"]
+               and not s["value"]["configured"])
+
+        # A config naming only the local daemon is not an accelerated host.
+        (cfg_dir / "memory-index.yaml").write_text(
+            'model: bge-m3\nhost: "http://localhost:11434"\n', encoding="utf-8")
+        s = ops.ollama_accel_state(engine)
+        _check("accel local host -> not configured", not s["due"]
+               and not s["value"]["configured"])
+
+        # A configured host that answers nothing is the failure this exists for.
+        (cfg_dir / "memory-index.yaml").write_text(
+            'model: bge-m3\nhost: "http://127.0.0.1:1"\n', encoding="utf-8")
+        s = ops.ollama_accel_state(engine, timeout=1)
+        _check("accel dead port -> due", s["due"] and s["value"]["configured"]
+               and not s["value"]["reachable"])
+
+
 def test_index():
     s = ops.classify_index(None, False)
     _check("index absent -> due high", s["due"] and s["value"] == "absent")

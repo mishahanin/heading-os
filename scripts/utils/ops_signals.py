@@ -14,7 +14,8 @@ and drives the ack "band" comparison and the crunch critical-floor. `tier` is
 Design split (per plan Decision 8 + testability): the expensive / non-
 deterministic measurement (git plumbing, an ollama probe, a subprocess) is kept
 separate from the PURE classifier that turns measured primitives into the signal
-dict. The classifiers (`classify_backup`, `classify_ollama`, `classify_cold_sweep`,
+dict. The classifiers (`classify_backup`, `classify_ollama`, `classify_ollama_accel`,
+`classify_cold_sweep`,
 `classify_publish`, `classify_index`, `classify_weekly_review`, `classify_odin`)
 are unit-tested in isolation; the measurement wrappers (`backup_state`,
 `ollama_state`, ...) call them after gathering primitives.
@@ -25,6 +26,7 @@ scripts/ops-radar.py.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -447,6 +449,76 @@ def classify_ollama(reachable: bool, model_present: bool) -> dict:
         "tier": "A",
         "summary": summary,
     }
+
+
+def classify_ollama_accel(configured: bool, reachable: bool) -> dict:
+    """Pure: accelerated-host configuration + reachability -> signal dict (Tier B).
+
+    Not configured is the normal state on most machines and is never due. A host
+    that IS configured and does not answer is due at `warn`: work continues on
+    the local daemon, so nothing is broken, only slower - but silently so, which
+    is the whole reason this needs saying out loud.
+
+    Tier B, not A, and deliberately. The accelerated daemon lives outside this
+    OS (on a WSL2 workspace it is the Windows side), so nothing here can restart
+    it; a Tier-A signal would wait for an auto-heal that cannot exist and stay
+    invisible forever, since `select_candidates` only surfaces Tier A after two
+    failed heals.
+    """
+    due = configured and not reachable
+    if not configured:
+        severity, summary = "ok", "ollama-accel: not configured"
+    elif reachable:
+        severity, summary = "ok", "ollama-accel: up"
+    else:
+        severity, summary = "warn", "ollama-accel: configured host down, running on the local daemon"
+    return {
+        "key": "ollama_accel",
+        "value": {"configured": configured, "reachable": reachable},
+        "threshold": None,
+        "due": due,
+        "severity": severity,
+        "tier": "B",
+        "summary": summary,
+    }
+
+
+def ollama_accel_state(engine_root: Path, timeout: int = 3) -> dict:
+    """Probe the accelerated ollama host the memory index is configured to use.
+
+    Reads the SAME preference the index reads, in the same order - `host` from
+    `config/memory-index.yaml`, else the `HEADING_OS_OLLAMA_EMBED_HOST`
+    environment variable - so this reports on the endpoint that is actually
+    used, not on a second opinion about which one it should be. A preference
+    that resolves to the local daemon is not an accelerated host and counts as
+    not configured.
+
+    Scope: this is the index's embedding endpoint. Other callers
+    (`chronicle.py`, `census-submodel-bench.py`) read `HEADING_OS_OLLAMA_HOST`
+    instead, and a machine could in principle point them somewhere else; this
+    signal says nothing about those.
+    """
+    import yaml
+
+    from scripts.utils import yamlio
+    from scripts.utils.ollama_host import LOCAL_HOST, candidate_url, probe
+
+    cfg: dict = {}
+    config_path = engine_root / "config" / "memory-index.yaml"
+    try:
+        with open(config_path, encoding="utf-8") as fh:
+            cfg = yamlio.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        cfg = {}
+
+    preference = cfg.get("host")
+    if preference is None:
+        preference = os.environ.get("HEADING_OS_OLLAMA_EMBED_HOST", "")
+
+    candidate = candidate_url(preference)
+    if candidate is None or candidate == LOCAL_HOST:
+        return classify_ollama_accel(False, False)
+    return classify_ollama_accel(True, probe(candidate, timeout=timeout))
 
 
 def ollama_state(host: str | None = None, timeout: int = 3) -> dict:

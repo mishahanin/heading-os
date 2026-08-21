@@ -57,6 +57,7 @@ except ImportError as exc:
 from scripts.utils import salience
 from scripts.utils.air_gap import is_denied
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from scripts.utils.commit_source import iter_commits
 from scripts.utils.embeddings import EmbeddingError, embed
 from scripts.utils.ollama_host import resolve_ollama_host
 from scripts.utils.workspace import get_classification, get_data_root, get_workspace_root, load_env
@@ -494,6 +495,63 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
         layer = layer_cfg["layer"]
         if layer not in layers:
             continue            # this store builds only its collection's layers
+
+        # A layer's `source` says where its rows come from. Absent means the
+        # original glob walk. `git-log` reads commit messages instead, which are
+        # not files -- so the two branches share the pending/claimed/prune
+        # bookkeeping below and nothing else.
+        #
+        # Claiming matters more than it looks: the prune at the end of this
+        # function deletes every stored path NOT claimed this pass. If a commit
+        # branch silently yields nothing, its whole corpus is wiped and the next
+        # query answers from an empty layer. So a git failure keeps the layer's
+        # existing paths claimed (see the except below) instead of degrading into
+        # a delete.
+        if layer_cfg.get("source") == "git-log":
+            label = layer_cfg.get("repo_label", "engine")
+            try:
+                commits = list(iter_commits(
+                    root,
+                    repo_label=label,
+                    include_paths=layer_cfg.get("body_paths", True),
+                    deny_prefixes=tuple(deny_prefixes),
+                    deny_segments=tuple(deny_segments),
+                ))
+            except (ValueError, RuntimeError) as exc:
+                # Degrade loudly, never silently, and never into a prune.
+                sys.stderr.write(
+                    f"{RED}commit layer {layer} unavailable:{RESET} {exc}\n"
+                    f"{YELLOW}Its existing rows are kept, not pruned.{RESET}\n"
+                )
+                claimed.update(
+                    p for p, in conn.execute(
+                        "SELECT DISTINCT path FROM notes WHERE layer=?", (layer,)
+                    )
+                )
+                continue
+            for c in commits:
+                rel = c["path"]
+                if rel in claimed:
+                    continue
+                claimed.add(rel)
+                # A commit is immutable: its sha fixes its message forever. So
+                # "already stored" IS "up to date" -- no mtime compare needed,
+                # and no `meta` high-water sha to keep in sync with the store.
+                if not force and rel in existing_by_path:
+                    skipped_uptodate += 1
+                    continue
+                changed_paths.add(rel)
+                info = {
+                    "title": c["title"], "ntype": c["ntype"], "raw_body": c["body"],
+                    "embed_text": c["embed_text"], "created": "", "updated": "",
+                    "confidence": "", "status": "", "access_count": 0,
+                    "last_accessed": "",
+                }
+                pending.append(
+                    (c["id"], rel, layer, 0, c["mtime"], info, c["embed_text"])
+                )
+            continue
+
         for sub in expand_brace_glob(layer_cfg["glob"]):
             for fpath in sorted(root.glob(sub)):
                 if not fpath.is_file():
@@ -538,7 +596,23 @@ def _build_store(cfg, root, store_rel, layers, force) -> int:
                     pending.append((cid, rel, layer, idx, mtime, info, etext))
 
     # Prune paths no longer matched / now denied -> delete all their chunks (air-gap honest).
-    stale_paths = [p for p in existing_by_path if p not in claimed]
+    #
+    # Scoped to what this pass could see. A path is prunable when its layer was
+    # WALKED here, or when its layer no longer exists in the config at all
+    # (orphaned by a config edit, with no owner and no way back). A row belonging
+    # to a layer this pass simply did not walk is left alone.
+    #
+    # Found the hard way on 2026-08-21: rebuilding one layer to A/B the commit
+    # body variants deleted 122 skill and rule rows the pass never looked at. The
+    # CLI could not reach it -- `cmd_build` always passes a store's full layer set
+    # -- but a partial rebuild is a normal thing to do, and a store that silently
+    # empties is the worst possible way to find out the call was wrong.
+    configured = {lc["layer"] for lc in cfg["layers"]}
+    prunable = {
+        p for p, lyr in conn.execute("SELECT DISTINCT path, layer FROM notes")
+        if lyr in layers or lyr not in configured
+    }
+    stale_paths = [p for p in existing_by_path if p not in claimed and p in prunable]
     for p in stale_paths:
         conn.execute("DELETE FROM notes WHERE path=?", (p,))
     # Delete old chunk rows of changed/new files so a now-smaller chunk count leaves no orphans.
@@ -1038,6 +1112,29 @@ def cmd_query(args) -> int:
             f"Known: {known}, or 'all'.\n"
         )
         return 1
+
+    # Per-layer threshold. Cosine is not comparable across registers: measured
+    # 2026-08-21 on the 25-query commit set, the correct answer to a paraphrased
+    # or Russian question scores 0.456-0.597, while the SAME index answers a
+    # keyword query at 0.590-0.697. One global cut calibrated on prose therefore
+    # reports a gap on a commit question it actually answered -- 77% against the
+    # agreed 80% bar, where 0.45 gives 85%. The cost is measured too, not waved
+    # away: one nonsense query in six gets a confident-looking hit at 0.45, none
+    # at 0.55. Scoped to the layers that need it, so `content` keeps 0.55 and its
+    # honest-gap behaviour is untouched.
+    #
+    # Applied only when the query resolves to ONE layer (via --layer or a
+    # single-layer collection). With several layers in play there is no single
+    # right cut, so the global one stands. An explicit --threshold always wins.
+    if args.threshold is None and allowed and len(allowed) == 1:
+        only = next(iter(allowed))
+        per_layer = next(
+            (lc.get("threshold") for lc in cfg["layers"]
+             if lc["layer"] == only and lc.get("threshold") is not None),
+            None,
+        )
+        if per_layer is not None:
+            threshold = float(per_layer)
 
     try:
         qvec = embed([qtext], model=cfg["model"], host=cfg["host"])[0]

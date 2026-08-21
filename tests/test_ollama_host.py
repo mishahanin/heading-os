@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils import ollama_host  # noqa: E402
 from scripts.utils.ollama_host import (  # noqa: E402
     LOCAL_HOST,
+    candidate_url,
     read_default_gateway,
     resolve_ollama_host,
 )
@@ -58,6 +59,43 @@ def test_malformed_gateway_is_skipped(tmp_path):
         "eth0\t00000000\tZZZZZZZZ\t0003\n"
     )
     assert read_default_gateway(_route_file(tmp_path, garbage)) is None
+
+
+# --- candidate resolution (address only, never probed) --------------------
+
+def test_candidate_of_no_preference_is_none(monkeypatch):
+    monkeypatch.setattr(ollama_host, "probe", lambda *a, **k: pytest.fail("must not probe"))
+    assert candidate_url("") is None
+    assert candidate_url(None) is None
+    assert candidate_url("   ") is None
+
+
+def test_candidate_of_auto_uses_the_current_gateway(monkeypatch):
+    monkeypatch.setattr(ollama_host, "read_default_gateway", lambda *a, **k: "172.30.48.1")
+    assert candidate_url("auto:11436") == "http://172.30.48.1:11436"
+
+
+def test_candidate_of_auto_without_port_defaults_to_11434(monkeypatch):
+    monkeypatch.setattr(ollama_host, "read_default_gateway", lambda *a, **k: "172.30.48.1")
+    assert candidate_url("auto") == "http://172.30.48.1:11434"
+
+
+def test_candidate_is_none_when_the_gateway_is_unreadable(monkeypatch):
+    monkeypatch.setattr(ollama_host, "read_default_gateway", lambda *a, **k: None)
+    assert candidate_url("auto:11436") is None
+
+
+def test_candidate_keeps_a_literal_url_without_probing(monkeypatch):
+    # The address is returned whether or not anything answers there. Probing is
+    # the CALLER's job - a signal that needs to report "configured but down"
+    # cannot tell those apart if the resolver folds them together.
+    monkeypatch.setattr(ollama_host, "probe", lambda *a, **k: pytest.fail("must not probe"))
+    assert candidate_url("http://10.0.0.5:11434/") == "http://10.0.0.5:11434"
+
+
+def test_candidate_refuses_a_non_http_scheme():
+    assert candidate_url("file:///etc/passwd") is None
+    assert candidate_url("ftp://10.0.0.5:11434") is None
 
 
 # --- resolution -----------------------------------------------------------

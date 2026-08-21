@@ -64,7 +64,7 @@ AUTOHEAL_FILE = "autoheal.json"
 # Known signal keys that `ack` will accept (plus the synthetic auto-heal keys).
 KNOWN_KEYS = {
     "backup", "publish", "weekly_review", "cold_sweep", "odin_cadence",
-    "queue", "ollama", "memory_index", "router_accuracy",
+    "queue", "ollama", "ollama_accel", "memory_index", "router_accuracy",
 }
 
 
@@ -126,6 +126,7 @@ def gather_live_signals(engine_root: Path, data_root: Path) -> list[dict]:
         ops.odin_cadence_state(engine_root),
         ops.queue_state(data_root),
         ops.ollama_state(),
+        ops.ollama_accel_state(engine_root),
         ops.index_freshness_state(engine_root, data_root),
         ops.router_accuracy_state(data_root),
     ]

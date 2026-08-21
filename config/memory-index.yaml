@@ -116,6 +116,41 @@ layers:
     glob: ".claude/skills/**/SKILL.md"
   - layer: rule
     glob: ".claude/rules/*.md"
+  # --- commit corpora (why a change was made; `source: git-log`, not a glob) ---
+  # A commit is not a file, so these layers carry no `glob`. The builder reads
+  # `git log` from the store's own root, which is what keeps the seam honest:
+  # commit-engine sits in the `code` collection (ENGINE root, engine store) and
+  # commit-data in `history` (DATA root, data store). Neither can reach the
+  # other's repository. Measured 2026-08-21: 605 indexable engine commits and 485
+  # data ones, after 153 `chore: workspace backup` subjects are dropped as noise
+  # (a fifth of data history, near-identical vectors that crowd real hits) and 14
+  # data commits are refused by the air gap for touching a `personal` path.
+  # `body_paths` is the A/B knob the design spec calls for: it puts the changed-
+  # path list in the embedded text, which answers "what touched the action queue"
+  # by meaning but dilutes the vector with filenames. Measure both, keep the
+  # winner, and record BOTH numbers.
+  - layer: commit-engine
+    source: git-log
+    repo_label: engine
+    body_paths: true
+    # Measured, not guessed (2026-08-21, 25-query set): a paraphrased or Russian
+    # question finds its commit at cosine 0.456-0.597, while a keyword query hits
+    # the same index at 0.590-0.697. The prose-calibrated 0.55 therefore calls a
+    # gap on 7 of 23 answers it did in fact rank first. 0.45 gives 85% against
+    # the agreed 80% bar; 0.50 and 0.55 both give 77%. Cost, measured on six
+    # nonsense queries: one false-confident hit at 0.45, none at 0.55.
+    threshold: 0.45
+  - layer: commit-data
+    source: git-log
+    repo_label: data
+    body_paths: true
+    # Measured, not guessed (2026-08-21, 25-query set): a paraphrased or Russian
+    # question finds its commit at cosine 0.456-0.597, while a keyword query hits
+    # the same index at 0.590-0.697. The prose-calibrated 0.55 therefore calls a
+    # gap on 7 of 23 answers it did in fact rank first. 0.45 gives 85% against
+    # the agreed 80% bar; 0.50 and 0.55 both give 77%. Cost, measured on six
+    # nonsense queries: one false-confident hit at 0.45, none at 0.55.
+    threshold: 0.45
 
 # Collections -- named groups of layers for `query --collection`. `content` is the
 # default (what we know / decided); `code` is the machinery (how skills/rules work),
@@ -131,7 +166,11 @@ layers:
 # both and fuses once). Both stores are gitignored, rebuildable caches.
 collections:
   content: [odin, thread, crm, linkedin, context, reference, plans, outputs, knowledge, datastore-extract, memory]
-  code: [skill, rule]
+  code: [skill, rule, commit-engine]
+  # history: why a change was made. A DATA-side collection sharing the physical
+  # content store (see _store_targets), queried SEPARATELY so the default
+  # /recall never mixes commit prose into an answer about what we decided.
+  history: [commit-data]
   # chronicle: dated history of past sessions. A DATA-side collection: its rows
   # live in the same physical store as `content` (see _store_targets), but it is
   # queried SEPARATELY (`query --collection chronicle`) and is NOT in `content`,

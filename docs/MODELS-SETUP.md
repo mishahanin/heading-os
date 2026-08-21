@@ -372,6 +372,8 @@ voice is live.
 | `config/memory-index.yaml` | Embedder model + host, ranking, chunking, indexed layers |
 | `scripts/memory-index.py` | Builds and queries the local recall index (`bge-m3`) |
 | `scripts/utils/embeddings.py` | Local embedding client over Ollama |
+| `scripts/utils/commit_source.py` | Commit messages as index rows (`source: git-log` layers) |
+| `scripts/eval-query-set.py` | Scores the index against a frozen query set and prints pass/fail |
 | `scripts/gemini-consult.py` | Gemini council wrapper (`GEMINI_API_KEY`) |
 | `scripts/grok-consult.py` | Grok council wrapper (`XAI_API_KEY`) |
 | `scripts/kimi-consult.py` | Kimi council wrapper (`OLLAMA_API_KEY`, Ollama cloud) |

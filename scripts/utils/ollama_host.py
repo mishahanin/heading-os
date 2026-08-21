@@ -96,6 +96,34 @@ def probe(host: str, timeout: float = DEFAULT_PROBE_TIMEOUT) -> bool:
     return "version" in payload
 
 
+def candidate_url(preferred: str | None) -> str | None:
+    """Turn a preference into the address it names, WITHOUT probing it.
+
+    Returns None when there is no usable preference: an empty value, an `auto`
+    whose gateway cannot be read, or anything that is not an http(s) URL.
+
+    Split out of `resolve_ollama_host` so a caller can tell "no accelerated host
+    is configured" from "one is configured and is down". The resolver folds both
+    into the same local fallback, which is right for the callers that only want
+    a working endpoint and useless for a monitor - that fold is exactly how a
+    16-hour outage of the Windows-side daemon went unreported on 2026-08-21.
+    """
+    wanted = (preferred or "").strip()
+    if not wanted:
+        return None
+
+    if wanted.startswith("auto"):
+        _, _, port = wanted.partition(":")
+        port = port.strip() or "11434"
+        gateway = read_default_gateway()
+        if gateway is None:
+            return None
+        return f"http://{gateway}:{port}"
+
+    candidate = wanted.rstrip("/")
+    return candidate if is_http_url(candidate) else None
+
+
 def resolve_ollama_host(
     preferred: str | None = None,
     *,
@@ -125,19 +153,14 @@ def resolve_ollama_host(
     if not wanted:
         return default.rstrip("/")
 
-    if wanted.startswith("auto"):
-        _, _, port = wanted.partition(":")
-        port = port.strip() or "11434"
-        gateway = read_default_gateway()
-        if gateway is None:
-            _warn(verbose, f"ollama: cannot read default gateway, using {default}")
-            return default.rstrip("/")
-        candidate = f"http://{gateway}:{port}"
-    else:
-        candidate = wanted.rstrip("/")
-        if not is_http_url(candidate):
-            _warn(verbose, f"ollama: {candidate!r} is not an http(s) URL, using {default}")
-            return default.rstrip("/")
+    candidate = candidate_url(wanted)
+    if candidate is None:
+        reason = (
+            "cannot read default gateway" if wanted.startswith("auto")
+            else f"{wanted.rstrip('/')!r} is not an http(s) URL"
+        )
+        _warn(verbose, f"ollama: {reason}, using {default}")
+        return default.rstrip("/")
 
     if probe(candidate, timeout=probe_timeout):
         return candidate

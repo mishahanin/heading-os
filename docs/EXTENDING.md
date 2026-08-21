@@ -158,7 +158,7 @@ uv run python scripts/run-tests.py                      # the suite
   Python files that no prose describes. Run it after you add a script, to see
   whether your documentation landed. It is advisory and gates nothing.
 
-  It excludes archive trees from the verdict — `outputs/`, `plans/archive/`,
+  It excludes archive trees from the verdict: `outputs/`, `plans/archive/`,
   `chronicle/`, `docs/superpowers/` and `threads/`. A handoff summary that quotes a
   filename does not document that file. It also prints which prose sources it read.
   On a clone with no private overlay, a file documented only there reads as

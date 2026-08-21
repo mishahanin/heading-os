@@ -4,6 +4,197 @@ All notable changes to HEADING OS are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims at [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0, interfaces may change between minor versions; see [ROADMAP.md](ROADMAP.md).
 
+## [0.13.0] - 2026-08-22
+
+The release about the commit log becoming searchable by meaning, and about the
+thing that does the searching being made to say which model computed what. 1,093
+commit messages carried the reasoning behind every decision here and were findable
+only by exact substring; they now answer paraphrased and cross-language questions
+at 85% against an 80% bar agreed before the build. Behind that, the store gained
+provenance - model, host, and the digest of the weights - because a model NAME is
+not an identity and a silently swapped model corrupts a vector store in a way
+cosine cannot reveal. A third capability was built, measured at 46% against a 70%
+bar, and WITHDRAWN; it is documented at the same length as what shipped, because a
+negative result nobody records gets rebuilt. Written for a reader rather than for a
+diff: [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md).
+
+### Added
+
+- **Commit messages are searchable by meaning.** `layers:` in
+  `config/memory-index.yaml` gained a `source:` kind; `git-log` reads messages
+  where the default walks a glob, sharing the pending/claimed/prune bookkeeping and
+  nothing else. No schema change - `notes` was already generic enough to take a
+  commit row unaltered. Two layers, one per side of the seam: `commit-engine` (607
+  rows, engine store, `code` collection) and `commit-data` (486 rows, data store,
+  a new `history` collection the default `/recall` deliberately does not search,
+  because commit prose is a different kind of answer and mixing it dilutes both).
+  Query: `python scripts/memory-index.py query "<q>" --layer commit-engine`.
+  Measured against a 25-question set frozen BEFORE the build and split mechanically
+  by whether `git log -i --grep` can answer it at all: Set A (grep-blind) 11/13 =
+  **85%** top-5, mean rank 1.2, against an 80% bar; Set B (grep already answers)
+  12/12 = 100%, mean rank 1.0, so nothing that already worked is buried. New:
+  `scripts/utils/commit_source.py`, `scripts/eval-query-set.py`.
+- **`threshold` is a per-layer key.** The prose-tuned 0.55 does not transfer: a
+  paraphrased or Russian question finds its commit at cosine 0.456-0.597 while a
+  keyword query hits the same index at 0.590-0.697, so seven of 23 correct answers
+  were ranked FIRST and reported as "a gap in this area of memory". Set to 0.45 on
+  the commit layers only; `content` keeps 0.55, because a global drop would buy
+  commit recall with prose precision. Cost measured, not waved away: one
+  false-confident hit in six nonsense queries at 0.45, none at 0.55. Both figures
+  are real and neither may be quoted without its threshold.
+- **The store records WHICH embedder built it.** `meta` now carries `model`,
+  `embed_host` and `model_digest` (the sha256 of the weights). A tag is not an
+  identity: `bge-m3` on two hosts is one NAME and can be two sets of weights the
+  moment either updates, at which point stored and new vectors are incomparable
+  while cosine returns a plausible number either way. Nothing synchronises two
+  Ollama installations, so the digest is the only field that moves when a model is
+  silently replaced; drift prints `WEIGHTS CHANGED`. New: `model_digest()` in
+  `scripts/utils/embeddings.py`.
+- **A build on a fallback embedder refuses; a query does not.** The asymmetry is
+  cost, not caution. A build writes vectors that live for months, so it exits 1 and
+  names `--allow-host-fallback` rather than hiding it. A query embeds one throwaway
+  vector against measured cosine 0.99997 between the two hosts, so refusing recall
+  would trade a live capability for float noise.
+- **The fallback is announced loudly, and it arrives.** A red banner is emitted
+  from `load_config`, through which every subcommand passes, so a command added
+  later cannot omit it. That alone was insufficient: `.claude/hooks/recall-inject.py`
+  captures the backend's stderr and discards it on a zero exit, so the banner never
+  reached the surface the operator reads all day. The query JSON now carries
+  `embed_fallback` and the hook renders it into the session.
+- **`check-path-references.py --coverage`** reports engine Python that no
+  non-archive prose names - 57 of 356 today, in 0.6 s. This is the planned
+  prose-to-code edge table, REDUCED on measurement: the table would hold 28,067
+  rows, 16,530 of them (59%) from `outputs/` and `plans/` where a handoff MENTIONS
+  a path rather than documents it, while the point lookup is `grep -rn` at 0.33 s
+  and the aggregate answer is 57 lines. Three honesty properties are tested rather
+  than assumed: archive prose does not count as documentation, the overlay's
+  absence narrows the claim and says so, and the `__init__.py` drop is printed
+  rather than swallowed. Advisory; `--check` is untouched.
+- **`ollama_accel` ops-radar signal** watches the ACCELERATED ollama host, not just
+  the local one. On 2026-08-20 the Windows daemon self-updated, inherited the wrong
+  environment on restart, tried to bind a port `wslrelay.exe` holds, and
+  crash-looped once a second for 16 hours while the existing signal reported green -
+  it probes one address and that one was healthy. Tier B on purpose: the daemon
+  lives outside this OS and nothing here can restart it. New: `candidate_url()` in
+  `scripts/utils/ollama_host.py`, which returns the address a preference NAMES
+  without probing it, so "not configured" and "configured and down" stop being the
+  same observation.
+- **Persistence rule: Markdown files and SQLite, nothing else.**
+  `.claude/rules/persistence.md`. Server databases are ruled out and so are
+  LanceDB, Kuzu, DuckDB, usearch, LMDB and every other embedded-but-not-SQLite
+  store - "embedded" is deliberately not the test, because a rule asking "does this
+  add a process?" needs a judgement every time while this one is answered by
+  reading a file header. Rationale: fsync pass-through on ext4-over-VHDX under WSL2
+  is undocumented, so a daemon's write-ahead promise is unverifiable here, and
+  SQLite carries the same uncertainty without the daemon. Governs data and state,
+  never configuration.
+- **Prose path audit.** `scripts/check-path-references.py --check` (pre-commit
+  `path-references` + a CI step) fails when tracked Markdown gains a NEW reference
+  to an engine path that does not exist. Deliberately narrow: only engine-ROUTED
+  paths, resolved through the routing map and never through the disk, so CI and the
+  operator's machine agree. Paths `.gitignore` covers are filtered rather than
+  baselined, because such an entry reads stale locally and dangling in CI.
+- **Cross-lingual recall is tested, not asserted.**
+  `tests/test_recall_cross_lingual.py`, the first user of the declared-but-unused
+  `requires_ollama` marker. `bge-m3` was chosen over an English code embedder for
+  exactly one reason, and the 85% Set A score is measured over a MIXED-language
+  set, so the English half alone could have carried it. Three Russian questions
+  must each rank the intended English commit above five close distractors, and a
+  fourth case requires the Russian and English forms of one question to agree,
+  which catches a model that is merely CONSISTENTLY wrong. Skips rather than fails
+  where no embedder answers.
+- **`tests/security/test_SEC_019_commit_air_gap.py`** asserts the commit air gap at
+  the security seam. The second case is the one that fails quietly: a commit
+  touching a private path AND a public path must be refused WHOLE, because a
+  per-file filter passes it, keeps the subject line, and looks correct while the
+  subject describes the private change as fully as the diff does.
+
+### Changed
+
+- **The build's prune is scoped to the layers the pass walked.** Rebuilding one
+  layer to A/B a variant deleted 122 skill and rule rows: the prune removed every
+  stored path the pass had not claimed, and a single-layer pass claims nothing
+  else. Now scoped to walked layers plus layers absent from the config entirely, so
+  a dropped layer is still cleaned up. Two tests hold both halves.
+- **`query --json` emits JSON on every exit, including the empty-index path.** It
+  printed prose regardless of the flag, so `recall-inject.py` logged "unparseable
+  JSON" and went silent - safe but BLIND, since an empty index and a broken backend
+  became one observation - and `eval-query-set.py` died on a raw traceback.
+- **`eval-query-set.py` measures the operator's default path.** Its first version
+  forced `--threshold 0`, which measures raw ranking rather than what the CLI
+  answers, and reported 85% where the CLI answered 77%. `--threshold` is now for
+  explicitly measuring raw ranking and the report says so.
+- **The `symbol` layer is WITHDRAWN**, its definition commented out in
+  `config/memory-index.yaml` with the numbers beside it. It answered 6/13 = 46% on
+  grep-blind intent queries against a 70% bar and a 50% kill line agreed before the
+  build. Two excuses were refuted by measurement: cosine spread is 0.0338 against
+  the PASSING commit layer's 0.0388, and raw cosine over all 9,608 rows with no
+  RRF, no re-rank and no threshold gives the IDENTICAL 46%, so no ranking change
+  can recover it. Targets sat at rank 117, 124 and 1016. Set B scored 92%, which
+  says the plumbing works and that name-search is all it does - what `git grep` and
+  CodeGraph FTS5 already do for free. Commented rather than orphaned: a layer
+  defined but outside every collection is neither built nor queried AND prints
+  `layers in no collection` on every invocation, including the recall hook that
+  fires on each operator prompt. `scripts/utils/symbol_source.py` and its 12 tests
+  stay in the tree so a next attempt starts from a measured negative.
+- **Symbol text comes from source via `ast`, never from CodeGraph's `docstring`
+  column.** That column reports 12.4% coverage where `ast` reports 52.0%, because
+  its parser attributes the `# =====` section banner ABOVE a symbol instead of the
+  string inside it - 582 of its 1,180 "docstrings" are banners. CodeGraph supplies
+  identity, location and edges; the file supplies text. The boundary outlives the
+  withdrawn layer.
+- **Four records carrying "GPU is ~1.9x faster on embeddings" now carry the batch
+  size.** Re-measured with both daemons warm: batched at 32 (what a build does) the
+  GPU runs ~30 texts/s against the CPU's 21-26, so 1.2-1.5x; one text per request
+  the GPU runs 9.8 against 12.7 and is SLOWER, because the WSL-to-Windows hop costs
+  more than a 0.66 GB model saves. Raising the batch does not help (32 and 128
+  differ by 3%, 256 is worse). Both re-measurements sit above the original on BOTH
+  hosts, which points at method rather than hardware; the original method is
+  unrecorded, so neither set is retracted. The consequence changed: pin the
+  accelerated host for SINGLE PROVENANCE, not for speed.
+- **Eight documentation paths that named files which do not exist are fixed**,
+  including an `/odin` ingest command that could not run, a security page
+  describing two hook files deleted in `ba1affd`, and three files citing a rule and
+  a vault directory that `SENSITIVE_MODE` replaced.
+
+### Fixed
+
+- **`model_digest` treated a malformed URL as fatal.** A host with no scheme - a
+  config typo, or the suite's stub value - raised `unknown url type` before any
+  socket opened and aborted the build. It broke 11 tests, which is how it was
+  found. A diagnostic must never be the thing that stops the work.
+- **`model_digest` opened a URL without checking its scheme.** The host arrives
+  from configuration, and `urlopen` honours whatever it is handed, so
+  `file:///etc/passwd` would have been opened and read. The guard that already
+  existed in `ollama_host.probe` is now applied here too.
+- **Dynamic SQL removed from `symbol_source.py`.** An f-string built the
+  placeholder list; values were bound and there was no hole, but the shape is what
+  the next author copies before interpolating a value. Now `json_each`, with no
+  dynamic SQL at all.
+- **A wrong correction reverted.** `reference/workspace-overview.md` was edited to
+  say the commit layer scores 77% and that an earlier 85% was mistaken. Both
+  numbers are real and belong to different thresholds. The edit was made by
+  trusting a summary line instead of opening the record, and was reverted after
+  re-running the measurement.
+- **The seam is tested in both directions.** Only "an engine store does not build a
+  layer outside its set" was covered. The uncovered direction carries the exposure:
+  `.memory-index-code/index.db` lives inside the PUBLIC engine clone, so a routing
+  slip puts private commit subjects in a public tree, and a gitignore is one guard
+  and not the seam. One new test reads the SHIPPED config rather than a fixture.
+
+### Security
+
+- **The commit air gap refuses a WHOLE commit, never merely the denied file inside
+  it.** A subject line is prose: "closed the villa purchase" describes the change as
+  completely as the diff does, so indexing the message of a private change leaks the
+  change even with the path dropped. It refused 14 data commits.
+- **The air gap cannot be switched off by a caller.** Found by a test written to
+  prove its own fixture was not vacuous, which then FAILED: the commit stayed
+  refused with EMPTY deny arguments, because `air_gap.is_denied()` carries a
+  hardcoded floor a caller's arguments ADD to and can never subtract from. That is
+  stronger than the guarantee being tested, so it is what the test now asserts.
+- 563 tests in `tests/security/`, up from 559.
+
 ## [0.12.0] - 2026-08-21
 
 The release about switches the operator can reach, and gates that turned out

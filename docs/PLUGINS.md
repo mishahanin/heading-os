@@ -146,9 +146,12 @@ Above 90 there is no window left in which to write the handoff. The command
 refuses a number at or below what the session has already used, because that
 number would fire at the very next pause.
 
-This switch moves the threshold and nothing else. It raises neither `auto` nor
-`unattended`. With both off, the hook asks at your number and compacts nothing by
-itself, and the command says so when it lands in that state.
+An accepted number also turns `unattended` on, and that turns `auto` on with it.
+So one command is enough, and the hook compacts at your number instead of asking.
+This changed on 2026-08-22. Before it, the switch moved the threshold and nothing
+else, which left the hook asking at a number nobody acted on. A refusal raises
+nothing, `status` and `off` raise nothing, and a stretch already running is left
+untouched. Only you lower the mode, with `/unattended off`.
 
 Both slash commands, `/unattended` and `/compact-at`, ship inside the
 `heading-core` bundle. They did not until 2026-08-21. The generator had no field

@@ -26,7 +26,12 @@ python scripts/checkpoint-paths.py --compact-at status
 Report the command output in one line. Then stop.
 
 The command refuses a number outside 15-90, and refuses one at or below the
-session's last rendered fill. It does NOT turn `auto` or `unattended` on; without
-one of those the hook asks at the threshold and compacts nothing.
+session's last rendered fill.
+
+An accepted number also turns `unattended` on, which turns `auto` on with it, so
+one command is enough and the hook compacts at the threshold instead of asking.
+A refusal raises nothing, and `status` and `off` raise nothing. When the mode is
+already on the command leaves the running stretch alone. Only the operator lowers
+it, with `/unattended off`.
 
 Do NOT write a checkpoint file. Do NOT run `/compact`. Do NOT continue any task.

@@ -244,9 +244,12 @@ threshold lands under the always-loaded context floor, and the trigger cascades.
 Above 90 there is no window left in which to write the handoff. The command
 refuses a number at or below what the session has already used, because that
 number would fire at the very next pause.</p>
-<p>This switch moves the threshold and nothing else. It raises neither <code>auto</code> nor
-<code>unattended</code>. With both off, the hook asks at your number and compacts nothing by
-itself, and the command says so when it lands in that state.</p>
+<p>An accepted number also turns <code>unattended</code> on, and that turns <code>auto</code> on with it.
+So one command is enough, and the hook compacts at your number instead of asking.
+This changed on 2026-08-22. Before it, the switch moved the threshold and nothing
+else, which left the hook asking at a number nobody acted on. A refusal raises
+nothing, <code>status</code> and <code>off</code> raise nothing, and a stretch already running is left
+untouched. Only you lower the mode, with <code>/unattended off</code>.</p>
 <p>Both slash commands, <code>/unattended</code> and <code>/compact-at</code>, ship inside the
 <code>heading-core</code> bundle. They did not until 2026-08-21. The generator had no field
 for <code>.claude/commands/</code>, so the plugin carried the <code>/checkpoint</code> skill and neither

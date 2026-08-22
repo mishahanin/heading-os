@@ -31,7 +31,7 @@ x-heading-routing:
   category: Operations
   label: /checkpoint [note]
   triggers:
-    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries three session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown countdown instead of halting, and it already includes `auto`. `compact-at N|status|off` moves the hard threshold where this session compacts, with the soft reminder derived 5 below; it raises neither `auto` nor `unattended`. Nothing lowers the mode except the operator - the assistant's done marker and the continuation ceiling stop a stretch and leave the switch up, and the status line shows its state on every render.
+    - NEVER auto-trigger. Explicit `/checkpoint [optional note]` only. Saves manual session handoff to `outputs/operations/handoff-archive/`, scoped to this session, without running /compact. Surfaces from the two-tier checkpoint-offer hook at the soft/hard thresholds (`CLAUDE_HANDOFF_SOFT_THRESHOLD` / `CLAUDE_HANDOFF_HARD_THRESHOLD`). Also carries three session switches. `auto on|off|status` makes the save silent and lets the Stop hook drive the compaction itself, through HERDR, once the handoff is on disk. `unattended on|off|status` adds continuing at a pause after a shown countdown instead of halting, and it already includes `auto`. `compact-at N|status|off` moves the hard threshold where this session compacts, with the soft reminder derived 5 below; an accepted number raises `unattended`, and `auto` with it, so one command is enough. Nothing lowers the mode except the operator - the assistant's done marker and the continuation ceiling stop a stretch and leave the switch up, and the status line shows its state on every render.
   exclusions:
     - Auto-resume after /compact handled by checkpoint-save.py (PostCompact)
     - reflective end-of-session -> /calibrate
@@ -95,10 +95,12 @@ leave, so a question here defeats the switch.
 `compact-at` is also a one-word slash command, `/compact-at 35`, which is the
 shorter route. The operator usually asks for it in prose. "Делаем compact на
 пороге 35%" means `--compact-at 35`. The hard threshold moves to 35, and the
-command derives the soft reminder at 30. It raises neither `auto` nor
-`unattended`. With both off the hook asks at the threshold and compacts nothing,
-and the command says so itself. Report the output and stop. The threshold takes
-effect at the next pause, and nothing restarts.
+command derives the soft reminder at 30. An accepted number also raises
+`unattended`, and that raises `auto` with it, so the hook compacts at the
+threshold rather than asking. A refusal raises nothing, `status` and `off` raise
+nothing, and a stretch already running is left untouched. Report the output and
+stop, exactly as for `unattended on`. The threshold takes effect at the next
+pause, and nothing restarts.
 
 Both switches apply to this session only. Each one overrides its own environment
 default in both directions. Neither needs cleanup. The state file carries a

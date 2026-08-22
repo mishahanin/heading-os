@@ -240,17 +240,67 @@ def test_status_reports_when_the_threshold_was_set(env):
     assert "set at:" in result.stdout
 
 
-def test_compact_at_does_not_raise_autonomy(env):
-    """It moves the point at which the hook ASKS. It never flips a switch the
-    operator did not ask for. `--unattended on` raising `auto` is justified
-    because unattended is inert without it; a threshold is not."""
+def test_setting_a_threshold_raises_unattended(env):
+    """Operator directive, 2026-08-22: one command, not two.
+
+    Until then a bare `--compact-at 35` only moved the point at which the hook
+    ASKED, and the operator had to follow it with `--unattended on` for anything
+    to compact. He types the pair together every time, so the pair is now one
+    command. A threshold set and never acted on was the failure mode, not a
+    switch raised without being asked for.
+
+    `raise_unattended` raises `session_auto` too, which is what makes the
+    compaction driven rather than merely offered.
+    """
     result = _run(env, "--compact-at", "35")
     assert result.returncode == 0, result.stderr
     state = _state(env)
-    assert "session_auto" not in state
-    assert "session_unattended" not in state
-    assert "compact" in result.stdout.lower()
-    assert "--auto on" in result.stdout
+    assert state["session_hard_threshold"] == 35
+    assert state["session_unattended"] is True
+    assert state["session_auto"] is True
+    assert "unattended" in result.stdout.lower()
+
+
+def test_a_refused_threshold_raises_nothing(env):
+    """The switch rides on the write, so a refusal must leave the session alone.
+
+    Both refusal paths: out of range, and at or below the last rendered fill.
+    """
+    for setup, value in (({}, "5"), ({"used_percentage": 60}, "35")):
+        _write_state(env, setup)
+        result = _run(env, "--compact-at", value)
+        assert result.returncode == 2, result.stdout
+        state = _state(env)
+        assert "session_unattended" not in state, f"{value} raised the switch anyway"
+        assert "session_auto" not in state
+
+
+def test_status_and_off_raise_nothing(env):
+    """Reading a value and clearing one are not the operator asking to work."""
+    _run(env, "--compact-at", "35")
+    _run(env, "--unattended", "off")
+    for arg in ("status", "off"):
+        result = _run(env, "--compact-at", arg)
+        assert result.returncode == 0, result.stderr
+        assert _state(env).get("session_unattended") is not True, arg
+
+
+def test_a_live_stretch_is_not_reset_by_a_new_threshold(env):
+    """Re-raising would clear the window, and the window is the running stretch.
+
+    `raise_unattended` pops the continuation counter and every window key, so
+    calling it on a session already unattended would silently hand the stretch a
+    fresh ceiling. The operator asked for the two commands to become one, not for
+    a threshold change to restart his run.
+    """
+    _write_state(env, {"session_unattended": True, "session_auto": True,
+                       "unattended_continuations": 7})
+    result = _run(env, "--compact-at", "35")
+    assert result.returncode == 0, result.stderr
+    state = _state(env)
+    assert state["session_hard_threshold"] == 35
+    assert state["unattended_continuations"] == 7, "the running stretch was reset"
+    assert "already on" in result.stdout.lower()
 
 
 # --------------------------------------------------------------------------

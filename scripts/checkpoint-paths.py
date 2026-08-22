@@ -20,6 +20,9 @@ Usage:
   python scripts/checkpoint-paths.py --unattended on      # continue at a pause
   python scripts/checkpoint-paths.py --unattended off     # halt at a pause again
   python scripts/checkpoint-paths.py --unattended status  # report, change nothing
+  python scripts/checkpoint-paths.py --compact-at 35      # compact here; raises unattended
+  python scripts/checkpoint-paths.py --compact-at off     # back to the environment pair
+  python scripts/checkpoint-paths.py --compact-at status  # report, change nothing
   python scripts/checkpoint-paths.py --done "plan X: 7 of 7"  # the plan is finished
   python scripts/checkpoint-paths.py --compact-history    # where compaction fired
 
@@ -419,10 +422,30 @@ def compact_at_switch(value: str) -> int:
               f"Pick a number above {used}, or run --compact-at off.", file=sys.stderr)
         return 2
 
+    # Setting a threshold RAISES unattended, inside the same lock. Operator
+    # directive, 2026-08-22: he typed the two commands together every time, and
+    # a threshold with both switches down moves the QUESTION and compacts
+    # nothing - which is a value set and never acted on, the failure this
+    # replaces. `raise_unattended` raises `session_auto` too, and that is what
+    # makes the compaction driven rather than merely offered.
+    #
+    # Only on an accepted NUMBER. `status` and `off` return above, and both
+    # refusals return before this block, so the switch rides on the write and
+    # cannot outlive a rejected value.
+    #
+    # Skipped when the mode is already on, because `raise_unattended` clears the
+    # window - it pops the continuation counter and every stretch key - so
+    # re-raising mid-run would hand a live stretch a fresh ceiling the operator
+    # never asked for. A paused stretch needs no help from here either: any
+    # instruction he types clears the pause through `unattended-resume.py`.
+    raised = False
     try:
         with CP.locked_state(path) as fresh:
             fresh["session_hard_threshold"] = hard
             fresh["session_hard_threshold_at"] = CP.utc_now().isoformat()
+            if not CP.unattended_mode(fresh):
+                CP.raise_unattended(fresh)
+                raised = True
     except OSError as exc:
         print(f"checkpoint-paths: could not write the threshold: {exc}", file=sys.stderr)
         return 1
@@ -432,13 +455,11 @@ def compact_at_switch(value: str) -> int:
     if used is None:
         print("This session has not reported a usable context reading, so the value was "
               "not checked against the current fill.")
-    if not (CP.auto_mode(state) or CP.unattended_mode(state)):
-        # Says what it does NOT do, rather than raising a switch the operator did
-        # not ask for. `_request_compaction` gates on auto OR unattended, so with
-        # both off this threshold moves the QUESTION and compacts nothing.
-        print(f"auto and unattended are both off, so the hook will ask at {hard}% and "
-              "compact nothing by itself.")
-        print("Turn the driven compaction on: python scripts/checkpoint-paths.py --auto on")
+    if raised:
+        print(f"unattended is now on as well, so the hook compacts at {hard}% instead "
+              "of asking. Only you lower it: --unattended off.")
+    else:
+        print("unattended was already on, and the running stretch was left untouched.")
     return 0
 
 

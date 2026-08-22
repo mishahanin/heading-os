@@ -124,7 +124,11 @@ _DEFAULT_PERSONAL_KEYWORDS = (
 PROMPT = """You classify and summarize a past AI-assistant work session.
 
 Return ONLY a compact JSON object, no prose, no markdown fence:
-{{"gist": "<2-4 sentences: what this conversation was about and what was decided>",
+{{"gist": "<2-4 sentences: what this conversation was about and what was decided.
+      A session usually holds SEVERAL unrelated subjects. Name each one, in the
+      order they first appear, starting with the subject the conversation opened
+      on. Do NOT summarize only the longest stretch: the subject that took the
+      most turns is often not the one the operator came for>",
   "reasoning": "<2-5 sentences: HOW the decision was reached - what was weighed,
       which measurement or fact settled it, what changed someone's mind. Write
       what a reader would need to re-open this decision in four months and
@@ -367,16 +371,63 @@ def language_directive(language: str) -> str:
     return _DIRECTIVES.get(language, _DIRECTIVES["mixed"])
 
 
+# How much of the opening turn to quote back. Long enough to carry a proper noun
+# and the ask around it, short enough that it cannot crowd out the directive.
+OPENING_CHARS = 300
+
+
+def opening_subject(body: str) -> str:
+    """The first USER turn of the body, trimmed. "" when there is none.
+
+    Measured, not judged - the same shape as dominant_language(). A session here
+    routinely holds several unrelated subjects, and the model reliably reports
+    whichever ran longest; the opening turn is usually what the operator came
+    for. On session c9bbd8dc both gemma3:4b and gemma3:12b opened their gist on
+    the second subject and never named the first at all.
+    """
+    for line in body.splitlines():
+        if line.startswith("USER:"):
+            text = line[len("USER:"):].strip()
+            if text:
+                return text[:OPENING_CHARS]
+    return ""
+
+
+_OPENING_DIRECTIVES = {
+    "ru": "ВАЖНО: разговор НАЧАЛСЯ вот с этого. Назови эту тему в gist, даже если "
+          "позже дольше говорили о другом: «{opening}»",
+    "en": "IMPORTANT: the conversation OPENED on this. Name this subject in the "
+          "gist, even if a later subject took more turns: \"{opening}\"",
+    "mixed": "IMPORTANT / ВАЖНО: the conversation OPENED on this. Name this "
+             "subject in the gist, even if a later subject took more turns. "
+             "Назови эту тему, даже если позже дольше говорили о другом: "
+             "\"{opening}\"",
+}
+
+
+def opening_directive(opening: str, language: str) -> str:
+    """One line naming the opening subject, written in the target language."""
+    if not opening:
+        return ""
+    template = _OPENING_DIRECTIVES.get(language, _OPENING_DIRECTIVES["mixed"])
+    return template.format(opening=opening)
+
+
 def build_prompt(body: str) -> str:
     """The full prompt, with the language directive as its LAST line.
 
     Last on purpose. The rule is also stated inside PROMPT, where a capable model
     reads it in context; this repetition at the end is what the 4B model actually
     obeys, and costs one line.
+
+    The opening-subject directive sits just above it, for the same reason and by
+    the same method. Order matters: the language fix was measured at the very
+    end, so nothing displaces it from there.
     """
-    return PROMPT.format(body=body) + "\n\n" + language_directive(
-        dominant_language(body)
-    )
+    language = dominant_language(body)
+    tail = [opening_directive(opening_subject(body), language),
+            language_directive(language)]
+    return PROMPT.format(body=body) + "\n\n" + "\n\n".join(t for t in tail if t)
 
 
 def envelope_body(envelope: dict) -> str:

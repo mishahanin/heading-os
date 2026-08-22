@@ -181,7 +181,7 @@ def run(question: str, depth: int = DEFAULT_DEPTH, critical: bool = False,
     # Phase 2 — reason + verify (Kimi). Retry once on transient failure (cloud
     # latency on a large reasoning prompt is the common cause) with a longer
     # timeout, then degrade gracefully if it still fails.
-    reason_prompt = build_reason_prompt(question, result["corpus"])
+    reason_prompt = build_reason_prompt(question, result["corpus"], result["sources"])
     last_err = None
     for attempt in range(2):
         try:

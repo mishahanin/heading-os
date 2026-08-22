@@ -1121,11 +1121,21 @@ def unattended_turn(
     rebuilt = _context_was_rebuilt(state, state.get("unattended_last_at"))
 
     done += 1
+    # The standing rules go out once per SESSION, not once per window. `--done`
+    # clears the window, so a stretch that follows one starts at continuation 1
+    # again - and the operator works in short stretches ended with `--done`, so
+    # every pause he saw was a "continuation 1" carrying the full four lines. He
+    # never once reached the repeat form. The flag is deliberately outside
+    # `_WINDOW_KEYS`: what it records is what the ASSISTANT has read, and `--done`
+    # does not remove that from its context. A compaction does, and `rebuilt`
+    # already answers for it.
+    show_rules = rebuilt or not state.get("unattended_rules_shown")
     _persist(
         state_path,
         unattended_continuations=done,
         unattended_turn_id=turn,
         unattended_last_at=CP.utc_now().isoformat(),
+        unattended_rules_shown=True,
     )
 
     # `remaining` and `compaction` were dropped from the template on 2026-08-19
@@ -1135,9 +1145,9 @@ def unattended_turn(
     # `wait` is what the wait ACTUALLY granted, not `CP.wait_seconds()`. The two
     # part company whenever `_effective_wait` shortened the window against the
     # registered hook timeout, and the sentence is read by the operator.
-    # The standing rules go out once per window, not once per pause. See the
+    # The standing rules go out once per session, not once per pause. See the
     # comment on UNATTENDED_WRAPPER_REPEAT.
-    if done == 1 or rebuilt:
+    if show_rules:
         reason = UNATTENDED_WRAPPER.format(
             used=used,
             wait=int(granted),

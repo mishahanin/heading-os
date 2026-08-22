@@ -4,6 +4,35 @@ All notable changes to HEADING OS are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims at [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0, interfaces may change between minor versions; see [ROADMAP.md](ROADMAP.md).
 
+## [Unreleased]
+
+### Changed
+
+- **Persistence rule corrected: the constraint is a SERVER database, not file
+  formats and not embedded stores.** `.claude/rules/persistence.md` shipped in
+  0.13.0 reading "Markdown files and SQLite, nothing else", which was wider than
+  the operator's intent in two directions. It refused ordinary data files - a
+  JSON index, a JSONL log, a YAML export - and it refused LanceDB, DuckDB and
+  Kuzu on the reasoning that "embedded is deliberately not the test". Files may
+  now be any format that fits the data, and an in-process store is a normal
+  proposal to argue on its merits, because it adds no daemon, no port and no
+  service account. Postgres, Oracle, MySQL, Microsoft SQL Server and every other
+  server database stay ruled out, and SQLite stays the one this workspace runs.
+  Also corrected in `docs/ARCHITECTURE.md` § 4 and `docs/RULES-REFERENCE.md`; the
+  0.13.0 release note below keeps its original text with a correction attached.
+- **The unattended Stop hook stops reprinting its standing rules.**
+  `.claude/hooks/checkpoint-offer.py`. The four-line form was gated on
+  "continuation 1 of this window", and `--done` clears the window - so an
+  operator who works in short stretches ended with `--done` saw a continuation 1
+  at every pause and never once reached the one-line repeat form. The gate is now
+  session-scoped (`unattended_rules_shown`, deliberately outside `_WINDOW_KEYS`),
+  because what it records is what the ASSISTANT has read and `--done` does not
+  remove that from its context. A compaction still restores the full text.
+  Guard: `tests/test_unattended_continuation_brevity.py`.
+- **`checkpoint-paths.py --done` answers in one line instead of four.** It still
+  names both halves of the state - the stretch ended, the switch stays on - and
+  drops the session slug and the echo of the note the assistant had just typed.
+
 ## [0.13.0] - 2026-08-22
 
 The release about the commit log becoming searchable by meaning, and about the

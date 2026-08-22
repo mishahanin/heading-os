@@ -322,15 +322,15 @@ def done_marker(note: str) -> int:
         print(f"checkpoint-paths: could not write the marker: {exc}", file=sys.stderr)
         return 1
 
-    print(f"done recorded for this session ({slug}): {state['unattended_done_note']}")
-    # Names BOTH halves of the state, because they are not the same thing and
-    # the operator asked for the distinction: the STRETCH is over, and the bar
-    # will say so, while the SWITCH stays up. A line that mentioned only the
-    # switch left him reading `unattended paused` on the bar without a sentence
-    # anywhere that connected the two.
-    print("Stretch ended, so the bar now reads `unattended paused`.")
-    print("The switch itself stays on - only you lower it - and your next "
-          "instruction resumes the stretch.")
+    # ONE line, and it was four until 2026-08-22. It still names BOTH halves of
+    # the state, because they are not the same thing and the operator asked for
+    # the distinction: the STRETCH is over and the bar says so, while the SWITCH
+    # stays up. What went is the padding around that - the slug, and an echo of
+    # the note the assistant had just typed on the line above. He reads this
+    # output at the end of every stretch, so a word that tells him nothing new
+    # is a word he re-reads forever.
+    print("done recorded. Stretch ended, bar reads `unattended paused`; "
+          "the switch stays on and your next instruction resumes it.")
     return 0
 
 

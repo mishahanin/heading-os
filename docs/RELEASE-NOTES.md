@@ -277,6 +277,8 @@ The reason is a question nobody can answer: fsync pass-through on ext4-over-VHDX
 
 It governs **data and state**, not configuration. `config/routing-map.yaml`, `config/tool-risk.json`, `pyproject.toml` and `.pre-commit-config.yaml` stay whatever format their consumers expect. And it governs only what runs *in* this workspace; it says nothing about what any product may use.
 
+**Corrected twice on 2026-08-22, the day after it shipped.** Both halves of the paragraph above were too wide. It refused ordinary data files — a JSON index, a JSONL log — which was never the intent; and "embedded is deliberately not the test" was a line of reasoning nobody had asked for, which turned LanceDB, DuckDB and Kuzu into refusals. What the operator actually ruled out is a **server** database. Files may be any format, an in-process store is a normal proposal, and SQLite stays the one this workspace runs. The current wording is in `.claude/rules/persistence.md`.
+
 ---
 
 ## 7. Eight paths the prose had outlived

@@ -274,7 +274,7 @@
 <tr>
 <td><code>persistence.md</code></td>
 <td>Always-on</td>
-<td>State lives in Markdown files or SQLite, and in nothing else. Postgres, Redis, Qdrant, Neo4j and every other server-process database are ruled out rather than weighed, because a store that outlives the process that wrote to it buys a daemon, a port and a backup story for a durability guarantee WSL2 does not document anyway. Rationale in <code>docs/ARCHITECTURE.md</code> § 4.</td>
+<td>State lives in files, in any format that fits, and the workspace&rsquo;s database is SQLite. Postgres, Oracle, MySQL, Microsoft SQL Server, Redis, Qdrant, Neo4j and every other SERVER database is ruled out rather than weighed, because a store that outlives the process that wrote to it buys a daemon, a port and a backup story for a durability guarantee WSL2 does not document anyway. An in-process store adds none of that and is not ruled out. Rationale in <code>docs/ARCHITECTURE.md</code> § 4.</td>
 </tr>
 <tr>
 <td><code>trace-id.md</code></td>

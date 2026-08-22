@@ -179,9 +179,10 @@ long-term advice, the <strong>knowledge base</strong> for notes, and <strong>thr
 operational state. They are explained together in <strong><a href="memory-odin.html">Memory &amp; ODIN</a></strong>.
 The recall index runs on a local embedder; connecting it is in
 <strong><a href="MODELS-SETUP.html">AI models</a></strong>.</p>
-<p><strong>Every one of those layers is a Markdown file or a SQLite database, and that is a
-rule rather than an accident</strong> (<code>.claude/rules/persistence.md</code>). No server database
-is permitted in this workspace.</p>
+<p><strong>Every one of those layers is a file or a SQLite database, and that is a rule
+rather than an accident</strong> (<code>.claude/rules/persistence.md</code>). File formats are free —
+Markdown, JSON, JSONL, YAML, whatever fits the data. What the rule refuses is a
+server database.</p>
 <p>The reason is durability, not taste. A database that runs as its own process stakes
 its whole durability contract on <code>fsync</code> reaching physical media. On WSL2, where the
 filesystem is ext4 inside a VHDX inside a Hyper-V guest, whether a guest flush is

@@ -78,9 +78,10 @@ operational state. They are explained together in **[Memory & ODIN](memory-odin.
 The recall index runs on a local embedder; connecting it is in
 **[AI models](MODELS-SETUP.html)**.
 
-**Every one of those layers is a Markdown file or a SQLite database, and that is a
-rule rather than an accident** (`.claude/rules/persistence.md`). No server database
-is permitted in this workspace.
+**Every one of those layers is a file or a SQLite database, and that is a rule
+rather than an accident** (`.claude/rules/persistence.md`). File formats are free —
+Markdown, JSON, JSONL, YAML, whatever fits the data. What the rule refuses is a
+server database.
 
 The reason is durability, not taste. A database that runs as its own process stakes
 its whole durability contract on `fsync` reaching physical media. On WSL2, where the

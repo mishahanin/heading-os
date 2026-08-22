@@ -106,11 +106,50 @@ def _reason(tmp: Path, **state_over) -> str:
 # --------------------------------------------------------------- which form
 
 
-def test_the_first_continuation_of_a_window_carries_the_standing_rules(tmp_path):
+def test_the_first_continuation_of_a_session_carries_the_standing_rules(tmp_path):
     reason = _reason(tmp_path)
     for sentence in STANDING:
-        assert sentence in reason, f"continuation 1 dropped {sentence!r}"
+        assert sentence in reason, f"the first pause dropped {sentence!r}"
     assert "--done" in reason
+
+
+def test_a_later_window_in_the_same_session_does_not_reprint_the_rules(tmp_path):
+    """The rules are session-scoped, not window-scoped.
+
+    `--done` clears the window, so the stretch after it starts at continuation 1
+    again. The operator works in short stretches ended with `--done`, which meant
+    every single pause he saw was a "continuation 1" carrying the full four
+    lines, and he never once reached the repeat form. He asked for the noise to
+    stop on 2026-08-22, holding a paste of it.
+
+    The assistant that read the rules in this session still holds them after
+    `--done`; only a compaction takes them away, and `rebuilt` already covers
+    that. So the flag lives outside `_WINDOW_KEYS` and survives the clear.
+    """
+    reason = _reason(
+        tmp_path,
+        unattended_rules_shown=True,
+        unattended_last_at="2026-08-20T09:00:00+00:00",
+    )
+    for sentence in STANDING:
+        assert sentence not in reason, (
+            f"a new window reprinted {sentence!r}; the assistant read it earlier "
+            f"in this same session and nothing removed it"
+        )
+    assert "--done" in reason, (
+        "the repeat dropped the only command that can end a stretch"
+    )
+
+
+def test_the_first_pause_records_that_the_rules_were_shown(tmp_path):
+    """Without the flag being written, every pause is the first pause."""
+    _reason(tmp_path)
+    state = json.loads(
+        (tmp_path / ".claude" / "state" / f"checkpoint-{SLUG}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state.get("unattended_rules_shown") is True
 
 
 def test_the_second_continuation_drops_the_rules_and_keeps_the_command(tmp_path):
@@ -121,6 +160,9 @@ def test_the_second_continuation_drops_the_rules_and_keeps_the_command(tmp_path)
         unattended_continuations=1,
         unattended_turn_id=TURN,
         unattended_last_at="2026-08-20T09:00:00+00:00",
+        # Written by the pause that printed them. A fixture without it is a
+        # session where they were never shown, and the full form is right there.
+        unattended_rules_shown=True,
     )
     for sentence in STANDING:
         assert sentence not in reason, (
@@ -157,6 +199,7 @@ def test_a_compaction_before_the_window_does_not(tmp_path):
         unattended_turn_id=TURN,
         unattended_last_at="2026-08-20T09:00:00+00:00",
         last_compact_at="2026-08-20T08:00:00+00:00",
+        unattended_rules_shown=True,
     )
     assert "Never invent work" not in reason
 

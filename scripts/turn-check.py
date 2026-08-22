@@ -35,7 +35,10 @@ Three lanes, cheapest first, each bounded:
            (hyphens normalise to underscores, which is the mapping that would
            have caught the rename above). Files under `tests/contract/` are
            matched, then skipped and counted: a frozen contract is red between
-           the approval commit and the implementation, on purpose.
+           the approval commit and the implementation, on purpose. Tests marked
+           `slow` are deselected and counted for the same class of reason: they
+           sleep for real, they belong to the once-per-push suite, and a lane
+           that takes a minute is a lane the operator learns to dread.
 
 Usage:
     python scripts/turn-check.py                # human output, exit 1 on failure
@@ -50,6 +53,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +88,21 @@ WATCHED_PREFIXES = ("scripts/", "tests/", ".claude/hooks/")
 CONTRACT_PREFIX = "tests/contract/"
 
 DEFAULT_TEST_TIMEOUT = 120
+
+# Pytest's exit code for "no tests were collected". Ordinary here, because the
+# test lane deselects the slow marker and a matched file can hold nothing else.
+NO_TESTS_COLLECTED = 5
+
+# A module naming its own fast contract, for when the stem rule finds nothing.
+# Repeatable, because six paths do not fit on one line.
+#
+# Anchored at column 0 with no leading whitespace allowed, so that an INDENTED
+# example of the syntax - inside a docstring explaining the convention, which is
+# exactly where one lives - is prose and not a declaration. Caught by
+# `test_every_declaration_in_the_tree_points_at_a_real_file` the first time this
+# module documented its own feature and thereby declared two tests that have
+# never existed.
+DECLARED_TESTS_RE = re.compile(r"^Tests:[ \t]*(.+)$", re.M)
 
 
 def _rel(path: Path) -> str:
@@ -219,12 +238,59 @@ def lane_import(paths: list[Path]) -> list[str]:
     return []
 
 
+def _declared_paths(path: Path) -> list[str]:
+    """The repo-relative test paths a module names in its own docstring.
+
+    Unresolved and unfiltered - `declared_tests` keeps the ones that exist and
+    `dangling_declarations` reports the ones that do not, because a caller that
+    cannot tell those apart is how a renamed test file becomes silent zero
+    coverage.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    found: list[str] = []
+    for line in DECLARED_TESTS_RE.findall(text):
+        for token in line.replace(",", " ").split():
+            token = token.strip("`'\"")
+            if token.startswith("tests/") and token.endswith(".py"):
+                found.append(token)
+    return found
+
+
+def declared_tests(path: Path) -> list[Path]:
+    """The declared test files that actually exist, resolved under the root."""
+    return [ROOT / rel for rel in _declared_paths(path) if (ROOT / rel).is_file()]
+
+
+def dangling_declarations(path: Path) -> list[str]:
+    """Declared test paths with no file behind them."""
+    return [rel for rel in _declared_paths(path) if not (ROOT / rel).is_file()]
+
+
 def matching_tests(paths: list[Path]) -> list[Path]:
-    """Test files that name the changed modules, plus changed test files.
+    """Test files that name the changed modules, plus changed test files, plus
+    the ones a module declares for itself.
 
     Stem matching with hyphens normalised: `wizard-verify-key.py` and
     `test_wizard_verify_key.py` only line up once `-` becomes `_`, and that
     pair is the exact miss this script was written for.
+
+    The stem rule finds tests NAMED after a module and nothing else, so a module
+    whose tests are named after the behaviour they pin matches nothing at all.
+    `scripts/checkpoint-paths.py` was that case: fifteen test files exercise it,
+    the stem `checkpoint_paths` matched none, and editing it ran zero tests under
+    a lane that printed `clean`. A module closes that by naming its own fast
+    contract in its docstring:
+
+        Tests: tests/test_a.py, tests/test_b.py
+
+    Additive, and the author picks the members. Matching by content instead was
+    measured and rejected - the fifteen files that merely mention
+    `checkpoint-paths` cost 60.6s, which is the end-of-turn wait this lane exists
+    to avoid. A declaration that points at a file which is not there is dropped
+    here and reported by `tests/test_turn_check.py`, never silently honoured.
     """
     tests_dir = ROOT / "tests"
     if not tests_dir.is_dir():
@@ -236,6 +302,7 @@ def matching_tests(paths: list[Path]) -> list[Path]:
         if rel.startswith("tests/"):
             picked.add(p)
             continue
+        picked.update(declared_tests(p))
         stem = p.stem.replace("-", "_")
         for name, tp in all_tests.items():
             body = name[len("test_"): -len(".py")]
@@ -249,19 +316,41 @@ def is_contract(path: Path) -> bool:
     return _rel(path).replace("\\", "/").startswith(CONTRACT_PREFIX)
 
 
-def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int]:
-    """Run the matched tests.
+def _deselected(body: str) -> int:
+    """How many tests pytest dropped for the marker expression.
 
-    Returns (failures, test files run, contract files skipped).
+    Read back from pytest's own summary rather than counted here, because this
+    lane never imports the target files and so cannot see their markers. A line
+    it cannot parse reports 0, which under-claims the exclusion instead of
+    inventing one.
+    """
+    match = re.search(r"(\d+) deselected", body)
+    return int(match.group(1)) if match else 0
+
+
+def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int, int]:
+    """Run the matched tests, minus the ones marked slow.
+
+    Returns (failures, test files run, contract files skipped, tests deselected).
+
+    `-m "not slow"` is the difference between a check that runs at the end of
+    every turn and one the operator learns to dread. Measured 2026-08-22: an edit
+    to `.claude/hooks/checkpoint-offer.py` matched a checkpoint/unattended set
+    whose tests sleep for real - 122s over 273 tests, one of them 22.8s alone -
+    and the Stop hook duly sat there for about a minute after every answer. Those
+    tests are not wrong; they are timing tests, and a timing test that does not
+    wait proves nothing. They belong to `scripts/run-tests.py`, which runs once
+    per push and where a minute is affordable. The count comes back so the drop
+    can be named rather than swallowed.
     """
     picked = matching_tests(paths)
     targets = [t for t in picked if not is_contract(t)]
     skipped = len(picked) - len(targets)
     if not targets:
-        return [], 0, skipped
+        return [], 0, skipped, 0
     args = [
         sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
-        "--no-header", "-x", *[str(t) for t in targets],
+        "-m", "not slow", "--no-header", "-x", *[str(t) for t in targets],
     ]
     try:
         out = subprocess.run(
@@ -271,15 +360,22 @@ def lane_tests(paths: list[Path], timeout: int) -> tuple[list[str], int, int]:
         return [
             f"the matched tests did not finish in {timeout}s "
             f"({len(targets)} file(s)); run them yourself or raise --timeout"
-        ], len(targets), skipped
+        ], len(targets), skipped, 0
     except OSError as e:
-        return [f"pytest could not run: {e}"], len(targets), skipped
+        return [f"pytest could not run: {e}"], len(targets), skipped, 0
+    body = (out.stdout or "") + (out.stderr or "")
+    dropped = _deselected(body)
+    # Exit 5 is "no tests collected". With a marker expression that is the
+    # ordinary outcome for a file whose tests are ALL slow, not a failure - and
+    # reporting it as one would block the turn over the very tests this lane
+    # deliberately declines to run.
+    if out.returncode == NO_TESTS_COLLECTED and dropped:
+        return [], len(targets), skipped, dropped
     if out.returncode != 0:
-        body = (out.stdout or "") + (out.stderr or "")
         tail = [ln for ln in body.strip().splitlines() if ln.strip()][-12:]
         return (["\n".join(tail) or f"pytest exited {out.returncode}"],
-                len(targets), skipped)
-    return [], len(targets), skipped
+                len(targets), skipped, dropped)
+    return [], len(targets), skipped, dropped
 
 
 def run(timeout: int, use_cache: bool, transcript=None) -> dict:
@@ -304,19 +400,24 @@ def run(timeout: int, use_cache: bool, transcript=None) -> dict:
         failures, lane = lane_import(paths), "import"
     tests_run = 0
     skipped_contract = 0
+    deselected_slow = 0
     if not failures:
-        failures, tests_run, skipped_contract = lane_tests(paths, timeout)
+        failures, tests_run, skipped_contract, deselected_slow = lane_tests(
+            paths, timeout
+        )
         lane = "tests"
 
     if failures:
         return {"status": "fail", "lane": lane, "failures": failures,
                 "files": len(paths), "tests_run": tests_run,
                 "skipped_foreign": foreign,
-                "skipped_contract": skipped_contract}
+                "skipped_contract": skipped_contract,
+                "deselected_slow": deselected_slow}
 
     write_state({"last_pass": fp, "files": len(paths), "tests_run": tests_run})
     return {"status": "pass", "files": len(paths), "tests_run": tests_run,
-            "skipped_foreign": foreign, "skipped_contract": skipped_contract}
+            "skipped_foreign": foreign, "skipped_contract": skipped_contract,
+            "deselected_slow": deselected_slow}
 
 
 def _foreign_note(result: dict) -> str:
@@ -339,8 +440,19 @@ def _contract_note(result: dict) -> str:
             f"until the slice implements them]{RESET}")
 
 
+def _slow_note(result: dict) -> str:
+    """The timing tests this lane hands to the full suite. Named for the same
+    reason as the two notes above: an exclusion nobody can see reads as
+    coverage."""
+    count = result.get("deselected_slow") or 0
+    if not count:
+        return ""
+    return (f" {GRAY}[{count} slow test(s) not run here: "
+            f"run `python scripts/run-tests.py` for those]{RESET}")
+
+
 def _notes(result: dict) -> str:
-    return _foreign_note(result) + _contract_note(result)
+    return _foreign_note(result) + _contract_note(result) + _slow_note(result)
 
 
 def render(result: dict) -> str:

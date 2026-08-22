@@ -23,8 +23,81 @@ import urllib.request
 from scripts.utils.ollama_host import is_http_url
 
 
+# The model this workspace embeds with when `config/memory-index.yaml` names
+# none. Kept identical to `scripts/memory-index.py`'s own
+# `cfg.setdefault("model", ...)`, and pinned equal to it by
+# tests/test_memory_health_redundancy.py: two fallbacks that disagree would split
+# the corpus on exactly the machine whose config went missing.
+INDEX_EMBED_MODEL_DEFAULT = "bge-m3"
+
+
 class EmbeddingError(RuntimeError):
     """Raised when the local embedder is unreachable or returns no vectors."""
+
+
+def _index_config() -> dict:
+    """`config/memory-index.yaml`, or {} when it cannot be read.
+
+    Degrades rather than raising: every caller below is advisory, interactive, or
+    a health probe, and none of them should die over a config file.
+    """
+    import yaml
+
+    from scripts.utils import yamlio
+    from scripts.utils.workspace import get_workspace_root
+
+    try:
+        path = get_workspace_root() / "config" / "memory-index.yaml"
+        with open(path, encoding="utf-8") as fh:
+            return yamlio.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+
+def index_embed_model() -> str:
+    """The model tag this workspace embeds with. Reads a file, probes nothing.
+
+    Split from `index_embed_target` for the one caller that wants the name and
+    must NOT touch the network to get it: `ops_signals.ollama_state` asks the
+    LOCAL daemon whether the embed model is present, and a health probe that
+    resolves a remote host to learn a string would be measuring the wrong machine.
+    """
+    return _index_config().get("model") or INDEX_EMBED_MODEL_DEFAULT
+
+
+def index_embed_target() -> tuple[str, str]:
+    """The (host, model) this workspace embeds with, read where the index reads them.
+
+    Resolution order is the SAME as `scripts/memory-index.py`: `host` from
+    `config/memory-index.yaml`, else `HEADING_OS_OLLAMA_EMBED_HOST`, else the
+    local daemon; `model` from the same file, else `INDEX_EMBED_MODEL_DEFAULT`.
+    An unreachable host degrades to local, because a slower answer beats no
+    answer.
+
+    Why this exists rather than four literals. Until 2026-08-22 the index, the
+    memory-hygiene redundancy scan, `chronicle personal-recall` and the ops radar
+    each named their own embedder. None of the first three was WRONG - each
+    compares only its own vectors - but `memory_health` spelled out
+    `http://localhost:11434` and `chronicle` read only an environment variable
+    nobody sets, so both ran on the WSL CPU while the index ran on the Windows
+    iGPU. Measured that day on the real auto-memory corpus: 267s against 87s. The
+    model copies were the same defect one step quieter: a model changed in config
+    would leave a second one resident in ollama beside the first, and nothing
+    would say so. The radar's copy was the worst of the four, because a monitor
+    that hardcodes what it monitors reports on a model the workspace may have
+    stopped using.
+
+    CALL THIS LAZILY, never at module scope. For an `auto:` preference it probes
+    a host - work that a command which never embeds (`chronicle stats`,
+    `chronicle build`) should not pay for on import.
+    """
+    from scripts.utils.ollama_host import resolve_ollama_host
+
+    config = _index_config()
+    host = resolve_ollama_host(
+        config.get("host"), env_var="HEADING_OS_OLLAMA_EMBED_HOST"
+    )
+    return host, config.get("model") or INDEX_EMBED_MODEL_DEFAULT
 
 
 def embed(

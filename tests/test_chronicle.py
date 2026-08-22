@@ -136,9 +136,13 @@ def test_personal_chronicle_is_air_gapped_from_the_index():
 def _reload_chronicle(monkeypatch, *, reachable=True, **env):
     """Re-import chronicle with a patched environment.
 
-    The endpoints are module-level constants resolved at import time, so the
-    only way to observe an override is a reload under the wanted environment.
-    `reachable` stands in for the probe, so no test touches the network.
+    The GENERATION endpoint is a module-level constant resolved at import time,
+    so the only way to observe an override is a reload under the wanted
+    environment. `reachable` stands in for the probe, so no test touches the
+    network.
+
+    The EMBEDDING endpoint is no longer a constant here - see `_embed_target`
+    below and the comment above `_FRONT_RE` in `scripts/chronicle.py`.
     """
     import importlib
 
@@ -153,10 +157,57 @@ def _reload_chronicle(monkeypatch, *, reachable=True, **env):
     return importlib.reload(mod)
 
 
-def test_ollama_endpoints_default_to_the_local_daemon(monkeypatch):
+def _embed_target(monkeypatch, tmp_path, *, config=None, reachable=True, **env):
+    """Chronicle's embedder, resolved under a controlled config and environment.
+
+    It comes from `scripts.utils.embeddings.index_embed_target()` since
+    2026-08-22, so this helper controls what that function reads instead of
+    reloading a module constant. `config=None` writes no file at all, which is
+    the "nothing configured" case.
+    """
+    import yaml
+
+    from scripts.utils import ollama_host, workspace
+    from scripts.utils.embeddings import index_embed_target
+
+    monkeypatch.setattr(ollama_host, "probe", lambda host, **kw: reachable)
+    monkeypatch.setattr(workspace, "get_workspace_root", lambda: tmp_path)
+    (tmp_path / "config").mkdir(exist_ok=True)
+    if config is not None:
+        (tmp_path / "config" / "memory-index.yaml").write_text(
+            yaml.safe_dump(config), encoding="utf-8")
+    for key in ("HEADING_OS_OLLAMA_HOST", "HEADING_OS_OLLAMA_EMBED_HOST"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    return index_embed_target()
+
+
+def test_ollama_endpoints_default_to_the_local_daemon(monkeypatch, tmp_path):
     mod = _reload_chronicle(monkeypatch)
     assert mod.OLLAMA_URL == "http://localhost:11434/api/generate"
-    assert mod.EMBED_HOST == "http://localhost:11434"
+    host, _model = _embed_target(monkeypatch, tmp_path)
+    assert host == "http://localhost:11434"
+
+
+def test_personal_recall_asks_the_shared_target_for_its_embedder(monkeypatch):
+    """The point of the 2026-08-22 change: chronicle no longer picks an embedder.
+
+    Before it, `EMBED_MODEL = "bge-m3"` sat here and the host came from
+    `HEADING_OS_OLLAMA_EMBED_HOST` ALONE - a variable unset on the CEO laptop, so
+    personal recall ran on the WSL CPU while the index ran on the Windows iGPU,
+    and the fallback being documented behaviour is exactly why nothing reported
+    it.
+
+    The other half - that no model literal is left behind - belongs to the AST
+    detector in `tests/test_embed_model_single_source.py`, not to a substring
+    scan here. A substring scan would flag the comment above `_FRONT_RE` that
+    RECORDS the old line, which is the same trap the `Tests:` declaration hit on
+    2026-08-22: prose about a pattern is not the pattern.
+    """
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "scripts" / "chronicle.py").read_text(encoding="utf-8")
+    assert "index_embed_target" in source
 
 
 def test_generation_host_is_overridable(monkeypatch):
@@ -164,19 +215,44 @@ def test_generation_host_is_overridable(monkeypatch):
     assert mod.OLLAMA_URL == "http://172.30.48.1:11436/api/generate"
 
 
-def test_generation_override_does_not_move_embeddings(monkeypatch):
-    # Embeddings must stay put unless their own variable says otherwise. A
-    # shared variable would silently ship every indexed text to whatever host
-    # generation points at, and would couple the always-on indexing path to a
-    # host chosen for a nightly summarizer.
-    mod = _reload_chronicle(monkeypatch, HEADING_OS_OLLAMA_HOST="http://172.30.48.1:11436")
-    assert mod.EMBED_HOST == "http://localhost:11434"
+def test_generation_override_does_not_move_embeddings(monkeypatch, tmp_path):
+    # Embeddings must stay put unless their own setting says otherwise. A shared
+    # variable would silently ship every indexed text to whatever host generation
+    # points at, and would couple the always-on indexing path to a host chosen
+    # for a nightly summarizer. Unchanged by the 2026-08-22 move to a shared
+    # target: that move was about WHERE the embedding preference is read, never
+    # about merging it with the generation one.
+    host, _model = _embed_target(
+        monkeypatch, tmp_path, HEADING_OS_OLLAMA_HOST="http://172.30.48.1:11436")
+    assert host == "http://localhost:11434"
 
 
-def test_embedding_host_has_its_own_override(monkeypatch):
+def test_embedding_host_has_its_own_override(monkeypatch, tmp_path):
+    """`HEADING_OS_OLLAMA_EMBED_HOST` still moves embeddings, and only them."""
+    host, _model = _embed_target(
+        monkeypatch, tmp_path, config={"model": "bge-m3"},
+        HEADING_OS_OLLAMA_EMBED_HOST="http://10.0.0.5:11434/")
+    assert host == "http://10.0.0.5:11434"      # trailing slash trimmed
     mod = _reload_chronicle(monkeypatch, HEADING_OS_OLLAMA_EMBED_HOST="http://10.0.0.5:11434/")
-    assert mod.EMBED_HOST == "http://10.0.0.5:11434"      # trailing slash trimmed
     assert mod.OLLAMA_URL == "http://localhost:11434/api/generate"
+
+
+def test_the_config_outranks_the_embed_variable(monkeypatch, tmp_path):
+    """A precedence CHANGE, recorded rather than discovered later.
+
+    Before 2026-08-22 `HEADING_OS_OLLAMA_EMBED_HOST` was chronicle's only input,
+    so it always won. Now chronicle reads `config/memory-index.yaml` first, the
+    same order `scripts/memory-index.py` uses, and the variable is what you reach
+    for when the config names no host. That is the price of one source of truth,
+    and it is the right side of the trade: an operator who edits the config
+    expects the whole workspace to follow.
+    """
+    host, model = _embed_target(
+        monkeypatch, tmp_path,
+        config={"host": "http://from-config:11436", "model": "from-config"},
+        HEADING_OS_OLLAMA_EMBED_HOST="http://from-env:11434")
+    assert host == "http://from-config:11436"
+    assert model == "from-config"
 
 
 def test_unreachable_override_degrades_to_the_local_daemon(monkeypatch):

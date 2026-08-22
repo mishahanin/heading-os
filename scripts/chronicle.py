@@ -522,14 +522,26 @@ def cmd_query(args: argparse.Namespace) -> int:
 # AT QUERY TIME, scores them locally (bge-m3 on the fly, lexical fallback), and
 # persists NOTHING. Personal life cannot surface unless the CEO summons it here.
 
-EMBED_MODEL = "bge-m3"
-# Separate from HEADING_OS_OLLAMA_HOST on purpose. Not because the two want the
-# same host - on 2026-08-18 the iGPU measured ~1.9x faster at embeddings too
-# (median 18.2 vs 9.5 vectors/s over 5 runs) - but because they carry different
-# risk: chronicle summarizes on a schedule and can wait for a remote host, while
-# embeddings feed the index every session. Moving one must not silently move the
-# other, and either can fall back to the local daemon on its own.
-EMBED_HOST = resolve_ollama_host(env_var="HEADING_OS_OLLAMA_EMBED_HOST")
+# The embedder is NOT this module's to choose. It comes from
+# `scripts.utils.embeddings.index_embed_target()`, the one place that reads
+# `config/memory-index.yaml`, so personal recall scores with the same host and
+# the same model as everything else in the workspace.
+#
+# What used to be here: `EMBED_MODEL = "bge-m3"` and a host resolved from
+# `HEADING_OS_OLLAMA_EMBED_HOST` ALONE. That variable is unset on the CEO laptop,
+# so the resolver returned the local daemon without probing and personal recall
+# ran on the WSL CPU while the index ran on the Windows iGPU - a split nothing
+# reported, because the fallback IS the documented behaviour. Reading the config
+# is what closes it.
+#
+# Still separate from OLLAMA_HOST above, and for the reason that separation was
+# written for: chronicle SUMMARIZES on a schedule and can wait for a remote host,
+# while embedding answers a CEO who is standing there. Different risk, different
+# preference, and moving one must not silently move the other. That argument was
+# never about which file the embedding preference is read from.
+#
+# Resolved per call, never at import: an `auto:` preference probes a host, and
+# `chronicle build` and `chronicle stats` never embed at all.
 _FRONT_RE = __import__("re").compile(r"^(\w[\w-]*):\s*(.*)$")
 
 
@@ -586,8 +598,10 @@ def cmd_personal_recall(args: argparse.Namespace) -> int:
     scored: list[tuple[float, dict]] = []
     mode = "semantic"
     try:
-        from scripts.utils.embeddings import EmbeddingError, embed
-        vecs = embed([query] + [e["text"] for e in entries], model=EMBED_MODEL, host=EMBED_HOST)
+        from scripts.utils.embeddings import EmbeddingError, embed, index_embed_target
+        embed_host, embed_model = index_embed_target()
+        vecs = embed([query] + [e["text"] for e in entries],
+                     model=embed_model, host=embed_host)
         qv, evs = vecs[0], vecs[1:]
         scored = [(_cosine(qv, ev), e) for ev, e in zip(evs, entries, strict=True)]
         floor = 0.5

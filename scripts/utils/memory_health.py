@@ -306,10 +306,12 @@ def scan_redundancy(memory_dir, *, threshold=0.86, embedder=None, timeout=120) -
         return {"ok": True, "pairs": [], "note": "fewer than 2 memory files"}
     if embedder is None:
         try:
-            from scripts.utils.embeddings import embed
+            from scripts.utils.embeddings import embed, index_embed_target
+
+            host, model = index_embed_target()
 
             def embedder(ts):
-                return embed(ts, model="bge-m3", host="http://localhost:11434", timeout=timeout)
+                return embed(ts, model=model, host=host, timeout=timeout)
         except Exception as e:
             return {"ok": False, "pairs": [], "note": f"embedder unavailable: {e}"}
     texts = [f.read_text(encoding="utf-8") for f in files]

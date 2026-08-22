@@ -54,6 +54,7 @@ def test_current_branch(tmp_path):
     assert current_branch(work) == "main"
 
 
+@pytest.mark.slow
 def test_ahead_behind_detects_unpushed_commit(tmp_path):
     _remote, work = _make_repo(tmp_path)
     supervised_push(work, branch="main", stall_window=15)

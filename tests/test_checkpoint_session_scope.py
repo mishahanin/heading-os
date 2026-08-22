@@ -1341,8 +1341,14 @@ def test_attended_mode_never_drives_a_compaction(env):
     )
 
 
+@pytest.mark.slow
 def test_the_wait_shows_a_countdown_and_always_clears_it(env):
-    """CAP-7. A still terminal must be visibly a wait, and never stay one."""
+    """CAP-7. A still terminal must be visibly a wait, and never stay one.
+
+    Marked slow: it sits out the whole configured 6s wait, because a countdown
+    that is not counted down proves nothing. `scripts/turn-check.py` deselects
+    the marker; `scripts/run-tests.py` still runs it.
+    """
     log = _install_fake_herdr(env, SESSION_A)
     _statusline(env, SESSION_A, 42)
     _set_state(env, SESSION_A, session_unattended=True)

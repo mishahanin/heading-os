@@ -515,17 +515,26 @@ def _append_after(path, entry, delay=1.0):
     return thread
 
 
+# The three negatives are marked `slow` and the three positives are not, because
+# that IS the difference between them: a positive ends the wait the moment the
+# line lands, a negative must sit out the whole configured 6s to prove it did not
+# mistake a tool result for the operator. `scripts/turn-check.py` deselects the
+# marker, so the end-of-turn lane keeps the cheap half of this coverage and
+# `scripts/run-tests.py` still runs all six.
 @pytest.mark.parametrize("entry,spoke", [
     ({"type": "user", "message": {"content": [{"type": "text", "text": "wait"}]}}, True),
     ({"type": "user", "message": {"content": "wait"}}, True),
     ({"type": "queue-operation", "operation": "enqueue",
       "sessionId": SESSION, "content": "hold on"}, True),
-    ({"type": "user", "message": {"content": [{"type": "tool_result",
-                                               "content": "x"}]}}, False),
-    ({"type": "user", "isMeta": True,
-      "message": {"content": [{"type": "text", "text": "meta"}]}}, False),
-    ({"type": "assistant",
-      "message": {"content": [{"type": "text", "text": "hi"}]}}, False),
+    pytest.param({"type": "user", "message": {"content": [{"type": "tool_result",
+                                                           "content": "x"}]}}, False,
+                 marks=pytest.mark.slow),
+    pytest.param({"type": "user", "isMeta": True,
+                  "message": {"content": [{"type": "text", "text": "meta"}]}}, False,
+                 marks=pytest.mark.slow),
+    pytest.param({"type": "assistant",
+                  "message": {"content": [{"type": "text", "text": "hi"}]}}, False,
+                 marks=pytest.mark.slow),
 ])
 def test_a_message_typed_during_the_wait_takes_the_turn_back(env, entry, spoke):
     """The half `_wait_out_the_grace` exists for, and the one nothing covered.

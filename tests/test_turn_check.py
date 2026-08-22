@@ -208,7 +208,7 @@ def test_a_frozen_contract_is_matched_then_skipped():
     if contract is None:
         pytest.skip("no frozen contract in the tree to check the skip against")
     assert tc.is_contract(contract), contract
-    failures, ran, skipped = tc.lane_tests([contract], timeout=30)
+    failures, ran, skipped, _ = tc.lane_tests([contract], timeout=30)
     assert failures == [], failures
     assert ran == 0, "a contract file was handed to pytest"
     assert skipped == 1, "the skip was not counted"
@@ -224,6 +224,146 @@ def test_the_render_names_the_contracts_it_declined_to_judge():
     text = tc.render({"status": "pass", "files": 1, "tests_run": 0,
                       "skipped_foreign": 0, "skipped_contract": 2})
     assert "2" in text and "contract" in text
+
+
+# ============================================================
+# A module that names its own tests
+# ============================================================
+
+def test_a_module_whose_tests_are_named_after_behaviour_is_still_matched(tmp_path):
+    """The stem rule maps a module to tests NAMED after it, and nothing else.
+
+    `scripts/checkpoint-paths.py` is the case that exposed the hole: fifteen test
+    files exercise it, all of them named after the behaviour they pin
+    (`test_checkpoint_state_lock.py`, `test_unattended_state_machine.py`), so the
+    stem `checkpoint_paths` matched NONE of them and editing the module ran zero
+    tests at the end of a turn. Silently - the lane printed `clean`.
+
+    Matching by content instead was measured and rejected: the fifteen files that
+    merely MENTION the module cost 60.6s, which is the wait this lane was just
+    fixed to remove. So the module declares its own fast contract and the author
+    picks what belongs in it.
+    """
+    module = tmp_path / "thing-with-dashes.py"
+    module.write_text(
+        '"""Does a thing.\n\nTests: tests/test_turn_check.py\n"""\n',
+        encoding="utf-8",
+    )
+    declared = tc.declared_tests(module)
+    assert [p.name for p in declared] == ["test_turn_check.py"], declared
+
+
+def test_a_declaration_may_span_several_lines(tmp_path):
+    """Six paths do not fit on one line, and wrapping must not drop the tail."""
+    module = tmp_path / "m.py"
+    module.write_text(
+        '"""Doc.\n\n'
+        "Tests: tests/test_turn_check.py, tests/test_session_scope.py\n"
+        "Tests: tests/test_scope_claims.py\n"
+        '"""\n',
+        encoding="utf-8",
+    )
+    names = {p.name for p in tc.declared_tests(module)}
+    assert names == {"test_turn_check.py", "test_session_scope.py",
+                     "test_scope_claims.py"}, names
+
+
+def test_an_indented_example_of_the_syntax_is_prose_not_a_declaration(tmp_path):
+    """Where the convention is DOCUMENTED is inside a docstring, indented - and
+    the first draft read its own example as a declaration of two tests that have
+    never existed. Column 0 is the whole difference."""
+    module = tmp_path / "m.py"
+    module.write_text(
+        '"""Doc.\n\n'
+        "A module names its contract like this:\n\n"
+        "    Tests: tests/test_made_up_example.py\n"
+        '"""\n',
+        encoding="utf-8",
+    )
+    assert tc.declared_tests(module) == []
+    assert tc.dangling_declarations(module) == []
+
+
+def test_a_declaration_pointing_nowhere_is_reported_not_swallowed(tmp_path):
+    """A renamed test file would otherwise turn a declaration into silent zero
+    coverage - the exact failure this whole mechanism exists to end."""
+    module = tmp_path / "m.py"
+    module.write_text(
+        '"""Doc.\n\nTests: tests/test_this_does_not_exist_at_all.py\n"""\n',
+        encoding="utf-8",
+    )
+    assert tc.declared_tests(module) == []
+    assert tc.dangling_declarations(module) == ["tests/test_this_does_not_exist_at_all.py"]
+
+
+def test_checkpoint_paths_declares_a_contract_and_it_resolves():
+    """The module the hole was found in, pinned so it cannot regress to zero."""
+    module = ROOT / "scripts" / "checkpoint-paths.py"
+    matched = tc.matching_tests([module])
+    assert matched, "checkpoint-paths.py maps to no tests again"
+    assert tc.dangling_declarations(module) == []
+
+
+def test_every_declaration_in_the_tree_points_at_a_real_file():
+    """Suite-level, not hook-level, on purpose: a dangling pointer is a real
+    defect, but blocking every turn on it teaches the operator to ignore the
+    hook - which is the failure mode the frozen-contract skip was written for."""
+    broken = {}
+    for folder in ("scripts", ".claude/hooks"):
+        for path in sorted((ROOT / folder).rglob("*.py")):
+            missing = tc.dangling_declarations(path)
+            if missing:
+                broken[str(path.relative_to(ROOT))] = missing
+    assert not broken, f"declarations pointing at files that do not exist: {broken}"
+
+
+# ============================================================
+# The slow lane, which the full suite owns
+# ============================================================
+
+SLOW_FIXTURE = '''\
+"""Temporary fixture written by tests/test_turn_check.py; deleted in that test."""
+import time
+
+import pytest
+
+
+@pytest.mark.slow
+def test_a_slow_one():
+    time.sleep(2)
+
+
+def test_a_fast_one():
+    assert True
+'''
+
+
+def test_the_test_lane_deselects_slow_marked_tests():
+    """A sleep-based test is worth running once per push, not once per turn.
+
+    Measured 2026-08-22: editing `.claude/hooks/checkpoint-offer.py` matched a
+    checkpoint/unattended set whose real sleeps cost 122s, so the Stop hook sat
+    for about a minute after every answer and the operator felt the whole harness
+    as slow. `scripts/run-tests.py` still runs them; this lane does not.
+    """
+    fixture = ROOT / "tests" / "test_turn_check_slow_fixture.py"
+    fixture.write_text(SLOW_FIXTURE, encoding="utf-8")
+    try:
+        failures, ran, skipped, deselected = tc.lane_tests([fixture], timeout=60)
+    finally:
+        fixture.unlink()
+    assert failures == [], failures
+    assert ran == 1, "the fixture file was not handed to pytest"
+    assert deselected == 1, "the slow-marked test was not deselected"
+
+
+def test_the_render_names_the_slow_tests_it_deselected():
+    """Same obligation as the foreign and contract notes: an exclusion nobody
+    can see reads as coverage."""
+    text = tc.render({"status": "pass", "files": 1, "tests_run": 1,
+                      "skipped_foreign": 0, "skipped_contract": 0,
+                      "deselected_slow": 4})
+    assert "4" in text and "slow" in text
 
 
 def test_the_hook_forwards_the_transcript_it_is_given():

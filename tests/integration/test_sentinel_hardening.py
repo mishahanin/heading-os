@@ -185,6 +185,7 @@ def test_theme_classify_custom_exception_falls_back(
 # Test 13: Telegram WAL checkpoint on locked session file
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_telegram_wal_checkpoint_on_locked_session(
     mock_config, state_manager, mock_logger, tmp_session_dir

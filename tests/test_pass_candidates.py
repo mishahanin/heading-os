@@ -384,6 +384,7 @@ def test_only_tests_that_were_red_for_real_are_weighed():
 # SC-5  Wired into the one command that reads a contract
 # ----------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_probe_refuses_a_taken_contract_and_leaves_a_strict_one_alone(
     tmp_path, capsys, monkeypatch
 ):

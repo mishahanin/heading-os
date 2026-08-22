@@ -29,6 +29,20 @@ Usage:
 Archive paths are DATA-root-relative (`outputs/...`), which is the form the
 @-reference and the inject hook resolve. The state path is project-relative.
 Write them as printed; do not rebuild them by hand.
+
+Fifteen test files exercise this module and every one of them is named after the
+behaviour it pins, so `scripts/turn-check.py`'s stem rule - which looks for
+`test_checkpoint_paths*.py` - matched NONE of them, and editing this file ran
+zero tests at the end of a turn while the lane printed `clean`. The declaration
+below is that lane's fast contract, measured 2026-08-22: 97 tests in 2.91s. It is
+deliberately NOT the full fifteen; those cost 60.6s because the rest of the
+checkpoint suite sleeps through real countdowns, and `scripts/run-tests.py` still
+runs all of them. Add a file here when it pins behaviour of THIS module and is
+cheap; leave the sleepers out.
+
+Tests: tests/test_checkpoint_state_lock.py, tests/test_unattended_state_machine.py
+Tests: tests/test_session_compaction_threshold.py, tests/test_checkpoint_write_path.py
+Tests: tests/test_checkpoint_operator_surface.py, tests/test_checkpoint_stamp_timezone.py
 """
 
 import argparse

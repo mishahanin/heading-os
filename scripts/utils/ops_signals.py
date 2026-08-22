@@ -61,9 +61,20 @@ PUBLISH_PENDING = 1                # >=1 corporate-routed change since last BUIL
 INDEX_STALE_DAYS = 2               # index older than this (build age) -> rebuild
 AUTOHEAL_ESCALATE = 2              # consecutive auto-heal failures before surfacing in the nudge
 
-# Default local embedder host (mirrors config/memory-index.yaml default).
+# Default local embedder host (mirrors config/memory-index.yaml default). This
+# one is deliberately the LOCAL daemon and not the configured host: Tier-A heals
+# by restarting local ollama, and `ollama_accel_state` below is the separate
+# signal that reports on the accelerated instance.
 OLLAMA_HOST = "http://localhost:11434"
-EMBED_MODEL_PREFIX = "bge-m3"
+
+# The model name is NOT a constant here. It was `EMBED_MODEL_PREFIX = "bge-m3"`
+# until 2026-08-22, which made this monitor report on a model the workspace may
+# have stopped using: change `model:` in config/memory-index.yaml and the radar
+# would keep announcing that `bge-m3` is missing while the index embedded happily
+# with the new one. A monitor that hardcodes what it monitors is the one copy of
+# a literal that produces a WRONG answer rather than a merely wasteful one.
+# Read per call from the single source: `embeddings.index_embed_model()`, which
+# reads the config and probes nothing.
 
 
 # ============================================================
@@ -431,13 +442,21 @@ def odin_cadence_state(engine_root: Path) -> dict:
 # Tier-A: ollama (probe)
 # ============================================================
 
-def classify_ollama(reachable: bool, model_present: bool) -> dict:
-    """Pure: ollama reachability + bge-m3 presence -> signal dict (Tier A)."""
+def classify_ollama(reachable: bool, model_present: bool,
+                    model: str | None = None) -> dict:
+    """Pure: ollama reachability + embed-model presence -> signal dict (Tier A).
+
+    `model` names the tag in the summary line. The CALLER supplies it, because
+    this function is pure and reading the config here would end that. Omitted
+    means the generic wording, which is right for a test that is asserting on
+    reachability and has no opinion about the tag.
+    """
     due = (not reachable) or (not model_present)
+    named = model or "the embed model"
     if not reachable:
         severity, summary = "high", "ollama: unreachable"
     elif not model_present:
-        severity, summary = "high", f"ollama: up but {EMBED_MODEL_PREFIX} missing"
+        severity, summary = "high", f"ollama: up but {named} missing"
     else:
         severity, summary = "ok", "ollama: up"
     return {
@@ -528,7 +547,10 @@ def ollama_state(host: str | None = None, timeout: int = 3) -> dict:
     try to restart it). The host is injectable for tests (point at a dead port
     to deterministically exercise the unreachable path).
     """
+    from scripts.utils.embeddings import index_embed_model
+
     host = host or OLLAMA_HOST
+    wanted = index_embed_model()
     url = f"{host.rstrip('/')}/api/tags"
     reachable = False
     model_present = False
@@ -539,12 +561,12 @@ def ollama_state(host: str | None = None, timeout: int = 3) -> dict:
         models = body.get("models", []) or []
         for m in models:
             name = (m.get("name") or m.get("model") or "") if isinstance(m, dict) else str(m)
-            if name.startswith(EMBED_MODEL_PREFIX):
+            if name.startswith(wanted):
                 model_present = True
                 break
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
         reachable = False
-    return classify_ollama(reachable, model_present)
+    return classify_ollama(reachable, model_present, model=wanted)
 
 
 # ============================================================

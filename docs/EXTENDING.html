@@ -269,6 +269,21 @@ an implementation detail. Write one test, make it pass, then the next.</p>
 harness that makes the bug appear and disappear on demand. Do not hypothesize about a
 cause you cannot reproduce. Write the regression test before the fix, watch it fail,
 apply the fix, watch it pass.</p>
+<h3 id="name-the-tests-your-module-cannot-match-by-name">Name the tests your module cannot match by name</h3>
+<p><code>scripts/turn-check.py</code> runs at the end of a turn. It maps a changed module to its
+tests by name. <code>wizard-verify-key.py</code> maps to <code>test_wizard_verify_key.py</code>. A module
+whose tests carry behaviour names matches nothing. The lane then runs no test and
+still prints <code>clean</code>.</p>
+<p>Declare the fast contract in the module docstring. Start the line at column 0:</p>
+<!-- ste-skip-start -->
+<div class="highlight"><pre><span></span><code>Tests: tests/test_turn_check.py, tests/test_session_scope.py
+</code></pre></div>
+<!-- ste-skip-end -->
+
+<p>Repeat the line when the paths do not fit. Name tests that are cheap and that pin this
+module. Leave out tests that sleep, because <code>scripts/run-tests.py</code> still runs those. An
+indented line is an example, not a declaration. A declared path with no file behind it
+fails <code>tests/test_turn_check.py</code>.</p>
 <hr />
 <h2 id="7-restraint">7. Restraint</h2>
 <ul>

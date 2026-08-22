@@ -33,7 +33,7 @@ Maps each Action Queue `action_type` to one of three risk tiers. `autonomous` is
 
 Drives `scripts/memory-index.py`, the local associative-memory index behind `/recall`. It sets which workspace layers to embed, the on-machine embedder (`bge-m3` via Ollama), and the salience threshold. It also carries the air-gap denylist that keeps sensitive layers out of the index. Runs entirely on-machine at zero API cost. See [memory and ODIN](memory-odin.html).
 
-The `audit:` block tunes the metamemory scan. `audit.near_dup_threshold` (float, default `0.86`) is a cosine-similarity threshold. Above it, two auto-memory files are flagged as a near-duplicate merge candidate. The scan (`scan_redundancy()` in `scripts/utils/memory_health.py`) is advisory-only. It surfaces candidates in the weekly `scripts/memory-hygiene.py` report for a human to resolve via `/dream`. It never enters the hygiene exit-code gate, and it is never auto-applied.
+The `audit:` block tunes the metamemory scan. `audit.near_dup_threshold` (float, default `0.86`) is a cosine-similarity threshold. Above it, two auto-memory files are flagged as a near-duplicate merge candidate. The scan (`scan_redundancy()` in `scripts/utils/memory_health.py`) reads this file for its embedder. So does `chronicle personal-recall`, and so does the ops radar when it checks that the model is present. All three ask `index_embed_target()` in `scripts/utils/embeddings.py`, which reads the `host:` and `model:` keys here. One workspace therefore has one embedder. The scan is advisory-only. It surfaces candidates in the weekly `scripts/memory-hygiene.py` report for a human to resolve via `/dream`. It never enters the hygiene exit-code gate, and it is never auto-applied.
 
 ## `llm_fallback.yaml`: model failover
 

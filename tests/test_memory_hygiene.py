@@ -102,6 +102,7 @@ def _patch_brain(mod, monkeypatch, *, errors):
     monkeypatch.setattr(mod, "collect_brain_compile", lambda: fake)
 
 
+@pytest.mark.slow
 def test_gather_gates_on_objective_defects(tmp_path, monkeypatch):
     mod = _load_hygiene()
     data_root = tmp_path / "data"
@@ -290,6 +291,7 @@ def test_real_memory_index_keeps_managed_marker_on_the_header_line():
 # No-mutation + single-file-write
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_detector_never_mutates_memory(tmp_path, monkeypatch):
     mod = _load_hygiene()
     data_root = tmp_path / "data"

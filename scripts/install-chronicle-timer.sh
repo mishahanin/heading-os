@@ -49,6 +49,24 @@ fi
 # swallowing it as a plain "no timezone configured".
 TZ_VALUE="${HEADING_OS_TZ:-$(cd "$WORKSPACE" && "$PYTHON" -m scripts.utils.paths tz || echo UTC)}"
 
+# Which ollama the summarizer talks to. Read from config/memory-index.yaml's
+# `host`, so ONE line in that file decides where both the embedder and the
+# summarizer run rather than two places drifting apart -- which is exactly what
+# happened until 2026-08-22, when the index ran on the Windows iGPU and the
+# nightly chronicle ran on the WSL CPU daemon because nobody ever set the
+# variable chronicle.py had documented since 2026-08-18. An explicit
+# HEADING_OS_OLLAMA_HOST still wins; an empty value leaves the local default.
+OLLAMA_HOST_VALUE="${HEADING_OS_OLLAMA_HOST:-$(cd "$WORKSPACE" && "$PYTHON" -c '
+import sys
+sys.path.insert(0, ".")
+try:
+    from scripts.utils import yamlio
+    with open("config/memory-index.yaml", encoding="utf-8") as fh:
+        print(yamlio.safe_load(fh).get("host", "") or "")
+except Exception:
+    print("")
+' 2>/dev/null || echo "")}"
+
 TEMPLATE_DIR="$WORKSPACE/scripts/templates/systemd"
 DEST_DIR="$HOME/.config/systemd/user"
 
@@ -94,6 +112,7 @@ for unit in chronicle.service chronicle.timer; do
     sed -e "s|{{WORKSPACE}}|${WORKSPACE}|g" \
         -e "s|{{PYTHON}}|${PYTHON}|g" \
         -e "s|{{TZ}}|${TZ_VALUE}|g" \
+        -e "s|{{OLLAMA_HOST}}|${OLLAMA_HOST_VALUE}|g" \
         "$TEMPLATE_DIR/$unit" > "$DEST_DIR/$unit"
 done
 

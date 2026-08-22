@@ -20,6 +20,16 @@ model: bge-m3
 # A plain URL still works here; see scripts/utils/ollama_host.py.
 host: "auto:11436"
 
+# How long ollama keeps the embed model resident after a request. Ollama's own
+# default is 5 minutes, and a working session pauses for longer than that
+# constantly, so the FIRST query after a pause paid a full model reload.
+# Measured 2026-08-22 on this machine: 7.00 s cold against 0.87 s warm — the
+# 6.1 s gap is bge-m3 being read back into video memory, nothing else. It hit
+# the `recall-inject` hook too, which fires on 80% of prompts.
+# Cost of holding it: 664 MB resident. Lower this to trade speed back for
+# memory; `0` restores ollama's unload-immediately behaviour, `-1` never unloads.
+keep_alive: "30m"
+
 # Salience threshold: hits cluster 0.56-0.61, empty 0.49-0.53 (tested on Odin).
 # Порог релевантности (тест на мозге Один: попадания 0.56-0.61, пустота 0.49-0.53).
 threshold: 0.55

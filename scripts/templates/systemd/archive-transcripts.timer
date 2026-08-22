@@ -1,0 +1,23 @@
+[Unit]
+Description=Daily 31C session-transcript archive (02:50, configured timezone)
+
+[Timer]
+# 02:50, ten minutes BEFORE the 03:00 chronicle build. Order matters in one
+# direction only: the chronicle writes an entry pointing at
+# chronicle/transcripts/<year>/<date>-<id>.jsonl.gz, and an archive already on
+# disk makes that pointer resolve the moment the entry is written rather than a
+# day later. Nothing breaks in the other order -- the archiver is idempotent and
+# the pointer is a path, not a link the entry validates.
+#
+# The zone is named rather than inherited so a host on another zone does not
+# shift this out of the quiet window and into the middle of a working session,
+# where it would find nothing settled to archive.
+#
+# Persistent=true runs a fire missed while the machine was off, on next boot.
+# That is the case this unit exists for: the loss it prevents is silent and the
+# window that causes it is measured in days.
+OnCalendar=*-*-* 02:50:00 {{TZ}}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

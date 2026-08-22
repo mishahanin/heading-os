@@ -1,0 +1,207 @@
+"""Session transcripts are archived off the harness's own 30-day clock.
+
+Why this exists. Claude Code deletes transcripts under `~/.claude/projects/`
+after `cleanupPeriodDays`, which defaults to 30 and was unset here. Measured
+2026-08-22: of 258 Chronicle entries, 177 (69%) already pointed at a transcript
+file that no longer existed, and the oldest surviving one was dated 2026-07-22 —
+exactly the 30-day edge. The Chronicle entry keeps the DECISION; the transcript
+is the only place the reasoning behind it survives. So 69% of "how did we get
+here" was already unrecoverable, and one more day of it went every day.
+
+The retention window was raised the same day, which stops the loss but does not
+protect it: the transcripts live outside both repositories, so no git and no
+`push-all.py` touches them, and a dead disk still takes everything.
+
+This archiver copies each finished transcript into the DATA overlay, compressed,
+where the normal backup already runs. It is append-only by construction: a
+finished transcript never changes, so an archived file is never rewritten.
+"""
+import gzip
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+WORKSPACE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(WORKSPACE))
+
+# Loaded by path, not imported: the script is a standalone CLI, so the workspace
+# naming convention gives it a hyphen, which is not a legal module name.
+_spec = importlib.util.spec_from_file_location(
+    "archive_transcripts_mod", WORKSPACE / "scripts" / "archive-transcripts.py"
+)
+arch = importlib.util.module_from_spec(_spec)
+sys.modules["archive_transcripts_mod"] = arch
+_spec.loader.exec_module(arch)
+
+
+@pytest.fixture
+def tree(tmp_path, monkeypatch):
+    """A fake transcript source and a fake DATA root."""
+    source = tmp_path / "projects" / "-some-workspace"
+    source.mkdir(parents=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(arch, "transcript_dir", lambda: source)
+    monkeypatch.setattr(arch, "archive_root", lambda: data / "chronicle" / "transcripts")
+    return source, data / "chronicle" / "transcripts"
+
+
+def _write(source: Path, name: str, lines: int = 3, when: str = "2026-08-01") -> Path:
+    """A transcript whose FIRST LINE is dated `when`, and whose mtime matches.
+
+    The first line is what decides the archive path, because it is the one date
+    that never moves. The mtime is set too, so the settle-window tests can drive
+    it independently.
+    """
+    import calendar
+    import os
+
+    path = source / f"{name}.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps({"timestamp": f"{when}T10:0{i}:00Z", "n": i})
+            for i in range(lines)
+        ),
+        encoding="utf-8",
+    )
+    stamp = calendar.timegm(tuple(int(p) for p in when.split("-")) + (12, 0, 0, 0, 0, 0))
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_archives_a_transcript_compressed_and_readable(tree):
+    source, dest = tree
+    src = _write(source, "aaaa1111", lines=4)
+
+    result = arch.archive(now=1_800_000_000.0)
+
+    assert result["archived"] == 1
+    out = next(dest.rglob("*.jsonl.gz"))
+    assert out.name.startswith("2026-08-01-aaaa1111")
+    with gzip.open(out, "rt", encoding="utf-8") as fh:
+        assert fh.read() == src.read_text(encoding="utf-8")
+
+
+def test_the_archive_is_dated_so_a_year_is_browsable(tree):
+    source, dest = tree
+    _write(source, "bbbb2222", when="2026-07-15")
+    arch.archive(now=1_800_000_000.0)
+    out = next(dest.rglob("*.jsonl.gz"))
+    assert out.parent.name == "2026", f"expected a year directory, got {out.parent}"
+
+
+def test_a_second_run_does_not_rewrite_an_already_archived_file(tree):
+    source, dest = tree
+    _write(source, "cccc3333")
+
+    first = arch.archive(now=1_800_000_000.0)
+    out = next(dest.rglob("*.jsonl.gz"))
+    stamp = out.stat().st_mtime_ns
+
+    second = arch.archive(now=1_800_000_000.0)
+
+    assert first["archived"] == 1
+    assert second["archived"] == 0 and second["skipped"] == 1
+    assert out.stat().st_mtime_ns == stamp, "an unchanged transcript was rewritten"
+
+
+def test_a_transcript_that_grew_is_re_archived_in_place(tree):
+    """A resumed session replaces its archive; it must not leave a second one.
+
+    Resuming rewrites the mtime. While the archive path was derived from the
+    mtime, the longer transcript landed under a NEW date and the first,
+    truncated copy stayed behind forever — two archives for one session, the
+    older one silently wrong. The path now comes from the session's start
+    timestamp, which never moves.
+    """
+    source, dest = tree
+    src = _write(source, "dddd4444", lines=2, when="2026-08-01")
+    arch.archive(now=1_800_000_000.0)
+
+    src.write_text(src.read_text(encoding="utf-8") + "\n" + json.dumps({"n": 99}),
+                   encoding="utf-8")
+    result = arch.archive(now=1_800_000_000.0)
+
+    assert result["archived"] == 1
+    archives = list(dest.rglob("*.jsonl.gz"))
+    assert len(archives) == 1, f"one session left {len(archives)} archives: {archives}"
+    assert archives[0].name == "2026-08-01-dddd4444.jsonl.gz"
+    with gzip.open(archives[0], "rt", encoding="utf-8") as fh:
+        assert '"n": 99' in fh.read()
+
+
+def test_the_live_session_is_left_alone(tree):
+    """A transcript written seconds ago is still being appended to.
+
+    Archiving it would store a half-conversation and then re-store it on the next
+    run, so the settle window keeps the archive one-write-per-session.
+    """
+    source, dest = tree
+    src = _write(source, "eeee5555")
+    import os
+    os.utime(src, (1_800_000_000.0, 1_800_000_000.0))
+
+    result = arch.archive(now=1_800_000_000.0 + 60)  # one minute old
+
+    assert result["archived"] == 0
+    assert result["too_fresh"] == 1
+    assert not list(dest.rglob("*.gz"))
+
+
+def test_a_settled_transcript_is_archived(tree):
+    source, dest = tree
+    src = _write(source, "ffff6666")
+    import os
+    os.utime(src, (1_800_000_000.0, 1_800_000_000.0))
+
+    result = arch.archive(now=1_800_000_000.0 + arch.SETTLE_SECONDS + 1)
+
+    assert result["archived"] == 1
+
+
+def test_dry_run_writes_nothing(tree):
+    source, dest = tree
+    _write(source, "9999aaaa")
+    result = arch.archive(now=1_800_000_000.0, dry_run=True)
+    assert result["archived"] == 1, "a dry run still reports what it would do"
+    assert not dest.exists() or not list(dest.rglob("*.gz"))
+
+
+def test_an_unreadable_transcript_does_not_stop_the_others(tree, monkeypatch):
+    """One bad file must not cost the whole run; the failure is counted, not hidden."""
+    source, dest = tree
+    _write(source, "aaaa0001")
+    bad = _write(source, "bbbb0002")
+
+    real_open = arch.gzip.open
+
+    def explode(path, *a, **kw):
+        if "bbbb0002" in str(path):
+            raise OSError("disk on fire")
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(arch.gzip, "open", explode)
+    result = arch.archive(now=1_800_000_000.0)
+
+    assert result["archived"] == 1
+    assert result["failed"] == 1
+    assert len(list(dest.rglob("*.gz"))) == 1
+
+
+def test_empty_source_is_not_an_error(tree):
+    result = arch.archive(now=1_800_000_000.0)
+    assert result == {"archived": 0, "skipped": 0, "too_fresh": 0, "failed": 0}
+
+
+def test_the_archive_lands_in_the_data_overlay_never_the_engine():
+    """Transcripts carry everything, including personal threads. DATA only."""
+    from scripts.utils.workspace import get_data_root, get_workspace_root
+
+    root = arch.archive_root()
+    assert str(root).startswith(str(get_data_root()))
+    assert not str(root).startswith(str(get_workspace_root()) + "/"), (
+        "an archived transcript must never land in the engine tree"
+    )

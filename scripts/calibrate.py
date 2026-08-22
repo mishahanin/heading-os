@@ -75,6 +75,38 @@ def parse_jsonl(path: Path) -> tuple[list, list]:
     return events, skipped
 
 
+def _turn_text(content) -> str:
+    """The readable prose of one turn, whichever shape the harness wrote it in.
+
+    Claude Code writes `message.content` as a plain string for a typed user
+    message and as a LIST OF BLOCKS for everything else — every assistant turn,
+    and every user turn that carries a tool result.
+
+    This function exists because the caller used to accept only the string shape.
+    Measured 2026-08-22 on a real 1.7 MB session: 27,405 characters of prose, of
+    which 26,270 (96%) were dropped, including every single assistant turn. The
+    Chronicle summarized what was left and its entries read as bare facts,
+    because the reasoning is in the assistant turns and none arrived.
+
+    Only `text` blocks are prose. `tool_use` and `tool_result` payloads are
+    machine traffic that would drown it, and a `thinking` block is written with
+    an empty `thinking` field and a signature only — nothing to read.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        block["text"]
+        for block in content
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+        and block["text"].strip()
+    ]
+    return "\n".join(parts)
+
+
 def build_envelope(session_path: Path, events: list) -> dict:
     """Filter and shape events into the envelope schema."""
     user_turns = []
@@ -86,13 +118,13 @@ def build_envelope(session_path: Path, events: list) -> dict:
         ev_type = ev.get("type")
         ts = ev.get("timestamp", "")
         if ev_type == "user":
-            content = ev.get("message", {}).get("content", "")
-            if isinstance(content, str) and content:
-                user_turns.append({"ts": ts, "text": content})
+            text = _turn_text((ev.get("message") or {}).get("content", ""))
+            if text:
+                user_turns.append({"ts": ts, "text": text})
         elif ev_type == "assistant":
-            content = ev.get("message", {}).get("content", "")
-            if isinstance(content, str) and content:
-                assistant_turns.append({"ts": ts, "text": content})
+            text = _turn_text((ev.get("message") or {}).get("content", ""))
+            if text:
+                assistant_turns.append({"ts": ts, "text": text})
         elif ev_type == "tool_use":
             tool = ev.get("tool", "")
             cmd = ev.get("input", {}).get("command", "")

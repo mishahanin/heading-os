@@ -362,7 +362,12 @@ def test_every_template_renders_to_a_unit_systemd_accepts(tmp_path):
         rendered = (template.read_text(encoding="utf-8")
                     .replace("{{WORKSPACE}}", str(tmp_path))
                     .replace("{{PYTHON}}", sys.executable)
-                    .replace("{{TZ}}", zone))
+                    .replace("{{TZ}}", zone)
+                    # Added 2026-08-22 with chronicle.service's ollama host, which
+                    # `install-chronicle-timer.sh` renders from
+                    # config/memory-index.yaml. A token added to a template and not
+                    # to this map fails the assertion below, which is the point.
+                    .replace("{{OLLAMA_HOST}}", "http://127.0.0.1:11434"))
 
         assert "{{" not in rendered, (
             f"{template.name} still carries an unrendered token after substitution: "
@@ -666,6 +671,11 @@ def test_no_unit_entrypoint_reads_the_zone_before_loading_the_env(script):
 # whether it is expected to read the zone at all. The table is asserted COMPLETE
 # below: a new timer entrypoint with no entry fails rather than slipping through.
 _PROBE_PLAN = {
+    # Files by the session's own START timestamp, read out of the transcript, and
+    # falls back to an mtime it converts with an EXPLICIT `timezone.utc`. So it
+    # reaches no local zone at all and the answer here is False rather than
+    # "reads it late". `--dry-run` because a probe must not write an archive.
+    "archive-transcripts.py": (["--dry-run"], False),
     "chronicle.py": (["build", "--sessions-dir", "{SESSIONS}", "--dry-run"], True),
     "council-models-notify.py": ([], False),
     "dream-shadow.py": (["--no-report", "--quiet"], True),

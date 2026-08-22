@@ -64,13 +64,38 @@ OLLAMA_HOST = resolve_ollama_host(env_var="HEADING_OS_OLLAMA_HOST")
 OLLAMA_URL = f"{OLLAMA_HOST}/api/generate"
 MODEL = "gemma3:4b"
 
-# Prefill is the bottleneck. On the CPU daemon it runs ~65-70 tok/s, so each
-# transcript is trimmed to this many characters of conversation before the model
-# reads it - enough to summarize, cheap enough to keep a session near ~50s.
-# A GPU-backed HEADING_OS_OLLAMA_HOST lifts prefill to ~220 tok/s, which is what
-# this budget would have to be re-tuned against before raising it.
-BODY_CHAR_BUDGET = 9000
+# Prefill is the bottleneck, and this is how much conversation the model is
+# allowed to read before it summarizes.
+#
+# It was 9000 characters -- roughly 2,250 tokens of a session whose transcript
+# runs from hundreds of kilobytes to tens of megabytes. The entries read as bare
+# facts because that is all the model was ever shown: the decision survives the
+# first paragraph, the reasoning behind it does not.
+#
+# The comment that used to sit here named its own exit: the budget was tuned
+# against the CPU daemon at ~65-70 tok/s, and said a GPU-backed
+# HEADING_OS_OLLAMA_HOST "lifts prefill to ~220 tok/s, which is what this budget
+# would have to be re-tuned against before raising it." Measured 2026-08-22 on
+# the Windows-side instance: 198.7 tok/s against 74.6 on the WSL CPU daemon, so
+# the claim held and the host now points there (see OLLAMA_HOST below).
+#
+# At 198.7 tok/s a full 120,000-character envelope costs ~150 s of prefill. The
+# build runs unattended at 03:00 over the one to three sessions a day produces,
+# so that is minutes of machine time nobody waits for, spent on the only record
+# of how a decision was reached.
+BODY_CHAR_BUDGET = 120_000
 ENVELOPE_MAX_BYTES = 120_000
+
+# The context window is STATED, never inherited. Measured 2026-08-22: the same
+# gemma3:4b, which declares `gemma3.context_length: 131072`, was loaded by the
+# WSL daemon with a window of 4096 and by the Windows daemon with 131072. Ollama
+# truncates a longer prompt silently -- a 120,000-character probe came back
+# reporting `prompt_eval_count: 2051`. With the old 9000-character budget nothing
+# overflowed and the difference was invisible; at 120,000 it would have thrown
+# away seven eighths of every session and said nothing.
+# 120,000 chars of mixed RU/EN is roughly 30,000 tokens; 32768 covers it with the
+# prompt scaffolding and the reply.
+NUM_CTX = 32_768
 
 # A session with less than this much user+assistant text is mechanical
 # (a bare /clear, an aborted boot) and produces no entry (CAP-1).
@@ -100,8 +125,42 @@ PROMPT = """You classify and summarize a past AI-assistant work session.
 
 Return ONLY a compact JSON object, no prose, no markdown fence:
 {{"gist": "<2-4 sentences: what this conversation was about and what was decided>",
+  "reasoning": "<2-5 sentences: HOW the decision was reached - what was weighed,
+      which measurement or fact settled it, what changed someone's mind. Write
+      what a reader would need to re-open this decision in four months and
+      understand the thinking, not just the outcome. "" if nothing was decided>",
+  "considered": ["<each option, approach or claim that was raised and then NOT
+      taken, with the reason it was dropped, e.g. 'NPU for embedding - INT8
+      vectors would not match the F16 index'. [] if there were no alternatives>"],
+  "open": ["<questions left unanswered or work deliberately deferred. [] if none>"],
   "topics": ["<3-6 short topic/entity tags>"],
   "class": "business" | "personal"}}
+
+Rules for the three new fields. Report only what the conversation actually shows;
+never invent a rationale that was not stated. Prefer the concrete over the
+abstract - a number, a filename, a measured result beats "performance concerns".
+When a decision was reversed mid-conversation, say what reversed it: that is the
+most valuable line in the record.
+
+LANGUAGE - NEVER TRANSLATE ANYTHING.
+
+Write the record in the language the conversation was actually held in. Russian
+conversation -> Russian entry. English conversation -> English entry. A
+conversation that mixed the two -> keep the mix, each part in the language it
+happened in. Do not normalise, do not pick one language, do not translate a
+single sentence in either direction.
+
+Quotations are absolute: reproduce what was said word for word, in its own
+alphabet and its own wording. A translated instruction stops being evidence of
+what was asked, and the exact phrasing is frequently the whole reason the line
+is worth keeping.
+
+This applies to every field: gist, reasoning, considered, open. Topic tags too -
+a topic the conversation named in Russian stays Russian.
+
+Report only what the conversation shows. If you cannot tell why something was
+decided, leave "reasoning" short or empty. An invented connection is worse than
+a missing one: a reader four months from now cannot tell the two apart.
 
 If the conversation has NO substantive content - only mechanical commands like
 /clear or /exit, an aborted or empty boot, or nothing was actually discussed -
@@ -238,13 +297,101 @@ def select_sessions(sessions_dir: Path, since: str | None, backfill: bool, limit
 # Summarization (local model)
 # ============================================================
 
+# Per-turn caps, sized against BODY_CHAR_BUDGET rather than against the old
+# 9000-character one. They were 1200 chars per user turn and 800 per assistant
+# turn over the first 40 turns, which under a 9000-character budget never bound
+# anything — the budget cut first. With the budget at 120,000 they became the
+# real limit, and an 800-character cut lands in the middle of exactly the
+# passage that explains a decision. The budget is the single place that decides
+# how much conversation is read; these only keep one long turn from eating it.
+TURN_CHARS = 3000
+MAX_ASSISTANT_TURNS = 150
+
+
+# ============================================================
+# Which language the record is written in
+# ============================================================
+#
+# Measured, not asked. The prompt above states the rule in prose, and prose in
+# the middle of a prompt is not what a 4B model obeys: tested 2026-08-22 against
+# this workspace's own session -- 23,773 characters of body, 56% of the letters
+# Cyrillic -- gemma3:4b returned an entry written entirely in English.
+#
+# So the share is computed here and handed to the model as a fact, in one short
+# line at the very END of the prompt, written IN the target language. Position
+# and brevity are what a small model follows; a directive written in Russian is
+# also an example of Russian, which is worth more than a sentence about it.
+
+# Below this share of Cyrillic among the letters, the session is English; above
+# the upper bound it is Russian; between them it genuinely mixed both. The band
+# is wide because every session here quotes Latin filenames, commands and
+# identifiers, so a Russian conversation still carries a lot of Latin letters --
+# a naive majority test would call it English.
+_RU_LOWER = 0.15
+_RU_UPPER = 0.50
+
+
+def dominant_language(body: str) -> str:
+    """"ru", "en" or "mixed", from the share of Cyrillic among the letters."""
+    cyrillic = latin = 0
+    for char in body:
+        lowered = char.lower()
+        if "а" <= lowered <= "я" or lowered == "ё":
+            cyrillic += 1
+        elif "a" <= lowered <= "z":
+            latin += 1
+    letters = cyrillic + latin
+    if not letters:
+        return "en"
+    share = cyrillic / letters
+    if share < _RU_LOWER:
+        return "en"
+    if share >= _RU_UPPER:
+        return "ru"
+    return "mixed"
+
+
+_DIRECTIVES = {
+    "ru": "ВАЖНО: разговор шёл по-русски. Пиши все поля JSON по-русски. "
+          "Ничего не переводи на английский.",
+    "en": "IMPORTANT: this conversation was in English. Write every JSON field "
+          "in English. Do not translate anything.",
+    "mixed": "IMPORTANT / ВАЖНО: this conversation mixed Russian and English. "
+             "Keep the mix - write each point in the language it was said in, "
+             "Russian points in Russian and English points in English. "
+             "Ничего не переводи ни в ту, ни в другую сторону.",
+}
+
+
+def language_directive(language: str) -> str:
+    return _DIRECTIVES.get(language, _DIRECTIVES["mixed"])
+
+
+def build_prompt(body: str) -> str:
+    """The full prompt, with the language directive as its LAST line.
+
+    Last on purpose. The rule is also stated inside PROMPT, where a capable model
+    reads it in context; this repetition at the end is what the 4B model actually
+    obeys, and costs one line.
+    """
+    return PROMPT.format(body=body) + "\n\n" + language_directive(
+        dominant_language(body)
+    )
+
+
 def envelope_body(envelope: dict) -> str:
-    turns = []
-    for t in envelope.get("user_turns", []):
-        turns.append("USER: " + t["text"][:1200])
-    for t in envelope.get("assistant_turns", [])[:40]:
-        turns.append("ASSISTANT: " + t["text"][:800])
-    return "\n".join(turns)[:BODY_CHAR_BUDGET]
+    """Interleave the turns in the order they were spoken, oldest first.
+
+    Order matters now that both sides are present: the old shape listed every
+    user turn and then every assistant turn, which reads as two monologues and
+    hides which answer followed which question. Reasoning is a conversation.
+    """
+    turns = [("USER", t) for t in envelope.get("user_turns", [])]
+    turns += [("ASSISTANT", t)
+              for t in envelope.get("assistant_turns", [])[:MAX_ASSISTANT_TURNS]]
+    turns.sort(key=lambda pair: pair[1].get("ts") or "")
+    lines = [f"{who}: {t['text'][:TURN_CHARS]}" for who, t in turns]
+    return "\n".join(lines)[:BODY_CHAR_BUDGET]
 
 
 _PERSONAL_KEYWORDS_CACHE: tuple[str, ...] | None = None
@@ -309,10 +456,14 @@ def summarize(body: str, timeout: int = 300) -> dict | None:
     """
     payload = {
         "model": MODEL,
-        "prompt": PROMPT.format(body=body),
+        "prompt": build_prompt(body),
         "stream": False,
         "think": False,
-        "options": {"temperature": 0.2, "num_predict": 400},
+        # num_predict was 400, which fit a gist and topics. The reply now also
+        # carries the reasoning, the rejected options and the open questions, and
+        # a reply cut mid-JSON parses as nothing at all -- the session would be
+        # dropped rather than thinned.
+        "options": {"temperature": 0.2, "num_predict": 900, "num_ctx": NUM_CTX},
     }
     req = urllib.request.Request(  # noqa: S310 - hardcoded localhost ollama URL
         OLLAMA_URL, data=json.dumps(payload).encode(),
@@ -342,7 +493,16 @@ def summarize(body: str, timeout: int = 300) -> dict | None:
         or model_class == "personal"
         or model_class not in ("business", "personal")
     )
-    return {"gist": gist, "topics": topics, "personal": personal}
+    # The reasoning fields are optional by construction: a model that returns
+    # only the old three keys still produces a valid entry, just a thinner one.
+    # An entry is never withheld for missing reasoning -- a bare gist beats no
+    # record of the session at all.
+    reasoning = str(obj.get("reasoning", "") or "").strip()
+    considered = [str(x).strip() for x in obj.get("considered", []) or [] if str(x).strip()][:8]
+    still_open = [str(x).strip() for x in obj.get("open", []) or [] if str(x).strip()][:6]
+
+    return {"gist": gist, "topics": topics, "personal": personal,
+            "reasoning": reasoning, "considered": considered, "open": still_open}
 
 
 # ============================================================
@@ -410,8 +570,40 @@ def render_entry(session_id: str, session_date: str, session_path: str, summary:
         lines.append("> Личное - historical record, not a current fact.")
         lines.append("")
     lines.append(gist)
+
+    # The reasoning sections. Rendered only when the model returned something,
+    # so an entry for a session that decided nothing does not grow empty
+    # headings. These exist because the entry used to carry the decision alone:
+    # the record said WHAT was chosen and the "why" survived only in the raw
+    # transcript, which the harness deletes on its own schedule.
+    reasoning = _normalize(summary.get("reasoning") or "")
+    if reasoning:
+        lines.append("")
+        lines.append("## How this was reached")
+        lines.append("")
+        lines.append(reasoning)
+
+    considered = [_normalize(x) for x in (summary.get("considered") or []) if x]
+    if considered:
+        lines.append("")
+        lines.append("## Considered and dropped")
+        lines.append("")
+        lines.extend(f"- {item}" for item in considered)
+
+    still_open = [_normalize(x) for x in (summary.get("open") or []) if x]
+    if still_open:
+        lines.append("")
+        lines.append("## Left open")
+        lines.append("")
+        lines.extend(f"- {item}" for item in still_open)
+
     lines.append("")
     lines.append(f"Full transcript: `{session_path}`")
+    # Where the transcript survives after the harness deletes the live copy.
+    # `scripts/archive-transcripts.py` files it by the session's START date, so
+    # this pointer is stable even for a session resumed across midnight.
+    lines.append(f"Archived transcript: `chronicle/transcripts/{session_date[:4]}/"
+                 f"{session_date}-{session_id}.jsonl.gz`")
     lines.append("")
     return "\n".join(lines)
 

@@ -22,6 +22,16 @@ ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/chronicle.py build
 # whereas a unit-pinned HEADING_OS_TZ could never be corrected by `.env` again
 # (load_env uses setdefault).
 Environment=TZ={{TZ}}
+# Which ollama summarizes. Unset resolves to the local daemon, and on this
+# machine that is the WSL CPU one: measured 2026-08-22 it ingests a long prompt
+# at 74.6 tok/s against 198.7 on the Windows-side instance, and it loads
+# gemma3:4b with a 4096-token window where the other uses 131072. chronicle.py
+# has documented the faster host since 2026-08-18 and nothing ever set the
+# variable, so every nightly build ran on the slow, small-windowed daemon.
+# Rendered from config/memory-index.yaml's `host`, so one line in that file
+# decides where BOTH the embedder and the summarizer run. An unreachable
+# preference degrades to the local daemon rather than failing the build.
+Environment=HEADING_OS_OLLAMA_HOST={{OLLAMA_HOST}}
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal
 StandardError=journal

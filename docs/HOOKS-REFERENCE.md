@@ -21,7 +21,7 @@ Some hook events can block work by protocol; the rest can only observe, enrich, 
 | Hook | Purpose |
 |------|---------|
 | `data-path-redirect.py` | Redirects data-relative tool paths to the resolved data root, so a `Read`/`Write`/`Edit`/`Grep`/`Glob` aimed at a data path lands in the private overlay, not the engine tree. The one hook wired in the portable `settings.json`. |
-| `_dispatch.py` | The consolidated PreToolUse guard, registered on three matchers: the write tools, `Bash`, and `Read`. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, and the personal-threads protection. |
+| `_dispatch.py` | The consolidated PreToolUse guard, registered on three matchers: the write tools, `Bash`, and `Read`. It runs, in one process, the secret-detection block (API-key and credential patterns), the corporate-boundary block (no writes to read-only corporate content), the docs-protection block, the personal-threads protection, and the slow-shell block (a `Bash` call that runs the whole test suite in one process, or waits in the foreground, is refused and pointed at `scripts/run-tests.py` or `run_in_background`). |
 
 ## PostToolUse (observe and correct)
 

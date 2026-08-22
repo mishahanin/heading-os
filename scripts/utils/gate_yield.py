@@ -68,8 +68,8 @@ DENIAL_MECHANISMS = (
     # The PreToolUse family, by the names `.claude/hooks/_dispatch.py` actually
     # passes: its deny path calls `_record_denial(check.__name__, ...)`, so the
     # mechanism name IS the function name. Omitting them was the declared
-    # property failing on its own largest family -- seven guards, and the seven
-    # LEAST likely to fire, because each one waits on a model mistake. A guard
+    # property failing on its own largest family -- and the guards LEAST likely
+    # to fire, because each one waits on a model mistake. A guard
     # that has never fired was invisible here rather than TOO EARLY, which is
     # the precise confusion the paragraph above says this list exists to end.
     "check_prevent_secrets",
@@ -77,6 +77,7 @@ DENIAL_MECHANISMS = (
     "check_protect_corporate",
     "check_protect_docs",
     "check_cwd_anchor",
+    "check_slow_shell",
     "check_rate_limit",
     "check_tool_budget",
 )
@@ -151,6 +152,7 @@ WALLS = tuple(WALL_REASONS)
 # unjudgeable.
 GATES = (
     "check_cwd_anchor",
+    "check_slow_shell",
     "check_rate_limit",
     "check_tool_budget",
 )

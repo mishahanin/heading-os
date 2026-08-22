@@ -1,0 +1,30 @@
+[Unit]
+Description=31C session-transcript archive (copy settled transcripts into the DATA overlay, gzipped)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+# Claude Code deletes transcripts under ~/.claude/projects/ on its own schedule
+# (`cleanupPeriodDays`, 30 by default). A Chronicle entry keeps WHAT was decided;
+# the transcript is the only place the reasoning behind it survives. Measured
+# 2026-08-22, before the window was raised: 177 of 258 Chronicle entries already
+# pointed at a file that no longer existed.
+#
+# Raising the window stops the deletions but protects nothing -- the files live
+# outside both repositories, so no git and no push-all.py reaches them. This
+# copies each SETTLED transcript (untouched for two hours, so never a live
+# session) into the DATA overlay where the normal backup runs.
+#
+# Safe to automate: it only reads the harness's own files and writes gzip copies
+# under chronicle/transcripts/. It never sends anything, never deletes a source,
+# and never rewrites an archive that is already current.
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/archive-transcripts.py
+# The archive path carries the session's start date, read from the transcript
+# itself rather than from a clock, so this unit does no date math and TZ is
+# cosmetic here. Pinned anyway so the journal timestamps line up with the other
+# units in this workspace.
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

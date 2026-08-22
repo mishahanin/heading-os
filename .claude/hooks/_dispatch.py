@@ -596,6 +596,225 @@ def check_cwd_anchor(payload: dict) -> Optional[dict]:
 
 
 # ============================================================
+# check_slow_shell — the two Bash shapes that spend the operator's wall clock
+# ============================================================
+#
+# Measured over the six sessions ending 2026-08-22, from the session transcripts:
+# the Bash tool held 4.85 h of wall time, median call 0.4 s, and two shapes owned
+# 65% of the total.
+#
+#   blocking waiters      2.07 h / 19 calls / avg 393 s
+#   the suite run serially 1.05 h / 107 calls, the long ones 434-601 s each
+#
+# Both have a ready replacement that was already in the tree. `run_in_background:
+# true` returns at once and wakes the turn on exit, so a wait costs nothing.
+# `scripts/run-tests.py` has passed `-n auto` since the push gate was
+# parallelized; measured 2026-08-22 on 16 cores, the full suite finishes in
+# 88.88 s there against 434-601 s for a bare serial `pytest`.
+#
+# This is a habit guard, so it is written as a wall rather than a note: recall
+# across sessions is the thing that failed, and a rule that depends on the same
+# recall would fail with it. The `slow-shell-ok` marker keeps a deliberate
+# exception possible and greppable — a wall with no door gets torn down.
+
+SLOW_SHELL_ESCAPE = "slow-shell-ok"
+
+_SHELL_OPERATORS = ";|&\n"
+
+
+def _shell_segments(command: str) -> list:
+    """Split a compound command into the parts a shell would run separately.
+
+    Quote-aware, because a regex is not. The first cut here split on `|`
+    unconditionally, and on 2026-08-22 it refused
+    `ls auto-memory/ | grep -iE "test|pytest|shell"` — the alternation inside the
+    quoted pattern broke into a segment whose only word was `pytest`, so a
+    directory listing read as a suite run. A metacharacter inside quotes is data.
+
+    Only the separators matter here, so `>` and `<` are left in place; `2>&1`
+    splitting at the `&` is harmless, since every caller looks at where a word
+    sits, not at redirection.
+    """
+    segments, buf = [], []
+    quote = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            buf.append(char)
+            if char == "\\" and quote == '"' and index + 1 < len(command):
+                buf.append(command[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "'\"":
+            quote = char
+            buf.append(char)
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            buf.append(char)
+            buf.append(command[index + 1])
+            index += 2
+            continue
+        if char in _SHELL_OPERATORS:
+            segments.append("".join(buf))
+            buf = []
+            index += 1
+            continue
+        buf.append(char)
+        index += 1
+    segments.append("".join(buf))
+    return [segment for segment in (part.strip() for part in segments) if segment]
+
+# A polling loop: any while/until that sleeps inside its body. Duration is not the
+# question here — the loop holds the turn for as long as the watched thing runs.
+_POLL_LOOP_RE = re.compile(r"\b(?:while|until)\b[\s\S]*?\bsleep\b")
+
+# A bare wait long enough that the operator feels it. Short sleeps (a daemon
+# socket coming up) are ordinary and stay allowed.
+_BLOCKING_SLEEP_SECONDS = 30
+
+# Flags that narrow a pytest run to something that finishes in seconds, or that
+# already distribute it. Either way there is nothing to correct.
+_PYTEST_PARALLEL_FLAGS = ("-n", "--numprocesses")
+_PYTEST_NARROWING_FLAGS = (
+    "-k", "--collect-only", "--co", "--lf", "--last-failed", "--ff", "--failed-first",
+)
+
+_SERIAL_SUITE_REASON = """\
+BLOCKED: this runs the suite in one process. Measured 2026-08-22 on this machine, \
+the same 6164 tests finish in 88.88 s across 16 workers and 434-601 s serially — \
+the serial shape spent 1.05 h of Bash wall time over the six sessions ending \
+2026-08-22.
+
+Use the runner, which has passed `-n auto` since the push gate was parallelized:
+
+    .venv/bin/python scripts/run-tests.py
+
+Or add the flag to the command you had: `-n auto`.
+
+Narrow runs are untouched — a file path, `-k`, or `--collect-only` all pass. \
+For a deliberate serial run (a baseline measurement, a plugin that will not \
+distribute), append `# {escape}` and it goes through."""
+
+_WAITER_REASON = """\
+BLOCKED: this command waits, and the wait holds the turn. Waiters of this shape \
+cost 2.07 h of Bash wall time over 19 calls (avg 393 s) in the six sessions \
+ending 2026-08-22, and none of that time did anything.
+
+Run the long command itself with `run_in_background: true` instead. The tool \
+returns immediately and the turn is re-invoked when the command exits, so the \
+wait is free and the output is still delivered.
+
+Short sleeps are untouched — under {threshold} s with no polling loop passes. \
+For a deliberate blocking wait, append `# {escape}` and it goes through."""
+
+
+def _pytest_argv(command: str) -> Optional[list]:
+    """The argv of a pytest invocation in `command`, or None if there is none.
+
+    Judged positionally: `pytest` must be the first word of a shell segment, or
+    follow `-m` on an interpreter. A `pytest` that is merely an argument to some
+    other program — a grep pattern, a path being echoed — is not an invocation
+    and must not be treated as one.
+    """
+    import shlex  # local: this hook runs on every Bash, Read and write call
+
+    for segment in _shell_segments(command):
+        if "pytest" not in segment:
+            continue
+        try:
+            tokens = shlex.split(segment, comments=True)
+        except ValueError:
+            continue  # unbalanced quotes — not something to reason about
+        if not tokens:
+            continue
+        # `word`, not `token`: ruff's S105 reads a variable called `token` as a
+        # credential and flags the comparison as a hardcoded password.
+        for index, word in enumerate(tokens):
+            if word != "pytest" and not word.endswith("/pytest"):
+                continue
+            if index == 0:
+                return tokens
+            if tokens[index - 1] == "-m":
+                return tokens
+        # `python scripts/run-tests.py` reaches pytest through the runner, which
+        # already distributes; it is the prescribed form, not a finding.
+    return None
+
+
+def _is_serial_full_suite(argv: list) -> bool:
+    for index, token in enumerate(argv):
+        if token.startswith(_PYTEST_PARALLEL_FLAGS):
+            return False  # -n, -n8, -nauto, --numprocesses=auto
+        if token in _PYTEST_NARROWING_FLAGS or token.startswith("--collect-only"):
+            return False
+        if index == 0:
+            continue
+        # A named target — a file, a directory below tests/, a node id — is a
+        # narrow run whose duration is not the problem this guard was built for.
+        if token.endswith(".py") or "::" in token:
+            return False
+    return True
+
+
+def _blocking_wait(command: str) -> bool:
+    if _POLL_LOOP_RE.search(command):
+        return True
+
+    import shlex  # local, same reason as above
+
+    for segment in _shell_segments(command):
+        if not segment.startswith("sleep"):
+            continue
+        try:
+            tokens = shlex.split(segment, comments=True)
+        except ValueError:
+            continue
+        if len(tokens) < 2 or tokens[0] != "sleep":
+            continue
+        try:
+            if float(tokens[1]) >= _BLOCKING_SLEEP_SECONDS:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def check_slow_shell(payload: dict) -> Optional[dict]:
+    if payload.get("tool_name") != "Bash":
+        return None
+    tool_input = payload.get("tool_input", {}) or {}
+    command = tool_input.get("command", "") or ""
+    if not command or SLOW_SHELL_ESCAPE in command:
+        return None
+
+    argv = _pytest_argv(command)
+    if argv is not None and _is_serial_full_suite(argv):
+        return {
+            "decision": "block",
+            "_policy_deny": True,
+            "reason": _SERIAL_SUITE_REASON.format(escape=SLOW_SHELL_ESCAPE),
+        }
+
+    # A backgrounded waiter is the prescribed fix, not the defect: it returns at
+    # once and holds nothing. Only a foreground wait is worth refusing.
+    if not tool_input.get("run_in_background") and _blocking_wait(command):
+        return {
+            "decision": "block",
+            "_policy_deny": True,
+            "reason": _WAITER_REASON.format(
+                threshold=_BLOCKING_SLEEP_SECONDS, escape=SLOW_SHELL_ESCAPE
+            ),
+        }
+    return None
+
+
+# ============================================================
 # check_rate_limit — daily Write/Edit cap + runaway-loop detection
 # ============================================================
 #
@@ -850,6 +1069,7 @@ CHECKS = [
     check_protect_corporate,
     check_protect_docs,
     check_cwd_anchor,
+    check_slow_shell,
     check_rate_limit,
     check_tool_budget,
 ]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SEC-017 regression coverage for the consolidated _dispatch.py.
 
-The PreToolUse dispatcher folds seven distinct security/safety checks into
+The PreToolUse dispatcher folds eight distinct security/safety checks into
 one in-process pipeline. Each check is a pure function of the tool payload,
 so we exercise them directly rather than via subprocess. Goals:
 
@@ -11,7 +11,7 @@ so we exercise them directly rather than via subprocess. Goals:
    so the dispatcher behaves identically when invoked from Windows VSCode
    or from WSL/Linux Claude Code against the same files.
 
-All seven checks are stateless and exercised via direct payloads. (The
+All eight checks are stateless and exercised via direct payloads. (The
 `_secure/` vault and its `check_protect_secure` branch were removed in Plan 5;
 sensitivity is now the fail-closed `SENSITIVE_MODE` flag, covered by
 `tests/test_sensitive_mode.py`.)
@@ -303,12 +303,17 @@ def test_tool_budget_allows_under_cap(dispatch, monkeypatch):
 # ============================================================
 
 
-def test_checks_list_has_seven_branches(dispatch):
+def test_checks_list_has_eight_branches(dispatch):
     """If a check is added or removed, this test forces an intentional update.
     check_prevent_secrets stays first: first-block-wins means whichever check
     runs first owns the message, and secret detection is the one that must own
-    it."""
-    assert len(dispatch.CHECKS) == 7
+    it.
+
+    `check_slow_shell` joined on 2026-08-22 and sits with the other two
+    session-shaped guards, after every content guard. Order matters for the same
+    first-block-wins reason: a command that both leaks a credential and runs the
+    suite serially must be refused for the credential."""
+    assert len(dispatch.CHECKS) == 8
     names = [c.__name__ for c in dispatch.CHECKS]
     assert names == [
         "check_prevent_secrets",
@@ -316,6 +321,7 @@ def test_checks_list_has_seven_branches(dispatch):
         "check_protect_corporate",
         "check_protect_docs",
         "check_cwd_anchor",
+        "check_slow_shell",
         "check_rate_limit",
         "check_tool_budget",
     ]

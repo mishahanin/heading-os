@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -106,13 +107,49 @@ def load_skill_system_prompt(skill_dir: Path) -> tuple[str, dict]:
 # Deterministic checks
 # ---------------------------------------------------------------------------
 
+def term_pattern(term: str) -> re.Pattern:
+    """Match a check term as a WORD, not as a substring.
+
+    Plain `term.lower() in output.lower()` made short terms meaningless. The
+    2026-08-23 audit caught the worst case: `brain-audit/case-3-boundaries`
+    asserts `must_mention: ["no"]`, and "no" is a substring of "not", "know",
+    "cannot", "note" and "another". Any answer of the required 30 words passed
+    it, including one that got the boundaries exactly wrong. Twenty-two more
+    terms of four characters or fewer sit in the corpus behind the same
+    weakness ("add" in "address", "log" in "login", "new" in "renew").
+
+    A boundary is added only where the term's own edge is a word character, so
+    the twelve terms that start or end with punctuation or an emoji still match:
+    `$350,000`, `.workspace-identity.json`, `.jsonl`, `Hi there!`, `\U0001F680`.
+    """
+    escaped = re.escape(term)
+    left = r"\b" if re.match(r"\w", term) else ""
+    right = r"\b" if re.search(r"\w$", term) else ""
+    return re.compile(left + escaped + right, re.IGNORECASE)
+
+
+def any_match(output: str, term) -> bool:
+    """True when `term` is present. A LIST of terms means "any of these".
+
+    Word-boundary matching is strict about inflection: `\\bpersist\\b` does not
+    find "persistence". Rather than loosen the matcher back into substring
+    mush, a check term may be a list of accepted spellings::
+
+        "must_mention": [["persist", "persistence", "persisting"], "daemon"]
+
+    A bare string still behaves exactly as before.
+    """
+    terms = term if isinstance(term, list) else [term]
+    return any(term_pattern(t).search(output) for t in terms)
+
+
 def run_checks(output: str, checks: dict, skill_dir: Path) -> list[dict]:
     """Apply check specifications against the model output. Returns list of results."""
     results = []
 
     must_mention = checks.get("must_mention", [])
     for term in must_mention:
-        passed = term.lower() in output.lower()
+        passed = any_match(output, term)
         results.append({
             "check": f"must_mention[{term!r}]",
             "passed": passed,
@@ -121,7 +158,7 @@ def run_checks(output: str, checks: dict, skill_dir: Path) -> list[dict]:
 
     must_not_mention = checks.get("must_not_mention", [])
     for term in must_not_mention:
-        passed = term.lower() not in output.lower()
+        passed = not any_match(output, term)
         results.append({
             "check": f"must_not_mention[{term!r}]",
             "passed": passed,
@@ -220,13 +257,31 @@ def resolve_model(frontmatter: dict, override: str | None) -> str:
     return claude_models.resolve(declared, default_family=DEFAULT_FAMILY)
 
 
+# Why an outcome, not a (passed, total) pair: `(0, 0)` meant three different
+# things - "nothing to run", "the skill does not exist", and "the model call
+# raised" - and `main` summed them all into `overall_total == 0` and returned 0.
+# The harness that exists to notice silent degradation degraded silently.
+# Found 2026-08-23. Exit codes 2 and 3 were in the docstring from the start and
+# nothing ever emitted them.
+OUTCOME_OK = "ok"
+OUTCOME_SKIPPED = "skipped"       # no cases, or --dry-run: not an error
+OUTCOME_NOT_FOUND = "not-found"   # setup error -> exit 2
+OUTCOME_API_ERROR = "api-error"   # exit 3
+
+
 def run_one_skill(skill_name: str, case_filter: str | None, model_override: str | None,
-                  dry_run: bool, write_benchmark: bool) -> tuple[int, int]:
-    """Run all (or one) case for a skill. Returns (passed_count, total_count)."""
+                  dry_run: bool, write_benchmark: bool) -> tuple[int, int, str]:
+    """Run all (or one) case for a skill.
+
+    Returns (passed_count, total_count, outcome), where outcome is one of the
+    OUTCOME_* constants above. The counts alone cannot distinguish a clean skip
+    from a failed API call, and treating them as if they could is what let a
+    missing API key report success.
+    """
     skill_dir = SKILLS_DIR / skill_name
     if not (skill_dir / "SKILL.md").exists():
         print(f"{RED}ERROR{RESET}: skill {skill_name!r} not found", file=sys.stderr)
-        return (0, 0)
+        return (0, 0, OUTCOME_NOT_FOUND)
 
     cases = load_cases(skill_dir, case_filter)
     if not cases:
@@ -234,7 +289,7 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
         if case_filter:
             msg += f" matching id={case_filter!r}"
         print(f"{YELLOW}skip{RESET}: {skill_name} - {msg}")
-        return (0, 0)
+        return (0, 0, OUTCOME_SKIPPED)
 
     system_prompt, frontmatter = load_skill_system_prompt(skill_dir)
     model = resolve_model(frontmatter, model_override)
@@ -257,7 +312,7 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
             output, usage, elapsed = call_skill(system_prompt, case["input"], model)
         except Exception as e:
             print(f"{RED}API ERROR{RESET} {e}")
-            return (0, 0)
+            return (passed_total, check_total, OUTCOME_API_ERROR)
 
         results = run_checks(output, case.get("checks", {}), skill_dir)
         passed = sum(1 for r in results if r["passed"])
@@ -297,11 +352,27 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
             "cases": case_results,
         }
         if "baseline" not in existing:
+            # A first run has nothing to compare against, so the baseline is
+            # seeded from it. LABEL THAT. Twelve of sixteen benchmarks carried
+            # a baseline byte-identical to last_run, timestamps included, and
+            # nothing in the file said it was a self-seed: a structurally-zero
+            # delta read exactly like "no regression detected". The audit of
+            # 2026-08-23 read them as fabricated greens, which is the wrong
+            # diagnosis but the right alarm.
             existing["baseline"] = existing["last_run"].copy()
+            existing["baseline"]["source"] = "seeded-from-first-run"
+        existing["baseline_is_self_seed"] = (
+            existing["baseline"].get("source") == "seeded-from-first-run"
+        )
         benchmark_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
         print(f"  {GREEN}benchmark.json updated{RESET} -> {benchmark_path.relative_to(ROOT)}")
+        if existing["baseline_is_self_seed"]:
+            print(f"  {YELLOW}baseline is a self-seed{RESET} - this run was compared "
+                  "against itself, so the delta detects nothing. Promote a real "
+                  "baseline before reading it as a regression check.")
 
-    return (passed_total, check_total)
+    return (passed_total, check_total,
+            OUTCOME_SKIPPED if dry_run else OUTCOME_OK)
 
 
 def list_skills_with_evals() -> list[str]:
@@ -334,12 +405,25 @@ def main() -> int:
 
     overall_passed = 0
     overall_total = 0
+    outcomes = []
     for name in skills:
-        p, t = run_one_skill(name, args.case, args.model, args.dry_run, write_benchmark=not args.no_write)
+        p, t, outcome = run_one_skill(
+            name, args.case, args.model, args.dry_run,
+            write_benchmark=not args.no_write)
         overall_passed += p
         overall_total += t
+        outcomes.append(outcome)
 
     print()
+    # Order matters, and it is worst-first. An API error outranks a check
+    # failure because a failed call measured nothing, and "nothing measured"
+    # must never be reported as either pass or fail.
+    if OUTCOME_API_ERROR in outcomes:
+        print(f"{RED}API error: {outcomes.count(OUTCOME_API_ERROR)} of "
+              f"{len(skills)} skill(s) could not be measured{RESET}", file=sys.stderr)
+        return 3
+    if OUTCOME_NOT_FOUND in outcomes:
+        return 2
     if overall_total == 0:
         print(f"{YELLOW}No checks run{RESET}")
         return 0

@@ -39,10 +39,19 @@ def _run_hook(payload: dict) -> tuple[int, str, str]:
     return p.returncode, p.stdout, p.stderr
 
 
-def _deny_reason(rc: int, stdout: str) -> str | None:
-    """The deny reason when the hook refused the call, else None."""
+def _deny_reason(rc: int, stdout: str, stderr: str = "") -> str | None:
+    """The deny reason when the hook refused the call, else None.
+
+    A non-zero exit is NOT an allow. Until 2026-08-23 this returned None on any
+    `rc != 0`, so a hook that crashed with a traceback read exactly like a clean
+    allow decision across every "must not be blocked" assertion in this file --
+    about twenty of them, all hollow at once. Raise instead: a broken hook is a
+    test failure, never a pass.
+    """
     if rc != 0:
-        return None
+        raise AssertionError(
+            f"the hook exited {rc} instead of deciding; that is a crash, not an "
+            f"allow.\nstdout: {stdout[:500]!r}\nstderr: {stderr[:1000]!r}")
     try:
         data = json.loads(stdout)
     except (json.JSONDecodeError, ValueError):
@@ -72,13 +81,13 @@ SERIAL_SUITE_COMMANDS = [
 
 def test_blocks_every_serial_full_suite_shape() -> None:
     for command in SERIAL_SUITE_COMMANDS:
-        reason = _deny_reason(*_run_hook(_bash(command))[:2])
+        reason = _deny_reason(*_run_hook(_bash(command)))
         assert reason is not None, f"not blocked: {command!r}"
         assert "run-tests.py" in reason, f"no runner pointer in reason for {command!r}"
 
 
 def test_serial_suite_reason_carries_the_measured_numbers() -> None:
-    reason = _deny_reason(*_run_hook(_bash("pytest tests/ -q"))[:2])
+    reason = _deny_reason(*_run_hook(_bash("pytest tests/ -q")))
     assert reason is not None
     assert "88.88" in reason or "89" in reason
 
@@ -86,7 +95,7 @@ def test_serial_suite_reason_carries_the_measured_numbers() -> None:
 def test_serial_suite_blocked_even_in_background() -> None:
     """Backgrounding hides the wait; it does not make a 450 s run a 89 s run."""
     payload = _bash(".venv/bin/python -m pytest tests/ -q", run_in_background=True)
-    assert _deny_reason(*_run_hook(payload)[:2]) is not None
+    assert _deny_reason(*_run_hook(payload)) is not None
 
 
 # ----------------------------------------------------------------------
@@ -104,7 +113,7 @@ WAITER_COMMANDS = [
 
 def test_blocks_every_blocking_waiter_shape() -> None:
     for command in WAITER_COMMANDS:
-        reason = _deny_reason(*_run_hook(_bash(command))[:2])
+        reason = _deny_reason(*_run_hook(_bash(command)))
         assert reason is not None, f"not blocked: {command!r}"
         assert "run_in_background" in reason, f"no pointer in reason for {command!r}"
 
@@ -113,7 +122,7 @@ def test_waiter_allowed_when_already_backgrounded() -> None:
     """A waiter that does not hold the session is exactly the prescribed fix."""
     payload = _bash("while ps -p 4242 >/dev/null; do sleep 30; done; echo done",
                     run_in_background=True)
-    assert _deny_reason(*_run_hook(payload)[:2]) is None
+    assert _deny_reason(*_run_hook(payload)) is None
 
 
 # ----------------------------------------------------------------------
@@ -154,20 +163,76 @@ def test_quoted_metacharacters_are_data_not_operators() -> None:
         'ls | grep -iE "test|pytest|slow"',
         "grep -E 'a;pytest tests/;b' README.md",
     ):
-        reason = _deny_reason(*_run_hook(_bash(command))[:2])
+        reason = _deny_reason(*_run_hook(_bash(command)))
         assert reason is None, f"wrongly blocked {command!r}: {reason}"
 
 
 def test_newline_still_separates_commands() -> None:
     """A multi-line Bash call is several commands; the second one still counts."""
     command = "cd /home/administrator/ai/claude-workspaces/.heading-os\npytest tests/ -q"
-    assert _deny_reason(*_run_hook(_bash(command))[:2]) is not None
+    assert _deny_reason(*_run_hook(_bash(command))) is not None
 
 
 def test_allows_the_fast_and_the_ordinary() -> None:
     for command in ALLOWED_COMMANDS:
-        reason = _deny_reason(*_run_hook(_bash(command))[:2])
+        reason = _deny_reason(*_run_hook(_bash(command)))
         assert reason is None, f"wrongly blocked {command!r}: {reason}"
+
+
+# ----------------------------------------------------------------------
+# A directory below the suite root is a NARROW run
+# ----------------------------------------------------------------------
+
+# The guard's own comment has always said "a file, a directory below tests/, a
+# node id" are narrow, and its deny message says "Narrow runs are untouched".
+# The code accepted only `.py` and `::`, so `pytest tests/security` was denied
+# by a wall promising not to touch it. Found by the 2026-08-23 audit and
+# reproduced. This matters more than the inconvenience: a guard that refuses the
+# shape its own text exempts teaches the operator to reach for the escape hatch
+# by reflex, which is the one outcome a habit guard must never produce.
+
+NARROW_DIRECTORY_COMMANDS = [
+    "pytest tests/security",
+    ".venv/bin/python -m pytest tests/utils -q",
+    ".venv/bin/python -m pytest tests/security/ -q",
+    "pytest ./tests/security",
+]
+
+# Still the whole suite in one process, however it is spelled.
+STILL_THE_WHOLE_SUITE = [
+    "pytest tests",
+    "pytest tests/",
+    "pytest ./tests/",
+    "pytest .",
+]
+
+
+def test_a_directory_below_the_suite_root_is_not_blocked() -> None:
+    for command in NARROW_DIRECTORY_COMMANDS:
+        reason = _deny_reason(*_run_hook(_bash(command)))
+        assert reason is None, f"wrongly blocked a narrow run {command!r}: {reason}"
+
+
+def test_the_suite_root_itself_is_still_blocked_however_spelled() -> None:
+    """The depth test must not become a hole: `./tests/` is one segment after
+    normalization and stays the full suite."""
+    for command in STILL_THE_WHOLE_SUITE:
+        reason = _deny_reason(*_run_hook(_bash(command)))
+        assert reason is not None, f"the full suite slipped through: {command!r}"
+
+
+def test_a_path_bearing_flag_is_not_read_as_a_target() -> None:
+    """`--rootdir=/opt/x` contains a slash and names no test."""
+    reason = _deny_reason(*_run_hook(_bash("pytest --rootdir=/opt/x")))
+    assert reason is not None, "a flag carrying a path disarmed the guard"
+
+
+def test_the_deny_message_now_names_directories_as_narrow() -> None:
+    """The message listed 'a file path, -k, or --collect-only'. It never said
+    directories, which is half of why the gap survived."""
+    reason = _deny_reason(*_run_hook(_bash("pytest tests/ -q")))
+    assert reason is not None
+    assert "directory below the suite root" in reason
 
 
 def test_escape_hatch_lets_a_deliberate_serial_run_through() -> None:
@@ -177,7 +242,7 @@ def test_escape_hatch_lets_a_deliberate_serial_run_through() -> None:
     so a deliberate exception stays visible instead of becoming a disarmed hook.
     """
     command = ".venv/bin/python -m pytest tests/ -q  # slow-shell-ok: baseline measurement"
-    assert _deny_reason(*_run_hook(_bash(command))[:2]) is None
+    assert _deny_reason(*_run_hook(_bash(command))) is None
 
 
 def test_ignores_non_bash_tools() -> None:
@@ -189,8 +254,8 @@ def test_ignores_non_bash_tools() -> None:
             "content": "Do not run `pytest tests/ -q` or `sleep 540; echo hi`.",
         },
     }
-    assert _deny_reason(*_run_hook(payload)[:2]) is None
+    assert _deny_reason(*_run_hook(payload)) is None
 
 
 def test_empty_command_is_not_blocked() -> None:
-    assert _deny_reason(*_run_hook(_bash(""))[:2]) is None
+    assert _deny_reason(*_run_hook(_bash(""))) is None

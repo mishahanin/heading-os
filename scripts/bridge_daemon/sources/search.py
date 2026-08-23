@@ -47,8 +47,21 @@ def _match(query: str, *fields) -> bool:
     return False
 
 
-def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT) -> dict:
+def search(data_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LIMIT,
+           workspace_root: Path | None = None) -> dict:
     """Run a unified search against all known sources.
+
+    TWO ROOTS, because the sources do not share one. Seven of the eight read
+    the DATA overlay; `list_capabilities` reads `.claude/skills`, which is
+    ENGINE. Until 2026-08-23 this took a single root, `app.py` passed
+    `data_root`, and the capability results came from
+    `<data-root>/.claude/skills`. That directory is not empty on the operator
+    machine — it holds one skill — so the search page reported 1 skill where
+    `/capabilities`, correctly given `workspace_root`, reported 96. A
+    plausible wrong number is worse than an empty section.
+
+    `workspace_root` defaults to `data_root` so a single-tree clone, where the
+    two are the same directory, keeps working with one argument.
 
     Returns:
         {
@@ -66,6 +79,8 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
             "data_time": ISO 8601 UTC of when the search ran,
         }
     """
+    if workspace_root is None:
+        workspace_root = data_root
     query = (query or "").strip()
     if not query:
         return {
@@ -83,7 +98,7 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
     # dir, etc.), the others should still return results. "5 of 7
     # categories returned" beats "search broken because of an Inbox bug."
     try:
-        inbox = read_inbox(workspace_root)
+        inbox = read_inbox(data_root, data_root=data_root)
         # Phase 1.32: inbox is banded - flatten every band into one list.
         rows = [r for band in inbox["bands"].values() for r in band]
         hits = [r for r in rows if _match(query, r.get("subject"))]
@@ -98,7 +113,7 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
 
     # --- Tribe ---
     try:
-        tribe = list_tribe(workspace_root)
+        tribe = list_tribe(data_root, data_root=data_root)
         hits = [m for m in tribe["members"] if _match(query, m.get("name"), m.get("role"), m.get("slug"))]
         if hits:
             categories["tribe"] = [
@@ -110,7 +125,7 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
 
     # --- Tasks ---
     try:
-        tasks = list_active_tasks(workspace_root)
+        tasks = list_active_tasks(data_root, data_root=data_root)
         hits = [t for t in tasks["tasks"] if _match(query, t.get("description"), t.get("kind"), t.get("source"))]
         if hits:
             categories["tasks"] = [
@@ -122,7 +137,7 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
 
     # --- Library ---
     try:
-        library = list_library(workspace_root)
+        library = list_library(data_root, data_root=data_root)
         hits = []
         for n in library["notes"]:
             kw_str = " ".join(n.get("keywords") or [])
@@ -138,7 +153,7 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
 
     # --- Studio ---
     try:
-        studio = recent_inflight_items(workspace_root)
+        studio = recent_inflight_items(data_root, data_root=data_root)
         hits = [it for it in studio["items"] if _match(query, it.get("name"), it.get("path"), it.get("category"))]
         if hits:
             categories["studio"] = [
@@ -150,7 +165,7 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
 
     # --- Day (today's agenda) ---
     try:
-        day = today_agenda(workspace_root)
+        day = today_agenda(data_root, data_root=data_root)
         hits = [e for e in day["events"] if _match(query, e.get("subject"), e.get("location"))]
         if hits:
             categories["day"] = [
@@ -174,7 +189,7 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
 
     # --- Pipeline (Phase 1.37) ---
     try:
-        pipe = list_pipeline(workspace_root)
+        pipe = list_pipeline(data_root)
         hits = [d for d in pipe["deals"] if _match(query, d.get("company"), d.get("country"), d.get("owner"), d.get("next_action"), d.get("stage"))]
         if hits:
             categories["pipeline"] = [
@@ -194,7 +209,7 @@ def search(workspace_root: Path, query: str, limit: int = SEARCH_PER_CATEGORY_LI
 
     # --- Investors (Phase 1.37) ---
     try:
-        invs = list_investors(workspace_root)
+        invs = list_investors(data_root)
         hits = [f for f in invs["firms"] if _match(query, f.get("firm"), f.get("region"), f.get("hq"), f.get("type"), f.get("notes"), f.get("fit"))]
         if hits:
             categories["investors"] = [

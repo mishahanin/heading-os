@@ -59,8 +59,18 @@ from scripts.utils.air_gap import is_denied
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 from scripts.utils.commit_source import iter_commits
 from scripts.utils.symbol_source import iter_symbols
-from scripts.utils.embeddings import EmbeddingError, embed, model_digest
-from scripts.utils.ollama_host import resolve_ollama_host
+from scripts.utils.embeddings import (
+    EmbeddingError,
+    embed,
+    index_embed_preference,
+    model_digest,
+)
+from scripts.utils.ollama_host import (
+    LOCAL_HOST,
+    OllamaHostUnavailable,
+    resolve_ollama_host,
+    resolve_pinned_host as _resolve_embed_host,
+)
 from scripts.utils.workspace import get_classification, get_data_root, get_workspace_root, load_env
 
 # ============================================================
@@ -98,8 +108,13 @@ TOKEN_RE = re.compile(r"\w+", re.UNICODE)  # query -> bare word tokens (RU/EN)
 # the single shared source of truth, imported above. Do not re-inline a copy here.
 
 
-def load_config(root: Path) -> dict:
-    """Load config/memory-index.yaml. Clear error if absent or unparseable."""
+def load_config(root: Path, *, allow_fallback: bool = False) -> dict:
+    """Load config/memory-index.yaml. Clear error if absent or unparseable.
+
+    `allow_fallback` carries `build --allow-host-fallback` down to host
+    resolution: it is the one documented way to embed somewhere other than the
+    pinned host.
+    """
     path = root / CONFIG_REL
     if not path.exists():
         sys.stderr.write(f"Config not found: {path}\n")
@@ -113,19 +128,41 @@ def load_config(root: Path) -> dict:
     # Resolved, not merely defaulted. `host` may read `auto:<port>`, which
     # follows the CURRENT WSL gateway - a literal gateway address would work
     # until the next WSL restart and then break every scheduled refresh
-    # silently. An unreachable host degrades to the local daemon, because a
-    # slower index beats a stale one. HEADING_OS_OLLAMA_EMBED_HOST overrides
-    # for a one-off run without editing config.
-    cfg["host_preferred"] = cfg.get("host")
-    cfg["host"] = resolve_ollama_host(
-        cfg.get("host"), env_var="HEADING_OS_OLLAMA_EMBED_HOST"
-    )
-    # Every subcommand goes through here, so the announcement cannot be forgotten
-    # by a code path added later. Operator directive, 2026-08-21: a fallback is
-    # said out loud, at once, in red -- not left for someone to notice in `meta`.
-    banner = host_fallback_banner(cfg["host_preferred"], cfg["host"])
-    if banner:
-        sys.stderr.write(banner)
+    # silently. HEADING_OS_OLLAMA_EMBED_HOST overrides for a one-off run without
+    # editing config.
+    #
+    # A configured host is a PIN (operator directive, 2026-08-23): when nothing
+    # it names answers, `cfg["host"]` is left None and `cfg["host_error"]`
+    # carries why. Resolution does NOT abort here, because `stats` and `meta`
+    # never embed and must keep working while the embedder is down; the two
+    # commands that DO embed refuse on the None. `allow_fallback` is the named
+    # override and restores the old degrade-to-local behaviour.
+    # The preference comes from `index_embed_preference()`, not from this file
+    # alone: since 2026-08-23 the machine's own pin lives in the gitignored
+    # `config/ollama-hosts.yaml`, because an address is a fact about one computer
+    # and this config is tracked. Reading only `cfg["host"]` here would resolve a
+    # pinned machine to the local daemon - which on this laptop no longer has the
+    # embed model at all.
+    cfg["host_preferred"] = index_embed_preference(root=root)
+    cfg["host"] = cfg["host_preferred"]
+    cfg["host_error"] = None
+    if allow_fallback:
+        cfg["host"] = resolve_ollama_host(
+            cfg.get("host"), env_var="HEADING_OS_OLLAMA_EMBED_HOST"
+        )
+        # Every subcommand goes through here, so the announcement cannot be
+        # forgotten by a code path added later. Operator directive, 2026-08-21:
+        # a fallback is said out loud, at once, in red.
+        banner = host_fallback_banner(cfg["host_preferred"], cfg["host"])
+        if banner:
+            sys.stderr.write(banner)
+    else:
+        try:
+            cfg["host"] = _resolve_embed_host(cfg.get("host"))
+        except OllamaHostUnavailable as exc:
+            cfg["host"] = None
+            cfg["host_error"] = str(exc)
+            sys.stderr.write(embedder_down_banner(str(exc)))
     cfg.setdefault("threshold", 0.55)
     cfg.setdefault("near_miss_margin", 0.12)
     cfg.setdefault("top_k", 8)
@@ -472,22 +509,22 @@ def _layer_store_map(cfg):
 
 
 def cmd_build(args) -> int:
-    cfg = load_config(get_workspace_root())  # memory-index.yaml is engine config
+    # memory-index.yaml is engine config. The flag travels into resolution: with
+    # it, an unreachable pin degrades to the local daemon (loudly); without it,
+    # resolution leaves `host` None and the refusal below fires.
+    cfg = load_config(
+        get_workspace_root(),
+        allow_fallback=bool(getattr(args, "allow_host_fallback", False)),
+    )
 
     # A build writes vectors that outlive the run. Embedding a few thousand of
     # them on an unintended host is precisely the split brain the operator asked
     # to prevent, and nothing downstream would ever surface it -- cosine compares
-    # mismatched vectors happily and returns a plausible number. So refuse, and
-    # name the override rather than hiding it. A QUERY does the opposite: it
-    # embeds one throwaway vector, the two hosts agree to cosine 0.99997 on the
-    # same bge-m3 digest, and refusing recall because Windows is asleep would
-    # trade a real capability for float noise.
-    if host_fell_back(cfg.get("host_preferred"), cfg["host"]) and not args.allow_host_fallback:
-        # load_config already printed the red banner naming wanted and got.
+    # mismatched vectors happily and returns a plausible number.
+    if cfg.get("host") is None:
+        # load_config already printed the red banner naming what was tried.
         sys.stderr.write(
-            f"{RED}{BOLD}Refusing to build on a fallback embedder.{RESET}\n"
-            f"{YELLOW}Start the preferred host, or pass --allow-host-fallback to "
-            f"accept a mixed-provenance store.{RESET}\n"
+            f"{RED}{BOLD}Refusing to build: the pinned embedder is down.{RESET}\n"
         )
         return 1
 
@@ -507,13 +544,23 @@ def host_fell_back(preferred: str | None, resolved: str) -> bool:
     a few thousand vectors from an unintended embedder is the split brain, and it
     is silent unless someone compares the two hosts by hand.
     """
-    want = (preferred or "").strip()
-    if not want:
+    entries = preferred if isinstance(preferred, (list, tuple)) else [preferred]
+    entries = [e.strip() for e in entries if isinstance(e, str) and e.strip()]
+    if not entries:
         return False                     # nothing asked for, nothing denied
-    if want.startswith("auto"):
-        _, _, port = want.partition(":")
-        return not (port and resolved.rstrip("/").endswith(f":{port}"))
-    return want.rstrip("/") != resolved.rstrip("/")
+    landed = resolved.rstrip("/")
+    for want in entries:
+        if want.startswith("auto"):
+            _, _, port = want.partition(":")
+            # The local daemon is excluded explicitly: since the pin may name
+            # 11434 - the port the Windows desktop app actually binds - a bare
+            # suffix match would call `localhost:11434` a successful resolution
+            # of `auto:11434`, which is the exact substitution being guarded.
+            if port and landed.endswith(f":{port}") and landed != LOCAL_HOST:
+                return False
+        elif want.rstrip("/") == landed:
+            return False
+    return True
 
 
 def host_fallback_info(preferred: str | None, resolved: str) -> dict | None:
@@ -555,6 +602,43 @@ def host_fallback_banner(preferred: str | None, resolved: str) -> str | None:
         f"{YELLOW}  Start Ollama on the Windows host, then re-run.{RESET}\n"
         f"{RED}{BOLD}{bar}{RESET}\n"
     )
+
+
+def embedder_down_banner(reason: str) -> str:
+    """Loud, red, immediate — the pinned embedder did not answer at all.
+
+    Sibling of `host_fallback_banner`, and the one that fires under the
+    2026-08-23 policy. The other banner now appears only behind the explicit
+    `--allow-host-fallback`.
+    """
+    bar = "=" * 70
+    return (
+        f"\n{RED}{BOLD}{bar}\n"
+        f"  EMBEDDER NOT AVAILABLE -- NOTHING WILL BE EMBEDDED\n"
+        f"{bar}{RESET}\n"
+        f"{RED}{BOLD}  {reason}{RESET}\n"
+        f"{YELLOW}  Embedding is pinned to the Windows-side ollama. Start it "
+        f"(Ollama tray app), then re-run.{RESET}\n"
+        f"{YELLOW}  A rebuild on the local daemon needs the explicit "
+        f"--allow-host-fallback.{RESET}\n"
+        f"{RED}{BOLD}{bar}{RESET}\n"
+    )
+
+
+def embed_unavailable_payload(reason: str) -> dict:
+    """The refusal as JSON, for `query --json`.
+
+    `.claude/hooks/recall-inject.py` captures stderr and discards it, so a red
+    banner never reaches the session — the surface the operator actually reads.
+    The same fact has to travel as data or it does not travel. Shaped like a gap
+    so a naive consumer degrades to "no memory" rather than crashing, with
+    `embed_unavailable` present for one that knows better.
+    """
+    return {
+        "hits": [],
+        "gap": True,
+        "embed_unavailable": {"reason": reason},
+    }
 
 
 def record_provenance(conn, *, model: str, host: str, digest: str | None = None) -> None:
@@ -1281,6 +1365,20 @@ def cmd_query(args) -> int:
             return
 
     cfg = load_config(get_workspace_root())  # memory-index.yaml is engine config
+
+    # Nothing below can run without an embedder, and a silent empty result is
+    # indistinguishable from "memory has nothing on this" — the exact confusion
+    # the 2026-08-23 directive exists to end. Refuse, in both renderings.
+    if cfg.get("host") is None:
+        reason = cfg.get("host_error") or "the pinned embedder is unreachable"
+        if getattr(args, "json", False):
+            print(json.dumps(embed_unavailable_payload(reason), ensure_ascii=False))
+        else:
+            sys.stderr.write(
+                f"{RED}Cannot search memory: {reason}{RESET}\n"
+            )
+        return 3
+
     threshold = args.threshold if args.threshold is not None else cfg["threshold"]
     near_miss_margin = float(cfg.get("near_miss_margin", 0.12) or 0.0)
     top_k = args.top_k or cfg["top_k"]
@@ -1616,8 +1714,8 @@ def main() -> int:
     p_build = sub.add_parser("build", help="(re)build the index from allowlisted layers")
     p_build.add_argument("--force", action="store_true", help="re-embed all, ignore mtime")
     p_build.add_argument("--allow-host-fallback", action="store_true",
-                         help="build even if the preferred embedder is unreachable "
-                              "(accepts a mixed-provenance store)")
+                         help="build on the local daemon when no pinned embedder "
+                              "answers (accepts a mixed-provenance store)")
     p_build.set_defaults(func=cmd_build)
 
     p_query = sub.add_parser("query", help="semantic recall over the index")

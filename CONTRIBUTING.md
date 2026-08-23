@@ -36,7 +36,18 @@ Keep the bar the engine holds itself to:
 
 ## Design docs and ADRs
 
-Structural or cross-cutting changes get a short design doc first, in [`docs/design/`](docs/design/), before the code. It records the context, the decision taken, and the alternatives rejected, so the direction is reviewable on its own. Small, local fixes do not need one. To start, copy [`docs/design/adr-template.md`](docs/design/adr-template.md); the naming convention and an index of existing records are in [`docs/design/README.md`](docs/design/README.md).
+Structural or cross-cutting changes get a short design doc first, before the code. It records the context, the decision taken, and the alternatives rejected, so the direction is reviewable on its own. Small, local fixes do not need one.
+
+**Write it in the pull request description, not in the repository.** This page used to point at `docs/design/` and tell you to copy a template from it. That directory is not here: the maintainer's design history moved to a private overlay on 2026-08-20 and the path is now gitignored, so all three links 404ed and anything you wrote there could never have been committed.
+
+Four headings are enough:
+
+- **Context.** What is true today, and what about it does not work.
+- **Decision.** What you propose to change.
+- **Alternatives rejected.** What else you considered, and why not.
+- **Undo.** How the change is reversed if it turns out wrong.
+
+A maintainer will tell you if a change needs one before you write code, so ask in an issue first rather than guessing.
 
 Non-trivial work in this repository runs on **[Canopus](docs/CANOPUS.md)**, the build standard: seven numbered steps, the test contract written and approved before the implementation exists, and one committed record per change naming its own undo. Read that page before proposing anything structural; the contributor-facing commands are summarised in [`docs/EXTENDING.md`](docs/EXTENDING.md).
 

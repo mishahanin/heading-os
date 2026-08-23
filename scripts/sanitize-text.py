@@ -24,6 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.sanitize_text import sanitize, scan
 
 
+def _word_count(text: str) -> int:
+    """Words as a human counts them in prose.
+
+    Whitespace-separated runs that contain at least one letter or digit, so a
+    bare bullet, a lone em-dash or a `|` table rule does not inflate the figure.
+    """
+    return sum(1 for tok in text.split() if any(ch.isalnum() for ch in tok))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Strip invisible Unicode characters from AI-generated text."
@@ -55,6 +64,12 @@ def main():
 
     if args.scan:
         count = scan(text, source)
+        # The word count belongs here because `.claude/rules/hidden-chars.md`
+        # requires every deliverable to carry "Word count: X. Hidden characters:
+        # clean." and nothing computed the X -- so the number was estimated by
+        # whoever wrote the line. A validation line with a guessed figure in it
+        # is the exact over-claim `.claude/rules/scope-claims.md` forbids.
+        print(f"  Word count: {_word_count(text)}", file=sys.stderr)
         sys.exit(1 if count > 0 else 0)
 
     clean = sanitize(text)

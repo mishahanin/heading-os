@@ -75,8 +75,13 @@ def install_pre_commit(hooks_dir: Path, check_only: bool = False) -> bool:
 
         # Existing hook without our marker - append
         print(f"  {YELLOW}pre-commit: appending secret scanner to existing hook{RESET}")
+        # removeprefix, NOT lstrip. str.lstrip takes a SET of characters, so
+        # "#!/bin/sh\n" strips every leading #, !, /, b, i, n, s, h and newline
+        # -- which ate the "# " opening the marker line, leaving a bare word the
+        # shell reads as a missing command AND leaving the marker unfindable, so
+        # the guard above missed and every run appended another copy.
         with open(hook_path, "a", encoding="utf-8") as f:
-            f.write("\n\n" + PRE_COMMIT_HOOK.lstrip("#!/bin/sh\n"))
+            f.write("\n\n" + PRE_COMMIT_HOOK.removeprefix("#!/bin/sh\n"))
     else:
         if check_only:
             print(f"  {RED}pre-commit: not installed{RESET}")

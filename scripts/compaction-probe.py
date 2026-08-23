@@ -11,11 +11,19 @@ this workspace can see - the statusline percentage, `--compact-history`'s
 between sample and event has been measured at five and a half minutes. So this
 script reads the transcripts and nothing else.
 
-TIMESTAMP SEMANTICS, stated once because two earlier drafts disagreed: handoff
-archives are compared by their FILENAME stamp, never by mtime.
-`checkpoint-save.py` truncates the stamp to `%H%M%S`, and mtime drifts with any
-later touch, so the filename is the only stable record of when the archive was
-written.
+TIMESTAMP SEMANTICS, stated once because three earlier drafts disagreed:
+
+1. Handoff archives are compared by their FILENAME stamp, never by mtime.
+   `checkpoint-save.py` truncates the stamp to `%H%M%S`, and mtime drifts with
+   any later touch, so the filename is the only stable record of when the
+   archive was written.
+2. There are TWO clocks here and they must not be mixed. Transcript timestamps
+   are UTC; archive filenames are stamped in the operator's own zone. So
+   `assert_driven` compares UTC against UTC (`compact_requests[].at` is
+   `CP.utc_now()`) via `_event_stamp`, and `assert_handoff_precedes` compares
+   local against local via `_event_stamp_local`. Mixing them was a real defect,
+   found 2026-08-23: on this UTC+4 host it produced 8 false violations and hid 2
+   real ones out of 91 boundaries.
 
 Usage:
     python scripts/compaction-probe.py
@@ -38,13 +46,14 @@ import json
 import re
 import statistics
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.utils import checkpoint_paths as CP  # noqa: E402
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.workspace import get_workspace_root  # noqa: E402
+from scripts.utils.workspace import get_default_tz, get_workspace_root  # noqa: E402
 
 # `checkpoint-save.py` names archives YYYY-MM-DD-HHMMSS_handoff_<kind>_<slug>.md
 ARCHIVE_RE = re.compile(
@@ -134,7 +143,12 @@ def _archives(project: Path) -> tuple[dict[str, list[dict]], list[str]]:
 
 
 def _event_stamp(event: dict) -> str:
-    """The boundary timestamp in the archive's own stamp format, for comparison."""
+    """The boundary timestamp, on the UTC clock, in stamp format.
+
+    Compare this against anything SERIALIZED — `compact_requests[].at` is
+    `CP.utc_now()`. For a handoff FILENAME use `_event_stamp_local`; see the
+    note on that function for why the two must not be merged.
+    """
     raw = (event.get("timestamp") or "").replace("Z", "")
     try:
         date, clock = raw.split("T", 1)
@@ -142,6 +156,37 @@ def _event_stamp(event: dict) -> str:
         return ""
     clock = clock.split(".", 1)[0].replace(":", "")
     return f"{date}-{clock[:6]}"
+
+
+def _event_stamp_local(event: dict) -> str:
+    """The boundary timestamp, converted to the operator's zone, in stamp format.
+
+    Two clocks meet in this file and only one comparison is string-safe without
+    a conversion. Transcript timestamps are UTC (`...Z`). Handoff archive
+    filenames are stamped with `CP.local_now()` — deliberately, so a handoff
+    written at 02:56 in Dubai is not filed under the previous calendar day. On
+    any host that is not UTC, comparing the raw strings compares two clocks.
+
+    Measured on 2026-08-23 before this existed: `assert_handoff_precedes`
+    reported 40 violations against this workspace's own transcripts, among them
+    session c2f703f7 at 2026-08-21T13:08:05Z, whose `auto` handoff is filed as
+    `2026-08-21-170420` — 13:04:20 UTC, four minutes BEFORE the boundary it was
+    reported as missing. The assertion's whole guarantee was noise.
+
+    Returns "" on an unparseable timestamp, matching `_event_stamp`; the caller
+    then finds no archive at or below "" and reports a violation, which is the
+    fail-toward-reporting direction `.claude/rules/scope-claims.md` asks for.
+    """
+    raw = (event.get("timestamp") or "").strip()
+    if not raw:
+        return ""
+    try:
+        moment = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(get_default_tz()).strftime("%Y-%m-%d-%H%M%S")
 
 
 def _requests(project: Path, session: str) -> list[dict]:
@@ -212,6 +257,10 @@ def assert_handoff_precedes(events: list[dict], project: Path) -> list[str]:
     The kind filter IS the assertion. Without it the check passes for any
     session that compacted even once, satisfied by the archive the compaction
     itself produced.
+
+    Everything here is on the ARCHIVE clock — the operator's zone — because that
+    is the clock the filenames are stamped on. `_event_stamp_local` does the
+    conversion; `assert_driven` deliberately stays on UTC.
     """
     grouped, notes = _archives(project)
     violations = list(notes)
@@ -219,7 +268,7 @@ def assert_handoff_precedes(events: list[dict], project: Path) -> list[str]:
     for event in events:
         session = event["session"]
         slug = CP.safe_slug(session)
-        stamp = _event_stamp(event)
+        stamp = _event_stamp_local(event)
         floor = previous.get(session, "")
         found = [
             a for a in grouped.get(slug, [])

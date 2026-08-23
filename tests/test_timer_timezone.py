@@ -687,6 +687,10 @@ _PROBE_PLAN = {
     # process cannot be driven to a read without lifting a safety control to test
     # a timezone, which is the wrong trade. The static walk above covers it.
     "odin-cadence-notify.py": ([], False),
+    # `check` probes and prints; it never formats a date, so it reaches no local
+    # zone. `heal` is not used here on purpose - a probe must not start a
+    # Windows application as a side effect of running the test suite.
+    "ollama-guard.py": (["check"], False),
     "ops-radar-notify.py": ([], False),
     "reminders-notify.py": ([], True),
     "router-accuracy-nightly.py": (["--dry-run"], False),
@@ -745,6 +749,19 @@ _sp.Popen = _forbidden
 _sp.check_output = _forbidden
 import urllib.request as _ur
 _ur.urlopen = _forbidden
+# requests and raw sockets, added 2026-08-23. Neutering telegram_notify only
+# covers entrypoints that go THROUGH it; sentinel.py and utils/alert.py import
+# TelegramBot directly, and its real transport is requests.post -- which this
+# probe left wide open while its comment above claimed nothing may leave. The
+# send stayed blocked in practice only because conftest blanks the bot token,
+# which is a fact about the parent process, not about this probe.
+import requests as _rq
+for _m in ("post", "get", "put", "patch", "delete", "head", "request"):
+    setattr(_rq, _m, _forbidden)
+_rq.Session.request = _forbidden
+import socket as _sock
+_sock.socket.connect = _forbidden
+_sock.create_connection = _forbidden
 
 sys.argv = [sys.argv[2]] + sys.argv[3:]
 try:

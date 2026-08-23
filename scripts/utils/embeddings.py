@@ -50,11 +50,15 @@ class EmbeddingError(RuntimeError):
     """Raised when the local embedder is unreachable or returns no vectors."""
 
 
-def _index_config() -> dict:
+def _index_config(root=None) -> dict:
     """`config/memory-index.yaml`, or {} when it cannot be read.
 
     Degrades rather than raising: every caller below is advisory, interactive, or
     a health probe, and none of them should die over a config file.
+
+    `root` exists for callers that already know which workspace they mean -
+    `scripts/memory-index.py` is handed a root and must not silently read a
+    different clone's config through `get_workspace_root()`.
     """
     import yaml
 
@@ -62,11 +66,44 @@ def _index_config() -> dict:
     from scripts.utils.workspace import get_workspace_root
 
     try:
-        path = get_workspace_root() / "config" / "memory-index.yaml"
+        path = (root or get_workspace_root()) / "config" / "memory-index.yaml"
         with open(path, encoding="utf-8") as fh:
             return yamlio.safe_load(fh) or {}
     except (OSError, yaml.YAMLError):
         return {}
+
+
+def index_embed_preference(*, root=None):
+    """The raw, UNRESOLVED embedding host preference. "" when nothing is set.
+
+    One place answers "where should embedding go", so the index builder, the
+    ops radar and every embed caller cannot drift apart on the question. It
+    returns the preference rather than an address because the resolvers differ:
+    embedding refuses when its pin is down, generation degrades.
+
+    Three sources, most explicit first:
+
+    1. `host` in `config/memory-index.yaml` - tracked, so an operator who writes
+       one there means it for every clone of this repo.
+    2. `HEADING_OS_OLLAMA_EMBED_HOST` - a one-off, for a single run.
+    3. `embed:` in `config/ollama-hosts.yaml` - gitignored, this machine's
+       standing default. Last because it is a default, not an override.
+
+    Source 3 exists because sources 1 and 2 could not hold the fact. The pin sat
+    in the tracked config for one day (2026-08-23) and broke every clone that
+    was not this WSL2 laptop: `auto:11434` names whatever answers at the local
+    default gateway, and since a pin refuses rather than degrades, a fresh clone
+    with a working ollama could not build its index at all.
+    """
+    import os
+
+    from scripts.utils.ollama_host import machine_hosts
+
+    return (
+        _index_config(root).get("host")
+        or os.environ.get("HEADING_OS_OLLAMA_EMBED_HOST", "")
+        or machine_hosts("embed", root=root)
+    )
 
 
 def index_embed_model() -> str:
@@ -90,14 +127,28 @@ def index_embed_keep_alive() -> str:
     return _index_config().get("keep_alive") or INDEX_EMBED_KEEP_ALIVE_DEFAULT
 
 
-def index_embed_target() -> tuple[str, str]:
+def index_embed_target(*, allow_fallback: bool = False) -> tuple[str, str]:
     """The (host, model) this workspace embeds with, read where the index reads them.
 
-    Resolution order is the SAME as `scripts/memory-index.py`: `host` from
-    `config/memory-index.yaml`, else `HEADING_OS_OLLAMA_EMBED_HOST`, else the
-    local daemon; `model` from the same file, else `INDEX_EMBED_MODEL_DEFAULT`.
-    An unreachable host degrades to local, because a slower answer beats no
-    answer.
+    The host comes from `index_embed_preference()`, which `scripts/memory-index.py`
+    also calls, so the builder and every other embed caller cannot disagree about
+    where vectors are computed. `model` comes from `config/memory-index.yaml`,
+    else `INDEX_EMBED_MODEL_DEFAULT`.
+
+    **A configured host is a PIN, not a preference** (operator directive,
+    2026-08-23). When one is set and nothing it names answers, this raises
+    `EmbeddingError` instead of quietly embedding somewhere else. The previous
+    arrangement degraded to the local daemon on the argument that both hosts ran
+    the same `bge-m3` digest, so the vectors matched to cosine 0.99997 — true,
+    and it still cost a morning: the Windows daemon came back on port 11434
+    instead of the pinned 11436, every recall answered from the WSL CPU, and the
+    only signal was a stderr banner the recall hook throws away. The fallback did
+    not preserve a capability, it hid an outage.
+
+    `allow_fallback=True` is the named way out, used by
+    `memory-index build --allow-host-fallback`. A workspace with NO host
+    configured is not pinned to anything and still uses the local daemon: a
+    public clone must not need this laptop's Windows side to embed at all.
 
     Why this exists rather than four literals. Until 2026-08-22 the index, the
     memory-hygiene redundancy scan, `chronicle personal-recall` and the ops radar
@@ -116,13 +167,32 @@ def index_embed_target() -> tuple[str, str]:
     a host - work that a command which never embeds (`chronicle stats`,
     `chronicle build`) should not pay for on import.
     """
-    from scripts.utils.ollama_host import resolve_ollama_host
+    import os
+
+    from scripts.utils.ollama_host import (
+        LOCAL_HOST,
+        OllamaHostUnavailable,
+        resolve_ollama_host,
+        resolve_pinned_host,
+    )
 
     config = _index_config()
-    host = resolve_ollama_host(
-        config.get("host"), env_var="HEADING_OS_OLLAMA_EMBED_HOST"
-    )
-    return host, config.get("model") or INDEX_EMBED_MODEL_DEFAULT
+    model = config.get("model") or INDEX_EMBED_MODEL_DEFAULT
+    pin = index_embed_preference()
+
+    if not pin:
+        return LOCAL_HOST, model
+    if allow_fallback:
+        return resolve_ollama_host(pin, env_var="HEADING_OS_OLLAMA_EMBED_HOST"), model
+    try:
+        return resolve_pinned_host(pin), model
+    except OllamaHostUnavailable as exc:
+        # Re-raised as the error every caller of this module already handles, so
+        # a down embedder reads as "cannot embed" and not as an unrelated crash.
+        raise EmbeddingError(
+            f"{exc}. Embedding is pinned to that host; start it, or pass "
+            f"--allow-host-fallback to accept a mixed-provenance store."
+        ) from exc
 
 
 def embed(

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
     get_workspace_root, validate_admin,
     get_corporate_repo_path, load_admin_config,
-    get_per_exec_repo_path, get_all_active_exec_slugs,
+    get_per_exec_repo_path, get_per_exec_contacts_dir, get_all_active_exec_slugs,
     get_crm_contacts_dir,
 )
 from scripts.utils.operator_identity import operator_slug
@@ -310,10 +310,21 @@ def merge_notes(body_from: str, body_into: str, from_slug: str, into_slug: str) 
 # ---------------------------------------------------------------------------
 
 def git_commit(repo: Path, files: list[Path], message: str) -> None:
-    """Stage files and commit in the given repo."""
-    for f in files:
-        subprocess.run(["git", "add", str(f)], cwd=str(repo), check=True,
-                       capture_output=True)
+    """Stage exactly `files` -- present or deleted -- and commit.
+
+    The 2026-08-23 defect was in the CALLER, not here: this script renames the
+    source contact to `.md.merged` and then passed only the backup path, so the
+    deletion of the original was never staged and the commit shipped a second
+    live copy of the contact. Measured on git 2.43: after `git add <backup>`
+    alone, `git status` shows ` D contacts/x.md` -- unstaged. Naming the source
+    path is what turns it into `R contacts/x.md -> contacts/x.md.merged`.
+
+    `--all` is belt-and-braces for older git; the pathspec stays exactly the
+    named files -- never their directory, which would sweep the operator's
+    unrelated edits into this commit.
+    """
+    subprocess.run(["git", "add", "--all", "--", *[str(f) for f in files]],
+                   cwd=str(repo), check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", message], cwd=str(repo), check=True,
                    capture_output=True)
 
@@ -347,7 +358,7 @@ def main() -> None:
     def _contacts_dir(exec_slug: str) -> Path:
         if exec_slug in admin_slugs:
             return get_crm_contacts_dir()
-        return get_per_exec_repo_path(exec_slug) / "contacts"
+        return get_per_exec_contacts_dir(exec_slug)
 
     from_contacts = _contacts_dir(args.from_exec)
     into_contacts = _contacts_dir(args.into)
@@ -404,8 +415,14 @@ def main() -> None:
     # Commit changes in each affected per-exec repo
     into_repo = into_contacts.parent
     from_repo = from_contacts.parent
+    # When both contacts live in ONE repo the second commit below is skipped
+    # entirely, so the backup and the source deletion have to ride along here or
+    # they are never committed at all.
+    first_paths = [target_path]
+    if into_repo == from_repo:
+        first_paths += [backup_path, source_path]
     try:
-        git_commit(into_repo, [target_path], (
+        git_commit(into_repo, first_paths, (
             f"Merge contact {args.contact} from {args.from_exec} into {args.into}"
         ))
         print(f"{GREEN}Committed to {args.into} repo.{RESET}")
@@ -414,7 +431,9 @@ def main() -> None:
         print(f"  {exc.stderr.decode().strip() if exc.stderr else exc}")
     if into_repo != from_repo:
         try:
-            git_commit(from_repo, [backup_path], (
+            # source_path as well as backup_path: the rename above left the
+            # original tracked, and only naming it stages the deletion.
+            git_commit(from_repo, [backup_path, source_path], (
                 f"Backup merged contact {args.contact} (transferred to {args.into})"
             ))
             print(f"{GREEN}Committed backup to {args.from_exec} repo.{RESET}")

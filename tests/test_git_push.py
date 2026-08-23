@@ -97,6 +97,62 @@ def test_supervised_push_refuses_dirty_engine(monkeypatch, tmp_path):
     assert no_main.returncode != 0
 
 
+def test_unreadable_roots_refuse_an_engine_clone_rather_than_skipping_the_wall(
+    monkeypatch, tmp_path
+):
+    """Found by the 2026-08-23 audit. The wall was skipped in silence.
+
+    `_is_split_engine` swallowed any exception from the root resolvers and
+    answered False, and False means "not the engine, nothing to wall". So on a
+    broken environment - the state in which misrouting is MOST likely - the
+    chokepoint the module docstring calls unbypassable simply stopped scanning
+    and said nothing. The remote-check leg three hundred lines down already
+    printed a loud warning for the same condition, which is what makes this an
+    oversight rather than a decision.
+
+    A repository carrying `scripts/utils/engine_guard.py` is the engine clone
+    whatever the resolvers say, and the answer there is refuse, not guess. The
+    data overlay carries no such file, so it is untouched by this.
+    """
+    _remote, work = _make_repo(tmp_path)
+
+    def _broken():
+        raise RuntimeError("HEADING_OS_DATA points at nothing")
+
+    # Only the DATA root is broken, which is the realistic shape: a bad
+    # HEADING_OS_DATA. Breaking the workspace root as well would take down
+    # `load_gh_token` first and prove nothing about the wall.
+    monkeypatch.setattr(git_push, "get_data_root", _broken)
+    (work / "scripts" / "utils").mkdir(parents=True)
+    (work / "scripts" / "utils" / "engine_guard.py").write_text("x\n", encoding="utf-8")
+
+    v = supervised_push(work, branch="main", stall_window=15)
+    assert v["state"] == "failed", v
+    assert "workspace roots" in v["reason"]
+    assert v["exit_code"] is None
+    no_main = subprocess.run(
+        ["git", "-C", str(_remote), "show-ref", "--verify", "refs/heads/main"],
+        capture_output=True,
+    )
+    assert no_main.returncode != 0
+
+
+def test_unreadable_roots_do_not_refuse_a_repository_that_is_not_the_engine(
+    monkeypatch, tmp_path
+):
+    """The data overlay and the corporate repos must still push on a broken
+    environment: they legitimately carry private content and were never walled."""
+    _remote, work = _make_repo(tmp_path)
+
+    def _broken():
+        raise RuntimeError("unresolvable")
+
+    monkeypatch.setattr(git_push, "get_data_root", _broken)
+
+    v = supervised_push(work, branch="main", stall_window=15)
+    assert v["state"] == "ok", v
+
+
 def test_supervised_push_allows_clean_engine(monkeypatch, tmp_path):
     # A clean engine clone (no private/corporate file) pushes normally -- the wall
     # must not break legitimate engine pushes.
@@ -681,9 +737,9 @@ def test_ceiling_notice_prints_once_per_remote(monkeypatch, tmp_path, capsys):
 def test_load_gh_token_returns_none_on_an_undecodable_env_file(tmp_path, monkeypatch):
     """A wall built to fail open must not carry a hard-crash path. Check A
     never uses the token, so a single non-UTF-8 byte in `.env` must not raise
-    out of `load_gh_token()` and crash the four callers (promote-corporate,
-    rollback-corporate, offboard-exec, create-data-repo) that reach this read
-    only because the chokepoint resolves it eagerly."""
+    out of `load_gh_token()` and crash the callers (offboard-exec,
+    create-data-repo) that reach this read only because the chokepoint resolves
+    it eagerly."""
     env_path = tmp_path / ".env"
     env_path.write_bytes(b"GH_TOKEN=abc\xffdef\n")
     monkeypatch.setattr(git_push, "get_workspace_root", lambda: tmp_path)

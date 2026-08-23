@@ -49,7 +49,7 @@ The 9 universal subchecks from `viia-framework.md` apply to trajectory targets, 
 3. **Dependency correctness** - Did steps that depended on prior step outputs actually see those outputs? Were files referenced by later steps created by earlier ones?
 4. **Edge cases** - Did the agent skip any plan step marked "if X then Y"? Did "(optional)" phases get reasoned about, or silently skipped?
 5. **Failure modes** - How did the agent recover from any failed step? Was a failure logged as a deviation, or silently swallowed and overwritten by a later success?
-6. **Hidden assumptions** - Did the agent assume capability X that the plan did not grant (e.g., wrote to `_secure/` from outside the vault)?
+6. **Hidden assumptions** - Did the agent assume capability X that the plan did not grant (e.g., wrote private data into the engine clone)?
 7. **Rule compliance** - Did any step violate `.claude/rules/*.md` rules during execution? Did tool calls touch forbidden patterns?
 8. **Security** - Were forbidden patterns used in tool calls (eval / exec / pickle.loads / subprocess shell=True / etc.)?
 9. **Hidden-character cleanliness** - Did emitted files survive post-apply sanitize-text scans? The trajectory JSONL itself is scanned at READ time at LOW severity (advisory, not auto-remediated - the trajectory is a verbatim audit record, not a content artefact).
@@ -90,7 +90,7 @@ Concrete trajectory-finding patterns this catches:
 Trajectory findings inherit the standard severity grid (`severity-grid.md`) with these examples:
 
 - **BLOCKER**: trajectory shows agent skipped a plan step that the final report claims was completed (missing `step_end`, present in summary)
-- **BLOCKER**: trajectory writes to `_secure/` from a non-vault session
+- **BLOCKER**: trajectory writes a private-routing artefact into the engine clone
 - **HIGH**: agent executed steps in wrong declared order without recording a `deviation` event
 - **HIGH**: `step_end` reports `status=ok` but the affected file fails post-apply hidden-character scan in the same step
 - **MEDIUM**: agent applied a fix without the plan's required post-apply check (validation_check event absent for an edited file)

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hooks reference</title>
-<meta name="description" content="The code that runs at fixed points in a session: before a tool call, after a write, at session start, on stop and compaction. Hooks are where several of the [rules](RULES-REFERENCE.html) stop being pr">
+<meta name="description" content="The code that runs at fixed points in a session: before a tool call, after a write, at session start, on stop and compaction.">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,7 +77,7 @@
 </aside>
 <main class="content">
   <h1>Hooks reference</h1>
-  <p class="page-meta">The code that runs at fixed points in a session: before a tool call, after a write, at session start, on stop and compaction. Hooks are where several of the [rules](RULES-REFERENCE.html) stop being pr</p>
+  <p class="page-meta">The code that runs at fixed points in a session: before a tool call, after a write, at session start, on stop and compaction.</p>
   <p>The code that runs at fixed points in a session: before a tool call, after a write, at session start, on stop and compaction. Hooks are where several of the <a href="RULES-REFERENCE.html">rules</a> stop being prose and become enforcement.</p>
 <h2 id="what-a-hook-is">What a hook is</h2>
 <p>A hook is a script the Claude Code harness runs at a named event. HEADING OS ships its hooks in <code>.claude/hooks/</code> and wires them in the settings files:</p>
@@ -149,7 +149,7 @@
 </tr>
 <tr>
 <td><code>memory-inject.py</code></td>
-<td>Loads the auto-memory index (<code>MEMORY.md</code> pointers) into context on startup.</td>
+<td>Loads the auto-memory index (<code>MEMORY.md</code> pointers) into context on startup. <strong>Dormant by default</strong> &ndash; <code>inject.enabled</code> is <code>false</code> in <code>config/memory-index.yaml</code>, superseded 2026-08-07 by <code>recall-inject.py</code> below. Wiring it as well gives you two memory injections per session, one of them date-ordered rather than relevance-ranked.</td>
 </tr>
 <tr>
 <td><code>memory-reconcile.py</code></td>

@@ -299,7 +299,12 @@ def step_setup_env(state: dict) -> bool:
 
     api_key = ""
     try:
-        api_key = input(f"  Enter your ANTHROPIC_API_KEY (or press Enter to skip): ").strip()
+        # getpass, not input: a key typed at input() is echoed to the terminal,
+        # so it lands in the scrollback, in any recording of the session, and in
+        # the transcript when this runs under an agent. It is imported at the top
+        # of this file and was, until 2026-08-23, never used.
+        api_key = getpass.getpass("  Enter your ANTHROPIC_API_KEY (input hidden, "
+                                  "or press Enter to skip): ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
 

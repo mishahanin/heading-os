@@ -4,9 +4,14 @@
 Use `.heading-os-data/admin/provision/provision_exec.py` for the two-part HEADING OS
 topology (CEO-owned `heading-os-data-{slug}` overlay + `heading-os-corporate` content).
 This script creates the old-model layout (`31c-workspace-{slug}` + a separate
-`31c-crm-{slug}` repo + corporate-sync) that the hard-cut migration retires; it is
-kept only for its canary/staging provisioning logic until that is ported into the
-admin-layer tool. Do not run it to onboard a new executive.
+`31c-crm-{slug}` repo + corporate-sync) that the hard-cut migration retires. Do
+not run it to onboard a new executive.
+
+NOTE (2026-08-23): it was previously "kept only for its canary/staging
+provisioning logic". That apparatus was removed as unwired, so this script now
+holds nothing the admin-layer tool lacks. It survives only because
+`tests/test_provision_exec_settings.py` and `tests/test_no_destructive_sync.py`
+still load it. It is a deletion candidate.
 
 Provision a new executive workspace with full directory structure, GitHub repos, and sync.
 
@@ -35,7 +40,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
     get_workspace_root, validate_admin, get_exec_slug, load_exec_registry,
-    get_crm_central_path, get_corporate_repo_path, load_admin_config,
+    get_data_config_dir,
+    get_crm_central_path, load_admin_config,
     load_github_org,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
@@ -335,22 +341,6 @@ def create_directory_structure(state: dict, args, workspace_dir: Path) -> bool:
 def create_workspace_identity(state: dict, args, workspace_dir: Path, slug: str) -> bool:
     """Create .workspace-identity.json."""
     if step_done(state, "create_workspace_identity"):
-        # Idempotent canary-flag patch: re-running with --canary on an already
-        # provisioned exec promotes them to canary without requiring a full
-        # re-provision (which would also reset GitHub repos, scheduled tasks, etc.).
-        if getattr(args, "canary", False):
-            identity_file = workspace_dir / ".workspace-identity.json"
-            if identity_file.exists():
-                try:
-                    existing = json.loads(identity_file.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    existing = None
-                if isinstance(existing, dict) and not existing.get("canary"):
-                    existing["canary"] = True
-                    identity_file.write_text(
-                        json.dumps(existing, indent=2), encoding="utf-8",
-                    )
-                    print(f"  {GREEN}[patch]{RESET} Set canary=true on existing .workspace-identity.json")
         print(f"  {GREEN}[skip]{RESET} Workspace identity already exists")
         return True
 
@@ -360,12 +350,9 @@ def create_workspace_identity(state: dict, args, workspace_dir: Path, slug: str)
         "slug": slug,
         "type": "exec-workspace",
     }
-    if getattr(args, "canary", False):
-        identity["canary"] = True
     identity_file = workspace_dir / ".workspace-identity.json"
     identity_file.write_text(json.dumps(identity, indent=2), encoding="utf-8")
-    canary_tag = " (CANARY)" if identity.get("canary") else ""
-    print(f"  {GREEN}[ok]{RESET} .workspace-identity.json created (slug: {slug}){canary_tag}")
+    print(f"  {GREEN}[ok]{RESET} .workspace-identity.json created (slug: {slug})")
 
     mark_step_done(workspace_dir, state, "create_workspace_identity")
     return True
@@ -953,42 +940,21 @@ def create_crm_repo(state: dict, args, workspace_dir: Path, slug: str) -> bool:
 
 
 def register_in_exec_registry(state: dict, args, workspace_dir: Path, slug: str) -> bool:
-    """Add exec to config/exec-registry.json in corporate repo."""
+    """Add exec to `<data-root>/config/exec-registry.json` (the 31C org chart).
+
+    Not the corporate repo: that file is classified `private`, and the corporate
+    repo syncs to every executive.
+    """
     if step_done(state, "register_in_exec_registry"):
-        # Idempotent canary-flag patch on the registry entry (companion to the
-        # patch in create_workspace_identity).
-        if getattr(args, "canary", False):
-            corp_repo = get_corporate_repo_path()
-            registry_file = corp_repo / "config" / "exec-registry.json"
-            if not registry_file.exists():
-                registry_file = workspace_dir / "config" / "exec-registry.json"
-            if registry_file.exists():
-                try:
-                    registry = json.loads(registry_file.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    registry = None
-                if isinstance(registry, dict):
-                    patched = False
-                    for entry in registry.get("executives", []):
-                        if entry.get("slug") == slug and not entry.get("canary"):
-                            entry["canary"] = True
-                            patched = True
-                            break
-                    if patched:
-                        registry_file.write_text(
-                            json.dumps(registry, indent=2), encoding="utf-8",
-                        )
-                        print(f"  {GREEN}[patch]{RESET} Set canary=true on registry entry for {slug}")
         print(f"  {GREEN}[skip]{RESET} Exec already registered")
         return True
 
     print(f"\n{BOLD}Step 14: Registering in exec registry{RESET}")
-    corp_repo = get_corporate_repo_path()
-    if not corp_repo.exists():
-        # Fall back to local config
-        corp_repo = workspace_dir
-
-    registry_dir = corp_repo / "config"
+    # Per-instance DATA, resolved through the data-config seam. This used to
+    # target `<corporate-repo>/config/` and mkdir it, which would have created a
+    # SECOND registry inside the repo that syncs down to every exec - and
+    # `config/exec-registry.json` is classified `private` in routing-map.yaml.
+    registry_dir = get_data_config_dir()
     registry_dir.mkdir(parents=True, exist_ok=True)
     registry_file = registry_dir / "exec-registry.json"
 
@@ -1013,20 +979,19 @@ def register_in_exec_registry(state: dict, args, workspace_dir: Path, slug: str)
             "role": args.role,
             "status": "active",
             "provisioned_at": datetime.now(timezone.utc).isoformat(),
-            "workspace_repo": f"31c-workspace-{slug}",
+            # No `workspace_repo`: it held the retired `31c-workspace-` name and
+            # the org chart no longer carries install facts at all (2026-08-23).
             "platform": args.platform or platform.system().lower(),
         }
         if args.github_user:
             entry["github_user"] = args.github_user
-        if getattr(args, "canary", False):
-            entry["canary"] = True
         registry["executives"].append(entry)
         registry_file.write_text(json.dumps(registry, indent=2), encoding="utf-8")
         print(f"  {GREEN}[ok]{RESET} Added {slug} to exec-registry.json")
 
     # Try to commit and push if in a git repo
     try:
-        cwd = str(corp_repo)
+        cwd = str(registry_dir.parent)
         run_cmd(["git", "add", "config/exec-registry.json"], cwd=cwd)
         status = run_cmd(["git", "status", "--porcelain"], cwd=cwd)
         if status.stdout.strip():
@@ -1148,7 +1113,7 @@ def main():
             f"Use the two-part HEADING OS provisioner:\n"
             f"  {CYAN}python .heading-os-data/admin/provision/provision_exec.py "
             f"--slug <slug> --name \"<Name>\" --role <role> --github-user <gh> "
-            f"[--canary] [--dry-run]{RESET}\n"
+            f"[--dry-run]{RESET}\n"
             f"(override for transition only: HEADING_OS_ALLOW_LEGACY_PROVISION=1)",
             file=sys.stderr,
         )
@@ -1169,11 +1134,6 @@ def main():
                         help="Target platform for the exec (default: current OS)")
     parser.add_argument("--reprovisioning", action="store_true",
                         help="Re-run prerequisite checks even if already passed")
-    parser.add_argument("--canary", action="store_true",
-                        help="Provision as the canary exec (tracks corporate staging branch, "
-                             "runs canary-smoke.py post-sync). Only one exec should be canary "
-                             "at a time.")
-
     args = parser.parse_args()
 
     # Admin gate

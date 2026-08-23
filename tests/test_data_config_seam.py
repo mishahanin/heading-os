@@ -56,12 +56,34 @@ def test_admin_config_loads_from_data_root(data_root):
 
 
 def test_exec_registry_loads_from_data_root(data_root):
-    from scripts.utils.workspace import load_exec_registry
-    (data_root / "config" / "exec-registry.json").write_text(
+    """The fleet registry is `admin/executives.json`, not `config/exec-registry.json`.
+
+    Corrected 2026-08-23. The seam was right - the registry does live under the
+    data root - but the FILENAME was the retired one, and no such file exists on
+    any machine. `load_exec_registry` therefore always returned an empty fleet,
+    and this test passed because it created the file it was about to read.
+    """
+    (data_root / "admin").mkdir(parents=True, exist_ok=True)
+    (data_root / "admin" / "executives.json").write_text(
         json.dumps({"executives": [{"slug": "a", "status": "active", "role": "exec"}]}),
         encoding="utf-8",
     )
-    assert len(load_exec_registry().get("executives", [])) == 1
+    assert len(load_exec_registry_fresh().get("executives", [])) == 1
+
+
+def test_exec_registry_ignores_the_retired_config_path(data_root):
+    """A leftover `config/exec-registry.json` must not resurrect the old model."""
+    (data_root / "config" / "exec-registry.json").write_text(
+        json.dumps({"executives": [{"slug": "ghost", "status": "active",
+                                    "role": "exec"}]}),
+        encoding="utf-8",
+    )
+    assert load_exec_registry_fresh().get("executives", []) == []
+
+
+def load_exec_registry_fresh():
+    from scripts.utils.workspace import load_exec_registry
+    return load_exec_registry()
 
 
 def test_loaders_degrade_when_data_config_absent(data_root):

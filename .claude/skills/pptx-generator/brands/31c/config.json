@@ -1,8 +1,9 @@
 {
   "output": {
-    "directory": "outputs/deliverables/presentations",
+    "directory": "$DECK_DIR",
     "naming": "{name}-{date}",
-    "keep_parts": false
+    "keep_parts": false,
+    "_directory_note": "Resolved by the caller, never a repo-relative literal. references/generation-workflow.md exports DECK_DIR from get_outputs_dir(), which lands in the DATA overlay. This field held 'outputs/deliverables/presentations' until 2026-08-23 -- a relative path that resolves into the engine root, which that same reference warns against by name."
   },
   "generation": {
     "slides_per_batch": 5,

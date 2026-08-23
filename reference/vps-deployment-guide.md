@@ -1,7 +1,7 @@
 # VPS Deployment Guide -- Claude Code Workspace on Ubuntu 24.04 LTS
 
 > Complete step-by-step instructions for deploying the Claude Code workspace to a Hostinger VPS. Written for someone who has never used Linux before. Every command is explained.
-> Last Updated: 2026-04-18
+> Last Updated: 2026-08-23
 
 ---
 
@@ -208,10 +208,20 @@ This will take 1-3 minutes. Wait until you see the `root@...:#` prompt again.
 Claude Code requires Node.js. Install version 24:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
+less /tmp/nodesource_setup.sh          # read it; press q to quit
+bash /tmp/nodesource_setup.sh
+rm /tmp/nodesource_setup.sh
 ```
 
-**What this does:** Downloads and runs the NodeSource setup script, which adds the Node.js 24.x repository to your system.
+**What this does:** Downloads the NodeSource setup script, lets you read it, and then runs it. It adds the Node.js 24.x repository to your system.
+
+**Why three commands instead of one.** The one-liner you will see everywhere is
+`curl ... | bash -`, which runs the script as root without anyone ever seeing it.
+Whatever the server returns is executed — a compromised mirror, a hijacked
+domain, or a server that serves a different body to `curl` than to a browser.
+Downloading first costs one extra line and makes the code reviewable. `less` is
+optional if you are in a hurry; the separation is not.
 
 Wait for it to finish, then install Node.js:
 
@@ -271,10 +281,15 @@ If all four commands show version numbers, you are ready for the next step.
 ### Step 3.1: Install Claude Code
 
 ```bash
-curl -fsSL https://claude.ai/install.sh | bash
+curl -fsSL https://claude.ai/install.sh -o /tmp/claude_install.sh
+less /tmp/claude_install.sh            # read it; press q to quit
+bash /tmp/claude_install.sh
+rm /tmp/claude_install.sh
 ```
 
-**What this does:** Downloads and runs the official Claude Code installer. It will install the `claude` command to `~/.local/bin/`.
+**What this does:** Downloads the official Claude Code installer, lets you read it, then runs it. It installs the `claude` command to `~/.local/bin/`.
+
+Same reason as Node above: download, look, then run. Never pipe a URL straight into a shell.
 
 Wait for the installation to complete. You should see a success message.
 
@@ -302,22 +317,41 @@ On a VPS (no browser), authenticate using your Anthropic API key. Run:
 claude
 ```
 
-Claude Code will start and ask you to authenticate. Choose the **API key** method and enter your Anthropic API key when prompted.
+Claude Code will start and ask you to authenticate. Choose the **API key** method and paste your Anthropic API key when prompted. Get the key from https://console.anthropic.com/settings/keys
 
-Alternatively, you can set it as an environment variable before running Claude:
+**That prompt is the whole step. Do not put the key anywhere else.**
+
+This guide used to tell you to `export` the key and then append that same
+`export` line to `~/.bashrc`. Do not do that, and undo it if you already did.
+Three things go wrong:
+
+- the key lands in `~/.bash_history` in plain text;
+- it lands in `~/.bashrc` in plain text, permanently, readable by anything that
+  can read your home directory;
+- every future shell exports it to every child process, and an environment
+  variable set that way **wins over the `.env` file** this workspace loads its
+  credentials from. Rotate the key later and the stale one keeps being used,
+  with an authentication error that points nowhere near `.bashrc`.
+
+If you need the key available to a script rather than to Claude Code itself, put
+it in the workspace `.env`, which is gitignored and which
+`scripts/utils/api.py` reads:
 
 ```bash
-export ANTHROPIC_API_KEY="<your-anthropic-api-key>"
+cd ~/workspaces/your-workspace
+cp .env.example .env
+chmod 600 .env
+mcedit .env          # fill in ANTHROPIC_API_KEY=... here
 ```
 
-Then add it permanently:
+**Already ran the old `.bashrc` version?** Clean up, then rotate the key: it has
+been sitting in two plaintext files.
 
 ```bash
-echo 'export ANTHROPIC_API_KEY="<your-anthropic-api-key>"' >> ~/.bashrc
-source ~/.bashrc
+sed -i '/ANTHROPIC_API_KEY/d' ~/.bashrc
+sed -i '/ANTHROPIC_API_KEY/d' ~/.bash_history
+unset ANTHROPIC_API_KEY
 ```
-
-**Replace `sk-ant-your-key-here` with your actual key.** Get it from https://console.anthropic.com/settings/keys
 
 ### Step 3.5: Test Claude Code
 
@@ -410,84 +444,52 @@ git status
 
 ## Part 5: Python Environment
 
-Python scripts in the workspace need many third-party packages. We install them in an isolated "virtual environment" so they don't interfere with the system Python.
+Python scripts in the workspace need many third-party packages. The workspace
+installs them with **uv**, which reads `pyproject.toml` and the locked
+`uv.lock` — so the VPS gets byte-identical versions to every other machine.
 
-### Step 5.1: Create the Virtual Environment
+**Do not install packages by hand here.** An earlier version of this guide listed
+25 packages with `>=` ranges and a bare `pip install`. Two problems, and the
+guide's own workspace forbids both. `>=` means the VPS resolves whatever is
+newest on the day you deploy, so it drifts away from the machine the code was
+tested on and the drift shows up as a bug nobody can reproduce. And bare `pip`
+bypasses the lockfile entirely, so the list here goes stale the moment
+`pyproject.toml` changes and nobody notices until an import fails.
+
+### Step 5.1: Install uv
+
+```bash
+curl -fsSL https://astral.sh/uv/install.sh -o /tmp/uv_install.sh
+less /tmp/uv_install.sh                # read it; press q to quit
+sh /tmp/uv_install.sh
+rm /tmp/uv_install.sh
+source ~/.bashrc
+```
+
+**What this does:** Installs `uv`, the workspace's package manager. Download,
+read, then run — the same rule as Node and Claude Code above.
+
+Verify:
+
+```bash
+uv --version
+```
+
+### Step 5.2: Create the Environment and Install Everything
 
 Make sure you are in the workspace directory:
 
 ```bash
 cd ~/workspaces/your-workspace
+uv sync --all-extras --group dev
 ```
 
-Then create the virtual environment:
+**What this does:** Creates `.venv/` and installs exactly the versions in
+`uv.lock` — the same set as the CEO workspace and CI. It replaces the whole
+hand-written package list this guide used to carry. Takes 2-5 minutes the first
+time.
 
-```bash
-python3 -m venv .venv
-```
-
-**What this does:** Creates a folder called `.venv` inside the workspace. This folder contains a private copy of Python with its own package directory. Think of it as a sandbox for Python packages.
-
-### Step 5.2: Activate the Virtual Environment
-
-```bash
-source .venv/bin/activate
-```
-
-**What this does:** Switches your terminal to use the Python inside `.venv` instead of the system Python. You will notice your prompt changes to show `(.venv)` at the beginning:
-
-```
-(.venv) root@vps-hostname:~/workspaces/your-workspace#
-```
-
-**Important:** You need to run this command every time you open a new PuTTY session and want to work with Python. To make it automatic, add it to your `.bashrc`:
-
-```bash
-echo 'cd ~/workspaces/your-workspace && source .venv/bin/activate' >> ~/.bashrc
-```
-
-### Step 5.3: Upgrade pip
-
-```bash
-pip install --upgrade pip
-```
-
-**What this does:** Updates the Python package installer to the latest version. Prevents warnings during package installation.
-
-### Step 5.4: Install All Dependencies
-
-```bash
-pip install \
-  exchangelib>=5.0.0 \
-  telethon>=1.34.0 \
-  anthropic>=0.42.0 \
-  google-api-python-client>=2.100.0 \
-  google-auth-httplib2>=0.2.0 \
-  google-auth-oauthlib>=1.2.0 \
-  python-docx>=1.0.0 \
-  openpyxl>=3.1.0 \
-  python-pptx>=0.6.0 \
-  Pillow>=10.0.0 \
-  playwright>=1.40.0 \
-  weasyprint>=60.0 \
-  scapy>=2.5.0 \
-  yt-dlp>=2024.1.0 \
-  youtube-transcript-api>=0.6.0 \
-  replicate>=1.0.0 \
-  pyyaml>=6.0.0 \
-  python-dotenv>=1.0.0 \
-  requests>=2.31.0 \
-  beautifulsoup4>=4.12.0 \
-  markdown>=3.5.0 \
-  requests-ntlm>=1.3.0 \
-  cryptography>=41.0.0 \
-  dnspython>=2.4.0 \
-  xlsxwriter>=3.1.0
-```
-
-**What this does:** Installs all the Python packages that the workspace scripts need. This will take 2-5 minutes as it downloads and compiles packages.
-
-**What each package does (summary):**
+**What the main packages do:**
 - `exchangelib` -- Connects to Microsoft Exchange (corporate email/calendar)
 - `telethon` -- Connects to Telegram
 - `anthropic` -- Connects to Claude AI API
@@ -497,32 +499,73 @@ pip install \
 - `weasyprint` -- Converts HTML to PDF
 - `pyyaml`, `python-dotenv` -- Configuration file handling
 
-### Step 5.5: Install Playwright Browsers
+The authoritative list is `pyproject.toml`. If something is missing, add it
+there with an exact `==` pin and re-run `uv sync` — never `pip install` it into
+the venv, because the next `uv sync` will remove it again.
+
+### Step 5.3: Using the Environment
+
+Invoke the interpreter by path rather than activating:
 
 ```bash
-playwright install --with-deps chromium
+.venv/bin/python scripts/crm-health.py
 ```
 
-**What this does:** Downloads the Chromium browser engine that Playwright uses for web automation. The `--with-deps` flag also installs system libraries that Chromium needs. This may take 1-2 minutes.
+**Why by path.** A bare `python` runs whichever interpreter the shell finds
+first, which on a fresh VPS is the system one, without any of the pinned
+packages. The workspace convention is the explicit path, so a forgotten
+`activate` cannot silently run the wrong Python.
 
-### Step 5.6: Save the Dependency List
+If you prefer activating, this still works:
 
 ```bash
-pip freeze > requirements-vps.txt
+source .venv/bin/activate
 ```
 
-**What this does:** Saves the exact versions of all installed packages to a file. Useful for recreating the environment later.
+### Step 5.4: Install Playwright Browsers
+
+```bash
+.venv/bin/playwright install --with-deps chromium
+```
+
+**What this does:** Downloads the Chromium browser engine that Playwright uses
+for web automation. `--with-deps` also installs the system libraries Chromium
+needs. This may take 1-2 minutes.
+
+### Step 5.5: Arm the Commit Gates
+
+```bash
+.venv/bin/pre-commit install
+```
+
+**What this does:** Installs the git hooks that block secrets and private data
+from being committed. Once per clone. Without it the gates are not armed.
+
+### Step 5.6: Do NOT Freeze Your Own Requirements File
+
+An earlier version of this guide said to run `pip freeze > requirements-vps.txt`.
+Do not. `requirements.txt` in this workspace is a GENERATED export of `uv.lock`
+and is never hand-edited; a second, machine-specific list is one more thing to
+drift. `uv.lock` already records the exact versions, and it is in git.
 
 ### Step 5.7: Verify Python Setup
 
 ```bash
-python3 -c "import exchangelib; print('exchangelib OK')"
-python3 -c "import telethon; print('telethon OK')"
-python3 -c "import anthropic; print('anthropic OK')"
-python3 -c "from playwright.sync_api import sync_playwright; print('playwright OK')"
+.venv/bin/python -c "import exchangelib; print('exchangelib OK')"
+.venv/bin/python -c "import telethon; print('telethon OK')"
+.venv/bin/python -c "import anthropic; print('anthropic OK')"
+.venv/bin/python -c "from playwright.sync_api import sync_playwright; print('playwright OK')"
 ```
 
-**Expected:** Each command prints `OK`. If any command fails with `ModuleNotFoundError`, that package did not install correctly -- re-run the `pip install` command for that specific package.
+**Expected:** Each command prints `OK`. If any fails with `ModuleNotFoundError`,
+re-run `uv sync --all-extras --group dev` — do not `pip install` the missing
+package, or the next sync will remove it again.
+
+Then run the suite once, which is the real check:
+
+```bash
+.venv/bin/python -m pytest tests/ -q
+```
 
 ---
 
@@ -634,13 +677,47 @@ cat .claude/settings.local.json
 
 Sentinel is the background comms monitor that checks email and Telegram every 15 minutes. On Linux, we run it as a **systemd service** -- this means it starts automatically when the VPS boots and restarts itself if it crashes.
 
-### Step 8.1: Copy the Service File
+### Step 8.1: Render and Install the Service File
+
+`reference/sentinel.service` is a TEMPLATE, not a finished unit. It carries two
+placeholders, `@WORKSPACE_ROOT@` and `@RUN_USER@`, and systemd rejects both
+where it wants a real path and a real account. Copying the file unchanged gives
+you `Unit configuration has fatal error, unit will not be started`, and Step 8.4
+then fails with no clue why. Fill them in as you install it:
 
 ```bash
-cp ~/workspaces/your-workspace/reference/sentinel.service /etc/systemd/system/sentinel.service
+cd ~/workspaces/your-workspace
+WORKSPACE_ROOT="$(python3 scripts/utils/paths.py)"
+RUN_USER="$(stat -c %U "$WORKSPACE_ROOT")"
+echo "$WORKSPACE_ROOT  ->  runs as $RUN_USER"    # sanity-check both
+sed -e "s#@WORKSPACE_ROOT@#${WORKSPACE_ROOT}#g" \
+    -e "s#@RUN_USER@#${RUN_USER}#g" reference/sentinel.service \
+  | tee /etc/systemd/system/sentinel.service >/dev/null
 ```
 
-**What this does:** Copies the Sentinel service definition to the system directory where Linux looks for service configurations.
+**What this does:** `paths.py` works out where your workspace actually lives,
+`stat` reads which account owns it, `sed` swaps both placeholders, and `tee`
+writes the finished unit into the system directory where Linux looks for
+services.
+
+**About `@RUN_USER@`.** Sentinel reads email and Telegram all day. That is
+untrusted content from strangers. Run it as the ordinary account that owns the
+workspace, not as root, so a flaw in Sentinel or one of its libraries costs you
+one service account instead of the whole machine. The template also switches on
+`NoNewPrivileges`, `PrivateTmp` and `ProtectSystem=full` for the same reason.
+
+**Check it before you go on:**
+
+```bash
+grep -E '@WORKSPACE_ROOT@|@RUN_USER@' /etc/systemd/system/sentinel.service && echo "STILL A PLACEHOLDER - do not continue"
+systemd-analyze verify /etc/systemd/system/sentinel.service
+systemctl show -p User sentinel     # must NOT say root
+```
+
+The `grep` should print nothing. `systemd-analyze verify` should print nothing
+about a fatal error. If either complains, the substitution did not happen; run
+the `sed` block again and check that the `echo` line printed a real path and a
+real user name.
 
 ### Step 8.2: Reload systemd
 
@@ -776,22 +853,54 @@ If there are new changes on GitHub, they will be downloaded. If everything is al
 
 To have the VPS automatically pull changes every 30 minutes:
 
+> **Read this before you set up the timer.**
+>
+> `vps-sync.sh` does not only download files. After it pulls, it re-runs
+> `scripts/setup-platform.sh`, and it runs `pip install -r requirements.txt`
+> when that file changed. Both of those come from the repository it just
+> pulled. So whoever can push to your repository can make this machine run
+> their code, automatically, within thirty minutes.
+>
+> That is acceptable when the account running the timer is an ordinary user.
+> It is **not** acceptable as root: a single bad push then owns the whole
+> server, including every credential on it. `vps-sync.sh` already calls `sudo`
+> for the one privileged thing it needs (restarting Sentinel), so it is written
+> to run as an ordinary user. Do that.
+
+Create a user that owns the workspace, and give it permission for that one
+privileged command only:
+
 ```bash
-crontab -e
+adduser --disabled-password --gecos "" hosync
+chown -R hosync:hosync ~/workspaces/your-workspace
+echo 'hosync ALL=(root) NOPASSWD: /bin/systemctl restart sentinel' \
+  > /etc/sudoers.d/hosync-sentinel
+chmod 440 /etc/sudoers.d/hosync-sentinel
+visudo -c          # must print "parsed OK"
 ```
 
-**What this does:** Opens the cron (scheduled tasks) editor. If it asks which editor to use, choose `mcedit` (or the number next to it).
+Then install the timer **as that user**, not as root:
 
-Add this line at the bottom of the file:
+```bash
+crontab -u hosync -e
+```
+
+**What this does:** Opens the cron (scheduled tasks) editor for the `hosync`
+user. If it asks which editor to use, choose `mcedit` (or the number next to it).
+
+Add this line at the bottom of the file, with the real path to your workspace:
 
 ```
-*/30 * * * * /root/workspaces/your-workspace/scripts/vps-sync.sh >> /root/vps-sync.log 2>&1
+*/30 * * * * /home/hosync/workspaces/your-workspace/scripts/vps-sync.sh >> /home/hosync/vps-sync.log 2>&1
 ```
+
+If you decide to run it as root anyway, you are choosing to let anyone with push
+access to the repository become root on this server. Know that you chose it.
 
 **What this line means:**
 - `*/30 * * * *` -- Run every 30 minutes
-- `/root/workspaces/your-workspace/scripts/vps-sync.sh` -- The script to run
-- `>> /root/vps-sync.log` -- Append output to a log file
+- `.../scripts/vps-sync.sh` -- The script to run
+- `>> /home/hosync/vps-sync.log` -- Append output to a log file
 - `2>&1` -- Also capture error messages
 
 Save (F2) and exit (F10).
@@ -799,7 +908,7 @@ Save (F2) and exit (F10).
 ### Step 10.3: Verify Cron is Set
 
 ```bash
-crontab -l
+crontab -u hosync -l
 ```
 
 **Expected:** Shows the line you just added.
@@ -950,10 +1059,18 @@ bash scripts/vps-sync.sh
 ### Check 15: CRM Health Check
 
 ```bash
-python3 scripts/crm-health.py 2>/dev/null | head -5
+.venv/bin/python scripts/crm-health.py; echo "exit=$?"
 ```
 
-**Expected:** CRM contact health output (or an error about missing context files, which is normal if some files haven't synced yet).
+**Expected:** CRM contact health output and `exit=0`. An error about missing
+context files is normal if some files have not synced yet, and you want to SEE
+that error, which is why nothing is hidden here.
+
+This check used to read `python3 scripts/crm-health.py 2>/dev/null | head -5`.
+That threw away every error message, and the pipe handed you `head`'s exit
+status instead of the script's, so a script that crashed on the first line
+printed nothing and still looked like a pass. It also used the system `python3`
+rather than the pinned `.venv/bin/python` the rest of this guide uses.
 
 ---
 
@@ -1084,7 +1201,7 @@ journalctl -u sentinel --since "10 minutes ago"
 **Common causes:**
 - `.env` file missing or has wrong values -- check Part 6
 - Python virtual environment not found -- check Part 5
-- Missing Python packages -- run `pip install` again (Part 5.4)
+- Missing Python packages -- run `uv sync --all-extras --group dev` again (Part 5.2)
 
 **Fix and retry:**
 
@@ -1097,10 +1214,25 @@ systemctl status sentinel
 
 **"Authentication failed"**
 
-Your GitHub token expired or is wrong. Generate a new one at https://github.com/settings/tokens and update your git credentials:
+Your GitHub token expired or is wrong. Generate a new one at https://github.com/settings/tokens, then hand it to a credential helper — never to the remote URL:
 
 ```bash
-git remote set-url origin https://YOUR_TOKEN@github.com/mishahanin/your-workspace-workspace.git
+git config --global credential.helper store
+git push                               # git asks once; use the token as the password
+```
+
+`credential.helper store` writes the token to `~/.git-credentials`, which you can
+`chmod 600`. For a shorter-lived copy use `credential.helper 'cache --timeout=3600'`,
+which keeps it in memory only.
+
+**Do NOT put the token in the remote URL** (`https://TOKEN@github.com/...`). Earlier
+versions of this guide did. A URL-embedded token is written in plaintext into
+`.git/config`, printed by `git remote -v`, and copied into every screenshot, paste
+and support ticket that shows either. If you have already done it, rotate the token
+and reset the remote:
+
+```bash
+git remote set-url origin https://github.com/mishahanin/your-workspace-workspace.git
 ```
 
 **"Merge conflict"**
@@ -1142,15 +1274,20 @@ rm -f /root/vps-sync.log
 
 **"ModuleNotFoundError: No module named 'xxx'"**
 
-The virtual environment isn't activated, or the package isn't installed.
+The package isn't installed, or you invoked the system Python instead of the
+workspace one.
 
 **Fix:**
 
 ```bash
 cd ~/workspaces/your-workspace
-source .venv/bin/activate
-pip install package-name
+uv sync --all-extras --group dev
+.venv/bin/python your-command
 ```
+
+If the package is genuinely absent from the workspace, add it to `pyproject.toml`
+with an exact `==` pin and sync again. A `pip install` into `.venv` survives only
+until the next `uv sync`.
 
 ---
 
@@ -1184,7 +1321,7 @@ Key files on the VPS and what they do:
 |   |   |-- session-start.py      # Runs at session start (CRM checks)
 |   |   |-- post-write-sanitize.py # Scans files for hidden characters
 |   |-- rules/                    # Auto-loaded rules (terminology, voice, etc.)
-|   |-- skills/                   # All 45 skills (/prime, /osint, /sentinel, etc.)
+|   |-- skills/                   # Every skill (/prime, /osint, /sentinel, ...); count with `ls .claude/skills | wc -l`
 |
 |-- .env                          # API keys and secrets (NEVER in git)
 |-- .sentinel/                    # Sentinel runtime state and logs

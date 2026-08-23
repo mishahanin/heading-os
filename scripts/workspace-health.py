@@ -448,14 +448,24 @@ def check_build_sync() -> int:
     """Compare local corporate repo BUILD.json against the last publish state.
 
     Passes if the corporate repo is reachable and its BUILD.json parses. The
-    per-exec sync-status check is already in `scripts/admin-health.py` - this
-    check focuses on: does our local corporate repo look sane.
+    per-exec activity check is already in `scripts/admin-health.py`, which since
+    2026-08-23 reports each exec's last COMMIT rather than a sync handshake -
+    this check focuses on: does our local corporate repo look sane.
     """
     header("Corporate BUILD.json")
     issues = 0
-    build_json = WORKSPACE.parent / "heading-os-corporate" / "BUILD.json"
+    corporate_root = WORKSPACE.parent / "heading-os-corporate"
+    build_json = corporate_root / "BUILD.json"
     if not build_json.exists():
-        warn(f"{build_json.relative_to(WORKSPACE.parent)}: not found (corporate repo may not be cloned locally)")
+        # Two different states, and the old message conflated them: it blamed a
+        # missing clone whether or not the clone was there. As of 2026-08-23 the
+        # live repo IS cloned and has never carried a BUILD.json, because
+        # `--bump-build` is opt-in and no publish has passed it.
+        if not corporate_root.exists():
+            warn(f"{corporate_root.name}: not cloned locally; no build number to read")
+        else:
+            warn(f"{build_json.relative_to(WORKSPACE.parent)}: not found - corporate has "
+                 f"never been published with --bump-build, so no build number exists yet")
         return 0  # Not a workspace-health failure - just info
     import json
     try:
@@ -464,8 +474,11 @@ def check_build_sync() -> int:
         action(f"BUILD.json parse failed: {e}")
         return 1
     build_no = data.get("build", "?")
-    last_updated = data.get("last_updated", "?")
-    ok(f"Corporate BUILD #{build_no}, last_updated: {last_updated}")
+    # `timestamp` is the key `publish-corporate.bump_build` writes. This read
+    # `last_updated`, which nothing has ever written, so the line printed "?"
+    # regardless of the file's contents.
+    written_at = data.get("timestamp", "?")
+    ok(f"Corporate BUILD #{build_no}, published: {written_at}")
     return issues
 
 

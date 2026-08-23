@@ -13,10 +13,18 @@ this module is a thin delegate that owns only the Kimi-specific prompt/CLI surfa
 Update DEFAULT_MODEL when Moonshot ships a new flagship Kimi variant (via
 config/council-models.json, see scripts/council-models.py --set).
 
+The prompt is council-shaped: it carries the 31C context block and, by default,
+asks for 200-400 words. For an ENUMERATING task ("list every defect in this
+file") that cap is wrong — pass `--length-hint ""` to drop it, and raise
+`--max-tokens` and `--timeout` together so the answer is not cut off by the
+budget instead. The 2026-08-23 engine audit hit all three at once.
+
 Usage:
   python scripts/kimi-consult.py --mode independent --question "..." [--context "..."]
   python scripts/kimi-consult.py --mode critique    --draft "..."    [--context "..."]
   python scripts/kimi-consult.py --mode independent --question "..." --model kimi-for-coding
+  python scripts/kimi-consult.py --mode independent --question "list every defect" \
+      --context "$(cat target.py)" --length-hint "" --max-tokens 32768 --timeout 900
 
 Exit codes:
   0  success, response printed to stdout
@@ -36,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import RED, RESET  # noqa: E402
 from scripts.utils.council_models import get_model  # noqa: E402
 from scripts.utils.council_prompts import (  # noqa: E402
+    DEFAULT_LENGTH_HINT,
     build_independent_prompt,
     build_critique_prompt,
 )
@@ -112,6 +121,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Additional context for either mode.",
     )
     p.add_argument(
+        "--length-hint",
+        default=DEFAULT_LENGTH_HINT,
+        help="Closing length instruction appended to the Output section. "
+             f"Default: {DEFAULT_LENGTH_HINT!r}. Pass an empty string to omit it "
+             "for an enumerating task (\"list every defect\") that must not be "
+             "capped at a word count.",
+    )
+    p.add_argument(
         "--model",
         default=DEFAULT_MODEL,
         help=f"Kimi model. Default: {DEFAULT_MODEL}",
@@ -141,8 +158,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--timeout",
         type=float,
         default=None,
-        help="Proxy socket timeout in seconds. Omit to inherit the transport default. "
-             "Raise it (e.g. 480) for a large k3 critique that would otherwise time out.",
+        help="Socket timeout in seconds for ONE call. Omit to inherit the transport "
+             "default. Raise it (e.g. 480) for a large k3 critique that would "
+             "otherwise time out. A truncation retry makes a second call at up to "
+             "twice this value, so the worst-case wall time is about 3x what you pass.",
     )
     args = p.parse_args(argv)
 
@@ -169,9 +188,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return int(e.code) if isinstance(e.code, int) else 1
 
     if args.mode == "independent":
-        prompt = build_independent_prompt(args.question, args.context)
+        prompt = build_independent_prompt(args.question, args.context,
+                                          length_hint=args.length_hint)
     else:
-        prompt = build_critique_prompt(args.draft, args.context)
+        prompt = build_critique_prompt(args.draft, args.context,
+                                       length_hint=args.length_hint)
 
     try:
         response = consult_kimi(
@@ -188,6 +209,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"{RED}Error:{RESET} {msg}", file=sys.stderr)
             return 2
         print(f"{RED}Error:{RESET} {msg}", file=sys.stderr)
+        return 3
+    except Exception as e:  # noqa: BLE001 - the documented contract is 0/2/3
+        # call_model wraps the API errors it knows into RuntimeError, but not
+        # every one: an unlisted APIStatusError subclass, or a KeyError on an
+        # unexpected response shape, escaped as a traceback and exit 1 -- a code
+        # this script's docstring does not define, so a caller reading the
+        # contract mis-handled it. Report the type and honour the contract.
+        print(f"{RED}Error:{RESET} unexpected {type(e).__name__}: {e}", file=sys.stderr)
         return 3
 
     # Print response to stdout for the skill to capture

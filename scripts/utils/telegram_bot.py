@@ -76,7 +76,13 @@ class TelegramBot:
         url = f"{self.base}/{method}"
         try:
             r = requests.post(url, json=params, timeout=_timeout)
-        except (requests.ConnectionError, requests.Timeout) as e:
+        # RequestException, not the ConnectionError/Timeout pair this used to
+        # name: TooManyRedirects, InvalidURL, ChunkedEncodingError,
+        # ContentDecodingError and RetryError are siblings, not subclasses, so
+        # they escaped unwrapped and unredacted -- past notify()'s "never raises"
+        # contract that six timer-driven scripts depend on, carrying the URL and
+        # therefore the bot token into the traceback.
+        except requests.RequestException as e:
             msg = self._redact(f"Telegram {method} transport failure: {e}")
             self._log_error(msg)
             raise TelegramAPIError(msg, status_code=None) from None

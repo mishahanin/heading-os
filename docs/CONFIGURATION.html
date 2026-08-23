@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Configuration</title>
-<meta name="description" content="Everything in config/ that shapes how the engine classifies, routes, and fails over. These files are engine code (shareable, no secrets). Real credentials live in the gitignored .env and .session">
+<meta name="description" content="Everything in config/ that shapes how the engine classifies, routes, and fails over. These files are engine code (shareable, no secrets).">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,7 +77,7 @@
 </aside>
 <main class="content">
   <h1>Configuration</h1>
-  <p class="page-meta">Everything in config/ that shapes how the engine classifies, routes, and fails over. These files are engine code (shareable, no secrets). Real credentials live in the gitignored .env and .session</p>
+  <p class="page-meta">Everything in config/ that shapes how the engine classifies, routes, and fails over. These files are engine code (shareable, no secrets).</p>
   <p>Everything in <code>config/</code> that shapes how the engine classifies, routes, and fails over. These files are engine code (shareable, no secrets). Real credentials live in the gitignored <code>.env</code> and <code>.sessions/</code>, never here. See <a href="INTEGRATIONS-SETUP.html">integrations and credentials</a> for where secrets go.</p>
 <h2 id="the-files">The files</h2>
 <table>
@@ -122,6 +122,8 @@
 </tr>
 </tbody>
 </table>
+<p>Two more per-instance files live in your <strong>data overlay</strong>, not here: the fleet
+roster and the org chart. See <a href="#running-heading-os-for-a-team-the-two-fleet-files">running HEADING OS for a team</a>.</p>
 <h2 id="routing-mapyaml-the-classifier"><code>routing-map.yaml</code>: the classifier</h2>
 <p>The single source of truth for where a record belongs. Every path resolves to one of three destinations:</p>
 <ul>
@@ -143,6 +145,59 @@
 <p>JSON schemas for CRM records: <code>crm-contact.schema.json</code>, <code>crm-relationship.schema.json</code>, and <code>crm-address-book.schema.json</code>. They validate the shape of contact data written by the <code>/crm</code> skill.</p>
 <h2 id="skill-custom"><code>skill-custom/</code></h2>
 <p>A place for local, per-clone skill overrides that should not ship with the engine. See its <code>README.md</code> for the override convention.</p>
+<h2 id="running-heading-os-for-a-team-the-two-fleet-files">Running HEADING OS for a team: the two fleet files</h2>
+<p>Skip this if you run HEADING OS for yourself. A single-operator install needs
+neither file, both loaders return empty, and nothing errors.</p>
+<p>If you run it for a team, the engine reads two registries. <strong>Both live in your
+data overlay, never in the engine repo</strong>, and both are classified <code>private</code>:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Question it answers</th>
+<th>Written by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;data-root&gt;/admin/executives.json</code></td>
+<td>Who is provisioned as a HEADING OS <strong>user</strong></td>
+<td><code>admin/provision/registry.py</code></td>
+</tr>
+<tr>
+<td><code>&lt;data-root&gt;/config/exec-registry.json</code></td>
+<td>Who is an executive in your <strong>organisation</strong></td>
+<td>you, by hand</td>
+</tr>
+</tbody>
+</table>
+<p>Copy the shape from <code>scripts/executives.example.json</code> and
+<code>scripts/exec-registry.example.json</code>. Each example carries its own field
+reference in a <code>_README</code> block.</p>
+<p><strong>Keep them separate.</strong> They look like the same list and are not. Someone can be
+one and not the other. An executive may never use HEADING OS. An assistant may
+use it and sit on no org chart. One row cannot carry two independent
+lifecycles, and the fact you copy across is the one that goes stale. This is not
+hypothetical. The org chart in this project once carried a flag meaning &ldquo;not a
+HEADING OS user&rdquo;. By the time anyone read it again, the two people it named had
+been active users for two months.</p>
+<p>Stable identifiers (<code>name</code>, <code>github_user</code>) may appear in both. They do not
+drift, and an executive with no roster row still needs a handle. Only lifecycle
+facts are kept apart.</p>
+<p>Read them joined, not separately:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">scripts.utils.workspace</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_fleet</span>
+
+<span class="k">for</span> <span class="n">person</span> <span class="ow">in</span> <span class="n">load_fleet</span><span class="p">():</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">person</span><span class="p">[</span><span class="s2">&quot;slug&quot;</span><span class="p">],</span> <span class="n">person</span><span class="p">[</span><span class="s2">&quot;is_business_exec&quot;</span><span class="p">],</span> <span class="n">person</span><span class="p">[</span><span class="s2">&quot;is_heading_os_user&quot;</span><span class="p">])</span>
+</code></pre></div>
+<p><code>load_fleet()</code> returns one record per person appearing in either file. Each
+record carries <code>is_business_exec</code> and <code>is_heading_os_user</code> flags. The two
+same-named <code>status</code> fields are renamed apart, into <code>employment_status</code> and
+<code>provisioning_status</code>.</p>
+<p><strong>Roster status vocabulary</strong>, in order: <code>provisioning</code> (setup in flight),
+<code>provisioned</code> (setup finished, not yet used), <code>active</code>, then <code>offboarded</code> or
+<code>revoked</code>. Only <code>active</code> counts as fleet membership: aggregation, sync and fleet
+health all filter on it.</p>
 <h2 id="data-root-pinning-heading_os_data">Data root: pinning <code>HEADING_OS_DATA</code></h2>
 <p>The engine and your private data are two sibling repositories: the engine clone (<code>.heading-os</code>) and the data overlay (<code>.heading-os-data</code>). The resolver <code>get_data_root()</code> in <code>scripts/utils/paths.py</code> picks the overlay in this order, first hit wins:</p>
 <ol>

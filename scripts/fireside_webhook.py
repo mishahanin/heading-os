@@ -55,8 +55,28 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
     _ensure_fastapi()
     app = FastAPI(title="fireside-webhook")
 
+    # ONE update is handled at a time. Every handler in fireside-bot.py works by
+    # load -> mutate -> save on a JSON file (schedule.json, opt-ins.json,
+    # helmsmen.json, the swap records), and none of them takes a lock. Before
+    # 2026-08-23 the tasks below ran concurrently, so two updates a second apart
+    # - a member tapping a swap button while the expiry sweep runs, two people
+    # sending /start together - interleaved load and save and one write vanished
+    # silently, leaving valid JSON that had lost somebody's action.
+    #
+    # The cost is stated rather than hidden: a slow handler now delays the
+    # PROCESSING of later updates. It does not delay their ACCEPTANCE, which is
+    # what Telegram's 60-second contract measures - the POST still returns 200 OK
+    # in milliseconds. At this bot's volume, correctness is worth the queue.
+    handler_lock = asyncio.Lock()
+
+    # asyncio only holds a WEAK reference to a task, so a fire-and-forget
+    # `create_task` can be garbage-collected mid-flight and the update is lost
+    # with no error anywhere. Documented CPython behaviour, and the reason this
+    # set exists.
+    background: set = set()
+
     async def _process_in_background(update: dict, kind: str, t_recv: float) -> None:
-        """Run _handle_update off the request path.
+        """Run _handle_update off the request path, one at a time.
 
         Telegram's webhook contract: any response slower than 60s makes
         Telegram re-deliver the same update. We return 200 OK from the POST
@@ -67,21 +87,40 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
         update_id = update.get("update_id")
         bot = fb_module.get_bot()
         t_start = time.monotonic()
+        async with handler_lock:
+            try:
+                await asyncio.to_thread(fb_module._handle_update, bot, update)
+            except Exception as e:
+                logger.exception("webhook: _handle_update raised for update=%s: %s",
+                                 update_id, e)
+                return
+            t_done = time.monotonic()
+            logger.info("webhook: ok update=%s kind=%s handler_ms=%d total_ms=%d",
+                        update_id, kind, int((t_done - t_start) * 1000),
+                        int((t_done - t_recv) * 1000))
+            try:
+                if isinstance(update_id, int):
+                    _advance_offset(update_id)
+            except Exception:
+                logger.exception("webhook: failed to update last-update-id")
+
+    def _advance_offset(update_id: int) -> None:
+        """Record the offset, never rewinding it.
+
+        A plain `{"offset": update_id + 1}` is written by whichever task
+        finishes last, not by whichever id is highest, so a slow update 100
+        finishing after a fast 101 used to rewind the offset by one. Harmless
+        while the webhook runs, and a re-processed update the moment the daemon
+        falls back to polling.
+        """
+        current = 0
         try:
-            await asyncio.to_thread(fb_module._handle_update, bot, update)
-        except Exception as e:
-            logger.exception("webhook: _handle_update raised for update=%s: %s",
-                             update_id, e)
-            return
-        t_done = time.monotonic()
-        logger.info("webhook: ok update=%s kind=%s handler_ms=%d total_ms=%d",
-                    update_id, kind, int((t_done - t_start) * 1000),
-                    int((t_done - t_recv) * 1000))
-        try:
-            if isinstance(update_id, int):
-                fb_module.save_state(fb_module.LAST_UPDATE_ID, {"offset": update_id + 1})
-        except Exception:
-            logger.exception("webhook: failed to update last-update-id")
+            existing = fb_module.load_state(fb_module.LAST_UPDATE_ID) or {}
+            current = int(existing.get("offset", 0) or 0)
+        except Exception:  # noqa: BLE001 - an unreadable/absent state file means 0
+            logger.exception("webhook: last-update-id unreadable; treating as 0")
+        fb_module.save_state(fb_module.LAST_UPDATE_ID,
+                             {"offset": max(current, update_id + 1)})
 
     @app.post("/telegram-webhook")
     async def telegram_webhook(
@@ -122,7 +161,9 @@ def create_app(fb_module: Any, secret_token: str, logger: logging.Logger):
         # Schedule the actual work. Returning 200 OK NOW satisfies Telegram's
         # webhook contract within milliseconds, so no retry-driven duplicate
         # delivery regardless of how slow the handler turns out to be.
-        asyncio.create_task(_process_in_background(update, kind, t0))
+        task = asyncio.create_task(_process_in_background(update, kind, t0))
+        background.add(task)
+        task.add_done_callback(background.discard)
         return {"ok": True}
 
     @app.get("/health")

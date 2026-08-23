@@ -19,7 +19,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-LATEST_FETCH_FILE = "outputs/operations/email-intelligence/_latest-fetch.json"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+LATEST_FETCH_FILE = "outputs/operations/email-intelligence/_latest-fetch.json"  # leak-guard: ok (relative suffix rooted by caller)
 CONVERSATIONS_ROW_CAP = 100  # safety cap, but typical fetch is ~30
 PARTICIPANT_CAP = 3          # show first N participants then "+ N more"
 

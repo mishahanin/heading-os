@@ -59,16 +59,32 @@ def test_smoke_boot_and_endpoints():
     state_dir = WORKSPACE / ".daemon-state"
     port_file = state_dir / "port"
     # If an active daemon is running, skip rather than clobber its state.
+    #
+    # The bar for "safe to wipe" is a REFUSED connection: nothing is listening.
+    # Until 2026-08-23 any exception fell through to the wipe, so a daemon that
+    # was merely busy -- a 1 s probe timeout is easy to hit -- read as dead and
+    # this test deleted its live token, heartbeat, usage.jsonl and
+    # config-history. A test that can eat production state is worse than a test
+    # that skips.
     if port_file.exists():
         try:
             running_port = int(port_file.read_text(encoding="utf-8").strip())
-            status, _ = _get(f"http://127.0.0.1:{running_port}/health", timeout=1)
-            if status == 200:
-                pytest.skip(f"daemon already running on port {running_port}; refuse to clobber")
-        except (OSError, ValueError, urllib.error.URLError):
-            pass  # stale port file is safe to wipe
+        except (OSError, ValueError) as exc:
+            pytest.skip(f"unreadable port file ({exc}); refuse to guess whether a daemon is live")
+        try:
+            status, _ = _get(f"http://127.0.0.1:{running_port}/health", timeout=5)
+            pytest.skip(f"something answers on port {running_port} (HTTP {status}); refuse to clobber")
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            if not isinstance(reason, ConnectionRefusedError):
+                pytest.skip(f"port {running_port} did not refuse cleanly ({reason!r}); "
+                            f"a busy daemon is not a dead one")
+        except OSError as exc:
+            if not isinstance(exc, ConnectionRefusedError):
+                pytest.skip(f"probe of port {running_port} failed ({exc!r}); refuse to clobber")
 
-    # Pre-clean any leftover state from a prior aborted run.
+    # Pre-clean any leftover state from a prior aborted run. Reached only when
+    # the port file is absent, or the port refused the connection outright.
     if state_dir.exists():
         shutil.rmtree(state_dir, ignore_errors=True)
 

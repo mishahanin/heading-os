@@ -63,7 +63,9 @@ After drafting, every skill runs:
 - `python scripts/sanitize-text.py {path} --scan` on the generated HTML/MD
 - Authoring checklist from `reference/corporate-style-guide.md` for that doctype
 
-Before declaring complete, the skill must state: `Word count: X. Hidden characters: clean.` If the scan found and removed characters, it must say so explicitly.
+Before declaring complete, the skill must carry the confirmation line defined in
+`.claude/rules/hidden-chars.md`, with both numbers copied from
+`scripts/sanitize-text.py --scan` — including when the scan was not clean.
 
 ## Rendering Pipeline
 

@@ -12,7 +12,7 @@ For per-tool query patterns, response parsing, confidence scoring, rate limits, 
 
 Screen target against international sanctions lists, PEP databases, and investigation platforms.
 
-1. **OpenSanctions API** - WebFetch `https://api.opensanctions.org/match/default` (POST with JSON body: `{"queries": {"q1": {"schema": "Person", "properties": {"name": ["{target}"]}}}}`, header `Authorization: ApiKey ${OPENSANCTIONS_API_KEY}` from `.env`)
+1. **OpenSanctions API** - Bash: `python3 .claude/skills/osint-advanced/scripts/osint_api.py sanctions --name "{target}"` (add `--schema Company` for an entity). This is a POST with an auth header, which WebFetch cannot issue - it is GET-only and controls no headers. The helper reads `OPENSANCTIONS_API_KEY` from `.env` in-process, so the key never reaches a command line. A non-zero exit means the stream DID NOT RUN: report it as not-run, never as CLEAR.
    - Parse JSON response: extract entity matches with name, schema, datasets, countries, score
    - Fallback if API fails: WebFetch `https://www.opensanctions.org/search/?q={url_encoded_target}`
 2. **OCCRP Aleph** - WebSearch `"{target}" site:aleph.occrp.org`
@@ -92,10 +92,10 @@ Discover, verify, and assess risk of email addresses.
 
 1. **EmailRep** - WebSearch `"{email}" site:emailrep.io` (API returns 429 without key)
    - Extract: reputation indicators, breach history mentions
-2. **Hunter.io** - API call via Bash: `curl -s "https://api.hunter.io/v2/domain-search?domain={company_domain}&api_key=$(python3 -c \"import os,sys;sys.path.insert(0,'.');from scripts.utils.api import load_api_key;print(load_api_key('HUNTER_API_KEY'))\")"` - for specific person use `/v2/email-finder?domain={domain}&first_name={first}&last_name={last}&api_key={key}`
+2. **Hunter.io** - Bash: `python3 .claude/skills/osint-advanced/scripts/osint_api.py hunter --domain {company_domain}` - for a specific person add `--first {first} --last {last}` (switches to email-finder)
 3. **VoilaNorbert** - WebSearch `"{person}" email site:voilanorbert.com`
 4. **Email Checker** - WebSearch `"{email}" site:email-checker.net` (free validation, no signup)
-5. **HIBP** - API call via Bash: `curl -s -H "hibp-api-key: $(python3 -c \"import os,sys;sys.path.insert(0,'.');from scripts.utils.api import load_api_key;print(load_api_key('HIBP_API_KEY'))\")" -H "user-agent: 31C-OSINT" "https://haveibeenpwned.com/api/v3/breachedaccount/{email}?truncateResponse=false"` - also try `/pasteaccount/{email}` for paste exposure
+5. **HIBP** - Bash: `python3 .claude/skills/osint-advanced/scripts/osint_api.py hibp --account {email}` - also `--kind pasteaccount` for paste exposure
 6. **CLI recommendation:** Note for user - "For email-to-social mapping, run locally: `holehe {email}`"
 
 ---
@@ -114,7 +114,7 @@ Technical reconnaissance on domains, IPs, SSL certificates, tech stack.
    - Extract: technology stack, analytics, CDN
 5. **DNSlytics** - WebSearch `"{domain}" site:dnslytics.com`
    - Extract: reverse IP, DNS records, domain history, CIDR blocks
-6. **VirusTotal** - API call via Bash: `curl -s -H "x-apikey: $(python3 -c \"import os,sys;sys.path.insert(0,'.');from scripts.utils.api import load_api_key;print(load_api_key('VIRUSTOTAL_API_KEY'))\")" "https://www.virustotal.com/api/v3/domains/{domain}"` - also try `/api/v3/ip_addresses/{ip}` for IP analysis
+6. **VirusTotal** - Bash: `python3 .claude/skills/osint-advanced/scripts/osint_api.py virustotal --domain {domain}` - also `--ip {ip}` for IP analysis
    - Extract: DNS records, WHOIS, reputation, detection stats, categories
 7. **DNS/WHOIS** - WebSearch `"{domain}" DNS records whois registration`
 
@@ -128,7 +128,7 @@ Cross-reference target against threat actor databases and cyber threat landscape
    - Extract: group profiles, TTPs, associated malware, target sectors
 2. **SOCRadar** - WebSearch `site:socradar.io "{target}" threat actor`
 3. **Malpedia** - WebSearch `site:malpedia.caad.fkie.fraunhofer.de "{target}"`
-4. **VirusTotal** - API call via Bash: `curl -s -H "x-apikey: $(python3 -c \"import os,sys;sys.path.insert(0,'.');from scripts.utils.api import load_api_key;print(load_api_key('VIRUSTOTAL_API_KEY'))\")" "https://www.virustotal.com/api/v3/search?query={target}"`
+4. **VirusTotal** - Bash: `python3 .claude/skills/osint-advanced/scripts/osint_api.py virustotal --search {target}`
 5. **General threat** - WebSearch `"{target}" APT threat actor vulnerability CVE`
 
 ---
@@ -161,9 +161,9 @@ Live conflict monitoring and geographic context.
 
 Check for breach exposure, compromised credentials, dark web mentions.
 
-1. **HIBP** - API call via Bash: `curl -s -H "hibp-api-key: $(python3 -c \"import os,sys;sys.path.insert(0,'.');from scripts.utils.api import load_api_key;print(load_api_key('HIBP_API_KEY'))\")" -H "user-agent: 31C-OSINT" "https://haveibeenpwned.com/api/v3/breachedaccount/{target}?truncateResponse=false"` - for domains use `/breacheddomain/{domain}`, for stealer logs use `/stealerlogsbyemail/{email}`
+1. **HIBP** - Bash: `python3 .claude/skills/osint-advanced/scripts/osint_api.py hibp --account {target}` - for domains `--kind breacheddomain`, for stealer logs `--kind stealerlogsbyemail`
 2. **Intelligence X** - WebSearch `site:intelx.io "{target}"`
-3. **DeHashed** - API call via Bash: `curl -s -X POST "https://api.dehashed.com/v2/search" -H "Dehashed-Api-Key: $(python3 -c \"import os,sys;sys.path.insert(0,'.');from scripts.utils.api import load_api_key;print(load_api_key('DEHASHED_API_KEY'))\")" -H "Content-Type: application/json" -d '{"query":"email:{target}","size":100,"page":1,"de_dupe":true}'` - also try `name:{target}`, `username:{target}`, `domain:{target}` as appropriate
+3. **DeHashed** - Bash: `python3 .claude/skills/osint-advanced/scripts/osint_api.py dehashed --query "email:{target}"` - also try `name:{target}`, `username:{target}`, `domain:{target}` as appropriate
 4. **LeakCheck** - WebSearch `"{target}" site:leakcheck.io`
 5. **SnusBase** - WebSearch `"{target}" site:snusbase.com`
 6. **General breach** - WebSearch `"{target}" data breach leak exposed credentials`

@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.workspace import (
     get_workspace_root, validate_admin, get_exec_slug, load_exec_registry,
-    get_corporate_repo_path, load_admin_config,
+    get_data_config_dir,
+    load_admin_config,
     load_github_org, get_crm_contacts_dir, get_outputs_dir,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
@@ -200,12 +201,10 @@ def reassign_contacts(slug: str, reassign_to: str) -> None:
 def update_exec_registry(slug: str) -> None:
     """Set exec status to 'offboarded' in exec-registry.json."""
     print(f"\n{BOLD}Step 5: Updating exec registry{RESET}")
-    corp_repo = get_corporate_repo_path()
-    registry_file = corp_repo / "config" / "exec-registry.json"
-
-    if not registry_file.exists():
-        # Try workspace root config
-        registry_file = get_workspace_root() / "config" / "exec-registry.json"
+    # Per-instance DATA. The corporate-repo and engine-root fallbacks that stood
+    # here resolved to paths that exist on no machine, and the corporate one
+    # would have published a `private`-classified registry to every exec.
+    registry_file = get_data_config_dir() / "exec-registry.json"
 
     if not registry_file.exists():
         print(f"  {YELLOW}[warn]{RESET} exec-registry.json not found")

@@ -72,15 +72,44 @@ def test_check_paths_skips_archived_scripts():
     assert r.returncode == 0
 
 
-def test_check_staged_blocks_private_via_autodetect_no_marker():
-    # Regression for the 2026-06-22 leak: with NO env marker, the guard must still
-    # block a private-routing file because this clone is the split-topology engine
-    # (get_data_root() != workspace root). The hand-set marker is no longer the sole
-    # trigger -- relying on it is exactly why the guard sat inert while specs leaked.
+def test_check_staged_blocks_private_via_autodetect_no_marker(tmp_path):
+    """Regression for the 2026-06-22 leak, on a topology this test builds itself.
+
+    With NO env marker the guard must still block a private-routing file, because
+    the clone is the split-topology engine (`get_data_root() != workspace root`).
+    The hand-set marker being the sole trigger is exactly why the guard sat inert
+    while specs leaked.
+
+    The overlay is pinned through `HEADING_OS_DATA` rather than inherited from
+    the machine. Until 2026-08-23 this read whatever topology the host happened
+    to have, so on a bare public clone — where the data root falls back to the
+    workspace root and autodetect is correctly inert — it went red and blamed
+    the guard for the absence of an overlay.
+    """
+    overlay = tmp_path / "data-overlay"
+    overlay.mkdir()
     env = {k: v for k, v in os.environ.items() if k != "HEADING_OS_ENGINE_REPO"}
+    env["HEADING_OS_DATA"] = str(overlay)
     r = _run(["check-staged", "--files", "crm/contacts/x.md"], env=env)
-    assert r.returncode == 1
+    assert r.returncode == 1, (
+        f"the guard did not fire on a split topology: {r.stdout}{r.stderr}"
+    )
     assert "crm/contacts/x.md" in r.stdout
+
+
+def test_check_staged_is_inert_when_the_overlay_is_the_workspace(tmp_path):
+    """The other half, through the same entry point: one tree, no marker, no block.
+
+    Pins that the fix above is a real topology switch and not a permanent block.
+    The in-process sibling below monkeypatches the seam; this one drives the CLI
+    the pre-commit hook actually runs.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "HEADING_OS_ENGINE_REPO"}
+    env["HEADING_OS_DATA"] = str(ROOT)
+    r = _run(["check-staged", "--files", "crm/contacts/x.md"], env=env)
+    assert r.returncode == 0, (
+        f"the guard blocked a single-tree clone: {r.stdout}{r.stderr}"
+    )
 
 
 def test_check_staged_blocks_private_file_in_engine():

@@ -17,7 +17,17 @@ ROOT="$(git rev-parse --show-toplevel)"
 if [ -x "$ROOT/.venv/bin/python" ]; then
     PY="$ROOT/.venv/bin/python"
 else
+    # Loud, not silent. The sibling hook `.githooks/pre-push-data` carries the
+    # measurement: a bare `python3` with pytest on PATH (9.0.3 here) runs the
+    # suite GREEN under an interpreter holding none of the pinned dependencies,
+    # so the last gate before the push wall passes on a toolchain nobody chose.
+    # That hook has warned since 2026-08-21; this one, guarding the repo that
+    # actually owns the pinned toolchain, still fell through in silence until
+    # 2026-08-23.
     PY="python3"
+    echo "engine test gate: no venv at '$ROOT/.venv' - falling back to" \
+         "$(command -v python3 || echo python3), which is NOT the pinned" \
+         "toolchain. Re-arm with: uv sync --all-extras --group dev" >&2
 fi
 "$PY" "$ROOT/scripts/run-tests.py"
 

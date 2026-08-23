@@ -227,3 +227,75 @@ def test_investor_search_surfaces_sent_status(tmp_path):
     result = search(tmp_path, "Contoso Capital")
     hit = result["categories"]["investors"][0]
     assert hit["sent_date"] is not None
+
+
+# ---- the two roots, which this file's single tmp_path could not see ----
+#
+# Found by the 2026-08-23 audit. `search()` took ONE root and handed it to eight
+# sources. Seven of them read the DATA overlay; `list_capabilities` reads
+# `.claude/skills`, which is ENGINE. `app.py` passes `data_root`, so on the
+# two-part topology the search page's capability results came from
+# `<data-root>/.claude/skills`.
+#
+# That directory is not empty on this machine — it holds one skill — so the
+# search page reported 1 skill where the `/capabilities` endpoint, which is
+# correctly given `workspace_root`, reports 96. Not a crash and not an obviously
+# empty section: a plausible wrong number.
+#
+# Every test above seeds both trees under one `tmp_path`, which is exactly why
+# none of them could fail on this.
+
+
+def _split_roots(tmp_path):
+    """A DATA overlay and an ENGINE tree that are genuinely different directories."""
+    data = tmp_path / "data"
+    engine = tmp_path / "engine"
+    data.mkdir()
+    engine.mkdir()
+    _setup_workspace(data)
+
+    # The real skills live in the ENGINE tree.
+    sk = engine / ".claude" / "skills" / "exampleproject-recap"
+    sk.mkdir(parents=True)
+    (sk / "SKILL.md").write_text(
+        '---\nname: exampleproject-recap\ndescription: "Summarize the ExampleProject '
+        'project status"\nmetadata:\n  version: "1.0"\n---\n\n# ExampleProject recap\n',
+        encoding="utf-8")
+
+    # A stale near-namesake in the DATA overlay, standing in for the one skill
+    # that really does sit under `.heading-os-data/.claude/skills`. If search
+    # reads the wrong root it finds THIS instead, and says so plausibly.
+    stale = data / ".claude" / "skills" / "exampleproject-stale"
+    stale.mkdir(parents=True)
+    (stale / "SKILL.md").write_text(
+        '---\nname: exampleproject-stale\ndescription: "A stale ExampleProject copy '
+        'in the data overlay"\nmetadata:\n  version: "0.1"\n---\n\n# stale\n',
+        encoding="utf-8")
+    return data, engine
+
+
+def test_capabilities_are_searched_in_the_engine_tree(tmp_path):
+    data, engine = _split_roots(tmp_path)
+    result = search(data, "exampleproject", workspace_root=engine)
+    names = [c["name"] for c in result["categories"].get("capabilities", [])]
+    assert names == ["exampleproject-recap"], (
+        f"search read skills from the wrong root; got {names}"
+    )
+
+
+def test_the_data_sources_still_read_the_data_overlay(tmp_path):
+    """The mutation guard: the fix must not send everything to the engine root."""
+    data, engine = _split_roots(tmp_path)
+    result = search(data, "exampleproject", workspace_root=engine)
+    for category in ("inbox", "tasks", "library"):
+        assert result["categories"].get(category), (
+            f"{category} lost its results, so a DATA source is now reading the "
+            "engine tree"
+        )
+
+
+def test_one_root_still_works_for_a_single_tree_clone(tmp_path):
+    """A public clone with no overlay passes one root; that must keep working."""
+    _setup_workspace(tmp_path)
+    result = search(tmp_path, "exampleproject")
+    assert result["categories"].get("capabilities")

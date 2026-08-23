@@ -56,6 +56,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from scripts.utils.sqlite_uri import read_only_uri
 
 # Self-contained utility module: imports workspace scripts.utils.colors for
 # terminal output but does not need workspace-root resolution. The artifact
@@ -234,7 +235,7 @@ def _snapshot_db(src: Path) -> Path:
     tmp_fd, tmp_path_str = tempfile.mkstemp(prefix="chromium_cookies_", suffix=".sqlite")
     os.close(tmp_fd)
     tmp_path = Path(tmp_path_str)
-    src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=5)
+    src_conn = sqlite3.connect(read_only_uri(src), uri=True, timeout=5)
     try:
         dst_conn = sqlite3.connect(tmp_path)
         try:
@@ -552,7 +553,7 @@ def get_cookies(
 
     snapshot = _snapshot_db(db_path)
     try:
-        conn = sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)
+        conn = sqlite3.connect(read_only_uri(snapshot), uri=True)
         try:
             if include_subdomains:
                 sql = (
@@ -621,6 +622,34 @@ def to_cookiejar(cookies: dict[str, str], domain: str | None = None):
 # CLI
 # ------------------------------------------------------------
 
+def _merge_playwright(store: Path, domain: str, cookies: dict) -> list:
+    """Playwright cookie objects for `domain`, merged into an existing store.
+
+    Cookies for other domains are preserved; cookies for THIS domain are
+    replaced, because a stale value for a name we just re-read is wrong.
+    A store that cannot be parsed is treated as empty rather than as a reason to
+    fail: losing another domain's session is bad, but refusing to import is
+    worse, and the caller is re-running this precisely because the store is
+    unusable.
+    """
+    existing = []
+    if store.is_file():
+        try:
+            loaded = json.loads(store.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                existing = loaded
+        except (OSError, json.JSONDecodeError):
+            existing = []
+    suffix = domain.lstrip(".").lower()
+    kept = [c for c in existing
+            if isinstance(c, dict)
+            and not str(c.get("domain", "")).lstrip(".").lower().endswith(suffix)]
+    fresh = [{"name": n, "value": v, "domain": f".{suffix}", "path": "/",
+              "secure": True, "httpOnly": False, "sameSite": "Lax"}
+             for n, v in sorted(cookies.items())]
+    return kept + fresh
+
+
 def _main() -> int:
     parser = argparse.ArgumentParser(
         description="Read cookies from a Chromium-family browser profile.",
@@ -653,7 +682,36 @@ def _main() -> int:
         action="store_true",
         help="Output JSON instead of human-readable.",
     )
+    parser.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Write the {name: value} map to PATH (0600) and print only the "
+             "count. The safe way to move live cookies: --values prints session "
+             "tokens into the terminal, and under an agent the terminal is the "
+             "transcript.",
+    )
+    parser.add_argument(
+        "--playwright",
+        action="store_true",
+        help="With --out/--store: write Playwright cookie objects and MERGE into "
+             "an existing store, keeping other domains. Lets one command do the "
+             "whole import, so no cookie value ever passes through a caller.",
+    )
+    parser.add_argument(
+        "--store",
+        action="store_true",
+        help="Shorthand for --out <the workspace Playwright cookie store> "
+             "--playwright. Resolves the path through the data-root seam, so no "
+             "caller has to spell a bare outputs/ path in a shell command.",
+    )
     args = parser.parse_args()
+    if args.store:
+        # Imported here, not at module scope: this file is otherwise
+        # self-contained and needs no workspace-root resolution (see the note by
+        # the imports). Only --store does.
+        from scripts.utils.workspace import get_outputs_dir
+        args.out = str(get_outputs_dir() / "browser" / "cookies.json")
+        args.playwright = True
 
     try:
         cookies = get_cookies(
@@ -677,6 +735,24 @@ def _main() -> int:
     except ImportError as exc:
         print(f"{RED}ERROR: {exc}{RESET}", file=sys.stderr)
         return 3
+
+    if args.out:
+        out = Path(args.out).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if args.playwright:
+            payload = _merge_playwright(out, args.domain, cookies)
+            note = f"{len(payload)} cookie(s) in the store"
+        else:
+            payload = cookies
+            note = f"{len(cookies)} cookie(s)"
+        fd = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        # Names and a count only. The values are the whole point of the file and
+        # must not also appear on stdout.
+        print(f"{GREEN}{note} written to {out}{RESET} "
+              f"{GRAY}(mode 0600; values not printed){RESET}")
+        return 0
 
     if args.json:
         payload = cookies if args.values else sorted(cookies.keys())

@@ -10,17 +10,12 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/docs.css">
 <style>
-  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
-  h3.cat:first-of-type { margin-top: 24px; }
   section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
   section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
   section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
   section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
   section.skill p { margin: 8px 0; }
   section.skill pre { margin: 10px 0; }
-  a.cmd-link { text-decoration: none; }
-  a.cmd-link code { color: var(--link); }
-  a.cmd-link:hover code { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -92,13 +87,12 @@
 
   <h1>Operations: daily drivers</h1>
   <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
-Operations: daily drivers</h3>
 
 <section class="skill">
 <h3 id="s-prime"><code>/prime</code><span class="badge">Operations 🔒</span></h3>
-<p class="skill-meta">Explicit invocation only (🔒) · read-only (loads context, spawns daemons if dead)</p>
+<p class="skill-meta">Explicit invocation only (🔒) · reads context and writes no workspace file, but starts the Fireside and Sync-Exchange daemons if they are down</p>
 <p><strong>What it is.</strong> Session initializer: loads full workspace context, runs a parallel health block, surfaces priorities, and recommends the day's skills.</p>
-<p><strong>What it does.</strong> Reads the context files in order (personal, business, strategy, current data, people, pipeline, workspace index, datastore index), then runs seven read-only health checks in parallel via <code>scripts/prime-health-parallel.py</code> (CRM, knowledge, memory, email-intel state, threads archive-scan, Fireside daemon, Sync-Exchange daemon). If the Fireside or Sync-Exchange daemon is dead the health block spawns a detached one. It renders an Active Threads panel from <code>MEMORY.md</code>, flags sync files older than 48 hours as SYNC STALE, and defers the skill catalog to the router rather than duplicating it.</p>
+<p><strong>What it does.</strong> Reads the context files in order (personal, business, strategy, current data, people, pipeline, workspace index, datastore index), then runs the twelve checks of the <code>CHECKS</code> registry in <code>scripts/prime-health-parallel.py</code> in parallel (CRM, knowledge, memory, email-intel state, threads archive-scan, Fireside daemon, Sync-Exchange daemon, Odin cadence, ops-radar, durable reminders, dream-shadow worklist, component updates). Ten only read. The two daemon checks call <code>fireside-pulse.py</code> and <code>sync-exchange-pulse.py</code>, which start a detached daemon when they find one down, so the block is not read-only end to end. It renders an Active Threads panel from <code>MEMORY.md</code>, flags sync files older than 48 hours as SYNC STALE, and defers the skill catalog to the router rather than duplicating it.</p>
 <p><strong>How to use it.</strong> Run once at the start of every working session. Mid-session, use <code>/next</code> for the logical next step, <code>/dashboard</code> for the morning briefing alone, or <code>/state-check</code> for function-by-function health.</p>
 <pre><code>/prime
 (no arguments; slash-command only, cannot be triggered from natural language)</code></pre>
@@ -136,6 +130,17 @@ Operations: daily drivers</h3>
 <pre><code>/radar ack backup --ttl 24h
 "what am I forgetting to run?"</code></pre>
 <p><strong>Customize.</strong> <code>ack &lt;key&gt;</code> silences one signal until its TTL (<code>--ttl 24h|7d</code>) or until severity worsens; valid keys include <code>backup</code>, <code>publish</code>, <code>weekly_review</code>, <code>cold_sweep</code>, <code>odin_cadence</code>, <code>ollama</code>, <code>memory_index</code>. <code>crunch on|off</code> toggles the critical-floor-only posture.</p>
+</section>
+
+<section class="skill">
+<h3 id="s-queue-draft"><code>/queue-draft [recipient] :: [subject] :: [body]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/operations/action-queue/queue.json</code></p>
+<p><strong>What it is.</strong> Stages one outbound message in the Action Queue as a gated draft. It is also the reference draft-tier skill: the thing that proves a headless run can draft and deposit but can never approve or send.</p>
+<p><strong>What it does.</strong> Parses a double-colon argument into recipient, subject and body, writes a one-card JSON, and runs <code>python3 scripts/action-queue.py deposit</code>. The card lands <code>tier=gated</code>, <code>status=pending</code>, and sits there. Its <code>allowed-tools</code> grant is one bash command, the deposit subcommand, so the skill cannot reach a send transport even if asked to. Run it headless with <code>heading skill queue-draft</code> and the boundary holds the same way.</p>
+<p><strong>How to use it.</strong> Use to park a draft for later review. To send an approved card use <code>/queue approve</code>, which only a human runs; to write an email into the chat with no queue entry use <code>/email-draft</code>.</p>
+<pre><code>/queue-draft alex@example.com :: Demo follow-up :: Thanks for the call today.
+python scripts/action-queue.py list</code></pre>
+<p><strong>Customize.</strong> A missing field falls back to a labelled placeholder, so the card is always well-formed. Never describe a deposited card as sent, and never widen the <code>allowed-tools</code> grant past <code>deposit</code>.</p>
 </section>
 
 <section class="skill">

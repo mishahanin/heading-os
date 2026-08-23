@@ -80,7 +80,7 @@ Summarize key findings from the dashboard:
 
 Format: concise 3-5 bullet summary with file paths.
 
-After "Hidden characters: clean", append a one-line branding confirmation:
+After the hidden-characters confirmation line, append a one-line branding confirmation:
 `Branding: 31C corporate (dark cover, GT Standard, orange corner, blue accents).`
 
 The GT Standard fonts or the canonical brand logos can fail to embed, when a

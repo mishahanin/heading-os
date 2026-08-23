@@ -70,6 +70,11 @@ ALLOW_IDENTITY = {
     # Published company mailboxes: shared, printed on public collateral, no
     # person behind them. A CRM record may carry one, so name them here.
     "info@31c.io", "sales@31c.io", "support@31c.io",
+    # Named public contributors, credited on purpose in CHANGELOG.md and
+    # docs/PLUGINS.md. Each is also a CRM contact, so the display-name harvest
+    # would read published attribution as a leak. Add a person here only when
+    # their name is ALREADY deliberately public in this repo.
+    "mahmoud maatuq",
 }
 
 # Fictional / illustrative names that legitimately appear in rule, skill, and test
@@ -194,6 +199,14 @@ def _harvest_person_slugs(data_root: Path, tokens: dict[str, str], strict: bool)
     for md in contacts.glob("*.md"):
         slug = md.stem  # e.g. "jane-doe"
         _add(tokens, slug, "crm-slug")
+        # The space-separated form is what prose contains. Emitting only the slug
+        # is the 2026-08-23 hole: a live counterparty's name sat in a tracked
+        # engine test and every layer read the tree as clean. A multi-word phrase
+        # carries the same no-collision guarantee as the organisation phrase form
+        # harvested below, so it is safe outside strict mode; a one-word slug is
+        # not, and stays behind it.
+        if "-" in slug:
+            _add(tokens, slug.replace("-", " "), "crm-name")
         if strict:  # bare name-words are noisy (collide with English) -> opt-in only
             for word in slug.split("-"):
                 _add(tokens, word, "crm-name")
@@ -341,12 +354,14 @@ def _harvest_curated(data_root: Path, tokens: dict[str, str], curated_path: Path
     """Load the CEO-maintained curated denylist (non-person entities)."""
     path = curated_path or (data_root / "config" / "content-denylist.yaml")
     if not path.is_file():
-        return
-    try:
-        import yaml
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return
+        return          # a public clone has none; absence is normal
+    # No local `except` here on purpose. Swallowing a parse error and returning
+    # left `degraded` False, so the gate ran WITHOUT the operator's curated
+    # companies, events and codenames and still reported the tree clean. A
+    # partial wall that looks whole is worse than one that says it is blind, so
+    # the failure propagates to build_denylist, which sets degraded.
+    import yaml
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     for category in ("companies", "events", "codenames", "competitors", "tokens"):
         for val in (data.get(category) or []):
             if val:

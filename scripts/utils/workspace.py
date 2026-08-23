@@ -381,21 +381,50 @@ def get_crm_central_path() -> Path:
 
 
 def get_per_exec_repo_path(slug: str) -> Path:
-    """Return the local clone path for a per-exec CRM repo.
+    """Return the local clone path for an exec's DATA overlay.
 
-    Per-exec repos are sibling directories of the workspace root, named
-    `31c-crm-{slug}`. Used by both CEO (clones all execs') and execs (clones own).
+    ONE topology, and this is it: each exec's full data overlay is cloned as
+    `../.heading-os-data-{slug}` (CEO-owned, exec is a collaborator), with CRM
+    contacts inside it at `crm/contacts/`. The dotted name matches
+    `provision_exec.py` and the data-root seam, so provisioning and aggregation
+    share one clone per exec.
+
+    Until 2026-08-23 this returned `31c-crm-{slug}` - the retired model - while
+    `scripts/aggregate-crm.py` carried its own correct copy and its docstring
+    said the legacy model was retired. Two integration test files pinned the two
+    answers and the suite was green on both. The audit of that date caught it.
+    Callers that were reading the wrong sibling: `scripts/transfer-contact.py`
+    and `scripts/admin-health.py`.
     """
     if not slug or "/" in slug or "\\" in slug or ".." in slug:
         raise ValueError(f"Invalid slug: {slug!r}")
-    return get_workspace_root().parent / f"31c-crm-{slug}"
+    return get_workspace_root().parent / f".heading-os-data-{slug}"
+
+
+def get_per_exec_contacts_dir(slug: str) -> Path:
+    """Where an exec's CRM contact files live: `<their data repo>/crm/contacts/`.
+
+    The overlay is a full data repo, so contacts sit under `crm/`, exactly as
+    `get_per_exec_repo_path` describes. Five call sites joined `contacts`
+    straight onto the repo root instead, one level too high, and read an empty
+    directory as an empty fleet: on 2026-08-23 `admin-health.py` reported the
+    whole fleet DEAD with 0 contacts while Dima's overlay held 11 files and
+    Jochanan's held 7. Two of the five WROTE there, filing contacts into a
+    directory no reader ever opens.
+
+    Exists as a helper rather than a path join so the layout is stated once.
+    """
+    return get_per_exec_repo_path(slug) / "crm" / "contacts"
 
 
 def get_all_active_exec_slugs() -> list[str]:
-    """Return sorted list of active exec slugs from config/exec-registry.json.
+    """Return sorted list of active exec slugs from the HEADING OS fleet roster.
 
-    Excludes admin role (CEO) and any non-active status. Used by aggregate-crm.py
-    to know which per-exec repos to pull from.
+    Source is `load_exec_registry()` (`<data-root>/admin/executives.json`), NOT
+    `config/exec-registry.json` - the docstring named the latter until
+    2026-08-23 while the code already called the former. Excludes admin role
+    (CEO) and any non-active status. Used by aggregate-crm.py to know which
+    per-exec repos to pull from.
     """
     registry = load_exec_registry()
     slugs = []
@@ -431,14 +460,123 @@ def load_admin_config() -> dict:
 
 
 def load_exec_registry() -> dict:
-    """Load exec registry from config/exec-registry.json."""
-    config_path = get_data_config_dir() / "exec-registry.json"
-    if config_path.exists():
+    """Load the HEADING OS fleet roster from `<data-root>/admin/executives.json`.
+
+    This answers "who is provisioned as a HEADING OS user". Its single writer is
+    `../.heading-os-data/admin/provision/registry.py`.
+
+    It is NOT `<data-root>/config/exec-registry.json`, which answers a different
+    question: who is an executive at 31C (title, email, business role). That one
+    is hand-maintained and loads through `load_business_registry()`. Prefer
+    `load_fleet()` over either: it joins them on `slug` and labels which side
+    each fact came from.
+
+    Until 2026-08-23 this loader read the `config/exec-registry.json` path while
+    intending the fleet roster, so it resolved the wrong file under the wrong
+    root and the `exists()` guard turned the miss into an empty registry rather
+    than an error. Every caller silently saw a fleet of zero.
+    `scripts/aggregate-crm.py` reads the roster through its own
+    `load_fleet_registry`, which is how the fleet kept working while
+    `admin-health.py` and `transfer-contact.py` saw nobody.
+
+    An absent file still yields an empty registry: a data-less engine clone has
+    no fleet, and that is not an error.
+    """
+    registry_path = get_data_root() / "admin" / "executives.json"
+    if registry_path.exists():
         try:
-            return json.loads(config_path.read_text(encoding="utf-8"))
+            return json.loads(registry_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
     return {"version": "1.0", "executives": []}
+
+
+def load_business_registry() -> dict:
+    """Load `<data-root>/config/exec-registry.json` — the 31C ORG CHART.
+
+    Answers "who is an executive in the business": name, title, email, business
+    role, platform, employment status. Hand-maintained, not written by
+    provisioning.
+
+    Its sibling is `load_exec_registry()` (`admin/executives.json`), the HEADING
+    OS fleet roster. Prefer `load_fleet()` over either: it joins them and says
+    which side each fact came from.
+
+    An absent file yields an empty registry, same as the roster: a data-less
+    engine clone has no org chart either.
+    """
+    path = get_data_config_dir() / "exec-registry.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"version": "1.0", "executives": []}
+
+
+# Which registry owns which fact. Split on 2026-08-23; the reasoning, and the
+# stale `aios: removed` defect that forced it, are in
+# tests/test_fleet_registry_split.py.
+_BUSINESS_FIELDS = {"name": "name", "title": "title", "email": "email",
+                    "role": "business_role", "platform": "platform",
+                    "status": "employment_status"}
+_SYSTEM_FIELDS = {"name": "name", "github_user": "github_user",
+                  "data_repo": "data_repo", "status": "provisioning_status"}
+
+
+def load_fleet() -> list[dict]:
+    """Join the org chart and the fleet roster on `slug`. Sorted by slug.
+
+    Returns one record per person appearing in EITHER file, carrying:
+
+      slug, is_business_exec, is_heading_os_user,
+      name, title, email, business_role, platform, employment_status,   (chart)
+      github_user, data_repo, provisioning_status                       (roster)
+
+    The two flags are the point. Merging the files was rejected because the
+    fleet already holds people who are one and not the other: an executive with
+    no HEADING OS install, and an install belonging to nobody on the org chart.
+    Read the flag rather than inferring membership from a `status` string —
+    BOTH files have a field called `status` and they mean different things,
+    which is why the join renames them apart.
+
+    Absent facts are None, never "" and never a guess: a caller must be able to
+    tell "this person has no roster row" from "their roster row says nothing".
+
+    `provisioning_status` runs provisioning -> provisioned -> active ->
+    offboarded | revoked. Only `active` counts as fleet membership for
+    aggregation and sync; `provisioned` means setup finished but the operator
+    has not started using the install.
+    """
+    merged: dict[str, dict] = {}
+
+    def _slot(slug: str) -> dict:
+        return merged.setdefault(slug, {
+            "slug": slug, "is_business_exec": False, "is_heading_os_user": False,
+            **dict.fromkeys(set(_BUSINESS_FIELDS.values()) | set(_SYSTEM_FIELDS.values())),
+        })
+
+    for row in load_business_registry().get("executives", []):
+        slug = row.get("slug")
+        if not slug:
+            continue
+        rec = _slot(slug)
+        rec["is_business_exec"] = True
+        for src, out in _BUSINESS_FIELDS.items():
+            if row.get(src) is not None:
+                rec[out] = row[src]
+
+    for row in load_exec_registry().get("executives", []):
+        slug = row.get("slug")
+        if not slug:
+            continue
+        rec = _slot(slug)
+        rec["is_heading_os_user"] = True
+        for src, out in _SYSTEM_FIELDS.items():
+            if row.get(src) is not None:
+                rec[out] = row[src]
+
+    return [merged[s] for s in sorted(merged)]
 
 
 @functools.lru_cache(maxsize=4)

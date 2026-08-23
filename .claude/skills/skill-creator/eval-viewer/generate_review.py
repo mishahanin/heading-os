@@ -269,7 +269,16 @@ def generate_html(
     if benchmark:
         embedded["benchmark"] = benchmark
 
-    data_json = json.dumps(embedded)
+    # Escape `<` before splicing into a <script> block. json.dumps escapes
+    # quotes and backslashes; it does not escape `<`, and the HTML parser ends
+    # a script block at the first literal `</script` whatever the JavaScript
+    # around it says. `embed_file` copies any text output a run produced -
+    # including .html and .js - straight into this payload, so a skill that
+    # writes an HTML file would silently break the reviewer's page or inject
+    # into it. `<` is valid JSON, decodes to the same string, and also
+    # neutralises `<!--` (the script-data-escaped state). U+2028/U+2029 are
+    # already escaped: json.dumps defaults to ensure_ascii=True.
+    data_json = json.dumps(embedded).replace("<", "\\u003c")
 
     return template.replace("/*__EMBEDDED_DATA__*/", f"const EMBEDDED_DATA = {data_json};")
 

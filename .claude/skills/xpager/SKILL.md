@@ -111,7 +111,8 @@ Outputs: PDF + HTML. Both files are deliverables - HTML for web/preview, PDF for
 
 ## Phase 5: Report
 
-Full absolute paths of the PDF and HTML. State: "Word count: X. Hidden characters: clean."
+Full absolute paths of the PDF and HTML, then the confirmation line from
+`.claude/rules/hidden-chars.md`.
 
 ## NEVER
 

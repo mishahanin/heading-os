@@ -21,7 +21,7 @@ from scripts.utils.workspace import (
     get_default_tz,
     get_workspace_root, validate_admin,
     get_corporate_repo_path, load_admin_config,
-    get_per_exec_repo_path, get_all_active_exec_slugs,
+    get_per_exec_repo_path, get_per_exec_contacts_dir, get_all_active_exec_slugs,
     get_crm_contacts_dir,
 )
 from scripts.utils.operator_identity import operator_slug
@@ -101,7 +101,7 @@ def main() -> None:
     def _contacts_dir(exec_slug: str) -> Path:
         if exec_slug in admin_slugs:
             return get_crm_contacts_dir()
-        return get_per_exec_repo_path(exec_slug) / "contacts"
+        return get_per_exec_contacts_dir(exec_slug)
 
     from_contacts = _contacts_dir(args.from_exec)
     to_contacts = _contacts_dir(args.to)

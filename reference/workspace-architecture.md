@@ -240,7 +240,7 @@ For the current hook inventory with file paths, matchers, and timeouts, see [`wo
 ## Protection Systems
 
 ### Hidden character protection
-Every piece of text Claude produces is scanned for invisible Unicode (zero-width spaces, ZWJ, soft hyphens, non-breaking spaces, directional marks, word joiners, BOM). PostToolUse hook auto-scans every write. `scripts/sanitize-text.py` can scan any file on demand. Every deliverable shown to Misha includes "Hidden characters: clean" confirmation. Treated as a defect on par with fabricating facts.
+Every piece of text Claude produces is scanned for invisible Unicode (zero-width spaces, ZWJ, soft hyphens, non-breaking spaces, directional marks, word joiners, BOM). PostToolUse hook auto-scans every write. `scripts/sanitize-text.py` can scan any file on demand. Every deliverable shown to Misha carries the confirmation line defined in `.claude/rules/hidden-chars.md`, reporting what the scan actually found rather than a pre-written "clean". Treated as a defect on par with fabricating facts.
 
 ### DataStore validation
 Before any factual claim about 31C in external-facing content: read `datastore/INDEX.md`, load the source (or its `-extract.md` companion for binary files), validate the claim, flag unverified. DataStore wins over context files on conflict.
@@ -255,29 +255,32 @@ The `_secure/` vault was removed in Plan 5. A sensitive session is now a fail-cl
 
 ## Multi-Executive Architecture
 
-Hub-and-spoke. CEO workspace (this one) is the master. A corporate repo at `../31c-corporate/` holds content shared with all execs. Executive workspaces (one per provisioned executive) pull from corporate on sync. `config/routing-map.yaml` decides what is ceo-only vs corporate (the single classification input). Skills published via `/publish-corporate` or `/push-updates`. CRM aggregated across execs via `../31c-crm-central/`. Full admin workflow in `docs/CEO-ADMIN-GUIDE.md` (CEO-only).
+Hub-and-spoke. CEO workspace (this one) is the master. A corporate repo at `../heading-os-corporate/` holds content shared with all execs. Executive workspaces (one per provisioned executive) pull from corporate on sync. `config/routing-map.yaml` decides what is ceo-only vs corporate (the single classification input). Skills published via `/publish-corporate` or `/push-updates`. CRM aggregated across execs via `../31c-crm-central/`. Full admin workflow in `docs/CEO-ADMIN-GUIDE.md` (CEO-only).
 
-### Two-stage propagation (staging branch + canary exec)
+### Corporate publishing: one stage, not two
 
-Designed 2026-05-15 (plan: `plans/2026-05-15-corporate-staging-branch-and-canary-exec.md`). Layer 1 CEO-side infrastructure is in place; the publish flip and canary-side activation follow in subsequent sessions.
+`/publish-corporate` copies the corporate-classified subset out of the data
+overlay into `heading-os-corporate` and pushes `main`. Execs pull `main`. That
+is the whole path.
 
-The corporate repo carries two branches: `main` (production, what most execs pull) and `staging` (canary pre-flight). One designated exec - **the canary exec** (a chosen slug marked `canary: true`) - pulls from `staging` instead of `main`. The branch-switch on pull was previously driven by `workspace-sync.py --branch`; that engine is retired (see `plans/2026-06-26-retire-workspace-sync-disk-import.md`), so the canary branch selection now lives in `canary-smoke.py` itself: its `ensure_on_staging()` does a plain `git fetch origin staging` + `git checkout staging` on the canary clone (gated on `identity.canary`, best-effort, never `-B`) before the checks read the branch. `scripts/canary-smoke.py` still runs four deterministic post-pull checks (skill-router sync, CRM schema, workspace-health, hidden-character scan on `corporate/CLAUDE.md`) and writes `status/canary-{slug}.json` to the staging branch so the CEO can read canary health locally without a network call to the canary machine.
+A two-stage version was designed on 2026-05-15 (staging branch, a canary exec
+who soaks each publish, a gated `staging -> main` fast-forward) and **removed on
+2026-08-23**. Only the CEO-side half had ever been built, and measurement showed
+the rest could not work: `publish-corporate.py` never wrote to `staging`, so the
+gate had no input; nothing scheduled the canary smoke run, so the gate could
+never open without `--force`; the designated canary was an empty scaffold; and
+the repo had been published three times in three months. A gate that always
+needs forcing trains you to force.
 
-The end-state flow:
+The three scripts (`promote-corporate`, `rollback-corporate`, `canary-smoke`)
+and their two skills were deleted; the code is recoverable from git history, so
+the names are given without paths, because those paths no longer resolve.
+`BUILD.json` numbering survives on its own and is still bumped by
+`publish-corporate.py --bump-build`.
 
-```text
-CEO /publish-corporate -> staging branch -> canary 4h soak (smoke + Layer 3 evals)
-  -> /promote-corporate (Layer 2) fast-forward merges staging -> main
-  -> non-canary execs pull main on next hourly sync
-```
-
-**Current rollout state (2026-05-15):**
-
-- Layer 1 CEO-side: implemented. `staging` branch exists on origin; `scripts/canary-smoke.py` ships to every exec workspace (M6 guard exits early on non-canary) and now owns the branch-switch via `ensure_on_staging()` (the retired `workspace-sync.py --branch` auto-track was replaced 2026-06-26, git-native); `scripts/provision-exec.py --canary` flag wired; the canary exec flagged in the fleet registry.
-- Layer 1 canary-side: pending. The canary exec's `.workspace-identity.json` needs `canary: true` set; their scheduled task needs `canary-smoke.py` invocation post-sync.
-- Layer 1 publish flip: deliberately deferred. `/publish-corporate` and `/push-updates` still push to `main` for now, so the non-canary execs continue to receive updates without interruption. The flip happens in the canary-side session, coordinated with Layer 2's `/promote-corporate` skill so the gate is in place before production traffic moves to staging.
-- Layer 2: shipped. `/promote-corporate` (`scripts/promote-corporate.py`) runs the soak, freshness and smoke gates and `--ff-only` merges `staging` into `main`; `/rollback-corporate` (`scripts/rollback-corporate.py`) forward-reverts `main` without a force-push.
-- Layers 3-4: pending. The Layer 3 canary evaluator was never built - no script exists for it yet - and the Layer 4 dashboard surface is unbuilt.
+If it is ever wanted again, three things must be true first, in this order:
+publish writes to `staging`; a real canary install exists and syncs; the smoke
+run is scheduled on the canary's own machine.
 
 ---
 

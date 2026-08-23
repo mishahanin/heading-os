@@ -39,10 +39,20 @@ INGEST_PATHS = [
     "outputs/operations/",  # leak-guard: ok (relative prefix/match key, not path construction)
 ]
 
-# Files that legitimately discuss injection patterns (by basename)
+# Files that legitimately discuss injection patterns (by basename).
+#
+# `prevent-secrets.py` was here until 2026-08-23. The shim it named was deleted
+# on 2026-08-11 when `_dispatch.py` absorbed it, and that file records the reason
+# to remove the allowance with it: "an allowance for a file that cannot exist is
+# a name waiting for someone to recreate it and inherit the exemption." The
+# lesson was written down in one wall and left standing in the other. The match
+# is basename-wide, so any `prevent-secrets.py` created anywhere under an ingest
+# path would have skipped injection scanning.
+#
+# Each surviving entry names a file that exists; `tests/test_prompt_guard.py`
+# holds that, so the next deletion cannot leave a ghost behind.
 ALLOW_BASENAMES = {
     "prompt-guard.py",
-    "prevent-secrets.py",
     "secret-scanner.py",
     "SECURITY-CONSTITUTION.md",
 }
@@ -77,6 +87,14 @@ def main():
     try:
         input_data = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, ValueError):
+        sys.exit(0)
+
+    # A payload that is valid JSON but not an object still reaches `.get`.
+    # `[]`, `"x"`, `3` and `null` all parse, then raise an uncaught
+    # AttributeError. Swept 2026-08-23 across every stdin hook: six crashed on
+    # all four shapes. Same defect checkpoint-inject.py fixed on 2026-08-20;
+    # the sweep is how the rest were found.
+    if not isinstance(input_data, dict):
         sys.exit(0)
 
     tool_input = input_data.get("tool_input", {})

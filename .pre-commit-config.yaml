@@ -55,11 +55,18 @@ repos:
 
   # _secure/ commit guard -- the vault was removed in Plan 5; this is retained
   # as cheap defence-in-depth so any stray `_secure/` path can never be committed.
+  #
+  # Both guards below exit through ONE unconditional `sys.exit(1 if leaked else 0)`.
+  # Until 2026-08-23 they ended in `print(...) or [print(f) for f in leaked] or
+  # sys.exit(1)`, and a non-empty list comprehension is truthy, so `or`
+  # short-circuited and sys.exit(1) never ran: both printed "BLOCKED" and then
+  # exited 0, letting the commit through. Neither had ever blocked anything.
+  # Guard: tests/test_precommit_guards_actually_block.py.
   - repo: local
     hooks:
       - id: vault-guard
         name: Block stray _secure/ paths from commits
-        entry: python3 -c "import sys; leaked=[f for f in sys.argv[1:] if '_secure/' in f.replace(chr(92),'/')]; (print('BLOCKED - vault files staged for commit') or [print(f'  {f}') for f in leaked] or sys.exit(1)) if leaked else sys.exit(0)"
+        entry: python3 -c "import sys; leaked=[f for f in sys.argv[1:] if '_secure/' in f.replace(chr(92),'/')]; print('BLOCKED - vault files staged for commit') if leaked else None; [print('  ' + f) for f in leaked]; sys.exit(1 if leaked else 0)"
         language: system
         pass_filenames: true
 
@@ -68,7 +75,7 @@ repos:
     hooks:
       - id: runtime-state-guard
         name: Block runtime state (.tmp/, scheduled_tasks.*) from commits
-        entry: python3 -c "import sys; pats=['.tmp/', '.claude/scheduled_tasks.json', '.claude/scheduled_tasks.lock']; leaked=[f for f in sys.argv[1:] if any(p in f.replace(chr(92),'/') for p in pats)]; (print('BLOCKED - runtime state staged for commit (add to .gitignore, unstage, retry)') or [print(f'  {f}') for f in leaked] or sys.exit(1)) if leaked else sys.exit(0)"
+        entry: python3 -c "import sys; pats=['.tmp/', '.claude/scheduled_tasks.json', '.claude/scheduled_tasks.lock']; leaked=[f for f in sys.argv[1:] if any(p in f.replace(chr(92),'/') for p in pats)]; print('BLOCKED - runtime state staged for commit (add to .gitignore, unstage, retry)') if leaked else None; [print('  ' + f) for f in leaked]; sys.exit(1 if leaked else 0)"
         language: system
         pass_filenames: true
 
@@ -371,5 +378,5 @@ repos:
         name: README numbers in sync (derived vs README/index)
         entry: bash -c 'command -v uv >/dev/null 2>&1 || { echo "uv not found; skipping readme-numbers (CI is authoritative)"; exit 0; }; uv run python scripts/dev/check-readme-numbers.py --quiet'
         language: system
-        files: '^(README\.md|docs/index\.html|scripts/dev/check-readme-numbers\.py)$'
+        files: '^(README\.md|ROADMAP\.md|docs/index\.html|scripts/dev/check-readme-numbers\.py)$'
         pass_filenames: false

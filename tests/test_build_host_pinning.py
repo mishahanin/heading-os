@@ -82,22 +82,41 @@ def test_the_fallback_is_also_data_not_only_a_printed_line():
 
 
 def test_loading_the_config_announces_a_fallback_by_itself(tmp_path, monkeypatch, capsys):
-    """The announcement sits in load_config so a NEW subcommand cannot omit it."""
+    """The announcement sits in load_config so a NEW subcommand cannot omit it.
+
+    Reachable only through the explicit `--allow-host-fallback` since
+    2026-08-23; without the flag a down host is a refusal, not a fallback.
+    """
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "memory-index.yaml").write_text(
         'host: "http://gpu.box:11436"\nmodel: bge-m3\n', encoding="utf-8"
     )
     monkeypatch.setattr(mi, "resolve_ollama_host", lambda h, **kw: "http://localhost:11434")
-    cfg = mi.load_config(tmp_path)
+    cfg = mi.load_config(tmp_path, allow_fallback=True)
     assert cfg["host_preferred"] == "http://gpu.box:11436"
     assert "GPU EMBEDDER NOT AVAILABLE" in capsys.readouterr().err
 
 
-def test_the_shipped_config_still_prefers_the_gpu_host():
-    """The pin is the control. A silent edit to localhost would defeat all of it."""
-    import yaml
-    raw = yaml.safe_load((mi.get_workspace_root() / "config/memory-index.yaml").read_text())
-    assert raw["host"] == "auto:11436", (
-        "config/memory-index.yaml no longer prefers the Windows GPU host; "
-        "builds would embed on the WSL CPU and split the store"
+def test_without_the_flag_a_down_host_leaves_no_host_at_all(tmp_path, monkeypatch, capsys):
+    """The default path refuses rather than degrades. `stats` and `meta` still
+    load their config, which is why this reports through `host` being None
+    instead of exiting inside `load_config`."""
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "memory-index.yaml").write_text(
+        'host: "http://gpu.box:11436"\nmodel: bge-m3\n', encoding="utf-8"
     )
+
+    def _down(pref, **kw):
+        raise mi.OllamaHostUnavailable("no pinned ollama host answered: http://gpu.box:11436")
+
+    monkeypatch.setattr(mi, "_resolve_embed_host", _down)
+    cfg = mi.load_config(tmp_path)
+    assert cfg["host"] is None
+    assert "gpu.box:11436" in cfg["host_error"]
+    err = capsys.readouterr().err
+    assert "EMBEDDER NOT AVAILABLE" in err and mi.RED in err
+
+
+# The shipped config's pin is asserted once, in tests/test_embed_host_pinned.py
+# (`test_the_shipped_config_pins_the_windows_side_and_never_localhost`). A second
+# copy here drifted the moment the pin grew a second port.

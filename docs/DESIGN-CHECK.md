@@ -37,7 +37,8 @@ renders.**
 <!-- audit-skip-start -->
 The difference is not academic. The regex engine can be told `font-family: Inter`
 and see it.
-<!-- audit-skip-end --> It cannot be told that `#79839a` on `#ffffff` is a 3.8:1 contrast
+<!-- audit-skip-end -->
+It cannot be told that `#79839a` on `#ffffff` is a 3.8:1 contrast
 ratio against a 4.5:1 accessibility floor, because that fact does not exist in
 any single line of the file. Every deep finding carries an `impeccable:` type
 prefix, so in a merged report you can always tell which engine made a claim.

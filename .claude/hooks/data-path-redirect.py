@@ -49,14 +49,48 @@ DATA_DIRS = frozenset(
 )
 
 
-def _first_segment(path: str) -> str:
-    """First path segment of a relative POSIX/Windows path ('' if absolute/empty)."""
+def _normalize_rel(path: str) -> str | None:
+    """Collapse `.` and `..` lexically. None if absolute, empty, or escaping.
+
+    `..` segments were never normalized, so classification ran on the raw first
+    segment and the rewrite concatenated the raw path onto the data root.
+    Reproduced 2026-08-23:
+
+        outputs/../scripts/foo.py     -> <data-root>/scripts/foo.py
+        outputs/../../x               -> <workspaces>/x
+        outputs/../../../etc/passwd   -> <home>/ai/etc/passwd
+
+    The first is a path that resolves to the ENGINE tree from cwd, silently
+    redirected into the data tree, in a hook whose docstring promises engine
+    paths are left untouched. The last two leave the data root altogether.
+
+    Lexical, not `Path.resolve()`: the target usually does not exist yet (this
+    runs before a Write), and resolve() would also follow symlinks, which
+    `no-symlinks-ever` says should not exist here but which this hook must not
+    depend on.
+    """
     if not path:
-        return ""
+        return None
     norm = path.replace("\\", "/")
     if norm.startswith("/") or (len(norm) > 1 and norm[1] == ":"):
-        return ""  # absolute (POSIX or Windows drive) -- never rewrite
-    return norm.split("/", 1)[0]
+        return None  # absolute (POSIX or Windows drive) -- never rewrite
+    parts: list[str] = []
+    for segment in norm.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            if not parts or parts[-1] == "..":
+                return None  # climbs out of the relative root; refuse to rewrite
+            parts.pop()
+            continue
+        parts.append(segment)
+    return "/".join(parts) or None
+
+
+def _first_segment(path: str) -> str:
+    """First segment of a NORMALIZED relative path ('' if absolute/empty/escaping)."""
+    norm = _normalize_rel(path)
+    return norm.split("/", 1)[0] if norm else ""
 
 
 def _is_data_rel(path: str) -> bool:
@@ -126,8 +160,12 @@ def main() -> int:
         return 0  # data in-tree; relative path already correct
 
     def _redirect(p: str) -> str | None:
-        if _is_data_rel(p):
-            return str(data_root / p.replace("\\", "/"))
+        # Join the NORMALIZED path, never the raw one: `outputs/../../x` used to
+        # be classified data-relative on its raw first segment and then
+        # concatenated verbatim, landing outside the data root.
+        norm = _normalize_rel(p)
+        if norm and _first_segment(p) in DATA_DIRS:
+            return str(data_root / norm)
         return None
 
     updated = dict(tool_input)

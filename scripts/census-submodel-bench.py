@@ -47,6 +47,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -55,7 +56,7 @@ from scripts.utils.api import load_api_key
 from scripts.utils.atomic import atomic_write_text
 from scripts.utils.claude_models import latest
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.ollama_host import resolve_ollama_host
+from scripts.utils.ollama_host import generation_host
 from scripts.utils.sensitive import is_sensitive, sensitivity_is_declared
 from scripts.utils.workspace import (
     get_default_tz,
@@ -68,15 +69,24 @@ from scripts.utils.workspace import (
 # Configuration
 # ============================================================
 
-# Same override as chronicle.py: HEADING_OS_OLLAMA_HOST (a literal URL or
-# `auto:<port>`) moves generation to a faster ollama instance without editing
-# code, and degrades to the local daemon when that host is not up. Benchmark
-# numbers are only comparable across runs that used the same host, so the
-# resolved value is recorded with the results.
-OLLAMA_HOST = resolve_ollama_host(env_var="HEADING_OS_OLLAMA_HOST")
-OLLAMA_URL = f"{OLLAMA_HOST}/api/chat"
 PROXY_URL = "http://localhost:8317/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+
+
+@lru_cache(maxsize=1)
+def ollama_url() -> str:
+    """The local-model endpoint, same source chronicle.py uses.
+
+    `generate:` in the machine-local `config/ollama-hosts.yaml`, overridden by
+    `HEADING_OS_OLLAMA_HOST`, degrading to the local daemon when neither
+    answers. A speed number is only comparable to another one taken on the same
+    host, so a run that reports ollama timings should say which host it reached
+    - print `ollama_url()` beside them.
+
+    Resolved on first use rather than at import, because it probes and
+    `--dry-run` promises no network.
+    """
+    return f"{generation_host()}/api/chat"
 
 DOC_COUNT = 30
 SLICE_WIDTHS = (4_000, 20_000, 50_000)
@@ -194,11 +204,24 @@ def _truth(text: str, marker: str) -> dict:
 
 
 def _candidate_docs(min_len: int, want: int) -> list[Path]:
-    """Documents of at least `min_len` characters, threads first.
+    """Documents of at least `min_len` CHARACTERS, threads first.
 
     Threads are the shape a sub-call actually sees, so they are preferred. They
     top out around 38k characters, so the long widths fall through to knowledge
     and outputs, which do hold documents past 50k.
+
+    Characters, not bytes, because `build_cases` cuts with `text[:width]` and a
+    filter in the other unit is not a filter. Until 2026-08-23 this compared
+    `st_size` against `min_len`: on a Cyrillic corpus, where UTF-8 spends two
+    bytes per character, a 50,000-byte Russian thread carries ~25,000 characters
+    and half-filled every long slice while passing the guard. The degenerate-
+    width check this file exists to protect was reporting ВЫРОЖДЕН for documents
+    that were long enough by the only unit the script actually measures in.
+
+    `st_size` survives as a cheap PRE-filter, which is sound in one direction
+    only: UTF-8 never spends fewer than one byte per character, so a file whose
+    byte count is below `min_len` cannot possibly hold `min_len` characters. The
+    survivors are then decoded and counted.
     """
     picked: list[Path] = []
     seen: set[Path] = set()
@@ -218,11 +241,21 @@ def _candidate_docs(min_len: int, want: int) -> list[Path]:
                 continue
             if size < min_len:
                 continue
+            if min_len and not _has_chars(path, min_len):
+                continue
             seen.add(path)
             picked.append(path)
             if len(picked) >= want:
                 return picked
     return picked
+
+
+def _has_chars(path: Path, min_len: int) -> bool:
+    """True when the decoded document holds at least `min_len` characters."""
+    try:
+        return len(path.read_text(encoding="utf-8", errors="ignore")) >= min_len
+    except OSError:
+        return False
 
 
 def constant_baseline(cases: list["Case"]) -> tuple[int, int]:
@@ -258,15 +291,26 @@ def _plant(text: str, marker: str, index: int) -> str:
     return f"{text}\n\n<!-- {marker} -->\n"
 
 
+def _case(path: Path, sliced: str, width: int, marker: str, index: int) -> Case:
+    """One case, with `actual_len` measured on the SLICE.
+
+    Not on the planted text. `_plant` appends ~33 characters that came from this
+    script rather than from the document, and counting them meant a slice one
+    character short of the width reported `filled` - the exact signal `--dry-run`
+    reads to fail a degenerate width. Found 2026-08-23.
+    """
+    text = _plant(sliced, marker, index)
+    return Case(path, text, width, len(sliced), _truth(text, marker))
+
+
 def build_cases(width: int, marker: str, doc_count: int = DOC_COUNT) -> list[Case]:
     cases: list[Case] = []
     for path in _candidate_docs(min_len=width, want=doc_count):
         try:
-            text = path.read_text(encoding="utf-8", errors="ignore")[:width]
+            sliced = path.read_text(encoding="utf-8", errors="ignore")[:width]
         except OSError:
             continue
-        text = _plant(text, marker, len(cases))
-        cases.append(Case(path, text, width, len(text), _truth(text, marker)))
+        cases.append(_case(path, sliced, width, marker, len(cases)))
     if len(cases) < doc_count:
         # Fall back to the longest available rather than silently under-sampling.
         for path in _candidate_docs(min_len=0, want=doc_count * 4):
@@ -274,9 +318,8 @@ def build_cases(width: int, marker: str, doc_count: int = DOC_COUNT) -> list[Cas
                 break
             if any(c.path == path for c in cases):
                 continue
-            text = _plant(path.read_text(encoding="utf-8", errors="ignore")[:width],
-                          marker, len(cases))
-            cases.append(Case(path, text, width, len(text), _truth(text, marker)))
+            sliced = path.read_text(encoding="utf-8", errors="ignore")[:width]
+            cases.append(_case(path, sliced, width, marker, len(cases)))
     return cases[:doc_count]
 
 
@@ -288,7 +331,10 @@ def _post(url: str, payload: dict, headers: dict, timeout: int = 300) -> dict:
     # Assert the destination rather than suppressing the warning about it. Every
     # caller passes one of the three module constants, but this payload is real
     # workspace text and the guard has to hold for whoever adds the fourth.
-    if url not in (OLLAMA_URL, PROXY_URL, ANTHROPIC_URL):
+    # PROXY/ANTHROPIC are checked FIRST and short-circuit, so a cloud-runner
+    # call never resolves the ollama host - which is a pin and raises when the
+    # machine serving it is off.
+    if url not in (PROXY_URL, ANTHROPIC_URL) and url != ollama_url():
         raise ValueError(f"refusing an unregistered destination: {url!r}")
     request = urllib.request.Request(  # noqa: S310 - destination asserted above
         url, data=json.dumps(payload).encode(), headers=headers, method="POST",
@@ -300,7 +346,7 @@ def _post(url: str, payload: dict, headers: dict, timeout: int = 300) -> dict:
 def call_model(runner: Runner, prompt: str) -> str:
     """One sub-call. Raises on transport failure so the caller can name the cause."""
     if runner.transport == "ollama":
-        data = _post(OLLAMA_URL, {
+        data = _post(ollama_url(), {
             "model": runner.model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,

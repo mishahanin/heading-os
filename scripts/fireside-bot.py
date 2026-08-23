@@ -414,8 +414,20 @@ def load_tribe_metadata() -> dict:
 # Schedule generator (Phase 2 task 2.3)
 # ============================================================
 
+def next_cycle_number(schedule: list) -> int:
+    """The cycle a rebuild of `schedule` should carry: one past the highest in it.
+
+    An entry with no `cycle` field is read as cycle 1, matching
+    `fireside_topics.current_cycle`, so a schedule written before the field
+    existed rolls over to 2 rather than to 1.
+    """
+    if not schedule:
+        return 1
+    return max(int(e.get("cycle", 1) or 1) for e in schedule) + 1
+
+
 def build_schedule(roster_by_name: dict, start_monday=None,
-                   weeks=None) -> tuple[list, list[str]]:
+                   weeks=None, cycle: int = 1) -> tuple[list, list[str]]:
     """Convert a week calendar into the schedule.json structure.
 
     Args:
@@ -425,6 +437,13 @@ def build_schedule(roster_by_name: dict, start_monday=None,
             long-running daemon rebuilds from an updated config file.
         weeks: the week calendar (list of {week, theme, mon, wed}). Defaults to
             the module constant WEEK_1_TO_9_SCHEDULE.
+        cycle: the cycle number stamped on every entry. Until 2026-08-23 this
+            was hardcoded to 1, so `cmd_cycle_rollover` produced a cycle-2
+            calendar that called itself cycle 1 -- and since
+            `fireside_topics.current_cycle` reads this field, every later
+            `/idea` was filed under cycle 1, the cycle-end backlog never
+            emptied, and `cycle_end_invite`'s idempotency key kept matching the
+            invite already sent for cycle 1.
 
     Returns:
         (schedule_entries, missing_speakers) where:
@@ -457,7 +476,7 @@ def build_schedule(roster_by_name: dict, start_monday=None,
                 if username is None:
                     missing.append(name)
                 entries.append({
-                    "cycle": 1,
+                    "cycle": cycle,
                     "week": week_num,
                     "session_date": day_date.isoformat(),
                     "day": day_label,
@@ -2910,8 +2929,12 @@ def cmd_cycle_rollover(args) -> None:
         print(f"{GRAY}cycle-rollover: no rollover due (cycle active or already built){RESET}")
         return
 
-    roster_by_name = build_roster_by_name(load_state(TRIBE_ROSTER) or [])
-    entries, missing = build_schedule(roster_by_name, start_monday=start_monday, weeks=weeks)
+    # `or {}`, not `or []`: build_roster_by_name calls .items() on this, so an
+    # absent roster used to raise AttributeError instead of rebuilding empty.
+    roster_by_name = build_roster_by_name(load_state(TRIBE_ROSTER) or {})
+    cycle = next_cycle_number(schedule)
+    entries, missing = build_schedule(roster_by_name, start_monday=start_monday,
+                                      weeks=weeks, cycle=cycle)
     if not entries:
         print(f"{RED}cycle-rollover: rebuilt schedule is empty; aborting{RESET}", file=sys.stderr)
         return

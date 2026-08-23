@@ -30,7 +30,7 @@ want a subset, set up only those rows.
 Two of these ride on Ollama (the local embedder and Kimi), so install Ollama first
 if you want either. Gemini and Grok are pure cloud APIs and need no local runtime.
 
-All credentials live in the engine's gitignored `.env`. See [section 6](#6-the-env-block) for
+All credentials live in the engine's gitignored `.env`. See [section 7](#7-the-env-block) for
 the exact block to paste.
 
 ---
@@ -43,7 +43,7 @@ Ollama is a local model server. HEADING OS uses it for two distinct jobs:
    API key, zero cost. This is what `/recall` and the memory index run on.
 2. **Cloud routing** for Kimi, where Ollama proxies a request to a hosted
    `kimi-k2.6:cloud` model. Here the prompt does leave the machine (see the
-   [privacy guardrail](#52-privacy-guardrail-read-before-using-cloud-voices)).
+   [privacy guardrail](#55-privacy-guardrail-read-before-using-cloud-voices)).
 
 You need Ollama installed and running for either. If you want neither recall nor
 Kimi, skip this whole section.
@@ -119,21 +119,55 @@ on disk. The pull is a one-time download.
 
 ### 3.2 Configuration
 
-The embedder is declared in `config/memory-index.yaml`. The two lines that matter:
+The embed **model** is declared in `config/memory-index.yaml`:
 
 ```yaml
 model: bge-m3
-host: "http://localhost:11434"
 ```
 
-`host` is broken out deliberately: pointing it at a remote Ollama instance (for
-example a GPU box) is a single-line change. Everything else in that file tunes
-ranking, chunking, and which workspace layers get indexed; the defaults are sound.
+The **host** is declared somewhere else, and the split is deliberate.
+`config/memory-index.yaml` is tracked and ships to every clone, while a host
+address is a fact about one computer. So the host lives in
+`config/ollama-hosts.yaml`, which is gitignored:
 
-`host` also accepts `auto:<port>`. The engine then finds the current default
-gateway and uses that address on the named port. Use this form to reach an Ollama
-that runs on the Windows side of WSL2, where the gateway address changes on every
-WSL restart. An unreachable host falls back to `http://localhost:11434`.
+```bash
+cp config/ollama-hosts.example.yaml config/ollama-hosts.yaml
+```
+
+```yaml
+embed:
+  - "auto:11434"
+  - "auto:11436"
+generate:
+  - "auto:11434"
+  - "auto:11436"
+```
+
+**No file at all is a valid setup**, and it is the default. Both jobs then use
+`http://localhost:11434`, nothing is probed, and a machine with one local Ollama
+works with zero configuration. Fill the file in only when a second, faster Ollama
+lives somewhere else.
+
+Two roles, because they may differ: `embed` is what `/recall` and the index use,
+`generate` is what the local summarizer (`scripts/chronicle.py`) uses.
+
+Every entry is tried in order. An entry is either a literal base URL or
+`auto:<port>`, which resolves the current default gateway at run time. Use the
+`auto` form to reach an Ollama on the Windows side of WSL2. That gateway address
+changes on every WSL restart. A literal address written there works until the
+next reboot, and then stops.
+
+List several ports of one machine when you cannot control which one it binds. The
+Ollama desktop app on Windows manages its own bind address. It ignores the
+`OLLAMA_HOST` environment variable and answers on its default `11434`. A
+hand-started `ollama serve` answers wherever `OLLAMA_HOST` told it to. Name both
+ports, and an update that restarts the daemon cannot move it out of reach.
+
+**A configured host is a pin, not a preference.** When none of its entries
+answers, the run FAILS — it does not quietly compute somewhere else. Overrides,
+highest first: `host:` in `config/memory-index.yaml` (a deliberate choice for
+every clone), then `HEADING_OS_OLLAMA_EMBED_HOST` / `HEADING_OS_OLLAMA_HOST` (a
+one-off), then this file.
 
 ### 3.2.1 One embedder, or a split store
 
@@ -146,10 +180,12 @@ The engine records the provenance of every store and acts on it.
 
 - The store keeps three values in its `meta` table: `model`, `embed_host`, and
   `model_digest`. The digest is the sha256 of the model weights.
-- A build refuses to run when the preferred host does not answer. Pass
+- A build refuses to run when no pinned host answers. Pass
   `--allow-host-fallback` to accept a mixed-provenance store.
-- A query runs on the fallback host and prints a red banner on stderr. The banner
-  names the host you asked for and the host you got.
+- A query refuses too, and says so in both renderings: a red banner on stderr, and
+  `embed_unavailable` in `--json` with exit code 3. The recall hook turns that
+  into a visible warning. An empty answer from a down embedder reads exactly like
+  a genuine gap in memory, and it is not one.
 - A build compares all three values against the store. Different weights under the
   same model tag print `WEIGHTS CHANGED`.
 
@@ -168,6 +204,20 @@ To make a mixed store one provenance again, start the preferred host and rebuild
 ```bash
 uv run python scripts/memory-index.py build --force
 ```
+
+### 3.2.2 Keeping it answering
+
+Nothing falls back, so availability matters. `scripts/ollama-guard.py` probes the
+configured addresses and starts the Windows-side application when none answers:
+
+```bash
+python scripts/ollama-guard.py check      # probe only; exit 0 up, 1 down
+python scripts/ollama-guard.py heal       # probe, start if needed, re-probe
+bash scripts/install-ollama-guard-timer.sh   # run `heal` every five minutes
+```
+
+It never restarts a daemon that is answering: a periodic restart would evict the
+resident model and pay a cold load on the next query.
 
 ### 3.3 Build and query
 
@@ -393,7 +443,7 @@ voice is live.
 | Symptom | Cause & fix |
 |---|---|
 | `/recall` returns nothing, or "index not refreshed (ollama down)" | Ollama is not running. `ollama serve &`, then `curl -s http://localhost:11434/api/tags`. |
-| `memory-index.py` errors mentioning the embed endpoint | `bge-m3` not pulled, or wrong host. `ollama pull bge-m3`; confirm `host:` in `config/memory-index.yaml`. |
+| `memory-index.py` errors mentioning the embed endpoint | `bge-m3` not pulled, or nothing answering at the pinned host. `ollama pull bge-m3`; run `python scripts/ollama-guard.py check`; confirm `embed:` in `config/ollama-hosts.yaml`. |
 | First `memory-index build` runs for a very long time | Expected on CPU for a large workspace. It is resumable and commits per file; let it finish or rerun. |
 | `GEMINI_API_KEY is missing from .env` | Key absent. Add it from Google AI Studio. |
 | `XAI_API_KEY is missing from .env` | Key absent. Add it from the xAI console. |
@@ -408,7 +458,8 @@ voice is live.
 
 | File | Role |
 |---|---|
-| `config/memory-index.yaml` | Embedder model + host, ranking, chunking, indexed layers |
+| `config/memory-index.yaml` | Embed model, ranking, chunking, indexed layers |
+| `config/ollama-hosts.yaml` | Which Ollama serves this machine (`embed` / `generate`). Gitignored; template `config/ollama-hosts.example.yaml` |
 | `scripts/memory-index.py` | Builds and queries the local recall index (`bge-m3`) |
 | `scripts/utils/embeddings.py` | Local embedding client over Ollama |
 | `scripts/utils/commit_source.py` | Commit messages as index rows (`source: git-log` layers) |

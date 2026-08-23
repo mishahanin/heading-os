@@ -1,0 +1,19 @@
+[Unit]
+Description=31C ollama guard - probe every few minutes, start the daemon if it died
+
+[Timer]
+# Five minutes, and a first fire two minutes after boot. The window is chosen
+# against what waits on it: the recall hook fires on most operator prompts and
+# gives up after 3.5 s, so a long gap here is a stretch of a working session
+# answering "nothing in memory" when the truth is "the embedder is gone".
+OnBootSec=2min
+OnUnitActiveSec=5min
+# A missed window is not worth replaying: the next fire is five minutes away and
+# probes the CURRENT state, which is the only state that matters to a watchdog.
+# Persistent=true is REQUIRED on the daily timers of this workspace and
+# deliberately absent here; the reason is the difference between catching up on
+# missed WORK and catching up on a missed LOOK.
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

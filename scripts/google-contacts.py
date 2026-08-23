@@ -347,22 +347,22 @@ def cmd_add(service, name, email=None, phone=None, company=None, title=None,
         body["names"][0]["familyName"] = parts[1]
 
     if email:
-        body["emailAddresses"] = [{"value": email}]
+        body["emailAddresses"] = _replace_first(current, "emailAddresses", {"value": email})
     if phone:
-        body["phoneNumbers"] = [{"value": phone}]
+        body["phoneNumbers"] = _replace_first(current, "phoneNumbers", {"value": phone})
     if company or title:
         org = {}
         if company:
             org["name"] = company
         if title:
             org["title"] = title
-        body["organizations"] = [org]
+        body["organizations"] = _replace_first(current, "organizations", org)
     if notes:
         body["biographies"] = [{"value": notes, "contentType": "TEXT_PLAIN"}]
     if address:
-        body["addresses"] = [{"formattedValue": address}]
+        body["addresses"] = _replace_first(current, "addresses", {"formattedValue": address})
     if url:
-        body["urls"] = [{"value": url}]
+        body["urls"] = _replace_first(current, "urls", {"value": url})
 
     result = service.people().createContact(
         body=body,
@@ -391,6 +391,19 @@ def cmd_get(service, resource_name, as_json=False):
     else:
         _print_detail(result)
     return result
+
+
+def _replace_first(current: dict, field: str, entry: dict) -> list:
+    """`entry` as the FIRST value of `field`, with the contact's others kept.
+
+    `updatePersonFields` replaces a field's whole list with what the body
+    carries, so sending `[{"value": phone}]` deleted every other number the
+    contact had. Editing one phone is not a request to forget the other two.
+    The edited value goes first, which is what the People API treats as primary.
+    """
+    existing = [e for e in (current.get(field) or []) if isinstance(e, dict)]
+    tail = [e for e in existing[1:] if e.get("value") != entry.get("value")]
+    return [entry] + tail
 
 
 def cmd_edit(service, resource_name, name=None, email=None, phone=None,

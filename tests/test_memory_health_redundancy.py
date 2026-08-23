@@ -75,7 +75,7 @@ def test_the_default_embedder_takes_both_host_and_model_from_the_index(tmp_path,
     (tmp_path / "b.md").write_text("two", encoding="utf-8")
 
     monkeypatch.setattr(
-        ollama_host_mod, "resolve_ollama_host",
+        ollama_host_mod, "resolve_pinned_host",
         lambda preferred=None, **kw: "http://resolver.example:11436",
     )
     seen = {}
@@ -93,22 +93,32 @@ def test_the_default_embedder_takes_both_host_and_model_from_the_index(tmp_path,
 
 
 def test_the_index_config_is_the_preference_the_resolver_is_handed(monkeypatch):
-    """One preference, read where the index reads it, so the two cannot drift."""
+    """One preference, read where the index reads it, so the two cannot drift.
+
+    The resolver is the PINNED one since 2026-08-23: a configured host is not a
+    preference that may be dropped, so `index_embed_target` no longer routes
+    through the degrading resolver at all.
+    """
     captured = {}
 
     def fake_resolve(preferred=None, **kw):
         captured["preferred"] = preferred
-        captured["env_var"] = kw.get("env_var")
-        return "http://localhost:11434"
+        return "http://pinned.example:11434"
 
-    monkeypatch.setattr(ollama_host_mod, "resolve_ollama_host", fake_resolve)
+    monkeypatch.setattr(ollama_host_mod, "resolve_pinned_host", fake_resolve)
     host, model = index_embed_target()
 
+    # `index_embed_preference()`, not `config["host"]`: since 2026-08-23 the
+    # machine's own pin lives in the gitignored `config/ollama-hosts.yaml`, and
+    # the tracked config pins nothing so a clone that is not this laptop still
+    # builds. The point of the test is unchanged - ONE function answers where
+    # embedding goes, and everything downstream is handed its answer.
+    from scripts.utils.embeddings import index_embed_preference
+
     config = _index_config()
-    assert captured["preferred"] == config["host"], captured
-    assert captured["env_var"] == "HEADING_OS_OLLAMA_EMBED_HOST", captured
+    assert captured["preferred"] == index_embed_preference(), captured
     assert model == config["model"], model
-    assert host == "http://localhost:11434", host
+    assert host == "http://pinned.example:11434", host
 
 
 def test_a_missing_config_falls_back_and_does_not_raise(monkeypatch, tmp_path):
@@ -117,10 +127,9 @@ def test_a_missing_config_falls_back_and_does_not_raise(monkeypatch, tmp_path):
     import scripts.utils.workspace as ws
 
     monkeypatch.setattr(ws, "get_workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        ollama_host_mod, "resolve_ollama_host",
-        lambda preferred=None, **kw: "http://localhost:11434",
-    )
+    monkeypatch.delenv("HEADING_OS_OLLAMA_EMBED_HOST", raising=False)
+    # No config means nothing is pinned, so the local daemon is the answer and
+    # no resolver runs at all. Patching one would hide that.
     host, model = index_embed_target()
     assert model == embeddings_mod.INDEX_EMBED_MODEL_DEFAULT
     assert host == "http://localhost:11434"

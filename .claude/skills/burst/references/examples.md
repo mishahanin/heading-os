@@ -19,9 +19,11 @@ the packet inspection layer that sees everything? The answer, today, is
 almost always the same three foreign vendors. That is the problem.
 
 ## Variant 2 - data-led declaration
-73% of national telco DPI deployments today run on foreign-owned probe
-stacks. Of those, none publish what their telemetry pipelines do with
-the data once it leaves the operator's tenancy. We changed that.
+{SHARE}% of national telco DPI deployments run on foreign-owned probe
+stacks [source: {SOURCE}]. Of those, none publish what their telemetry
+pipelines do with the data once it leaves the operator's tenancy. We
+changed that.
+[NEEDS FIGURE: {SHARE} and {SOURCE}. Ask, or drop this variant.]
 
 ## Variant 3 - swing: contrarian provocation
 "Sovereign DPI" is a marketing word. There is no such thing as a
@@ -29,8 +31,9 @@ sovereign packet inspector you bought from a vendor whose root CA is
 not yours. Either you control the keys, the firmware build, and the
 telemetry sink, or you do not.
 
-My pick: Variant 2 - the data-led opener lands harder on the operator
-audience that recognizes the 73% number from their own RFPs.
+My pick: Variant 2, if you can supply the figure. A number an operator
+already meets in their own RFPs lands harder than a rhetorical opener.
+Without the figure, Variant 1.
 
 Reply "use variant N" to converge (next /burst will walk back to your choice), or any other message to continue normally.
 ```

@@ -38,7 +38,7 @@ from scripts.utils.crm import parse_frontmatter
 from scripts.utils.workspace import (
     get_workspace_root,
     get_all_active_exec_slugs,
-    get_per_exec_repo_path,
+    get_per_exec_contacts_dir,
     get_outputs_dir,
     get_crm_contacts_dir,
 )
@@ -171,6 +171,35 @@ def _canonical_name(records: list[dict]) -> str:
 # ============================================================
 # Data Loading: Scan CRM Sources
 # ============================================================
+def _record_from(file_path: Path, owner: str, fm: dict) -> dict:
+    """One scanned contact, in the shape render_relationship_record expects.
+
+    Module scope, not a closure inside scan_all_contacts: a nested function
+    cannot be tested, and the field-drop this shape once caused is exactly the
+    kind of bug a test catches and a reading does not.
+    """
+    return {
+        "owner": owner,
+        "file_path": str(file_path),
+        "name": fm.get("name", ""),
+        "email": fm.get("email", ""),
+        "company": fm.get("company", ""),
+        "type": fm.get("type", ""),
+        "linkedin": fm.get("linkedin", ""),
+        "phone": fm.get("phone", ""),
+        "region": fm.get("region", ""),
+        "timezone": fm.get("timezone", ""),
+        "last_touch": fm.get("last_touch", ""),
+        "source": fm.get("source", ""),
+        # render_relationship_record reads these; omitting them here meant its
+        # `if cadence not in (None, "", 0)` never fired and the 2026-05-15 run
+        # silently stripped cadence from about a hundred live contacts.
+        # A field the renderer reads must be a field the scan carries.
+        "cadence": fm.get("cadence"),
+        "radar_freeze_until": fm.get("radar_freeze_until", ""),
+    }
+
+
 def scan_all_contacts() -> list[dict]:
     """Scan CEO's crm/contacts/ + each per-exec CRM clone at ../31c-crm-{slug}/.
 
@@ -182,22 +211,6 @@ def scan_all_contacts() -> list[dict]:
     """
     records = []
 
-    def _record_from(file_path: Path, owner: str, fm: dict) -> dict:
-        return {
-            "owner": owner,
-            "file_path": str(file_path),
-            "name": fm.get("name", ""),
-            "email": fm.get("email", ""),
-            "company": fm.get("company", ""),
-            "type": fm.get("type", ""),
-            "linkedin": fm.get("linkedin", ""),
-            "phone": fm.get("phone", ""),
-            "region": fm.get("region", ""),
-            "timezone": fm.get("timezone", ""),
-            "last_touch": fm.get("last_touch", ""),
-            "source": fm.get("source", ""),
-        }
-
     # CEO contacts at crm/contacts/
     ceo_dir = get_crm_contacts_dir()
     for f in sorted(ceo_dir.glob("*.md")):
@@ -206,14 +219,16 @@ def scan_all_contacts() -> list[dict]:
             continue
         records.append(_record_from(f, "owner-exec-a", fm))
 
-    # Per-exec CRM contacts at ../31c-crm-{slug}/contacts/
-    # Use get_all_active_exec_slugs() which reads exec-registry.json (list format)
-    # and already excludes the admin/CEO role. load_admin_config() returns a
-    # different structure (config/admin.json) and is not suitable here.
+    # Per-exec CRM contacts at ../.heading-os-data-{slug}/crm/contacts/.
+    # Both halves of that path were wrong here: the comment named the retired
+    # `31c-crm-{slug}` repo, and the join sat one level above the files (fixed
+    # 2026-08-23, see tests/test_per_exec_contacts_dir.py).
+    # get_all_active_exec_slugs() reads the fleet roster and already excludes
+    # the admin/CEO role; load_admin_config() is a different structure and is
+    # not suitable here.
     exec_slugs = get_all_active_exec_slugs()
     for slug in exec_slugs:
-        repo_path = get_per_exec_repo_path(slug)
-        exec_contacts_dir = repo_path / "contacts"
+        exec_contacts_dir = get_per_exec_contacts_dir(slug)
         if not exec_contacts_dir.exists():
             continue
         for f in sorted(exec_contacts_dir.glob("*.md")):
@@ -537,7 +552,7 @@ def render_relationship_record(record: dict, entity_slug: str) -> str:
     fm.append("tags: []")
     if record.get("company"):
         fm.append(f"pipeline_company: {record['company']}")
-    fm.append("radar_freeze_until: \"\"")
+    fm.append(f"radar_freeze_until: \"{record.get('radar_freeze_until') or ''}\"")
     fm.append(f"owner: {record['owner']}")
     fm.append("---")
     fm.append("")

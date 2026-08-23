@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HEADING OS — Quickstart</title>
-<meta name="description" content="The one-page version. For the full zero-to-running walk-through, see">
+<meta name="description" content="The one-page version. For the full zero-to-running walk-through, see DEPLOYMENT.md.">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,11 +77,11 @@
 </aside>
 <main class="content">
   <h1>HEADING OS — Quickstart</h1>
-  <p class="page-meta">The one-page version. For the full zero-to-running walk-through, see</p>
+  <p class="page-meta">The one-page version. For the full zero-to-running walk-through, see DEPLOYMENT.md.</p>
   <!-- version: 2.5.0 | last-updated: 2026-07-12 -->
 
 <p>The one-page version. For the full zero-to-running walk-through, see
-<strong><a href="DEPLOYMENT.md">DEPLOYMENT.md</a></strong>.</p>
+<strong><a href="DEPLOYMENT.html">DEPLOYMENT.md</a></strong>.</p>
 <hr />
 <h2 id="try-it-in-60-seconds-no-data-no-keys">Try it in 60 seconds (no data, no keys)</h2>
 <p>Want to see the engine run before installing anything? Open the repository in a
@@ -96,7 +96,7 @@ mode refuses writes by design.</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/crm-health.py
 </code></pre></div>
 <p>When you are ready for a real workspace, follow <strong>Install (short form)</strong> below. Details
-live in <a href="../.devcontainer/README.md"><code>.devcontainer/README.md</code></a>.</p>
+live in <a href="https://github.com/mishahanin/heading-os/blob/main/.devcontainer/README.md"><code>.devcontainer/README.md</code></a>.</p>
 <hr />
 <h2 id="install-as-a-claude-code-plugin">Install as a Claude Code plugin</h2>
 <p>Want the sovereignty core inside your existing Claude Code, with no clone? Add the
@@ -106,7 +106,7 @@ marketplace and install the bundle:</p>
 </code></pre></div>
 <p><code>heading-core</code> carries the <code>prime</code>, <code>state-check</code>, and <code>checkpoint</code> skills plus the
 sovereignty guard hooks. For what each bundle holds, how updates work, and when to
-prefer a plugin over a full clone, see <strong><a href="PLUGINS.md">PLUGINS.md</a></strong>.</p>
+prefer a plugin over a full clone, see <strong><a href="PLUGINS.html">PLUGINS.md</a></strong>.</p>
 <hr />
 <h2 id="install-short-form">Install (short form)</h2>
 <p>Once you have WSL2/Ubuntu (Windows) or a Unix shell, plus <code>git</code>, <code>gh</code>, <code>uv</code>, Node, and
@@ -136,9 +136,9 @@ claude<span class="w">        </span><span class="c1"># then /prime</span>
 Telegram, browser automation, document generation, &hellip;) lives in an optional
 extra you arm on demand: <code>uv sync --extra &lt;name&gt;</code>. A script that needs a dormant
 extra tells you the exact command to run. Want everything at once? Use
-<code>uv sync --all-extras</code>. See <a href="DEPLOYMENT.md">DEPLOYMENT.md</a> for the extras ladder.</p>
+<code>uv sync --all-extras</code>. See <a href="DEPLOYMENT.html">DEPLOYMENT.md</a> for the extras ladder.</p>
 <p>Full prerequisites, platform setup, authentication, plugins, and troubleshooting are
-in <a href="DEPLOYMENT.md">DEPLOYMENT.md</a>.</p>
+in <a href="DEPLOYMENT.html">DEPLOYMENT.md</a>.</p>
 <hr />
 <h2 id="first-session">First session</h2>
 <table>
@@ -222,7 +222,7 @@ caught before it becomes a wrong deliverable. Prefix a message with <code>!</cod
 immediately; type <code>/align</code> to force a round of clarifying questions first. The full
 three-phase flow, the escape valves, and the <code>/align</code> · <code>/devil</code> · <code>/burst</code>
 escalations are documented in the
-<a href="RULES-REFERENCE.md#prompt-refinement-in-depth">rules reference</a>.</p>
+<a href="RULES-REFERENCE.html#prompt-refinement-in-depth">rules reference</a>.</p>
 <blockquote>
 <p><strong>Outbound is always human-gated.</strong> Email and messages are drafted and shown to you
 first. Nothing sends on its own.</p>
@@ -237,12 +237,12 @@ first. Nothing sends on its own.</p>
 <li><code>/deep-research-advance</code> adds <strong>Perplexity + Kimi</strong> for deep web research.</li>
 </ul>
 <p>Install steps, where to get each key, and how to verify are in
-<strong><a href="MODELS-SETUP.md">MODELS-SETUP.md</a></strong>.</p>
+<strong><a href="MODELS-SETUP.html">MODELS-SETUP.md</a></strong>.</p>
 <p>To connect email, Telegram, Google, and the OSINT keys, see
-<strong><a href="INTEGRATIONS-SETUP.md">INTEGRATIONS-SETUP.md</a></strong>. To make the workspace speak in
-your own voice and identity, see <strong><a href="MAKE-IT-YOURS.md">MAKE-IT-YOURS.md</a></strong> (<code>/setup-wizard</code>).</p>
+<strong><a href="INTEGRATIONS-SETUP.html">INTEGRATIONS-SETUP.md</a></strong>. To make the workspace speak in
+your own voice and identity, see <strong><a href="MAKE-IT-YOURS.html">MAKE-IT-YOURS.md</a></strong> (<code>/setup-wizard</code>).</p>
 <hr />
-<p><em>HEADING OS · Quickstart · see <a href="DEPLOYMENT.md">DEPLOYMENT.md</a> for the full guide and
+<p><em>HEADING OS · Quickstart · see <a href="DEPLOYMENT.html">DEPLOYMENT.md</a> for the full guide and
 the in-workspace <code>/prime</code> for live orientation.</em></p>
   <footer class="foot">
     <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>

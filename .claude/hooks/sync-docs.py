@@ -45,6 +45,75 @@ ENGINE_PUBLISHED = {
 ENGINE_ROOT = Path(__file__).resolve().parents[2]
 
 
+def is_real_template(file_path: Path) -> bool:
+    """True only for a file directly inside a `templates/` directory.
+
+    The trigger was the unanchored substring `"/templates/" in str(path)`, and
+    it was wrong in both directions. Found by the 2026-08-23 audit and
+    reproduced:
+
+      * FALSE POSITIVE, the dangerous one. A write to
+        `outputs/scratch/templates/EMERGENCY-PROCEDURES.md` matched. Because
+        that name is in ENGINE_PUBLISHED, `sync_targets` then returned the real
+        `<engine>/docs/EMERGENCY-PROCEDURES.md` and `shutil.copy2` overwrote the
+        published document with scratch content. `REQUIRED_ANCHORS` only covers
+        GETTING-STARTED, so nothing shouted. It also slipped past the
+        `check_protect_docs` wall in `.claude/hooks/_dispatch.py`, which exists
+        to stop exactly this file being clobbered: the copy happens inside this
+        hook, not through a tool call, so the wall never sees it.
+
+      * FALSE NEGATIVE. A RELATIVE path, `templates/GETTING-STARTED.md`, has no
+        leading slash, so the substring did not match and an ordinary edit was
+        silently not synced.
+
+    Resolving first fixes the false negative. Three structural tests fix the
+    false positive, in increasing strictness:
+
+      1. the parent directory must BE named `templates`;
+      2. its root must not be a strict DESCENDANT of the engine or the data
+         root, which is what `outputs/scratch/templates/` is and what a real
+         `<root>/templates/` never is;
+      3. for a name in ENGINE_PUBLISHED, whose sync reaches the engine's
+         published `docs/`, the root must be the engine root or the data root
+         exactly. That one destination is public, so it earns identity rather
+         than shape.
+
+    Rule 2 is deliberately shape-based, not an identity check, so a synthetic
+    root in a test tree still exercises the sync. Rule 3 is the identity check,
+    scoped to the only destination where a wrong write is published.
+    """
+    try:
+        resolved = file_path.resolve()
+    except OSError:
+        return False
+    if resolved.parent.name != "templates":
+        return False
+    root = resolved.parent.parent
+
+    known = {ENGINE_ROOT}
+    # The data overlay holds the CEO-only guides; resolve it the same way the
+    # engine does, and treat its absence as "engine-only layout".
+    try:
+        sys.path.insert(0, str(ENGINE_ROOT))
+        from scripts.utils.workspace import get_data_root  # noqa: PLC0415
+        known.add(Path(get_data_root()).resolve())
+    except Exception as exc:  # noqa: BLE001 — never let path resolution break a write
+        print(f"[sync-docs] data-root lookup skipped ({exc})", file=sys.stderr)
+
+    if any(k in root.parents for k in known):
+        print(f"[sync-docs] refusing {resolved}: a templates/ directory nested "
+              "inside a workspace root is not a template source", file=sys.stderr)
+        return False
+
+    if resolved.name in ENGINE_PUBLISHED and root not in known:
+        print(f"[sync-docs] refusing {resolved}: {resolved.name} publishes to the "
+              "engine docs site, so its template must live in a workspace root",
+              file=sys.stderr)
+        return False
+
+    return True
+
+
 def sync_targets(file_path: Path, engine_root: Path = ENGINE_ROOT) -> list:
     """Every docs/ path a template must be copied to, in publish order.
 
@@ -91,6 +160,14 @@ def main():
         print(f"[sync-docs] failed to parse input: {e}", file=sys.stderr)
         sys.exit(0)
 
+    # A payload that is valid JSON but not an object still reaches `.get`.
+    # `[]`, `"x"`, `3` and `null` all parse, then raise an uncaught
+    # AttributeError. Swept 2026-08-23 across every stdin hook: six crashed on
+    # all four shapes. Same defect checkpoint-inject.py fixed on 2026-08-20;
+    # the sweep is how the rest were found.
+    if not isinstance(input_data, dict):
+        sys.exit(0)
+
     tool_input = input_data.get("tool_input", {})
     file_path_str = tool_input.get("file_path", "")
 
@@ -99,14 +176,10 @@ def main():
 
     file_path = Path(file_path_str)
 
-    # Normalize path separators for template detection
-    norm_path = str(file_path).replace("\\", "/")
-
-    # Check if the written file is in templates/ and is a sync target
-    if "/templates/" not in norm_path:
+    if file_path.name not in SYNC_FILES:
         sys.exit(0)
 
-    if file_path.name not in SYNC_FILES:
+    if not is_real_template(file_path):
         sys.exit(0)
 
     # Determine project directory (for the HTML renderer, which lives in the
@@ -155,15 +228,33 @@ def main():
         regen_script = project_dir / "scripts" / "regenerate-docs-html.py"
         if regen_script.exists():
             try:
+                # The result used to be discarded, so a renderer exiting 1
+                # (a missing pygments, a template error) left stale HTML while
+                # this hook appended "+ regenerated HTML" — a success claim on a
+                # distribution pipeline that had not run. Found by the
+                # 2026-08-23 audit. Non-zero stays non-blocking, per the module
+                # docstring's promise of a warning, but it must now be SAID.
+                failures = []
                 for md_target in [file_path, *targets]:
-                    subprocess.run(
+                    proc = subprocess.run(
                         [sys.executable, str(regen_script), "--quiet", str(md_target)],
                         cwd=project_dir,
                         timeout=30,
                         capture_output=True,
+                        text=True,
                         check=False,
                     )
-                regen_msg = f" + regenerated HTML for {file_path.name}"
+                    if proc.returncode != 0:
+                        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+                        failures.append(f"{md_target.name} (exit {proc.returncode}"
+                                        + (f": {detail[-1]}" if detail else "") + ")")
+                if failures:
+                    print(f"[sync-docs] HTML regen FAILED: {'; '.join(failures)}",
+                          file=sys.stderr)
+                    regen_msg = (f" (HTML regen FAILED for {len(failures)} target(s): "
+                                 f"{'; '.join(failures)}. The HTML is STALE.)")
+                else:
+                    regen_msg = f" + regenerated HTML for {file_path.name}"
             except Exception as e:
                 print(f"[sync-docs] HTML regen warning for {file_path.name}: {e}", file=sys.stderr)
                 regen_msg = f" (HTML regen warning: {e})"

@@ -1,10 +1,12 @@
 # ============================================================
 # Sentinel -- CEO Comms Monitor (systemd service)
 # ============================================================
-# Install (substitute @WORKSPACE_ROOT@ at install time, never hand-edit literals):
+# Install (substitute BOTH placeholders at install time, never hand-edit literals):
 #   WS="$(cd "$(dirname reference/sentinel.service)/.." && pwd)"   # or your clone root
 #   WORKSPACE_ROOT="$(python3 "$WS/scripts/utils/paths.py")"
-#   sed "s#@WORKSPACE_ROOT@#${WORKSPACE_ROOT}#g" reference/sentinel.service \
+#   RUN_USER="$(stat -c %U "$WORKSPACE_ROOT")"   # the account that owns the tree
+#   sed -e "s#@WORKSPACE_ROOT@#${WORKSPACE_ROOT}#g" \
+#       -e "s#@RUN_USER@#${RUN_USER}#g" reference/sentinel.service \
 #     | sudo tee /etc/systemd/system/sentinel.service >/dev/null
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable sentinel
@@ -29,7 +31,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+# Substituted at install time like @WORKSPACE_ROOT@. This said `User=root` until
+# 2026-08-23, which ran a daemon whose entire job is parsing untrusted email and
+# Telegram content with full host privilege: any flaw in Sentinel, Telethon,
+# exchangelib or their dependencies became host compromise rather than the
+# compromise of one service account. Use the account that owns the workspace.
+# An unsubstituted placeholder fails loudly at `systemctl start` (unknown user),
+# which is the right direction.
+User=@RUN_USER@
 WorkingDirectory=@WORKSPACE_ROOT@
 Environment=WORKSPACE_ROOT=@WORKSPACE_ROOT@
 Environment=PATH=@WORKSPACE_ROOT@/.venv/bin:/usr/local/bin:/usr/bin:/bin
@@ -38,6 +47,20 @@ Restart=on-failure
 RestartSec=30
 StandardOutput=journal
 StandardError=journal
+
+# Hardening. Chosen to be safe for this workload rather than maximal:
+#   NoNewPrivileges  - no setuid binary can raise privilege from inside
+#   PrivateTmp       - its own /tmp, so nothing else on the box can read scratch
+#   ProtectSystem=full - /usr, /boot and /etc read-only. NOT `strict`, which
+#                      would also make the workspace and the data overlay
+#                      read-only and stop Sentinel writing its state.
+#   Protectcontrol-groups / kernel knobs - it has no business there
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
 
 # Resource limits (prevent runaway processes)
 MemoryMax=512M

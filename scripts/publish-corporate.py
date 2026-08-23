@@ -340,12 +340,17 @@ def mode_verify() -> int:
 
 def bump_build(summary: str = "Workspace update", structural: bool = False,
                files_changed: int = 0) -> int:
-    """R16 H1: increment BUILD.json in the corporate repo. Additive capability
-    used by the Layer 2 two-stage flow (a staging push bumps the build so the
-    canary's version gate pulls; /promote-corporate then preserves this build
-    verbatim through the --ff-only merge). PATCH bump by default; MINOR when
-    --structural. Atomic write (tmp + os.replace). Does NOT commit or push --
-    the caller stages it with the file copy.
+    """Increment BUILD.json in the corporate repo: which build each exec holds.
+
+    Opt-in (`--bump-build`); a plain publish does not touch it. PATCH bump by
+    default, MINOR with --structural. Atomic write (tmp + os.replace). Does NOT
+    commit or push - the caller stages it with the file copy.
+
+    It was introduced for the two-stage staging/canary flow, which was removed
+    on 2026-08-23 as unwired (see docs/EXTENDING.md). Build numbering stands on
+    its own: `scripts/check-build.py` compares this number against each exec's
+    copy to show sync drift. Note that the live corporate repo carries no
+    BUILD.json yet, so nothing reads a real number until a first bump.
     """
     build_path = CORPORATE_ROOT / "BUILD.json"
     try:
@@ -370,7 +375,11 @@ def bump_build(summary: str = "Workspace update", structural: bool = False,
         "summary": summary,
         "files_changed": files_changed,
     }
-    if "history" in cur:  # preserve the force-promote audit trail if present
+    # An old BUILD.json may still carry a `history` array from when the
+    # since-removed promotion gate wrote force-promote records here. Carried
+    # forward so a bump does not delete an old audit trail; nothing writes new
+    # entries into it any more.
+    if "history" in cur:
         payload["history"] = cur["history"]
     tmp = CORPORATE_ROOT / "BUILD.json.tmp"
     tmp.write_text(json.dumps(payload, indent=4) + "\n", encoding="utf-8")
@@ -391,8 +400,8 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--verify", action="store_true",
                       help="Verify corporate repo matches ceo-main; no changes.")
     mode.add_argument("--bump-build", action="store_true",
-                      help="R16 H1: increment BUILD.json (PATCH; MINOR with --structural). "
-                           "Additive; used by the Layer 2 staging flow. No commit/push.")
+                      help="Increment BUILD.json (PATCH; MINOR with --structural). "
+                           "Opt-in; a plain publish leaves it alone. No commit/push.")
     parser.add_argument("--summary", default="Workspace update",
                         help="Summary line written into BUILD.json on --bump-build.")
     parser.add_argument("--structural", action="store_true",

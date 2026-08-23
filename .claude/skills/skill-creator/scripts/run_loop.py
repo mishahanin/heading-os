@@ -17,9 +17,18 @@ from pathlib import Path
 
 import anthropic
 
+# Resolve `scripts.*` to THIS skill's package, not the workspace's.
+# `python -m scripts.<name>` from the skill root already does; running the
+# file by path (`python scripts/<name>.py`) puts scripts/ on sys.path[0]
+# instead of the skill root, so the absolute name resolves to whatever
+# other `scripts` package is importable - in this workspace the repo root's,
+# pinned there by an editable install. Measured 2026-08-23: all four
+# intra-skill importers died on import under `python scripts/<name>.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from scripts.generate_report import generate_html
 from scripts.improve_description import improve_description
-from scripts.run_eval import find_project_root, run_eval
+from scripts.run_eval import EvalRunError, find_project_root, run_eval
 from scripts.utils import parse_skill_md
 
 
@@ -101,6 +110,17 @@ def run_loop(
             model=model,
         )
         eval_elapsed = time.time() - t0
+
+        # A broken CLI is not a bad description. Without this, the loop spends
+        # every remaining iteration rewriting a description against runs that
+        # never happened. See run_eval.py's module docstring.
+        if all_results["summary"].get("errored"):
+            raise EvalRunError(
+                f"{all_results['summary']['errored']} of "
+                f"{all_results['summary']['total']} queries produced no usable "
+                f"run on iteration {iteration}. Fix the `claude` CLI before "
+                "iterating on the description."
+            )
 
         # Split results back into train/test by matching queries
         train_queries_set = {q["query"] for q in train_set}

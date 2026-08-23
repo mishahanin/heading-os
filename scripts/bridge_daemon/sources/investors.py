@@ -17,7 +17,7 @@ from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
 
-PROGRAM_DIR = "outputs/operations/fundraising/2026-05-17_investor-outreach-program"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+PROGRAM_DIR = "outputs/operations/fundraising/2026-05-17_investor-outreach-program"  # leak-guard: ok (relative suffix rooted by caller)
 SHORTLIST_FILE = "00-master-shortlist-v1.md"
 DOSSIERS_DIR = "dossiers"
 MESSAGES_DIR = "messages"

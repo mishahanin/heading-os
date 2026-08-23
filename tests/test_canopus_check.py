@@ -211,6 +211,67 @@ def test_C3_reports_when_the_contract_was_already_green_at_the_approval_sha(tmp_
     assert "green" in message.lower()
 
 
+def test_C3_reports_when_the_contract_collected_nothing_at_the_approval(tmp_path):
+    """Refutes: a C3 that reads the exit code alone.
+
+    Found by the 2026-08-23 audit. C3 called `_pytest` and threw the junit
+    report away (`code, _xml = _pytest(...)`), then treated ANY non-zero exit as
+    proof the contract was red. Pytest exits 5 when it collects nothing and 2 on
+    a collection error, so a contract that did not exist at the approval sha, or
+    that failed to import there, certified the freeze as sound.
+
+    That is the exact "collected is not run" trap the module already documents
+    for C4, and C4 already refuses it — the two clauses disagreed about what a
+    measurement is.
+
+    Here the contract file is added by a LATER commit, so at the approval sha
+    the path does not exist: pytest exits 5, having measured nothing.
+    """
+    repo = _init(tmp_path)
+    _write(repo, "widget.py", IMPLEMENTATION)
+    approval = _commit(repo, "approval: recorded before the contract was written")
+    _write(repo, CONTRACT, RED_CONTRACT)
+    _commit(repo, "the contract, written after the approval it claims")
+
+    ok, message = cc.C3(repo, _fields(approval))
+
+    assert not ok, (
+        "a contract that did not exist at its own approval sha was certified "
+        "as having been red there"
+    )
+    assert "ran no tests" in message or "no tests" in message, message
+
+
+def test_C3_reports_when_every_test_was_skipped_at_the_approval(tmp_path):
+    """The other half of the same trap: collected, reported, never executed.
+
+    Pytest exits 0 here, so this one was already caught by the green branch —
+    but for the wrong reason, and the message said "already GREEN" about a
+    contract that was never run. The distinction matters because the operator
+    reads the message and goes looking for an implementation that does not exist.
+    """
+    repo = _init(tmp_path)
+    _write(repo, CONTRACT, SKIPPED_CONTRACT)
+    approval = _commit(repo, "approval: a contract nothing runs")
+
+    ok, message = cc.C3(repo, _fields(approval))
+
+    assert not ok
+    assert "ran no tests" in message or "no tests" in message, message
+
+
+def test_C3_still_accepts_a_contract_that_really_was_red(tmp_path):
+    """The mutation guard. The fix must not reject a sound freeze."""
+    repo = _init(tmp_path)
+    _write(repo, CONTRACT, RED_CONTRACT)
+    approval = _commit(repo, "approval: the contract, red, with nothing to satisfy it")
+
+    ok, message = cc.C3(repo, _fields(approval))
+
+    assert ok, message
+    assert "red" in message
+
+
 def test_C4_reports_when_the_contract_collects_but_runs_nothing(tmp_path):
     """Refutes: a C4 that reads the exit code alone.
 

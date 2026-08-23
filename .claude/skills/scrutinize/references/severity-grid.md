@@ -57,7 +57,7 @@ For `trajectory:<run_id>` target type, findings inherit the same severity scale 
 
 **BLOCKER trajectory:**
 - Agent skipped a plan step that the final report claims was completed (missing `step_end`, present in `run_end` summary)
-- Trajectory writes to `_secure/` from a non-vault session
+- Trajectory writes a private-routing artefact into the engine clone
 
 **HIGH trajectory:**
 - Agent executed steps in wrong declared order without recording a `deviation` event

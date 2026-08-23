@@ -10,17 +10,12 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/docs.css">
 <style>
-  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
-  h3.cat:first-of-type { margin-top: 24px; }
   section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
   section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
   section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
   section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
   section.skill p { margin: 8px 0; }
   section.skill pre { margin: 10px 0; }
-  a.cmd-link { text-decoration: none; }
-  a.cmd-link code { color: var(--link); }
-  a.cmd-link:hover code { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -92,7 +87,6 @@
 
   <h1>Strategy skills</h1>
   <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
-Strategy</h3>
 
 <section class="skill">
 <h3 id="s-deep-think"><code>/deep-think [problem]</code><span class="badge">Strategy</span></h3>
@@ -250,7 +244,7 @@ Strategy</h3>
 </section>
 
 <section class="skill">
-<h3 id="s-odin"><code>/odin [mode] [source or question]</code><span class="badge">Strategy 🔒</span></h3>
+<h3 id="s-odin"><code>/odin [mode] [source or question]</code><span class="badge">Strategy</span></h3>
 <p class="skill-meta">Auto-routes on "Odin" as a name or address (CEO-only, never synced) · writes to <code>knowledge/odin-brain/</code></p>
 <p><strong>What it is.</strong> A persistent AI advisor with a curated, CEO-only knowledge brain that ingests books, articles, and videos, builds principles and positions, and gives referenced first-person advice with a mandatory Challenge section.</p>
 <p><strong>What it does.</strong> Runs nine modes: learn (ingest a source and extract principles), consult (default, brain-grounded advice), recall, reflect, teach, log (record a dated episode), collect (scan business threads for episodes), compile (lint the brain plus ZK), and skill-proposal. All writes land only in the <code>knowledge/odin-brain/</code> brain; after any write it refreshes <code>INDEX.md</code> and rebuilds the associative memory index (<code>scripts/memory-index.py build</code>) so new notes are recallable, then runs the hidden-character scan.</p>

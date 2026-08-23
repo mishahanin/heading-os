@@ -850,7 +850,11 @@ def build_app(workspace_root: Path, state, token: str, user_slug: str,
         # FastAPI auto-parses ?q=... and ?limit=... from the URL.
         # Bound the limit to avoid pathological queries.
         bounded_limit = max(1, min(50, int(limit)))
-        return _search_source(data_root, q, limit=bounded_limit)
+        # Both roots: search spans DATA sources and the ENGINE skill catalog.
+        # Passing data_root alone made the capability results come from
+        # `<data-root>/.claude/skills` — 1 skill instead of 96 (fixed 2026-08-23).
+        return _search_source(data_root, q, limit=bounded_limit,
+                              workspace_root=workspace_root)
 
     from pydantic import BaseModel
     from . import terminal as terminal_mod

@@ -490,8 +490,11 @@ SYNCED_FILES = {
 def check_protect_docs(payload: dict) -> Optional[dict]:
     """Block direct Write/Edit to auto-synced docs/ files.
 
-    The 8 shared documentation files in docs/ are auto-synced from
-    templates/ by sync-docs.py (PostToolUse). Direct edits get silently
+    The 6 shared documentation files in SYNCED_FILES are auto-synced from
+    templates/ by sync-docs.py (PostToolUse). The count is stated because a
+    coverage claim on a wall should be checkable; it said 8 against a set of 6
+    until 2026-08-23, and tests/test_dispatch_docstrings_match_the_code.py now
+    reads both. Direct edits get silently
     overwritten on the next template change. This check steers Claude
     to edit templates/ instead.
     """
@@ -697,7 +700,8 @@ Use the runner, which has passed `-n auto` since the push gate was parallelized:
 
 Or add the flag to the command you had: `-n auto`.
 
-Narrow runs are untouched — a file path, `-k`, or `--collect-only` all pass. \
+Narrow runs are untouched — a file path, a directory below the suite root such \
+as `tests/security`, a node id, `-k`, or `--collect-only` all pass. \
 For a deliberate serial run (a baseline measurement, a plugin that will not \
 distribute), append `# {escape}` and it goes through."""
 
@@ -759,7 +763,31 @@ def _is_serial_full_suite(argv: list) -> bool:
         # narrow run whose duration is not the problem this guard was built for.
         if token.endswith(".py") or "::" in token:
             return False
+        if _is_subdirectory_target(token):
+            return False
     return True
+
+
+def _is_subdirectory_target(token: str) -> bool:
+    """True for a directory BELOW the suite root, e.g. `tests/security`.
+
+    The comment above has claimed since this guard shipped that a directory
+    below tests/ counts as narrow. The code did not implement it: only `.py`
+    and `::` were accepted, so `pytest tests/security` was policy-denied with a
+    message promising narrow runs are untouched. Found by the 2026-08-23 audit
+    and reproduced. A guard that refuses the exact shape its own text exempts
+    teaches the operator to reach for `# slow-shell-ok`, which is the one
+    outcome a habit guard must never produce.
+
+    The distinction that matters is depth, not existence: `tests/` IS the full
+    suite and must stay blocked, while `tests/security` is a fast subset. So
+    count meaningful path segments rather than touching the filesystem, which
+    keeps this cheap and keeps `./tests/` from reading as narrow.
+    """
+    if token.startswith("-"):
+        return False  # `--rootdir=/x` is a flag, not a target
+    segments = [s for s in token.split("/") if s not in ("", ".")]
+    return len(segments) > 1
 
 
 def _blocking_wait(command: str) -> bool:
@@ -996,7 +1024,10 @@ def check_tool_budget(payload: dict) -> Optional[dict]:
     """Total-tool-call cap in 30-min rolling window + same-args repeat detection.
 
     Counts every tool invocation (not just writes). Soft cap warns; hard cap blocks.
-    Three identical calls in a row (same tool, same args) → advisory only - the
+    TOOL_REPEAT_THRESHOLD identical calls in a row (same tool, same args) →
+    advisory only, which is 4. The prose said three, from before the threshold
+    was raised on 2026-08-20, so the docstring described behaviour the code had
+    stopped having. The
     pattern signals a stuck loop but legitimately re-running the same `python script
     --check` is not a bug.
     """

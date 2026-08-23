@@ -132,6 +132,14 @@ def append_records(records: list[dict]) -> None:
             confidence_before=rec.get("confidence"),
             degraded=None,
             writer="flag-fp",
+            payload={
+                "severity": rec.get("severity"),
+                "statement": rec.get("statement"),
+                "location": rec.get("location"),
+                "evidence": rec.get("evidence"),
+                "ceo_note": rec.get("ceo_note"),
+                "flagged_at": rec.get("flagged_at"),
+            },
         )
 
 

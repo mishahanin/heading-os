@@ -12,6 +12,10 @@ Treat hidden character contamination as a defect on par with fabricating facts.
 Full reference: `reference/hidden-characters.md`
 Sanitizer: `scripts/sanitize-text.py`
 
-**Validation on every deliverable.** When presenting any draft copy to Misha (messages, posts, emails, proposals, etc.), run the sanitizer to validate and include confirmation: "Word count: X. Hidden characters: clean." If characters were found and removed, say so explicitly.
+**Validation on every deliverable.** When presenting any draft copy to Misha (messages, posts, emails, proposals, etc.), run the sanitizer and carry its result: `Word count: X. Hidden characters: <what the scan reported>.` "clean" is one possible value, not the template. If characters were found and removed, say so explicitly.
+
+This literal appears here and nowhere else. Sixteen other rules and skills used to quote it with the clean outcome already written in, which is a nudge toward stating an outcome instead of reading one; on 2026-08-23 they were changed to point here. `tests/test_hidden_chars_confirmation.py` keeps it that way.
+
+**Both numbers come from the tool, never from an estimate.** `--scan` prints the word count beside the character verdict, so copy X from its output. Until 2026-08-23 nothing computed X and it was guessed — a made-up figure inside a validation line, which `.claude/rules/scope-claims.md` forbids.
 
 This rule is the canonical owner of that confirmation line: its wording, when it is required, and what to say when the scan was not clean are defined here, and any other rule or skill that asks for it defers to this file rather than restating it.

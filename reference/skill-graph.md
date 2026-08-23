@@ -2,7 +2,7 @@
 
 The machine-readable map of how skills sequence into one another. Makes explicit the "X feeds Y" relationships that today live only as prose in `.claude/rules/skill-router.md` (the Compound column and Exclusions cross-references). The `/next` recommender reasons over this catalog plus a "what just happened" signal to suggest the logical next step and its exact command.
 
-Last Updated: 2026-06-04
+Last Updated: 2026-08-23
 Consumed by: `/next` (via `scripts/skill_graph.py`).
 Classification: corporate.
 
@@ -23,7 +23,14 @@ Classification: corporate.
 
 ## Editing rules
 
-- One row per routable skill. When a skill is added, re-scoped, or retired in `skill-router.md`, update its row here too (the relationship and the routing metadata are kept deliberately separate — triggers/exclusions stay in `triggers.json` and the router, never here).
+- One row per routable skill, **enforced** by
+  `tests/test_skill_graph_covers_the_router.py`. Stating the rule here was not
+  enough: on 2026-08-23 the router listed 96 skills and this file carried 85,
+  with `/census`, `/queue`, `/radar`, `/recall` and seven others missing
+  entirely — so `/next` could neither recommend them nor map their outputs back
+  to them. The test also refuses a row for a skill the router has dropped, a
+  phase outside the seven, and an edge naming a skill that has no row.
+  When a skill is added, re-scoped, or retired in `skill-router.md`, update its row here too (the relationship and the routing metadata are kept deliberately separate — triggers/exclusions stay in `triggers.json` and the router, never here).
 - `followed_by` carries the recommendation logic; keep it honest — only real, common sequences, never an exhaustive "could conceivably follow" list. A weak edge produces a weak recommendation.
 - Empty `followed_by` means "no strong next step" — `/next` will fall back to the recency signal alone and may recommend nothing rather than guess (honesty floor).
 - `\|` is the multi-value separator inside a cell (not a comma — commas are the CSV delimiter).

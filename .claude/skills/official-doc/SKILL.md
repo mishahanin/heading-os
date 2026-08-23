@@ -121,7 +121,9 @@ Outputs: PDF + DOCX.
 
 ## Phase 5: Report
 
-Full absolute paths. "Word count: X. Hidden characters: clean." Reminder that counsel countersign or corporate seal application may be required before this document takes legal effect.
+Full absolute paths, then the confirmation line from `.claude/rules/hidden-chars.md`.
+Reminder that counsel countersign or corporate seal application may be required
+before this document takes legal effect.
 
 ## NEVER
 

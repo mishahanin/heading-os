@@ -50,21 +50,44 @@ def _load_registry() -> dict:
     if not REGISTRY.exists():
         return {}
     try:
-        return json.loads(REGISTRY.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        loaded = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        # OSError was uncaught until 2026-08-23, so an unreadable or locked
+        # registry crashed session-start with a traceback while this docstring
+        # promised recovery. A permission or lock error is exactly the case the
+        # promise was written for.
+        print(f"bridge-hook: registry unreadable ({exc}); starting empty",
+              file=sys.stderr)
         return {}
+    if not isinstance(loaded, dict):
+        print(f"bridge-hook: registry held {type(loaded).__name__}, not an object; "
+              "starting empty", file=sys.stderr)
+        return {}
+    return loaded
 
 
 def session_start(payload: dict) -> int:
-    """Write a registry entry keyed by cwd. Returns 1 on missing required fields."""
+    """Write a registry entry keyed by session_id. Returns 1 on missing fields.
+
+    Keyed by cwd until 2026-08-23, which this workspace breaks by design: it
+    runs several sessions on one tree, as `checkpoint-statusline.py` states in
+    its own docstring. Two sessions launched from the same directory produced
+    one entry, the second silently overwriting the first, and whichever ended
+    first deleted it, deregistering a session that was still alive. Found by the
+    2026-08-23 audit.
+
+    session_id is unique per session and is already required here, so it is the
+    natural key; cwd stays as a field for anything that groups by directory.
+    """
     sid = payload.get("session_id")
     cwd = payload.get("cwd")
     if not sid or not cwd:
         print("bridge-hook: missing session_id or cwd in session-start payload", file=sys.stderr)
         return 1
     reg = _load_registry()
-    reg[cwd] = {
+    reg[sid] = {
         "session_id": sid,
+        "cwd": cwd,
         "transcript_path": payload.get("transcript_path"),
         "pid": os.getppid(),
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -75,11 +98,26 @@ def session_start(payload: dict) -> int:
 
 
 def session_end(payload: dict) -> int:
-    """Remove the registry entry for the given cwd. Idempotent - no-op if absent."""
+    """Remove this session's entry. Idempotent - no-op if absent.
+
+    Deletes by session_id. Deleting by cwd removed whichever session happened to
+    hold that key, which with two sessions in one directory was the one still
+    running. A cwd-keyed entry written before 2026-08-23 is swept too, so an old
+    registry drains instead of accumulating forever.
+    """
+    sid = payload.get("session_id")
     cwd = payload.get("cwd")
     reg = _load_registry()
-    if cwd in reg:
+    changed = False
+    if sid and sid in reg:
+        del reg[sid]
+        changed = True
+    # Legacy cwd-keyed entry from before the rekey, and only if it is OURS.
+    if cwd and cwd in reg and isinstance(reg[cwd], dict) \
+            and reg[cwd].get("session_id") == sid:
         del reg[cwd]
+        changed = True
+    if changed:
         _atomic_write(REGISTRY, json.dumps(reg, indent=2))
     return 0
 
@@ -109,11 +147,31 @@ def _read_user_choice(timeout: int) -> str:
             return buf.strip().lower()
         else:
             import select
-            with open("/dev/tty", "r") as tty:
-                ready, _, _ = select.select([tty], [], [], timeout)
-                if ready:
-                    return tty.readline().strip().lower()
-                return ""
+            import time as _t
+            # `select` fires on ONE readable byte, and Claude Code leaves the
+            # terminal in raw/cbreak mode, so a stray keypress made the old
+            # `tty.readline()` wait for a newline that might never arrive. That
+            # blocked the Stop hook, and with it the session exit, forever,
+            # under a docstring promising a 5 s timeout. Found by the 2026-08-23
+            # audit. Read byte by byte against a deadline instead: every wait is
+            # bounded, so the worst case is the timeout the caller asked for.
+            deadline = _t.monotonic() + timeout
+            buf = ""
+            with open("/dev/tty", "rb", buffering=0) as tty:
+                while True:
+                    remaining = deadline - _t.monotonic()
+                    if remaining <= 0:
+                        return buf.strip().lower()
+                    ready, _, _ = select.select([tty], [], [], remaining)
+                    if not ready:
+                        return buf.strip().lower()
+                    chunk = tty.read(1)
+                    if not chunk:            # EOF
+                        return buf.strip().lower()
+                    ch = chunk.decode("utf-8", errors="replace")
+                    if ch in ("\r", "\n"):
+                        return buf.strip().lower()
+                    buf += ch
     except (OSError, FileNotFoundError, ImportError):
         # No controlling tty (headless / CI / background). Caller defaults to stay.
         return ""
@@ -215,6 +273,14 @@ def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except json.JSONDecodeError:
+        payload = {}
+    # `[]`, `"x"` and `3` are valid JSON and are not objects; the first `.get`
+    # in session_start then raises an uncaught AttributeError. Reproduced
+    # 2026-08-23: `echo '[]' | bridge-hook.py session-start` exited 1 with a
+    # traceback. Same shape checkpoint-inject.py fixed on 2026-08-20.
+    if not isinstance(payload, dict):
+        print(f"bridge-hook: payload was {type(payload).__name__}, not an object",
+              file=sys.stderr)
         payload = {}
     cmd = sys.argv[1]
     if cmd == "session-start":

@@ -43,7 +43,12 @@ ROOT = get_workspace_root()
 EXPECTED_LAYERS = 6
 
 # Front-door pages that must carry matching figures.
-FRONT_DOORS = [ROOT / "README.md", ROOT / "docs" / "index.html"]
+#
+# ROADMAP.md joined the list on 2026-08-23. It was the one page quoting the
+# security-test count that nothing checked, and it had drifted: 554 against a
+# real 563, while the README beside it was right. A number that only one guarded
+# page carries is a number that will disagree with its unguarded twin.
+FRONT_DOORS = [ROOT / "README.md", ROOT / "docs" / "index.html", ROOT / "ROADMAP.md"]
 
 _SEC_RE = re.compile(r"(\d+)\s+security tests", re.IGNORECASE)
 _LAYER_RE = re.compile(r"(\d+)\s+enforcement layers", re.IGNORECASE)
@@ -74,10 +79,18 @@ def derive_security_test_count() -> int:
     return int(matches[-1])
 
 
-def _extract(pattern: re.Pattern[str], text: str, path: Path, label: str) -> int:
+def _extract(pattern: re.Pattern[str], text: str, path: Path, label: str) -> int | None:
+    """The figure this page carries, or None if it does not carry one.
+
+    A missing figure is not a defect. ROADMAP.md quotes the security-test count
+    and never mentions enforcement layers, and demanding both would make the
+    page serve the guard rather than the reader. What IS a defect is a page
+    listed here that carries neither figure, and `main` refuses that separately:
+    a watched page checked for nothing reads as covered while covering nothing.
+    """
     matches = pattern.findall(text)
     if not matches:
-        raise SystemExit(f"{RED}{path.relative_to(ROOT)}: no '{label}' figure found.{RESET}")
+        return None
     values = {int(m) for m in matches}
     if len(values) > 1:
         raise SystemExit(
@@ -100,9 +113,14 @@ def main() -> int:
         sec = _extract(_SEC_RE, text, path, "security tests")
         layers = _extract(_LAYER_RE, text, path, "enforcement layers")
         rel = path.relative_to(ROOT)
-        if sec != derived_sec:
+        if sec is None and layers is None:
+            problems.append(
+                f"{rel}: carries neither figure, so listing it here checks nothing. "
+                f"Add a figure or drop the page from FRONT_DOORS."
+            )
+        if sec is not None and sec != derived_sec:
             problems.append(f"{rel}: says {sec} security tests, CI collects {derived_sec}")
-        if layers != EXPECTED_LAYERS:
+        if layers is not None and layers != EXPECTED_LAYERS:
             problems.append(f"{rel}: says {layers} enforcement layers, expected {EXPECTED_LAYERS}")
 
     if problems:
@@ -119,7 +137,8 @@ def main() -> int:
     if not args.quiet:
         print(
             f"{GREEN}README numbers in sync: {derived_sec} security tests, "
-            f"{EXPECTED_LAYERS} enforcement layers (README + docs/index.html).{RESET}"
+            f"{EXPECTED_LAYERS} enforcement layers, across "
+            f"{', '.join(str(p.relative_to(ROOT)) for p in FRONT_DOORS)}.{RESET}"
         )
     return 0
 

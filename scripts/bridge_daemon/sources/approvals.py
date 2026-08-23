@@ -22,12 +22,12 @@ from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
 
-EMAIL_DRAFTS_DIR = "outputs/communications/email"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+EMAIL_DRAFTS_DIR = "outputs/communications/email"  # leak-guard: ok (relative suffix rooted by caller)
 APPROVALS_ROW_CAP = 20  # safety cap; CEO unlikely to have more pending
 DRAFT_MAX_BYTES = 200_000  # 200 KB upper bound on any single draft body read
 
 # Phase 1.71: sent log for the mark-sent workflow.
-SENT_LOG_FILE = "outputs/operations/bridge/approval-sent-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+SENT_LOG_FILE = "outputs/operations/bridge/approval-sent-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 SENT_LOG_MAX_BYTES = 1_000_000
 SENT_NOTE_MAX_CHARS = 200
 _SENT_LOG_LOCK = threading.Lock()

@@ -346,12 +346,27 @@ def test_the_test_lane_deselects_slow_marked_tests():
     for about a minute after every answer and the operator felt the whole harness
     as slow. `scripts/run-tests.py` still runs them; this lane does not.
     """
+    # This file has to live in the REAL tests directory: `matching_tests` only
+    # picks up a changed test file whose path is under `tests/`, so a tmp_path
+    # fixture would exercise nothing. The cost is that the tests tree is briefly
+    # mutated while other xdist workers walk it — that raced
+    # `tests/test_venv_relaunch_guard.py` twice on 2026-08-22 with a
+    # FileNotFoundError, and it took a full traceback on 2026-08-23 to see why.
+    # Any new test that scans `tests/` must tolerate a path vanishing between
+    # rglob and read; that guard shows the shape.
+    #
+    # `missing_ok=True`: cleanup must never be the thing that fails this test.
+    # On 2026-08-23 `tests/test_venv_relaunch_guard.py` wrote and deleted this
+    # exact path as its own probe, and when the two landed on different xdist
+    # workers at the same moment this `unlink` raised FileNotFoundError. That
+    # test now owns a distinct name, and asserts no one else uses it; this stays
+    # as the second line of defence.
     fixture = ROOT / "tests" / "test_turn_check_slow_fixture.py"
     fixture.write_text(SLOW_FIXTURE, encoding="utf-8")
     try:
         failures, ran, skipped, deselected = tc.lane_tests([fixture], timeout=60)
     finally:
-        fixture.unlink()
+        fixture.unlink(missing_ok=True)
     assert failures == [], failures
     assert ran == 1, "the fixture file was not handed to pytest"
     assert deselected == 1, "the slow-marked test was not deselected"

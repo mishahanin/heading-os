@@ -61,7 +61,8 @@ If a required subcheck could not run (e.g., an expected file was missing), state
 
 NEVER:
 - Write to any workspace file (including CRM, state files, plans).
-- Touch `_secure/` (the vault).
+- Write anything private-routing into the engine clone (the vault `_secure/`
+  this line used to name was removed in Plan 5).
 - Modify CRM contact files.
 - Auto-apply any fix. Your job is findings + proposals only.
 - Modify git state (no `git add`, no commits).

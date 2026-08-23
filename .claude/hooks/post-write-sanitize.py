@@ -41,6 +41,17 @@ def main():
         print(f"[post-write-sanitize] failed to parse input: {e}", file=sys.stderr)
         sys.exit(0)
 
+    # A payload that is valid JSON but not an object still has `.get` called on
+    # it. `[]`, `"x"` and `3` all parse, then raise an uncaught AttributeError.
+    # Measured 2026-08-23 with `echo '[]' | python <hook>`: exit 1, traceback.
+    # `.claude/hooks/checkpoint-inject.py` fixed this shape on 2026-08-20 and
+    # these were missed. Degrade to the empty dict, which every path below
+    # already handles, rather than dropping the hook's whole job.
+    if not isinstance(input_data, dict):
+        print(f"[post-write-sanitize] payload was {type(input_data).__name__}, "
+              "not an object", file=sys.stderr)
+        sys.exit(0)
+
     tool_input = input_data.get("tool_input", {})
     # Write/Edit/MultiEdit carry file_path; NotebookEdit carries notebook_path.
     # We scan the on-disk result, so the same post-write scan covers all four.

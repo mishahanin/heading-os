@@ -77,5 +77,6 @@
         "elapsed_seconds": 22.55
       }
     ]
-  }
+  },
+  "baseline_is_self_seed": false
 }

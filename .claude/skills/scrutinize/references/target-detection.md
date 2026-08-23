@@ -72,7 +72,7 @@ Default: 1
 Source: read the file at `<path>`. If path does not exist, stop and report the missing path.
 
 ### dir:<path>
-Source: glob `<path>/**/*` with these exclusions: `.git/`, `node_modules/`, `outputs/`, `_secure/`, `.sessions/`, `*.pen`, binary files. Review each file per its type.
+Source: glob `<path>/**/*` with these exclusions: `.git/`, `node_modules/`, `outputs/`, `.sessions/`, `*.pen`, binary files. Review each file per its type.
 
 ### workspace
 Source: the entire main workspace. Dispatch 5 parallel specialist agents per `workspace-areas.md`.

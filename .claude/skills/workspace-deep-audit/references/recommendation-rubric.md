@@ -48,7 +48,7 @@ A recommendation is P2 if it meets ANY of:
 
 Examples:
 - Add observability stack (Langfuse / LangSmith)
-- Implement staging branch + canary exec
+- Add a multi-stage rollout gate for corporate publishes
 - Refactor 10+ skills against new pattern
 - Add per-task budget caps with hook integration
 

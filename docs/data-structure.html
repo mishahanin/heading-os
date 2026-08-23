@@ -139,7 +139,10 @@
 │
 ├── admin/                        # Fleet administration (PRIVATE — operator/admin only)
 │   ├── provision/                #   exec-provisioning tooling + generated packets
-│   #   executives.json = the fleet roster
+│   #   executives.json = the fleet ROSTER: who is a HEADING OS user
+│   #   (its sibling config/exec-registry.json is the ORG CHART: who is an
+│   #    executive in the business. Different question, separate file.)
+│   #   Templates: scripts/executives.example.json, scripts/exec-registry.example.json
 │
 ├── reference/                    # Operator reference content (mostly PRIVATE)
 │   #   workspace-overview, voice files, operating policy, market/strategy reference
@@ -173,7 +176,7 @@
       <tr><td><code>outputs/</code></td><td>Every artifact the assistant generates — the single sink for generated work, organized by type.</td></tr>
       <tr><td><code>datastore/</code></td><td>Authoritative original documents (PDFs, decks, contracts) used as source-of-truth for factual claims.</td></tr>
       <tr><td><code>auto-memory/</code></td><td>Persistent cross-session memory: the <code>MEMORY.md</code> index plus one file per durable observation.</td></tr>
-      <tr><td><code>admin/</code></td><td>Fleet administration: the executive roster, provisioning tooling, admin guides.</td></tr>
+      <tr><td><code>admin/</code></td><td>Fleet administration: <code>executives.json</code> (the roster of HEADING OS users), provisioning tooling, admin guides. Needed only if you run HEADING OS for a team — see <a href="CONFIGURATION.html#running-heading-os-for-a-team-the-two-fleet-files">the two fleet files</a>.</td></tr>
       <tr><td><code>reference/</code></td><td>Operator reference content: workspace catalogue, voice files, operating rhythm, market/strategy reference.</td></tr>
       <tr><td><code>config/</code></td><td>Per-instance configuration carrying real identity, rosters, and topology (the engine ships <code>*.example.*</code> stand-ins).</td></tr>
       <tr><td><code>corporate/</code></td><td>Base daemon/config content shared down to an executive fleet.</td></tr>

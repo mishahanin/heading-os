@@ -106,7 +106,7 @@ enrichment rules. The table names only the command lines and the approval gates.
 - **Subdirectory mapping**: type determines subdirectory (see `add` in `references/subcommands.md`)
 - **Wiki-links**: `[[ID|Label]]` format for Zettlr graph compatibility
 - **Cross-references**: backtick paths for workspace files (e.g., `crm/contacts/victor-stein.md`)
-- **Validation**: Run `python3 scripts/sanitize-text.py` on every generated note. Report: "Hidden characters: clean."
+- **Validation**: Run `python3 scripts/sanitize-text.py <note> --scan` on every generated note and report what it found, per `.claude/rules/hidden-chars.md`. Never pre-write the word "clean".
 - **Hyphens only** (-) never em-dashes
 
 ## Rules

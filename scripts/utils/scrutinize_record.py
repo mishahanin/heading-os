@@ -127,6 +127,7 @@ def append_row(
     currency: dict | None = None,
     degraded: str | None = None,
     writer: str = "dispatch",
+    payload: dict | None = None,
 ) -> dict:
     """Validate and append one row. Returns the row written."""
     row: dict[str, Any] = {
@@ -145,6 +146,11 @@ def append_row(
         "currency": currency,
         "degraded": degraded,
         "writer": writer,
+        # Free-form, kind-specific detail. `fp_flag` carries the operator's own
+        # words here: the statement he is overruling and the reason he gave. The
+        # fixed columns above have nowhere to put prose, and dropping it made the
+        # CLI print "Note attached" over a row that held only an ID.
+        "payload": payload,
     }
     _check(row)
 

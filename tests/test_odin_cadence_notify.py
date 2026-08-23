@@ -89,6 +89,7 @@ def test_propose_fires_and_folds_path_into_line(tmp_path, monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls["cmd"] = cmd
+        calls["kwargs"] = kwargs
         # Simulate the headless call producing the deterministic proposal file.
         today = mod.datetime.now(mod.get_default_tz()).date()
         proposal_dir = data_root / "outputs" / "operations" / "odin-reflect-proposals"
@@ -101,7 +102,13 @@ def test_propose_fires_and_folds_path_into_line(tmp_path, monkeypatch):
 
     assert "cmd" in calls
     cmd = calls["cmd"]
-    assert str(mod.PROPOSE_HEADLESS_TIMEOUT) or True  # timeout kwarg checked separately below
+    # `assert str(X) or True` can never fail, and the comment that said the
+    # timeout was "checked separately below" was false -- fake_run discarded
+    # **kwargs, so the headless subprocess could have been launched with no
+    # timeout at all, which is a hang in a notify path.
+    assert calls["kwargs"].get("timeout") == mod.PROPOSE_HEADLESS_TIMEOUT, (
+        f"headless propose ran with timeout={calls['kwargs'].get('timeout')!r}, "
+        f"expected {mod.PROPOSE_HEADLESS_TIMEOUT!r}")
     assert "odin" in cmd and "reflect" in cmd and "--propose" in cmd
     from scripts.heading_cli import PROPOSE_DEFAULT_BUDGET_USD
     assert str(PROPOSE_DEFAULT_BUDGET_USD) in cmd

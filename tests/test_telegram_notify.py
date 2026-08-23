@@ -127,3 +127,43 @@ def test_no_migrated_script_has_me_self_saved_as_a_reachable_fallback():
                 if value and value.lower() in _UNRESOLVABLE:
                     offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}: return {value!r}")
     assert offenders == [], "found 'me'/'self'/'saved' as a reachable fallback:\n" + "\n".join(offenders)
+
+
+# ============================================================
+# CAP-2, the transport half: "never raises" must survive every requests error
+# ============================================================
+@pytest.mark.parametrize("err_name", [
+    "TooManyRedirects", "InvalidURL", "ChunkedEncodingError",
+    "ContentDecodingError", "RetryError",
+])
+def test_notify_never_raises_on_any_requests_error(monkeypatch, err_name):
+    """`_call` caught only ConnectionError and Timeout, so five sibling
+    `requests` errors escaped unwrapped and `notify` -- which catches only
+    TelegramAPIError -- re-raised them. Six timer-driven scripts call notify and
+    rely on the documented contract that it degrades to False instead.
+    """
+    import requests
+    exc_cls = getattr(requests.exceptions, err_name)
+
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "1234567:AAtest-token")
+
+    def _boom(*a, **k):
+        raise exc_cls("simulated")
+    monkeypatch.setattr(requests, "post", _boom)
+
+    assert notify_mod.notify("12345", "hello") is False
+
+
+def test_a_raised_requests_error_does_not_leak_the_token(monkeypatch, caplog):
+    import logging
+    import requests
+    monkeypatch.setenv("TELEGRAM_NOTIFY_BOT_TOKEN", "1234567:AAsecret-value-xyz")
+
+    def _boom(*a, **k):
+        raise requests.exceptions.TooManyRedirects(
+            "https://api.telegram.org/bot1234567:AAsecret-value-xyz/sendMessage")
+    monkeypatch.setattr(requests, "post", _boom)
+
+    with caplog.at_level(logging.DEBUG):
+        assert notify_mod.notify("12345", "hello") is False
+    assert "AAsecret-value-xyz" not in caplog.text

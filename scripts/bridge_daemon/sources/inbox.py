@@ -28,20 +28,20 @@ _PRIORITY_BAND = {"P1": "needs-you", "P2": "needs-you", "P3": "fyi", "P4": "nois
 PROPOSED_ACTIONS_CAP = 6  # cap recommended actions surfaced per card
 
 # Phase 1.62: dismiss log. Conversations the CEO has explicitly cleared.
-DISMISS_LOG_FILE = "outputs/operations/email-intelligence/_dismiss-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+DISMISS_LOG_FILE = "outputs/operations/email-intelligence/_dismiss-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 DISMISS_LOG_MAX_BYTES = 1_000_000
 DISMISS_NOTE_MAX_CHARS = 200
 _DISMISS_LOG_LOCK = threading.Lock()
 
 # Phase 1.33: defer log. A conversation deferred to a future date drops
 # off the Inbox until that date arrives, then resurfaces in its band.
-DEFER_LOG_FILE = "outputs/operations/email-intelligence/_defer-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+DEFER_LOG_FILE = "outputs/operations/email-intelligence/_defer-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 DEFER_LOG_MAX_BYTES = 1_000_000
 _DEFER_LOG_LOCK = threading.Lock()
 
 # Phase 1.33: crm-logged log. Conversations already recorded as a CRM
 # interaction - append-only, prevents the dashboard double-logging.
-CRM_LOGGED_FILE = "outputs/operations/email-intelligence/_crm-logged.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+CRM_LOGGED_FILE = "outputs/operations/email-intelligence/_crm-logged.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 CRM_LOGGED_MAX_BYTES = 1_000_000
 _CRM_LOGGED_LOCK = threading.Lock()
 
@@ -582,7 +582,7 @@ def read_inbox(workspace_root: Path, now: datetime | None = None,
 # email-intelligence run. Conversations older than that fetch window
 # (default 168h / 7d) are not present here, and the drill-down falls
 # back to a "stale - older than last fetch" message.
-LATEST_FETCH_FILE = "outputs/operations/email-intelligence/_latest-fetch.json"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+LATEST_FETCH_FILE = "outputs/operations/email-intelligence/_latest-fetch.json"  # leak-guard: ok (relative suffix rooted by caller)
 RAW_EMAIL_SNIPPET_BYTES = 1200  # cap any single raw email body excerpt
 MAX_RAW_EMAILS_RETURNED = 5     # cap chain length to avoid huge payloads
 

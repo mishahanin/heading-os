@@ -246,13 +246,28 @@ def test_the_skill_exists():
 
 
 def test_the_skill_declares_every_subcommand_in_its_argument_hint():
+    """Read the set from the parser; do not retype it here.
+
+    Found by the 2026-08-23 audit. This test pinned the set with a literal
+    `("note", "check", "probe")` in a file whose own `_real_subcommands()`
+    docstring says "READ, never retyped" - and the parser-derived set was used
+    by exactly one other test. Add a fourth subcommand and the literal version
+    stayed green while the skill's hint went stale, which is precisely the drift
+    the file exists to catch.
+    """
     import yaml
+
+    real = _real_subcommands()
+    assert real, "no subcommands were read from the parser, so nothing was checked"
 
     text = _SKILL.read_text(encoding="utf-8")
     front = yaml.safe_load(text.split("---")[1])
     hint = front.get("argument-hint", "")
-    for word in ("note", "check", "probe"):
-        assert word in hint, f"{word} missing from argument-hint: {hint!r}"
+    missing = sorted(name for name in real if name not in hint)
+    assert missing == [], (
+        f"argument-hint does not advertise {missing}; "
+        f"the tool carries {sorted(real)} and the hint is {hint!r}"
+    )
 
 
 def test_the_skill_no_longer_advertises_the_retired_subcommands():
@@ -309,11 +324,21 @@ def test_the_step_numbers_agree_between_the_module_and_the_skill():
     summarise, but it may not renumber."""
     from scripts.utils.canopus_steps import STEPS
 
+    import re
+
     body = _SKILL.read_text(encoding="utf-8")
+    # Anchor on a numbered-list line, not a bare substring. `str(4) in body`
+    # matched the "24,576" byte budget two sections down, and `str(7) in body`
+    # matched any date -- so deleting a step from the skill left this green.
+    numbered = {int(m.group(1))
+                for m in re.finditer(r"^\s{0,3}(\d+)\.\s", body, re.M)}
+    numbered |= {int(m.group(1))
+                 for m in re.finditer(r"^#+\s*Step\s+(\d+)\b", body, re.M)}
     for entry in STEPS:
         if entry["approval"]:
-            assert str(entry["number"]) in body, (
-                f"the skill does not mention the operator's step {entry['number']}")
+            assert entry["number"] in numbered, (
+                f"the skill does not carry the operator's step "
+                f"{entry['number']} as a numbered step; found {sorted(numbered)}")
 
 
 def test_the_plan_byte_budget_agrees_between_the_module_and_the_skill():

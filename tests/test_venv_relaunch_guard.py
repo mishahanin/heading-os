@@ -52,19 +52,114 @@ def test_the_guard_is_set_once_by_the_root_conftest():
     assert _SETS_THE_SENTINEL.search((TESTS / "conftest.py").read_text(encoding="utf-8"))
 
 
+def _tracked(rel: str) -> bool:
+    """Is this path in git's index? Used to judge a file that vanished mid-scan."""
+    proc = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel],
+                          cwd=str(ROOT), capture_output=True, text=True, check=False)
+    return proc.returncode == 0
+
+
 def test_no_test_module_carries_its_own_copy_of_the_guard():
     """The cross-satisfying copies, refused as a class rather than one by one.
 
     A module that sets the sentinel for itself is indistinguishable in its own
     output from one that inherited it, which is exactly how three copies came to
     cover for each other. The root conftest is the only place it belongs.
+
+    THE MID-SCAN DISAPPEARANCE, and why it is tolerated rather than ignored.
+    This scan walks the LIVE tests directory while the rest of the suite runs
+    beside it under xdist, and one test in that suite writes a real file into
+    that directory and deletes it again:
+    `tests/test_turn_check.py::test_the_test_lane_deselects_slow_marked_tests`
+    creates `tests/test_turn_check_slow_fixture.py`, because `turn-check.py`
+    only picks up test files whose path is under `tests/`, so a `tmp_path`
+    fixture would not exercise the lane at all.
+
+    Land between that write and that unlink and `rglob` yields a path whose
+    `read_text` then raises FileNotFoundError. It happened twice on 2026-08-22
+    and could not be reproduced in 17 clean runs plus a dedicated 8-iteration
+    hunt; it was recorded as unexplained in the audit verdict and diagnosed on
+    2026-08-23 from a full traceback, which named the file.
+
+    A file that disappears while the suite runs was never part of the
+    repository, so it cannot be a checked-in stray copy of the guard — but that
+    is asserted, not assumed: `git ls-files` has to agree the path is untracked
+    before it is dropped. A TRACKED file that vanishes is a real finding and
+    still fails.
     """
-    strays = [
-        path.relative_to(ROOT).as_posix()
-        for path in sorted(TESTS.rglob("test_*.py"))
-        if _SETS_THE_SENTINEL.search(path.read_text(encoding="utf-8"))
-    ]
+    strays = []
+    for path in sorted(TESTS.rglob("test_*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        try:
+            body = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            assert not _tracked(rel), (
+                f"{rel} is tracked by git but disappeared mid-scan"
+            )
+            continue
+        if _SETS_THE_SENTINEL.search(body):
+            strays.append(rel)
     assert strays == []
+
+
+def test_a_vanished_untracked_file_is_dropped_but_a_tracked_one_is_not():
+    """Both halves of the mid-scan tolerance, without waiting for the race.
+
+    `read_text` is made to raise FileNotFoundError for one path at a time. An
+    untracked path must be dropped; a tracked path really did disappear from a
+    checkout and must still fail.
+
+    THE GHOST NEEDS ITS OWN NAME. This test first used
+    `tests/test_turn_check_slow_fixture.py`, the same path the lane test
+    writes, and its `unlink(missing_ok=True)` then deleted that test's fixture
+    out from under it whenever the two landed on different xdist workers at the
+    same moment. `test_the_test_lane_deselects_slow_marked_tests` failed on its
+    own cleanup with FileNotFoundError, once in five full-suite runs on
+    2026-08-23. A fix for a race that introduced a second race; the name below
+    is unique to this test and must stay that way.
+    """
+    real_read = Path.read_text
+    ghost = TESTS / "test_venv_guard_vanish_probe.py"   # untracked, ours alone
+    tracked = TESTS / "conftest.py"                      # not matched by rglob
+    victim = {"path": ghost}
+
+    def _read(self, *a, **kw):
+        if self == victim["path"]:
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real_read(self, *a, **kw)
+
+    assert not _tracked(ghost.relative_to(ROOT).as_posix()), (
+        "the probe path is tracked now; pick another untracked example"
+    )
+    assert _tracked(tracked.relative_to(ROOT).as_posix())
+    # No other test may write this path, or the two will delete each other's
+    # scratch file under xdist. That is exactly how this test broke the lane
+    # test on 2026-08-23.
+    owners = [p.name for p in sorted(TESTS.rglob("test_*.py"))
+              if p.name != Path(__file__).name
+              and ghost.name in p.read_text(encoding="utf-8", errors="replace")]
+    assert owners == [], f"{ghost.name} is also written by {owners}"
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        # The untracked ghost: present to rglob, absent to read. Must pass.
+        ghost.write_text("# transient\n", encoding="utf-8")
+        monkeypatch.setattr(Path, "read_text", _read)
+        try:
+            test_no_test_module_carries_its_own_copy_of_the_guard()
+        finally:
+            monkeypatch.undo()
+            ghost.unlink(missing_ok=True)
+
+        # A TRACKED test file that vanishes is a real finding.
+        victim["path"] = next(iter(sorted(TESTS.rglob("test_*.py"))))
+        assert _tracked(victim["path"].relative_to(ROOT).as_posix())
+        monkeypatch.setattr(Path, "read_text", _read)
+        with pytest.raises(AssertionError, match="tracked by git"):
+            test_no_test_module_carries_its_own_copy_of_the_guard()
+    finally:
+        monkeypatch.undo()
+        ghost.unlink(missing_ok=True)
 
 
 def _candidate_interpreters() -> list:

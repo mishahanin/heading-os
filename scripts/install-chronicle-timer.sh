@@ -49,24 +49,6 @@ fi
 # swallowing it as a plain "no timezone configured".
 TZ_VALUE="${HEADING_OS_TZ:-$(cd "$WORKSPACE" && "$PYTHON" -m scripts.utils.paths tz || echo UTC)}"
 
-# Which ollama the summarizer talks to. Read from config/memory-index.yaml's
-# `host`, so ONE line in that file decides where both the embedder and the
-# summarizer run rather than two places drifting apart -- which is exactly what
-# happened until 2026-08-22, when the index ran on the Windows iGPU and the
-# nightly chronicle ran on the WSL CPU daemon because nobody ever set the
-# variable chronicle.py had documented since 2026-08-18. An explicit
-# HEADING_OS_OLLAMA_HOST still wins; an empty value leaves the local default.
-OLLAMA_HOST_VALUE="${HEADING_OS_OLLAMA_HOST:-$(cd "$WORKSPACE" && "$PYTHON" -c '
-import sys
-sys.path.insert(0, ".")
-try:
-    from scripts.utils import yamlio
-    with open("config/memory-index.yaml", encoding="utf-8") as fh:
-        print(yamlio.safe_load(fh).get("host", "") or "")
-except Exception:
-    print("")
-' 2>/dev/null || echo "")}"
-
 TEMPLATE_DIR="$WORKSPACE/scripts/templates/systemd"
 DEST_DIR="$HOME/.config/systemd/user"
 
@@ -90,12 +72,15 @@ if ! "$PYTHON" -c "import sys; sys.path.insert(0, '$WORKSPACE'); import scripts.
     exit 7
 fi
 
-# ollama (gemma3:4b) is the summarizer. Warn (do not block) if it is unreachable
-# now -- the timer still installs; a nightly fire simply skips what it cannot
-# summarize and the next fire resumes.
-if ! "$PYTHON" -c "import urllib.request,sys; urllib.request.urlopen('http://localhost:11434/api/tags', timeout=3)" >/dev/null 2>&1; then
-    echo "  [warn] ollama not reachable at localhost:11434 right now -- install proceeds;" >&2
-    echo "         ensure ollama + gemma3:4b are up before the nightly fire." >&2
+# ollama (gemma3:4b) is the summarizer, and since 2026-08-23 it is a PIN: a
+# nightly fire with no reachable host now FAILS rather than summarizing on a
+# slower local copy, because there is no local copy any more. Warn, do not
+# block -- the host can be down at install time and up at 03:00.
+# The probe asks scripts/ollama-guard.py, so this check and the runtime path
+# read the same configuration instead of a second hardcoded address.
+if ! (cd "$WORKSPACE" && "$PYTHON" scripts/ollama-guard.py check >/dev/null 2>&1); then
+    echo "  [warn] no ollama answering right now -- install proceeds, but a nightly" >&2
+    echo "         fire will fail until one is up. Check: scripts/ollama-guard.py check" >&2
 fi
 
 for unit in chronicle.service chronicle.timer; do
@@ -112,7 +97,6 @@ for unit in chronicle.service chronicle.timer; do
     sed -e "s|{{WORKSPACE}}|${WORKSPACE}|g" \
         -e "s|{{PYTHON}}|${PYTHON}|g" \
         -e "s|{{TZ}}|${TZ_VALUE}|g" \
-        -e "s|{{OLLAMA_HOST}}|${OLLAMA_HOST_VALUE}|g" \
         "$TEMPLATE_DIR/$unit" > "$DEST_DIR/$unit"
 done
 

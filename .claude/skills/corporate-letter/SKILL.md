@@ -138,7 +138,9 @@ The renderer produces three files with the locked filename convention:
 
 ## Phase 5: Report
 
-Present the full absolute paths of the PDF and DOCX. State: "Word count: X. Hidden characters: clean."
+Present the full absolute paths of the PDF and DOCX, then the confirmation line
+from `.claude/rules/hidden-chars.md`, with both numbers copied from
+`sanitize-text.py --scan`.
 
 ## Reference Number Generation
 

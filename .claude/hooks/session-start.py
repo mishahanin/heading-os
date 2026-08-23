@@ -3,6 +3,7 @@
 import sys
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -90,6 +91,43 @@ def check_sync_status(project_dir, identity):
 _CRM_CACHE_TTL_SECONDS = 1800  # 30 minutes
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _red_contacts(output: str) -> list:
+    """The overdue CONTACT lines from crm-health.py output, not its header.
+
+    The filter was `"RED" in line`, which matches the section HEADER
+    `RED - Overdue` and nothing else: the contact lines below it carry a name, a
+    company and a day count, never the word RED. So `len()` of the result was
+    the number of headers, always 1, and the session banner read "CRM ALERT: 1
+    contact(s) need attention today" whether one contact was overdue or forty.
+    Measured 2026-08-23 against a three-overdue fixture: the hook reported 1.
+
+    The substring was also unanchored, so a contact or company containing RED
+    (REDACTED, REDMOND, a person called FRED) counted as an alert.
+
+    Read the section instead: everything indented under the RED header, up to
+    the blank line that ends it. ANSI codes are stripped, because crm-health.py
+    colourizes unconditionally and the cached strings are shown to a human.
+    """
+    lines = _ANSI_RE.sub("", output).split("\n")
+    contacts = []
+    inside = False
+    for line in lines:
+        stripped = line.strip()
+        if not inside:
+            if stripped.startswith("RED - "):
+                inside = True
+            continue
+        if not stripped:
+            break  # blank line ends the section
+        if not line.startswith((" ", "\t")):
+            break  # next section header, unindented
+        contacts.append(stripped)
+    return contacts
+
+
 def check_crm_health(project_dir):
     """Run CRM health check and extract RED contacts. Result cached for 30 minutes
     in .sessions/crm-health-cache.json to keep SessionStart fast."""
@@ -107,7 +145,7 @@ def check_crm_health(project_dir):
                 cached = json.loads(f.read())
             cached_at = cached.get("cached_at", 0)
             if (datetime.now().astimezone().timestamp() - cached_at) < _CRM_CACHE_TTL_SECONDS:
-                red_lines = cached.get("red_lines") or []
+                red_lines = cached.get("red_contacts") or []
                 return red_lines if red_lines else None
     except Exception as e:
         print(f"[session-start] crm-health cache read failed: {e}", file=sys.stderr)
@@ -121,10 +159,7 @@ def check_crm_health(project_dir):
         )
         if result.returncode == 0:
             output = result.stdout
-            red_lines = [
-                line.strip() for line in output.split("\n")
-                if "RED" in line and line.strip()
-            ]
+            red_lines = _red_contacts(output)
             # Write cache (best-effort - never block on cache write failure)
             try:
                 os.makedirs(cache_dir, mode=0o700, exist_ok=True)
@@ -132,13 +167,17 @@ def check_crm_health(project_dir):
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump({
                         "cached_at": datetime.now().astimezone().timestamp(),
-                        "red_lines": red_lines,
+                        "red_contacts": red_lines,
                     }, f)
+                # chmod the TEMP file, then replace. Doing it the other way
+                # round left the cache at the default umask (commonly 0644)
+                # between the replace and the chmod, and it holds CRM contact
+                # lines. Found by the 2026-08-23 audit. os.replace preserves the
+                # source file's mode, so the live file is 0o600 from the instant
+                # it exists.
+                # .sessions/ is a uniformly restricted store (SEC-006 / F-H2).
+                os.chmod(tmp_path, 0o600)
                 os.replace(tmp_path, cache_file)
-                # .sessions/ is a uniformly restricted store (SEC-006 / F-H2):
-                # lock the cache to 0o600 so the live tree stays 0o600 across
-                # session-start regenerations.
-                os.chmod(cache_file, 0o600)
             except Exception as e:
                 print(f"[session-start] crm-health cache write failed: {e}", file=sys.stderr)
             if red_lines:
@@ -249,8 +288,16 @@ def check_stale_files(project_dir, identity=None):
                 for line in f:
                     if "Last verified:" in line or "last verified:" in line.lower():
                         for part in line.split():
+                            # `.strip()` removes whitespace only, so a line
+                            # ending "Last verified: 2026-06-01." yielded the
+                            # token "2026-06-01." and strptime raised, silently
+                            # skipping the file. A freshness alarm that fails
+                            # toward silence is the worst way for it to fail.
+                            # Found by the 2026-08-23 audit; latent, since no
+                            # context file carries one today.
+                            token = part.strip().strip(".,;:!?()[]{}<>\'\"\u2018\u2019\u201c\u201d")
                             try:
-                                d = datetime.strptime(part.strip(), "%Y-%m-%d").replace(tzinfo=datetime.now().astimezone().tzinfo)
+                                d = datetime.strptime(token, "%Y-%m-%d").replace(tzinfo=datetime.now().astimezone().tzinfo)
                                 days_old = (datetime.now().astimezone() - d).days
                                 if d < crit_threshold:
                                     stale.append((fname, days_old, "CRITICAL"))
@@ -271,6 +318,17 @@ def main():
         input_data = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, ValueError) as e:
         print(f"[session-start] failed to parse input: {e}", file=sys.stderr)
+        input_data = {}
+
+    # A payload that is valid JSON but not an object still has `.get` called on
+    # it. `[]`, `"x"` and `3` all parse, then raise an uncaught AttributeError.
+    # Measured 2026-08-23 with `echo '[]' | python <hook>`: exit 1, traceback.
+    # `.claude/hooks/checkpoint-inject.py` fixed this shape on 2026-08-20 and
+    # these were missed. Degrade to the empty dict, which every path below
+    # already handles, rather than dropping the hook's whole job.
+    if not isinstance(input_data, dict):
+        print(f"[session-start] payload was {type(input_data).__name__}, not an "
+              "object; continuing with defaults", file=sys.stderr)
         input_data = {}
 
     project_dir = input_data.get("cwd", os.getcwd())
@@ -330,8 +388,14 @@ def main():
                     alerts.append(msg)
                     # Mark as notified
                     update["notified"] = True
-                    with open(update_file, "w", encoding="utf-8") as f:
+                    # tmp + os.replace, per the global atomic-state-write rule.
+                    # A crash mid-write left a truncated file, after which the
+                    # read above raises forever and the notification can never
+                    # be delivered. Found by the 2026-08-23 audit.
+                    tmp_update = update_file + ".tmp"
+                    with open(tmp_update, "w", encoding="utf-8") as f:
                         f.write(json.dumps(update, indent=2))
+                    os.replace(tmp_update, update_file)
             except Exception as e:
                 print(f"[session-start] workspace update notification failed: {e}", file=sys.stderr)
 

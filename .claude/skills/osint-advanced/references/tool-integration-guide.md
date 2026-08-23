@@ -16,7 +16,7 @@ Last Updated: 2026-03-21
 - **Confidence scoring:** Multiple dataset matches = HIGH, single dataset = MEDIUM, partial name match = LOW
 - **Rate limit:** No documented limit for web search
 - **Failure mode:** Page loads but shows "No results" text
-- **Note:** The API endpoint (`api.opensanctions.org`) returns 401 without an API key. Use the web search page instead -- it returns rich HTML that Claude can parse.
+- **Note:** The API endpoint (`api.opensanctions.org`) returns 401 without an API key. With `OPENSANCTIONS_API_KEY` in `.env`, prefer the authenticated match API: `python3 .claude/skills/osint-advanced/scripts/osint_api.py sanctions --name "{query}"`. The web search page above is the FALLBACK; say which one ran.
 
 ### OCCRP Aleph
 - **Query:** `WebSearch "{target}" site:aleph.occrp.org`
@@ -65,7 +65,7 @@ Last Updated: 2026-03-21
 - **If API key available:** Add header `Key: {api_key}` to WebFetch request for JSON response
 
 ### Hunter.io (API -- key available)
-- **Query:** `curl -s "https://api.hunter.io/v2/domain-search?domain={domain}&api_key=$(load_api_key('HUNTER_API_KEY'))"`
+- **Query:** `python3 .claude/skills/osint-advanced/scripts/osint_api.py hunter --domain {domain}`
 - **Response:** JSON with `data.emails[]` array
 - **Key fields:** `data.emails[].value` (email), `data.emails[].type` (personal/generic), `data.emails[].confidence` (0-100), `data.emails[].sources[].domain`
 - **Additional endpoints:** `/v2/email-finder` (find specific person), `/v2/email-verifier` (verify email), `/v2/email-count` (no auth)
@@ -74,7 +74,7 @@ Last Updated: 2026-03-21
 - **Note:** API key in `.env` as `HUNTER_API_KEY`. Returns organization data, email patterns, and individual addresses with confidence scores.
 
 ### HIBP (API -- key available)
-- **Query:** `curl -s -H "hibp-api-key: $(python3 -c \"import os,sys;sys.path.insert(0,'.');from scripts.utils.api import load_api_key;print(load_api_key('HIBP_API_KEY'))\")" -H "user-agent: 31C-OSINT" "https://haveibeenpwned.com/api/v3/breachedaccount/{email}?truncateResponse=false"`
+- **Query:** `python3 .claude/skills/osint-advanced/scripts/osint_api.py hibp --account {email}`
 - **Response:** JSON array of breach objects
 - **Key fields:** `[].Name`, `[].Domain`, `[].BreachDate`, `[].PwnCount`, `[].DataClasses[]`, `[].IsVerified`
 - **Additional endpoints:** `/pasteaccount/{email}` (pastes), `/breacheddomain/{domain}` (domain breaches), `/stealerlogsbyemail/{email}` (stealer logs, Pwned 5+ only)
@@ -127,7 +127,7 @@ Last Updated: 2026-03-21
 - **Extract:** Reverse IP results, DNS records, hosting provider, CIDR allocation
 
 ### VirusTotal (API -- key available)
-- **Query:** `curl -s -H "x-apikey: $(load_api_key('VIRUSTOTAL_API_KEY'))" "https://www.virustotal.com/api/v3/domains/{domain}"`
+- **Query:** `python3 .claude/skills/osint-advanced/scripts/osint_api.py virustotal --domain {domain}`
 - **Response:** JSON with `data.attributes`
 - **Key fields:** `data.attributes.last_dns_records[]`, `data.attributes.whois`, `data.attributes.reputation`, `data.attributes.last_analysis_stats` (harmless/malicious/suspicious/undetected counts), `data.attributes.categories`
 - **Additional endpoints:** `/api/v3/ip_addresses/{ip}`, `/api/v3/files/{hash}`, `/api/v3/search?query={query}`
@@ -208,7 +208,7 @@ Last Updated: 2026-03-21
 - **For stealer logs:** Use `/stealerlogsbyemail/{email}` (requires Pwned 5+ subscription)
 
 ### DeHashed (API)
-- **Query:** `curl -s -X POST "https://api.dehashed.com/v2/search" -H "Dehashed-Api-Key: {DEHASHED_API_KEY}" -H "Content-Type: application/json" -d '{"query":"email:{target}","size":100,"page":1,"de_dupe":true}'`
+- **Query:** `python3 .claude/skills/osint-advanced/scripts/osint_api.py dehashed --query "email:{target}"`
 - **Response:** JSON with `balance`, `total`, `entries[]`
 - **Search fields:** `email:`, `username:`, `name:`, `domain:`, `ip_address:`, `phone:`
 - **Note:** API key in `.env` as `DEHASHED_API_KEY`. Max 10000 results per page.

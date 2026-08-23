@@ -206,6 +206,22 @@
 </tbody>
 </table>
 <p><code>threshold</code> is now a per-layer key, set to 0.45 on the commit layers only. <code>content</code> keeps 0.55 untouched, because a global drop would have bought commit recall at the price of prose precision. The cost is stated rather than waved away: one nonsense query in six now gets a confident-looking hit on this layer.</p>
+<blockquote>
+<p><strong>Re-measured 2026-08-23, and &ldquo;seven&rdquo; does not reproduce.</strong> An audit read the
+&ldquo;seven of 23&rdquo; above against the table beside it and called it arithmetically
+impossible. Re-running <code>scripts/eval-query-set.py --phase 1</code> on today&rsquo;s index
+rather than reasoning from the table: the shipped default answers 23 of 25
+(Set A 11/13, Set B 12/12, matching the table exactly), and <code>--threshold 0.55</code>
+answers 22 of 25. The cut costs <strong>one</strong> answer today, not seven, and the one
+it costs is the query &ldquo;the plan still promised work that was already
+delivered&rdquo;, rank 1 at the shipped setting and returned at all at 0.55.</p>
+<p>The sentence is left standing because it describes the state BEFORE
+<code>threshold</code> became a per-layer key, on an index that has since been rebuilt,
+and that state cannot be reconstructed from here. Per the rule in the next
+paragraph, it is not being &ldquo;corrected&rdquo; to the newer figure by inference — that
+exact move was made once during this release and was wrong. Quote the 2026-08-23
+measurement when you need a number; treat &ldquo;seven&rdquo; as unreproducible history.</p>
+</blockquote>
 <p><strong>Both numbers are real, and neither may be quoted without its threshold.</strong> During this release one of them was &ldquo;corrected&rdquo; to the other in a reference file. That edit was wrong, was made by trusting a summary line instead of opening the record, and was reverted after re-running the measurement.</p>
 <p><strong>Rebuilding one layer deleted 122 rows of another.</strong> The build&rsquo;s prune removes every stored path the pass did not claim, and a single-layer pass claims nothing else. It is now scoped to layers the pass actually walked, plus layers that no longer exist in the configuration at all, so a dropped layer is still cleaned up. Two tests hold both halves.</p>
 <h3 id="what-is-deliberately-excluded">What is deliberately excluded</h3>
@@ -338,7 +354,7 @@
 <p>It was built. All <strong>9,608</strong> symbols were indexed.</p>
 <h3 id="the-bar-and-the-kill-line-agreed-before-the-build">The bar, and the kill line, agreed before the build</h3>
 <p>Set A ≥ 70% top-5. Set B no regression. <strong>Kill criterion: Set A below 50% stops the phase — ship commits only, do not tune.</strong></p>
-<p>The two sets aim at the <em>same</em> 13 symbols, varying only the register of the question. That is the control: holding the target fixed isolates the effect being measured.</p>
+<p>The two sets aim at the <em>same</em> symbols, varying only the register of the question. That is the control: holding the target fixed isolates the effect being measured. The pairing is 12 of 13, not 13 of 13: <code>scripts/utils/census_schema.py:validate</code> has a Set A entry and no Set B twin, which is why the denominators below differ.</p>
 <table>
 <thead>
 <tr>

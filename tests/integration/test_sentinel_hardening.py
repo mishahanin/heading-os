@@ -318,37 +318,43 @@ def test_status_prints_on_corrupt_state(tmp_state_dir, capsys):
 async def test_telegram_disconnect_during_sleep_fails(
     mock_config, mock_logger, tmp_state_dir
 ):
-    """Covers Sentinel.run disconnect-for-sleep except block (~L1714).
+    """The disconnect-for-sleep failure is GUARDED in sentinel.py.
 
-    After a successful cycle, the sleep-transition disconnect call raises.
-    except catches, debug logged with 'Telegram disconnect-for-sleep fallback'.
+    What this test used to do, and why it was replaced on 2026-08-23: it built an
+    `AsyncMock`, re-implemented the try/except inline in its own body, and
+    asserted on the mock logger. Its docstring claimed it constructed a Sentinel;
+    it did not. Deleting the whole except block from `scripts/sentinel.py` left it
+    green -- it tested Python's `try`, not this workspace.
 
-    This test exercises just the relevant except block directly without
-    running a full Sentinel.run() loop (that would require a huge fixture setup).
-    We prove the except-block behavior by constructing a Sentinel instance
-    with a telegram_source whose disconnect() raises, then invoking the
-    same try/except sequence as line 1713-1719.
+    What this test does now, and its honest limit: it reads the source and pins
+    that the disconnect call sits inside a `try` with a broad `except` that logs
+    the named fallback. That catches the regression that actually happens -- the
+    guard being removed or narrowed -- and it does NOT prove runtime behaviour.
+    Proving that needs a constructed Sentinel, which needs the daemon fixture
+    this repo does not carry, because sentinel runs on the Steward VM.
     """
-    # Build a minimal object with the same disconnect behavior
-    source = AsyncMock()
-    source.disconnect = AsyncMock(side_effect=RuntimeError("already disconnected"))
+    import ast
 
-    # Simulate the except-block from sentinel.py lines 1713-1719
-    try:
-        await source.disconnect()
-        mock_logger.debug("Telegram disconnected (releasing session lock for sleep)")
-    except Exception as e:
-        mock_logger.debug(f"Telegram disconnect-for-sleep fallback: {e}")
+    src = (Path(__file__).resolve().parents[2] / "scripts" / "sentinel.py")
+    tree = ast.parse(src.read_text(encoding="utf-8"))
 
-    # Assert the fallback path ran, not the success path
-    debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
-    assert any(
-        "Telegram disconnect-for-sleep fallback" in msg for msg in debug_messages
-    ), f"Expected disconnect-for-sleep fallback log. Got: {debug_messages}"
-    # The success message must NOT have been logged
-    assert not any(
-        "releasing session lock for sleep" in msg for msg in debug_messages
-    ), "Success message logged despite disconnect failure"
+    guarded = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        body = ast.unparse(ast.Module(body=node.body, type_ignores=[]))
+        if "telegram_source.disconnect()" not in body:
+            continue
+        for handler in node.handlers:
+            names = ast.unparse(handler.type) if handler.type else "Exception"
+            logged = ast.unparse(ast.Module(body=handler.body, type_ignores=[]))
+            if "Exception" in names and "disconnect-for-sleep fallback" in logged:
+                guarded = True
+
+    assert guarded, (
+        "sentinel.py no longer wraps the sleep-transition "
+        "telegram_source.disconnect() in a try/except that logs "
+        "'Telegram disconnect-for-sleep fallback'")
 
 
 # ---------------------------------------------------------------------------
@@ -359,23 +365,27 @@ async def test_telegram_disconnect_during_sleep_fails(
 async def test_telegram_retry_disconnect_fails_second_disconnect(
     mock_logger
 ):
-    """Covers Sentinel._fetch_all retry-disconnect except block (~L1807).
+    """The retry-loop disconnect failure is GUARDED in sentinel.py.
 
-    During the retry loop, `await self.telegram_source.disconnect()` raises.
-    Inner except catches, debug logged with 'Telegram retry-disconnect fallback'.
-
-    Structural test: exercises the same try/except pattern as lines 1802-1807.
+    Same replacement as the sleep-transition test above, for the same reason:
+    the old body mocked a source, re-ran the try/except itself, and would have
+    stayed green with the production guard deleted. Same honest limit too --
+    this pins that the guard exists, not that it behaves at runtime.
     """
-    source = AsyncMock()
-    source.disconnect = AsyncMock(side_effect=RuntimeError("socket already closed"))
+    import ast
 
-    # Simulate lines 1802-1807
-    try:
-        await source.disconnect()
-    except Exception as disc_err:
-        mock_logger.debug(f"Telegram retry-disconnect fallback: {disc_err}")
+    src = (Path(__file__).resolve().parents[2] / "scripts" / "sentinel.py")
+    tree = ast.parse(src.read_text(encoding="utf-8"))
 
-    debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
-    assert any(
-        "Telegram retry-disconnect fallback" in msg for msg in debug_messages
-    ), f"Expected retry-disconnect fallback log. Got: {debug_messages}"
+    guarded = any(
+        isinstance(node, ast.Try)
+        and "telegram_source.disconnect()" in ast.unparse(
+            ast.Module(body=node.body, type_ignores=[]))
+        and any("retry-disconnect fallback" in ast.unparse(
+            ast.Module(body=h.body, type_ignores=[])) for h in node.handlers)
+        for node in ast.walk(tree)
+    )
+    assert guarded, (
+        "sentinel.py no longer wraps the retry-loop "
+        "telegram_source.disconnect() in a try/except that logs "
+        "'Telegram retry-disconnect fallback'")

@@ -141,6 +141,63 @@ def test_organisation_harvest_produces_no_ordinary_word_tokens(tmp_path):
         assert word not in dl.tokens, f"ordinary word harvested as a token: {word}"
 
 
+def test_flags_person_display_name(tmp_path):
+    """The 2026-08-23 hole: the harvest emitted a contact's SLUG (`zenon-makarios`)
+    and, in strict mode only, its bare words -- never the space-separated form a
+    sentence actually contains. So a live counterparty from an open deal thread
+    sat by name in a tracked engine test file and every layer of the wall read
+    the tree as clean. The two-word phrase is as safe as the organisation phrase
+    form already emitted beside it: it cannot collide with ordinary English.
+
+    Writing this test proved the point twice -- the first draft named the real
+    person in this docstring, and the fixed gate flagged it.
+    """
+    dl = build_denylist(_make_overlay(tmp_path))
+    for leaked in (
+        "Zenon Makarios answered at 08:00 UTC",   # prose, title case
+        "assert 'zenon makarios' not in body",    # lower case
+        "ping Hale Quorix about the renewal",     # a second contact
+    ):
+        assert dl.scan_text(leaked), f"MISSED a real person's name in: {leaked!r}"
+    # and the bare surname stays out of the default denylist -- the phrase form is
+    # the addition, not a back door into strict mode.
+    assert dl.scan_text("the makarios report") == []
+
+
+def test_public_contributor_name_is_not_flagged(tmp_path):
+    """A named public contributor is credited on purpose in CHANGELOG.md and
+    docs/PLUGINS.md. He is also a CRM contact, so the display-name harvest above
+    would flag that deliberate credit as a leak. The allowlist is what keeps the
+    gate from crying wolf on published attribution."""
+    dl = build_denylist(_make_overlay(tmp_path))
+    assert dl.scan_text("Contributed by Mahmoud Maatuq.") == []
+
+
+def test_an_unparseable_curated_list_marks_the_gate_degraded(tmp_path):
+    """The 2026-08-23 hole: `_harvest_curated` swallowed its own exception and
+    returned, so `build_denylist`'s outer handler never saw it and `degraded`
+    stayed False. The gate then ran WITHOUT the operator's hand-curated
+    companies, events and codenames -- and reported the tree clean.
+
+    `engine_content_scan` skips entirely on `degraded`, so a silent partial list
+    is strictly worse than a loud empty one: it looks like coverage.
+    """
+    overlay = _make_overlay(tmp_path)
+    (overlay / "config" / "content-denylist.yaml").write_text(
+        "companies: [unclosed\n  - broken: : :\n", encoding="utf-8")
+    dl = build_denylist(overlay)
+    assert dl.degraded, "a curated list that failed to parse must degrade the gate"
+
+
+def test_a_missing_curated_list_is_not_a_degradation(tmp_path):
+    """A public clone has no curated file. Absence is normal; corruption is not."""
+    overlay = _make_overlay(tmp_path)
+    (overlay / "config" / "content-denylist.yaml").unlink()
+    dl = build_denylist(overlay)
+    assert not dl.degraded
+    assert dl.tokens, "the harvested tokens still stand without a curated list"
+
+
 def test_degrades_without_overlay():
     dl = build_denylist(None)
     assert dl.degraded

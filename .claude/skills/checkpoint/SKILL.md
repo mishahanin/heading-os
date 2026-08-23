@@ -2,6 +2,7 @@
 name: checkpoint
 description: "Сохранить manual checkpoint текущей сессии в outputs/operations/handoff-archive/ без выполнения /compact. Используй когда хочешь зафиксировать состояние работы и иметь возможность вернуться позже с чистым контекстом. NEVER auto-trigger - вызывается ТОЛЬКО явной командой /checkpoint."
 allowed-tools: "Write, Read, Bash(date:*), Bash(python scripts/checkpoint-paths.py:*), Bash(python3 scripts/checkpoint-paths.py:*)"
+disable-model-invocation: true
 argument-hint: "[заметка] | auto on|off|status | unattended on|off|status | compact-at N|status|off"
 metadata:
   author: Misha Hanin

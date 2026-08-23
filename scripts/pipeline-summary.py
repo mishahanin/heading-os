@@ -373,6 +373,41 @@ def print_verbose(metrics):
         print(f"  {d['company']:40s}  {stage_display:12s}  {val:>12s}  weighted: {wval:>12s}")
 
 
+def replace_summary_block(content: str, summary_text: str) -> str:
+    """Swap the "## Pipeline Summary" section for a fresh one, losing nothing.
+
+    The section ends where the next one begins -- the next top-level heading, or
+    the `---` rule that precedes it -- and only at end-of-file when the summary
+    genuinely IS the last section.
+
+    Until 2026-08-23 the boundary was a lookahead naming two specific headings
+    with `\\Z` as the fallback. Rename or reorder either heading and the lazy body
+    ran to the end of the file, so a routine `--update` silently deleted every
+    section below the summary. The heading names were never the boundary; the
+    next heading is.
+    """
+    start = re.search(r"^## Pipeline Summary[ \t]*$", content, flags=re.M)
+    if start is None:
+        # No summary yet: insert after the intro rule, or at the very top.
+        first_sep = content.find("\n---\n")
+        if first_sep >= 0:
+            at = first_sep + len("\n---\n")
+            return content[:at] + "\n" + summary_text + content[at:]
+        return summary_text + "\n" + content
+
+    nxt = re.search(r"^## ", content[start.end():], flags=re.M)
+    if nxt is None:
+        end = len(content)                       # the summary really is last
+    else:
+        end = start.end() + nxt.start()
+        # Give back the `---` rule and blank lines that belong to the NEXT
+        # section, so the replacement does not swallow its separator.
+        tail = content[:end]
+        stripped = tail.rstrip()
+        end = len(stripped) - len("---") if stripped.endswith("---") else len(stripped)
+    return content[:start.start()] + summary_text + content[end:]
+
+
 def main():
     parser = argparse.ArgumentParser(description="31C Pipeline Summary")
     parser.add_argument("--update", action="store_true", help="Write summary into pipeline.md")
@@ -387,24 +422,7 @@ def main():
     summary_text, metrics = generate_summary(content)
 
     if args.update:
-        # Remove existing Pipeline Summary block and replace
-        pattern = r"## Pipeline Summary\n.*?(?=\n---\n\n## Stage Definitions|\n---\n\n## Active Deals|\Z)"
-        match = re.search(pattern, content, flags=re.DOTALL)
-
-        if match:
-            # Replace existing summary
-            updated = content[:match.start()] + summary_text + content[match.end():]
-        else:
-            # Insert after the freshness marker / intro section
-            # Find the first "---" separator after the header
-            first_sep = content.find("\n---\n")
-            if first_sep >= 0:
-                # Insert after the first separator
-                insert_point = first_sep + len("\n---\n")
-                updated = content[:insert_point] + "\n" + summary_text + content[insert_point:]
-            else:
-                updated = summary_text + "\n" + content
-
+        updated = replace_summary_block(content, summary_text)
         PIPELINE_FILE.write_text(updated, encoding="utf-8")
         print(f"{GREEN}Pipeline summary written to {PIPELINE_FILE.name}{RESET}")
 

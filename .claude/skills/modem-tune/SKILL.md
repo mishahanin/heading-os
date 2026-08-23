@@ -160,6 +160,17 @@ hidden characters, plain prose.
 - NEVER write the SSH password into any tracked file, commit message, or output. It
   lives only in `.env`.
 - NEVER document this skill, the routers, IMEI values, or credentials in corporate or
-  executive-facing files (`reference/workspace-overview.md`, `templates/`, corporate repo).
+  executive-facing files (`reference/workspace-overview.md`, `templates/`, corporate repo),
+  nor anywhere under `docs/`, the published documentation site.
+  The 2026-08-23 audit found a full card for this skill on
+  `docs/skills-operations-infra.html`. It named the router model and the three
+  `MODEM_*` credential variables. That card existed because this line listed three
+  surfaces, and the docs site was not one of them. Operator decision the same day:
+  remove the page, do not publish it.
+  `tests/test_modem_tune_is_not_on_the_docs_site.py` holds that.
+  This SKILL.md and `scripts/modem-tune.py` still ship in the public engine repo.
+  That is the 2026-06-14 NO EXCEPTIONS routing decision: code is engine, device
+  identity is private data. This rule covers the documentation site only. It makes
+  no claim about the repository.
 - NEVER scrape an external IMEI generator -- generation is local and deterministic.
 - NEVER save router IMEI values or credentials to auto-memory.

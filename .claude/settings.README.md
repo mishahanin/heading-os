@@ -16,13 +16,26 @@ It is published to every executive workspace via the corporate content repo (`he
 
 The shipped plugin set is intentional. Do not add plugins here for one-off experiments — do that in `settings.local.json` first, validate the plugin is stable and useful, then promote it here if it should ship to the fleet.
 
-Current shipped plugins:
+Current shipped plugins — enabled in `.claude/settings.json`:
 
 - `superpowers@claude-plugins-official` — brainstorming, planning, TDD, scrutinize workflows
 - `skill-creator@claude-plugins-official` — authoring new skills
 - `claude-md-management@claude-plugins-official` — maintaining CLAUDE.md files
 - `frontend-design@claude-plugins-official` — UI/design workflows
-- `playwright@claude-plugins-official` — browser automation (screenshots, scraping, PDF generation, YouTube transcripts)
+- `mattpocock-skills@claude-plugins-official` — TypeScript authoring skills
+- `code-review@claude-plugins-official` — review workflows
+- `code-simplifier@claude-plugins-official` — simplification passes
+
+Deliberately OFF, and listed so nobody re-enables one by accident:
+
+- `playwright@claude-plugins-official` — the MCP server covers browser work here
+- `security-guidance@claude-plugins-official` — measured 333 ms per write for zero findings
+- `context7@claude-plugins-official` — used through `scripts/context7.py` instead
+
+This list drifted once (2026-08-23): it named `playwright` as shipped while
+`settings.json` had it off, and omitted three that were on. Verify it with
+`python scripts/harness-audit.py` rather than by reading, and keep
+`reference/plugin-roster.md` in step.
 
 ## Host prerequisite: `python3` on PATH
 

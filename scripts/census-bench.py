@@ -955,6 +955,15 @@ def mode_operating_point(questions: list[dict], corpus: CorpusPaths,
 
 CROSSCHECK_QUESTIONS = ("agg-05", "agg-03", "ctl-02")
 
+# The hits the print pass showed, carried to the grading pass. Undated on
+# purpose: it is a handoff between two invocations of one measurement, not a
+# report, and the operator may answer the next morning.
+CROSSCHECK_SHOWN_FILE = "recall-crosscheck-shown.json"
+
+
+def _crosscheck_shown_path() -> Path:
+    return get_outputs_dir() / "operations" / "census-bench" / CROSSCHECK_SHOWN_FILE
+
 
 def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
                            root: Path, today: date,
@@ -975,37 +984,83 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
     back, it grades them against the oracle and records whether the outcome
     matched the ceiling's prediction. The model is in the loop by construction,
     which is the whole point; what is removed is the pretence that it was.
+
+    The two invocations are joined by `recall-crosscheck-shown.json`, written by
+    the print pass and read by the grading pass. That file IS the measurement:
+    the ceiling must describe the hits the answers came from, not a re-query run
+    after the operator went to bed.
     """
     truth = load_truth(questions, corpus, today)
     by_id = {q["id"]: q for q in questions}
+    shown_path = _crosscheck_shown_path()
 
     if answers_path is None:
+        shown: dict[str, list[dict]] = {}
         for qid in CROSSCHECK_QUESTIONS:
             question = by_id[qid]
             text = question.get("question_ru") or question.get("question_en")
             hits = query_at(root, text, OPERATING_TOP_K, OPERATING_THRESHOLD)
+            shown[qid] = [{"path": h.get("path"), "score": h.get("score", 0)}
+                          for h in hits]
             print(f"\n{BOLD}{qid}{RESET} ({question['group']}, "
                   f"{question.get('question_class', '')}) - {text}")
             print(f"{GRAY}истина: {len(truth[qid].paths)} путь(ей); "
                   f"выдача /recall на рабочей точке: {len(hits)} хит(ов){RESET}")
             for hit in hits:
                 print(f"  {hit.get('score', 0):.3f}  {hit.get('path')}")
+        # Persisted so the grading pass grades THIS material. See the note on
+        # the grading branch below for what re-querying there cost.
+        atomic_write_text(shown_path, json.dumps({
+            "schema_version": 1,
+            "generated": datetime.now(tz=get_default_tz()).isoformat(),
+            "run_state": _run_state(corpus, root, today),
+            "top_k": OPERATING_TOP_K, "threshold": OPERATING_THRESHOLD,
+            "shown": shown,
+        }, ensure_ascii=False, indent=2) + "\n")
         print(f"\n{YELLOW}Ответьте на эти три вопроса ТОЛЬКО по показанной "
               f"выдаче, как это делает /recall, и подайте ответы обратно:{RESET}")
         print(f"{GRAY}  --recall-crosscheck --crosscheck-answers FILE{RESET}")
         print(f'{GRAY}  формат: {{"agg-05": {{"kind": "paths", "paths": [...]}}, ...}}'
               f' либо {{"agg-05": {{"refused": true}}}}{RESET}')
+        print(f"{GRAY}показанная выдача сохранена: {shown_path}{RESET}")
         return 0
+
+    # The ceiling is computed from the hits the PRINT pass showed, never from a
+    # fresh query. Until 2026-08-23 this branch called `query_at` again, minutes
+    # or hours later, against a live corpus whose index rebuilds on file change
+    # and on a nightly timer. The mode's own falsification rule - at ceiling 0.00
+    # the answer must be wrong or a refusal - was then decided by whichever
+    # version of the index answered second: a rebuild could manufacture a
+    # РАСХОЖДЕНИЕ out of a correct answer composed from three real hits, or bury
+    # a real one. A harness that exists to falsify an assumption must not itself
+    # be falsifiable by an unrelated background job.
+    if not shown_path.is_file():
+        print(f"{RED}нет показанной выдачи: {shown_path}{RESET}", file=sys.stderr)
+        print(f"{RED}Сначала запустите --recall-crosscheck без --crosscheck-answers, "
+              f"ответьте по ТОЙ выдаче, затем подайте ответы.{RESET}", file=sys.stderr)
+        return 2
+    record = json.loads(shown_path.read_text(encoding="utf-8"))
+    shown = record.get("shown") or {}
+    missing = [q for q in CROSSCHECK_QUESTIONS if q not in shown]
+    if missing:
+        print(f"{RED}показанная выдача не покрывает {', '.join(missing)}. "
+              f"Перезапустите печатающий проход.{RESET}", file=sys.stderr)
+        return 2
+
+    comparable, diverged = states_comparable(
+        record.get("run_state") or {}, _run_state(corpus, root, today))
+    if not comparable:
+        # Not fatal: the shown hits are still exactly what the answers came
+        # from, so the grade stands. But the reader must know the corpus moved.
+        print(f"{YELLOW}Корпус изменился между проходами ({', '.join(diverged)}). "
+              f"Оценка идёт по показанной выдаче, отчёт помечен.{RESET}")
 
     given = json.loads(Path(answers_path).read_text(encoding="utf-8"))
     rows = []
     for qid in CROSSCHECK_QUESTIONS:
         expected = truth[qid]
         answer = given.get(qid) or {}
-        hits = query_at(root, by_id[qid].get("question_ru")
-                        or by_id[qid].get("question_en"),
-                        OPERATING_TOP_K, OPERATING_THRESHOLD)
-        got = {h.get("path") for h in hits}
+        got = {h.get("path") for h in shown[qid]}
         denom = len(expected.paths) or 1
         ceiling = len(expected.paths & got) / denom
 
@@ -1056,6 +1111,9 @@ def mode_recall_crosscheck(questions: list[dict], corpus: CorpusPaths,
         "schema_version": 1, "mode": "recall-crosscheck",
         "generated": datetime.now(tz=get_default_tz()).isoformat(),
         "run_state": _run_state(corpus, root, today),
+        "shown_run_state": record.get("run_state"),
+        "shown_generated": record.get("generated"),
+        "corpus_moved_between_passes": diverged,
         "top_k": OPERATING_TOP_K, "threshold": OPERATING_THRESHOLD,
         "questions": rows,
         "contradictions": len(contradicted),

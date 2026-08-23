@@ -2,7 +2,7 @@
 name: workspace-deep-audit
 description: >
   EXPLICIT INVOCATION ONLY -- never auto-trigger. Comprehensive deep audit of
-  the entire ceo-main workspace producing an 8-section report (executive summary,
+  the entire workspace producing an 8-section report (executive summary,
   methodology, inventory matrix, architectural findings, Context7 validation,
   2026 best-practices gap analysis, competitive mapping, prioritized
   recommendations). This is the heaviest workspace skill - dispatches up to 7
@@ -15,7 +15,7 @@ description: >
   competitive + best-practices analysis (cuts runtime ~50%). Use --focus to
   scope to a single subsystem.
 disable-model-invocation: true
-argument-hint: "[--mode={full|quick|focus}] [--focus={skills|rules|deps|security|architecture}] [--vs=<previous_audit_path>]"
+argument-hint: "[--mode={full|quick|focus}] [--focus={skills|rules|deps|security|architecture|observability}] [--vs=<previous_audit_path>]"
 allowed-tools: "Read, Write, Edit, Glob, Grep, Bash(python3:*), Bash(git:*), Bash(wc:*), Bash(ls:*), Bash(find:*), Bash(du:*), Bash(pre-commit:*), Bash(pip:*), Agent, WebSearch, WebFetch"
 context: fork
 # Backgrounded forks (the default since Claude Code 2.1.218) get the narrower
@@ -52,7 +52,7 @@ x-heading-routing:
   category: Operations
   triggers:
     - 'NEVER auto-trigger. Explicit `/workspace-deep-audit` or "deep audit"/"run a full audit"/"audit the entire workspace"/"do the same deep audit" only. Produces v1/v2-equivalent 8-section comprehensive workspace audit. Flags: `--mode={full\|quick\|focus}`'
-    - '`--focus={skills\|rules\|deps\|security\|architecture}`'
+    - '`--focus={skills\|rules\|deps\|security\|architecture\|observability}`'
     - '`--vs=<prev_audit>`'
   exclusions:
     - All general "audit" requests without explicit invocation -> /scrutinize or /state-check

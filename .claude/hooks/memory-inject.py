@@ -46,6 +46,12 @@ try:
 except Exception:  # noqa: BLE001 -- never break SessionStart over a path resolve
     DB_PATH = WORKSPACE / ".memory-index" / "index.db"  # in-tree fallback
 
+try:
+    from scripts.utils.sqlite_uri import read_only_uri
+except Exception:  # noqa: BLE001 -- SessionStart must never die on an import
+    def read_only_uri(path):
+        return f"{Path(path).absolute().as_uri()}?mode=ro"
+
 
 def _emit(context: str) -> None:
     """Emit additionalContext for SessionStart; empty string -> emit nothing."""
@@ -100,12 +106,24 @@ def main() -> None:
     try:
         sys.path.insert(0, str(WORKSPACE))
         from scripts.utils.air_gap import is_denied
-    except Exception:
-        def is_denied(rel):  # fail-closed-ish: if unavailable, treat nothing as denied
-            return False
+    except Exception as exc:
+        # This fallback returned False, meaning "nothing is denied", under a
+        # comment calling itself fail-closed-ish and a module docstring
+        # promising the hook "defensively skips any air-gapped path". It was
+        # fail-OPEN, and both descriptions said the opposite. Found by the
+        # 2026-08-23 audit.
+        #
+        # Closed is the cheap direction here: denying everything means this hook
+        # injects nothing, which costs one turn of context and breaks no
+        # workflow. Injecting an air-gapped path costs the air gap.
+        print(f"[memory-inject] air_gap unavailable ({exc}); denying every path",
+              file=sys.stderr)
+
+        def is_denied(rel):
+            return True
 
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(read_only_uri(DB_PATH), uri=True)
     except Exception:
         _emit("")
 

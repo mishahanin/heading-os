@@ -154,7 +154,7 @@ coverage now.
 ## Voice
 
 Internal engineering prose: terse and concrete. Never use `--` (two ASCII
-hyphens) as punctuation; a single em-dash or a restructured sentence. Use 31C
+hyphens) as punctuation, and no em-dash either; restructure the sentence. Use 31C
 terminology exactly: **ODUN.ONE**, **DPI+**, **Tribe**, **TrustONE**. No hidden
 Unicode. Criteria and contracts are factual claims — never fabricate a metric, a
 threshold, or a behaviour. Derive it from the plan, or ask.

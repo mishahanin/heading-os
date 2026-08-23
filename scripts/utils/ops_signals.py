@@ -61,10 +61,13 @@ PUBLISH_PENDING = 1                # >=1 corporate-routed change since last BUIL
 INDEX_STALE_DAYS = 2               # index older than this (build age) -> rebuild
 AUTOHEAL_ESCALATE = 2              # consecutive auto-heal failures before surfacing in the nudge
 
-# Default local embedder host (mirrors config/memory-index.yaml default). This
-# one is deliberately the LOCAL daemon and not the configured host: Tier-A heals
-# by restarting local ollama, and `ollama_accel_state` below is the separate
-# signal that reports on the accelerated instance.
+# Fallback endpoint for `ollama_state` when this machine pins no host. It is NOT
+# "the local daemon by policy" any more: on 2026-08-23 the ollama inside WSL was
+# uninstalled and every model moved to the Windows side, so a monitor hardwired
+# to localhost would have gone red forever and driven Tier-A to keep restarting
+# a unit that no longer exists. `ollama_state` now probes whatever
+# `config/ollama-hosts.yaml` says serves this machine, and falls back here only
+# on a machine that pins nothing.
 OLLAMA_HOST = "http://localhost:11434"
 
 # The model name is NOT a constant here. It was `EMBED_MODEL_PREFIX = "bge-m3"`
@@ -278,8 +281,17 @@ def classify_cold_sweep(red_count: int) -> dict:
 def cold_sweep_state(engine_root: Path) -> dict:
     """Count red-health contacts via crm-health.py --json, then classify.
 
-    Degrades to red_count=0 (not due) when crm-health is absent or unreadable -
-    a missing CRM is not a cold-sweep emergency.
+    Degrades to red_count=0 (not due) when crm-health is absent, unreadable, or
+    emits something other than a list of contact dicts - a missing CRM is not a
+    cold-sweep emergency, and neither is a changed output shape.
+
+    That last clause was false until 2026-08-23. The comprehension below calls
+    `c.get(...)` on whatever the JSON parsed to, and the except clause caught
+    only OSError, SubprocessError and JSONDecodeError. A dict, a list of
+    strings, a bare null - all parse cleanly and then raise AttributeError or
+    TypeError, killing the whole ops-radar run. The monitor that exists to
+    surface silent failures died on the shape of what it monitors.
+    `publish_state`, twenty lines below, already guards with `isinstance`.
     """
     script = engine_root / "scripts" / "crm-health.py"
     red = 0
@@ -294,7 +306,9 @@ def cold_sweep_state(engine_root: Path) -> dict:
             )
             if proc.returncode == 0:
                 data = json.loads(proc.stdout)
-                red = sum(1 for c in data if c.get("health") == "red")
+                if isinstance(data, list):
+                    red = sum(1 for c in data
+                              if isinstance(c, dict) and c.get("health") == "red")
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
             red = 0
     return classify_cold_sweep(red)
@@ -442,7 +456,7 @@ def odin_cadence_state(engine_root: Path) -> dict:
 # Tier-A: ollama (probe)
 # ============================================================
 
-def classify_ollama(reachable: bool, model_present: bool,
+def classify_ollama(reachable: bool, model_present: bool | None,
                     model: str | None = None) -> dict:
     """Pure: ollama reachability + embed-model presence -> signal dict (Tier A).
 
@@ -450,12 +464,19 @@ def classify_ollama(reachable: bool, model_present: bool,
     this function is pure and reading the config here would end that. Omitted
     means the generic wording, which is right for a test that is asserting on
     reachability and has no opinion about the tag.
+
+    `model_present=None` means NOT CHECKED, and is not the same as False. Since
+    2026-08-23 the embed model is deliberately absent from the local daemon -
+    embedding is pinned to the Windows side and `bge-m3` was removed here so the
+    pin cannot be defeated by accident. A monitor that kept asserting its
+    presence would report a permanent, false, unfixable failure; presence on the
+    host that DOES need it is `ollama_accel_state`'s job.
     """
-    due = (not reachable) or (not model_present)
+    due = (not reachable) or (model_present is False)
     named = model or "the embed model"
     if not reachable:
         severity, summary = "high", "ollama: unreachable"
-    elif not model_present:
+    elif model_present is False:
         severity, summary = "high", f"ollama: up but {named} missing"
     else:
         severity, summary = "ok", "ollama: up"
@@ -470,13 +491,16 @@ def classify_ollama(reachable: bool, model_present: bool,
     }
 
 
-def classify_ollama_accel(configured: bool, reachable: bool) -> dict:
+def classify_ollama_accel(configured: bool, reachable: bool,
+                          model_present: bool | None = None) -> dict:
     """Pure: accelerated-host configuration + reachability -> signal dict (Tier B).
 
     Not configured is the normal state on most machines and is never due. A host
-    that IS configured and does not answer is due at `warn`: work continues on
-    the local daemon, so nothing is broken, only slower - but silently so, which
-    is the whole reason this needs saying out loud.
+    that IS configured and does not answer is due at `high`, not `warn`: until
+    2026-08-23 work continued on the local daemon and the cost was only speed,
+    but embedding is now pinned here, so this host being down means recall and
+    every rebuild stop. `model_present` is None when it could not be determined
+    (host down, or the tags endpoint failed) and is never guessed.
 
     Tier B, not A, and deliberately. The accelerated daemon lives outside this
     OS (on a WSL2 workspace it is the Windows side), so nothing here can restart
@@ -484,16 +508,21 @@ def classify_ollama_accel(configured: bool, reachable: bool) -> dict:
     invisible forever, since `select_candidates` only surfaces Tier A after two
     failed heals.
     """
-    due = configured and not reachable
+    due = configured and (not reachable or model_present is False)
     if not configured:
         severity, summary = "ok", "ollama-accel: not configured"
-    elif reachable:
-        severity, summary = "ok", "ollama-accel: up"
+    elif not reachable:
+        # No longer "running on the local daemon": since 2026-08-23 embedding is
+        # pinned here, so this host being down means nothing embeds at all.
+        severity, summary = "high", "ollama-accel: pinned embed host down -- nothing can embed"
+    elif model_present is False:
+        severity, summary = "high", "ollama-accel: up but the embed model is not pulled there"
     else:
-        severity, summary = "warn", "ollama-accel: configured host down, running on the local daemon"
+        severity, summary = "ok", "ollama-accel: up"
     return {
         "key": "ollama_accel",
-        "value": {"configured": configured, "reachable": reachable},
+        "value": {"configured": configured, "reachable": reachable,
+                  "model_present": model_present},
         "threshold": None,
         "due": due,
         "severity": severity,
@@ -507,20 +536,30 @@ def ollama_accel_state(engine_root: Path, timeout: int = 3) -> dict:
 
     Reads the SAME preference the index reads, in the same order - `host` from
     `config/memory-index.yaml`, else the `HEADING_OS_OLLAMA_EMBED_HOST`
-    environment variable - so this reports on the endpoint that is actually
-    used, not on a second opinion about which one it should be. A preference
-    that resolves to the local daemon is not an accelerated host and counts as
-    not configured.
+    environment variable, else `embed:` in the machine-local
+    `config/ollama-hosts.yaml` - so this reports on the endpoint that is
+    actually used, not on a second opinion about which one it should be. A
+    preference that resolves to the local daemon is not an accelerated host and
+    counts as not configured.
 
-    Scope: this is the index's embedding endpoint. Other callers
-    (`chronicle.py`, `census-submodel-bench.py`) read `HEADING_OS_OLLAMA_HOST`
-    instead, and a machine could in principle point them somewhere else; this
-    signal says nothing about those.
+    Keeping this list in step with `index_embed_target` is load-bearing: when the
+    pin moved out of the tracked config on 2026-08-23, a monitor still reading
+    only that file would have reported "not configured" on a machine that was
+    pinned, and gone blind to exactly the outage it exists for.
+
+    Scope: this is the index's EMBEDDING endpoint. Generation (`chronicle.py`,
+    `census-submodel-bench.py`) resolves `generate:` from the same machine file
+    and may point elsewhere; this signal says nothing about it.
     """
     import yaml
 
     from scripts.utils import yamlio
-    from scripts.utils.ollama_host import LOCAL_HOST, candidate_url, probe
+    from scripts.utils.ollama_host import (
+        LOCAL_HOST,
+        host_candidates,
+        machine_hosts,
+        probe,
+    )
 
     cfg: dict = {}
     config_path = engine_root / "config" / "memory-index.yaml"
@@ -530,43 +569,111 @@ def ollama_accel_state(engine_root: Path, timeout: int = 3) -> dict:
     except (OSError, yaml.YAMLError):
         cfg = {}
 
-    preference = cfg.get("host")
-    if preference is None:
-        preference = os.environ.get("HEADING_OS_OLLAMA_EMBED_HOST", "")
+    preference = (
+        cfg.get("host")
+        or os.environ.get("HEADING_OS_OLLAMA_EMBED_HOST", "")
+        or machine_hosts("embed", root=engine_root)
+    )
 
-    candidate = candidate_url(preference)
-    if candidate is None or candidate == LOCAL_HOST:
+    # `host_candidates`, not `candidate_url`: since 2026-08-23 the pin may name
+    # several ports on the same machine, and reading only the first entry would
+    # call a healthy second one "not configured" - a monitor blind in exactly the
+    # case the list was added for.
+    candidates = [c for c in host_candidates(preference) if c != LOCAL_HOST]
+    if not candidates:
         return classify_ollama_accel(False, False)
-    return classify_ollama_accel(True, probe(candidate, timeout=timeout))
+
+    for candidate in candidates:
+        if probe(candidate, timeout=timeout):
+            return classify_ollama_accel(
+                True, True, model_present=_embed_model_present(candidate, timeout)
+            )
+    return classify_ollama_accel(True, False)
 
 
-def ollama_state(host: str | None = None, timeout: int = 3) -> dict:
-    """Probe the local ollama endpoint for reachability + the embed model.
+def _embed_model_present(host: str, timeout: int = 3) -> bool | None:
+    """Whether the configured embed model is pulled on `host`. None if unknown.
 
-    Read-only HTTP GET to /api/tags. Unreachable host -> due (Tier-A heal will
-    try to restart it). The host is injectable for tests (point at a dead port
-    to deterministically exercise the unreachable path).
+    Asked of the PINNED host and nowhere else. Embedding happens there or it does
+    not happen, so a missing tag there is a real outage - unlike its deliberate
+    absence on the local daemon. None (the tags endpoint hiccuped) is reported as
+    unknown rather than as missing: a monitor that guesses is worse than one that
+    abstains.
     """
     from scripts.utils.embeddings import index_embed_model
 
-    host = host or OLLAMA_HOST
     wanted = index_embed_model()
-    url = f"{host.rstrip('/')}/api/tags"
-    reachable = False
-    model_present = False
+    # The host comes from config/ollama-hosts.yaml, so its scheme is operator
+    # input, not a literal. A `file:` host would make urlopen read a local path
+    # and report its contents as an ollama tag list.
+    tags_url = f"{host.rstrip('/')}/api/tags"
+    if not tags_url.startswith(("http://", "https://")):
+        return None
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        with urllib.request.urlopen(tags_url, timeout=timeout) as resp:  # noqa: S310 - scheme guarded above
             body = json.loads(resp.read().decode("utf-8"))
-        reachable = True
-        models = body.get("models", []) or []
-        for m in models:
-            name = (m.get("name") or m.get("model") or "") if isinstance(m, dict) else str(m)
-            if name.startswith(wanted):
-                model_present = True
-                break
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
-        reachable = False
-    return classify_ollama(reachable, model_present, model=wanted)
+        return None
+    for m in body.get("models", []) or []:
+        name = (m.get("name") or m.get("model") or "") if isinstance(m, dict) else str(m)
+        if name.startswith(wanted):
+            return True
+    return False
+
+
+def ollama_hosts_in_use(engine_root: Path | None = None) -> list[str]:
+    """Every address this machine expects an ollama at. Never empty.
+
+    The union of the `embed` and `generate` pins, in that order, falling back to
+    `OLLAMA_HOST` when the machine pins nothing. Probes nothing itself.
+
+    Two pins rather than one because they are allowed to differ, and a monitor
+    that watched only the embed host would miss a summarizer pointed elsewhere.
+    """
+    from scripts.utils.embeddings import index_embed_preference
+    from scripts.utils.ollama_host import host_candidates, machine_hosts
+
+    root = engine_root
+    preferences = [index_embed_preference(root=root), machine_hosts("generate", root=root)]
+    seen: list[str] = []
+    for preference in preferences:
+        for candidate in host_candidates(preference):
+            if candidate not in seen:
+                seen.append(candidate)
+    return seen or [OLLAMA_HOST]
+
+
+def ollama_state(host: str | None = None, timeout: int = 3) -> dict:
+    """Is an ollama answering for this workspace at all? Tier A.
+
+    Read-only HTTP GET to /api/version against each address in
+    `ollama_hosts_in_use()`; the first to answer makes the signal green.
+    Unreachable everywhere -> due, and Tier-A heal tries to start one. `host` is
+    injectable for tests (point at a dead port to exercise the unreachable path).
+
+    It watched `http://localhost:11434` until 2026-08-23, when the ollama inside
+    WSL was uninstalled and every model moved to the Windows side. A monitor left
+    pointing at localhost would have reported a permanent outage of a daemon that
+    was deliberately removed - the mirror image of the defect fixed the day
+    before, where it asserted an embed model whose absence was also deliberate.
+
+    It still does not check for the embed model: presence of the model where it
+    IS required is `ollama_accel_state`'s job, on the host that must have it.
+    """
+    hosts = [host] if host else ollama_hosts_in_use()
+    reachable = False
+    for candidate in hosts:
+        url = f"{candidate.rstrip('/')}/api/version"
+        if not url.startswith(("http://", "https://")):
+            continue          # same operator-input scheme guard as above
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - scheme guarded above
+                json.loads(resp.read().decode("utf-8"))
+            reachable = True
+            break
+        except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+            continue
+    return classify_ollama(reachable, None)
 
 
 # ============================================================

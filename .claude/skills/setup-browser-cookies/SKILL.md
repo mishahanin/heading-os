@@ -63,14 +63,22 @@ chrome / chromium / edge, default brave)?"** Then STOP and wait.
 The profile defaults to `ClaudeCode`; pass `--profile "<name>"` if the user logs in
 under a different Chromium profile.
 
-### 2. Extract cookies for the domain
+### 2. Import the cookies straight into the store
 
 ```bash
-python3 scripts/utils/chromium_cookies.py "<domain>" --browser brave --profile ClaudeCode --json --values
+python3 scripts/utils/chromium_cookies.py "<domain>" --browser brave --profile ClaudeCode --store
 ```
 
-This prints a `{name: value}` JSON map for the domain (and its subdomains). If it
-errors:
+One command extracts, converts to Playwright objects, and merges into the store,
+keeping every other domain already there. It prints a count and nothing else.
+`--store` resolves the cookie-store path itself through the data-root seam, so
+this command names no path.
+
+**Never pass `--values` here.** It prints live session tokens to stdout, and under
+an agent stdout IS the transcript — which the NEVER list below forbids. `--values`
+exists for a human at a private terminal, not for this flow.
+
+If it errors:
 
 - **`No cookies found`** — the profile is not logged in to that domain; ask the user to
   log in in that browser/profile first.
@@ -80,17 +88,18 @@ errors:
 - **`secretstorage not installed` / locked keyring (Linux)** — only v10 cookies decrypt;
   unlock the keyring (gnome-keyring / kwallet) for v11.
 
-### 3. Assemble the Playwright cookie store
+### 3. Repeat per domain
 
-For each imported domain, convert the `{name: value}` map into Playwright cookie
-objects and merge them into `outputs/browser/cookies.json` (preserve any cookies for
-other domains already present). Each object:
+Step 2 already wrote and merged the store, so there is nothing to assemble by
+hand. Run it once per domain the user named; each run keeps the other domains.
+
+Do NOT rebuild the file with the Write tool. That would mean reading every cookie
+value into context to write it back out — the same leak step 2 exists to avoid.
+The shape the script writes, for reference only:
 
 ```json
 {"name": "<name>", "value": "<value>", "domain": ".<domain>", "path": "/", "secure": true, "httpOnly": false, "sameSite": "Lax"}
 ```
-
-Write the merged array to `outputs/browser/cookies.json` with the Write tool.
 
 ### 4. Confirm
 

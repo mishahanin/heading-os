@@ -39,7 +39,9 @@ All loaded via Google Fonts. Fallback stacks included.
 
 ### Logo
 
-`31C_Logo_Black_Color.png` (black on cream background). Located at `.claude/skills/pptx-generator/brands/31c/assets/`.
+`31C_Logo_Black_Color.png` (black on cream background).
+
+Two copies of this file exist and they are not the same bytes. `datastore/brand/assets/logos/` is the authority, per the Source of Truth table in `reference/corporate-style-guide.md`; take the logo from there. `.claude/skills/pptx-generator/brands/31c/assets/` holds the `/pptx-generator` brand pack that ships with the engine, and its copy is the same 1000x337 image at roughly three and a half times the file size (17.0 KB against 4.9 KB), so it renders identically and only costs bandwidth. This guide named the engine copy until 2026-08-23, which is why the distinction is written down rather than silently corrected.
 
 ### Layout
 

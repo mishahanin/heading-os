@@ -25,7 +25,7 @@ uv run python scripts/crm-health.py
 ```
 
 When you are ready for a real workspace, follow **Install (short form)** below. Details
-live in [`.devcontainer/README.md`](../.devcontainer/README.md).
+live in [`.devcontainer/README.md`](https://github.com/mishahanin/heading-os/blob/main/.devcontainer/README.md).
 
 ---
 

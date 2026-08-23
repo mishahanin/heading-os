@@ -13,7 +13,7 @@ Last Updated: 2026-08-20
 
 ## The one generator
 
-`scripts/regenerate-docs-html.py` is the single docs generator. It has four modes:
+`scripts/regenerate-docs-html.py` is the single docs generator. It has five modes:
 
 | Mode | What it does |
 | --- | --- |
@@ -122,7 +122,10 @@ pages that are exec-shared, and the list that stays CEO-only.
 
 ## Propagation Chain
 
-The CEO manually initiates updates; each exec machine pulls automatically on a schedule.
+The CEO manually initiates updates; each exec pulls manually. There is no
+scheduled sync on the exec side — the auto-sync that used to provide one was
+retired with `workspace-sync.py`. This sentence claimed the opposite until
+2026-08-23, two headings above the paragraph that retires it.
 
 ### CEO side (manual, initiated by `/push-updates` or equivalent)
 
@@ -167,7 +170,11 @@ pull (or run `/sync`). Offline execs catch up on their next pull.
 
 - Same session: visible to CEO immediately (file on disk).
 - +minutes: visible in corporate GitHub (once CEO runs `/publish-corporate` + `git push`).
-- +0-60 min after GitHub push: visible in each online exec's `corporate/` tree (via their scheduled task).
+- After the GitHub push: visible in an exec's `.corporate-repo/` the next time
+  they run `python scripts/sync-corporate.py` or `/sync`. No sooner, and no
+  upper bound — an offline exec catches up on their next pull. The old
+  "+0-60 min ... via their scheduled task" row described the retired
+  `31C-Sync-{slug}` task and was removed 2026-08-23.
 - Exec session: exec reads their local `corporate/` copy; no network call per read.
 
 ## Documentation Distribution

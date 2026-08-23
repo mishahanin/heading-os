@@ -89,16 +89,14 @@ Last Updated: 2026-08-20
 
 5. **NEVER hand-type the file list** or write ad-hoc Python inline. Use the script as the single source of truth. If the script's classification logic is wrong for a specific case, add a rule to `config/routing-map.yaml`. Never work around the script.
 
-> **R16 Layer 2 (staged rollout) — current state.** Publish still targets `main`
-> directly (this Phase 3), so non-canary execs keep receiving updates unchanged.
-> The two-stage flow is built and additive. `scripts/publish-corporate.py --bump-build`
-> increments BUILD.json without a manual edit, `/promote-corporate` gates a
-> `staging -> main` fast-forward after canary soak, and `/rollback-corporate` reverts
-> a bad build. The cutover flips publish to push `staging`, bumps on every staging
-> push, and drops the manual bump here. It is a human-gated step, pending a GPG
-> signing key, GitHub branch protection on `heading-os-corporate/main`, and canary
-> activation on the canary exec (`admin/provision/provision_exec.py --canary`).
-> Until that cutover, keep bumping BUILD.json on `main` as below.
+> **Publish targets `main` directly. There is one stage, not two.** A
+> staging-branch-plus-canary rollout was written in 2026-05 and removed on
+> 2026-08-23: measured, it had no entry point (publish never wrote to
+> `staging`), no scheduled smoke run to open its gate, and no live canary
+> install, against a repo published three times in three months. The rationale
+> is in `docs/EXTENDING.md`; the code is recoverable from git history.
+> `scripts/publish-corporate.py --bump-build` still increments BUILD.json when
+> you want a build number, and it stays opt-in.
 
 ### Phase 3: Build & Release
 

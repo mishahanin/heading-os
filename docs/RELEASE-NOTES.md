@@ -78,6 +78,22 @@ Measured on the operator's real query path, with no forced threshold.
 
 `threshold` is now a per-layer key, set to 0.45 on the commit layers only. `content` keeps 0.55 untouched, because a global drop would have bought commit recall at the price of prose precision. The cost is stated rather than waved away: one nonsense query in six now gets a confident-looking hit on this layer.
 
+> **Re-measured 2026-08-23, and "seven" does not reproduce.** An audit read the
+> "seven of 23" above against the table beside it and called it arithmetically
+> impossible. Re-running `scripts/eval-query-set.py --phase 1` on today's index
+> rather than reasoning from the table: the shipped default answers 23 of 25
+> (Set A 11/13, Set B 12/12, matching the table exactly), and `--threshold 0.55`
+> answers 22 of 25. The cut costs **one** answer today, not seven, and the one
+> it costs is the query "the plan still promised work that was already
+> delivered", rank 1 at the shipped setting and returned at all at 0.55.
+>
+> The sentence is left standing because it describes the state BEFORE
+> `threshold` became a per-layer key, on an index that has since been rebuilt,
+> and that state cannot be reconstructed from here. Per the rule in the next
+> paragraph, it is not being "corrected" to the newer figure by inference — that
+> exact move was made once during this release and was wrong. Quote the 2026-08-23
+> measurement when you need a number; treat "seven" as unreproducible history.
+
 **Both numbers are real, and neither may be quoted without its threshold.** During this release one of them was "corrected" to the other in a reference file. That edit was wrong, was made by trusting a summary line instead of opening the record, and was reverted after re-running the measurement.
 
 **Rebuilding one layer deleted 122 rows of another.** The build's prune removes every stored path the pass did not claim, and a single-layer pass claims nothing else. It is now scoped to layers the pass actually walked, plus layers that no longer exist in the configuration at all, so a dropped layer is still cleaned up. Two tests hold both halves.
@@ -167,7 +183,7 @@ It was built. All **9,608** symbols were indexed.
 
 Set A ≥ 70% top-5. Set B no regression. **Kill criterion: Set A below 50% stops the phase — ship commits only, do not tune.**
 
-The two sets aim at the *same* 13 symbols, varying only the register of the question. That is the control: holding the target fixed isolates the effect being measured.
+The two sets aim at the *same* symbols, varying only the register of the question. That is the control: holding the target fixed isolates the effect being measured. The pairing is 12 of 13, not 13 of 13: `scripts/utils/census_schema.py:validate` has a Set A entry and no Set B twin, which is why the denominators below differ.
 
 | | Result | Bar | |
 |---|---|---|---|

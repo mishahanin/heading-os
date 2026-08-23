@@ -172,7 +172,7 @@ Each skill enforces these before presenting the draft.
 
 - [ ] Document class declared in header (Board Resolution / Formal Notice / Letter of Position / Certificate)
 - [ ] Issuing entity: "31 Concept" - never legal-suffix variants
-- [ ] Reference number auto-generated: `31C-{class}-{YYYY}-{seq}`
+- [ ] Reference number auto-generated: `31C-{CLASS-CODE}-{YYYY}-{QN}-{NNN}`, counted per class code, year and quarter. Class codes: BR, FN, LP, CA, CD. Owner of the format is `.claude/skills/official-doc/SKILL.md`; this line mirrors it. (Partnership documents use a different shape, `31C-{MOU|LOI|TS|PA}-{YYYY}-{NNNN}`, with no quarter segment.)
 - [ ] Date, place, and signing officer explicit
 - [ ] Authoritative voice - declarative, no hedging
 - [ ] No marketing language

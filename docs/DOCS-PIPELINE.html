@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Docs pipeline: where every published page comes from</title>
-<meta name="description" content="The source-of-truth map for the HEADING OS documentation site (docs/, served at">
+<meta name="description" content="The source-of-truth map for the HEADING OS documentation site (docs/, served at https://mishahanin.github.io/heading-os/).">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,7 +77,7 @@
 </aside>
 <main class="content">
   <h1>Docs pipeline: where every published page comes from</h1>
-  <p class="page-meta">The source-of-truth map for the HEADING OS documentation site (docs/, served at</p>
+  <p class="page-meta">The source-of-truth map for the HEADING OS documentation site (docs/, served at https://mishahanin.github.io/heading-os/).</p>
   <p>The source-of-truth map for the HEADING OS documentation site (<code>docs/</code>, served at
 <code>https://mishahanin.github.io/heading-os/</code>). Every <code>docs/*.html</code> page is either
 regenerated from a Markdown source or hand-authored HTML. This file says which,
@@ -87,7 +87,7 @@ the fleet propagation chain and the shared-versus-CEO-only distribution list. Al
 anyone who edits a page under <code>docs/</code>.</p>
 <p>Last Updated: 2026-08-20</p>
 <h2 id="the-one-generator">The one generator</h2>
-<p><code>scripts/regenerate-docs-html.py</code> is the single docs generator. It has four modes:</p>
+<p><code>scripts/regenerate-docs-html.py</code> is the single docs generator. It has five modes:</p>
 <table>
 <thead>
 <tr>
@@ -198,7 +198,10 @@ on 2026-08-20, when that rule was made path-scoped. They give the route a docs o
 template change takes to reach each executive clone. They also give the list of
 pages that are exec-shared, and the list that stays CEO-only.</p>
 <h2 id="propagation-chain">Propagation Chain</h2>
-<p>The CEO manually initiates updates; each exec machine pulls automatically on a schedule.</p>
+<p>The CEO manually initiates updates; each exec pulls manually. There is no
+scheduled sync on the exec side — the auto-sync that used to provide one was
+retired with <code>workspace-sync.py</code>. This sentence claimed the opposite until
+2026-08-23, two headings above the paragraph that retires it.</p>
 <h3 id="ceo-side-manual-initiated-by-push-updates-or-equivalent">CEO side (manual, initiated by <code>/push-updates</code> or equivalent)</h3>
 <p>When Misha updates any shared content in ceo-main:</p>
 <ol>
@@ -236,7 +239,11 @@ pull (or run <code>/sync</code>). Offline execs catch up on their next pull.</p>
 <ul>
 <li>Same session: visible to CEO immediately (file on disk).</li>
 <li>+minutes: visible in corporate GitHub (once CEO runs <code>/publish-corporate</code> + <code>git push</code>).</li>
-<li>+0-60 min after GitHub push: visible in each online exec&rsquo;s <code>corporate/</code> tree (via their scheduled task).</li>
+<li>After the GitHub push: visible in an exec&rsquo;s <code>.corporate-repo/</code> the next time
+  they run <code>python scripts/sync-corporate.py</code> or <code>/sync</code>. No sooner, and no
+  upper bound — an offline exec catches up on their next pull. The old
+  &ldquo;+0-60 min &hellip; via their scheduled task&rdquo; row described the retired
+  <code>31C-Sync-{slug}</code> task and was removed 2026-08-23.</li>
 <li>Exec session: exec reads their local <code>corporate/</code> copy; no network call per read.</li>
 </ul>
 <h2 id="documentation-distribution">Documentation Distribution</h2>

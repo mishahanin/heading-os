@@ -570,6 +570,17 @@ def cmd_question(args) -> int:
               file=sys.stderr)
         return EXIT_UNKNOWN_ID
 
+    if not args.value_from_stdin and not getattr(args, "check", False):
+        # Refuse, do not default to {}. With an empty payload every branch below
+        # read `payload.get("value", "")` and wrote the EMPTY STRING over the
+        # placeholder in every file the question targets, then marked the
+        # question answered and stamped applied_at. One forgotten flag silently
+        # erased placeholders across a freshly cloned workspace -- the exact
+        # corruption this script exists to prevent.
+        print("ERROR: --question needs a value. Pass it on stdin with "
+              "--value-from-stdin, or use --check for a dry run.", file=sys.stderr)
+        return EXIT_SCHEMA_ERROR
+
     try:
         payload = _read_stdin_payload() if args.value_from_stdin else {}
     except SchemaError as e:

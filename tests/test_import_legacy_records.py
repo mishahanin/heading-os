@@ -158,24 +158,56 @@ def test_only_scopes_to_one_subtree(data_root, old_root):
 
 
 def test_traversal_is_refused(data_root, tmp_path):
-    """A source filename engineered to escape the destination is refused, not
-    written outside the destination tree."""
+    """A source tree engineered to escape the destination writes nothing outside it.
+
+    Until 2026-08-23 this test attempted no escape at all: it copied one benign
+    file and asserted that benign file landed where it should. The named security
+    property had zero coverage, so a regression that followed a symlink or a
+    crafted nested path out of the destination passed cleanly.
+
+    Three real attempts now, all of which a legacy tree could genuinely contain:
+    a symlinked FILE aimed above the destination, a symlinked DIRECTORY aimed at
+    a sibling tree, and a nested path whose components spell a climb.
+    """
     from scripts.utils.workspace import get_knowledge_dir
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "victim.md").write_text("original\n", encoding="utf-8")
 
     old = tmp_path / "evil-old"
     (old / "knowledge").mkdir(parents=True)
-    # A legitimate file plus a nested dir we will probe for escape behaviour.
     (old / "knowledge" / "safe.md").write_text("safe\n", encoding="utf-8")
+    # 1. a file symlink aimed at a file outside the source tree
+    (old / "knowledge" / "link.md").symlink_to(outside / "victim.md")
+    # 2. a directory symlink aimed at the tree outside
+    (old / "knowledge" / "linkdir").symlink_to(outside, target_is_directory=True)
+    # 3. a nested path that spells a climb once joined
+    nested = old / "knowledge" / "sub"
+    nested.mkdir()
+    (nested / "deep.md").write_text("deep\n", encoding="utf-8")
 
     mod = _load_importer()
     rc = _run(mod, ["--from", str(old), "--only", "knowledge"])
-    assert rc == 0
+    assert rc in (0, 2), f"the importer neither imported nor refused cleanly: rc={rc}"
 
-    # The safe file lands inside the destination; nothing escaped above it.
-    kd = get_knowledge_dir()
-    assert (kd / "safe.md").exists()
-    # No file was written as a sibling of the destination root (escape guard).
+    kd = get_knowledge_dir().resolve()
+    # Prove the import actually ran, so the assertions below are about its
+    # behaviour and not about a no-op.
+    assert (kd / "safe.md").exists(), "the import did nothing; the rest proves nothing"
+
+    # Whatever it chose to import, nothing may sit outside the destination and
+    # nothing outside may have been modified.
+    assert (outside / "victim.md").read_text(encoding="utf-8") == "original\n", \
+        "the import wrote through a symlink into a file outside the destination"
     assert not (kd.parent / "safe.md").exists()
+    assert not (kd.parent / "victim.md").exists()
+
+    for path in kd.rglob("*"):
+        assert not path.is_symlink(), f"a symlink was copied into the destination: {path}"
+        resolved = path.resolve()
+        assert resolved == kd or kd in resolved.parents, \
+            f"an imported path resolves outside the destination: {path} -> {resolved}"
 
 
 def test_missing_from_dir_exits_nonzero(data_root, tmp_path):

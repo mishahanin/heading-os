@@ -26,7 +26,7 @@ PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
 
 # Phase 1.90: dashboard-side done log. Filters tasks out of /tasks listing
 # without touching tasks.md. The /viraid skill remains canonical.
-DONE_LOG_FILE = "outputs/operations/viraid/_done-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+DONE_LOG_FILE = "outputs/operations/viraid/_done-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 DONE_LOG_MAX_BYTES = 1_000_000
 DONE_NOTE_MAX_CHARS = 200
 TASK_KEY_DESC_PREFIX = 64  # chars of description used in the stable key

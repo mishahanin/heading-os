@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Install as a Claude Code plugin</title>
-<meta name="description" content="HEADING OS ships an installable plugin marketplace, so you can try the engine&#x27;s">
+<meta name="description" content="HEADING OS ships an installable plugin marketplace, so you can try the engine&#x27;s core inside Claude Code with two commands, no clone and no toolchain.">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,7 +77,7 @@
 </aside>
 <main class="content">
   <h1>Install as a Claude Code plugin</h1>
-  <p class="page-meta">HEADING OS ships an installable plugin marketplace, so you can try the engine&#x27;s</p>
+  <p class="page-meta">HEADING OS ships an installable plugin marketplace, so you can try the engine&#x27;s core inside Claude Code with two commands, no clone and no toolchain.</p>
   <p>HEADING OS ships an installable plugin marketplace, so you can try the engine&rsquo;s
 core inside Claude Code with two commands, no clone and no toolchain.</p>
 <p>Last Updated: 2026-08-16</p>
@@ -110,11 +110,13 @@ same way (<code>/plugin install &lt;bundle&gt;@heading-os-marketplace</code>):</
   (editorial-review).</li>
 </ul>
 <p>Bundles ship only skills that run without your private data, credentials, or
-daemons. Skills that need those stay in the full engine. The <code>heading-crm</code>
-skills (crm, viraid, google-contacts) need a private CRM overlay or Google
-OAuth. Skills like email-intel, telegram, osint, and council need Exchange,
+daemons. Skills that need those stay in the full engine. There is no CRM
+bundle to install. The crm, viraid and google-contacts skills need a private
+CRM overlay or Google OAuth. So <code>heading-crm</code> is a reserved name in
+<code>config/plugin-bundles.yaml</code> with no skills in it, and the build skips it.
+Skills like email-intel, telegram, osint, and council need Exchange,
 a session, or third-party API keys. To run those, clone the engine
-(<a href="DEPLOYMENT.md">DEPLOYMENT.md</a>).</p>
+(<a href="DEPLOYMENT.html">DEPLOYMENT.md</a>).</p>
 <h2 id="the-checkpoint-system">The checkpoint system</h2>
 <p><code>heading-core</code> also carries the session checkpoint. It writes down what the next
 session needs before a long session fills its context. A handoff holds the
@@ -272,7 +274,7 @@ devcontainer uses.</p>
 <li><strong>Plugin install</strong> gives you the sovereignty core inside your existing Claude
   Code, with zero setup. It is the fastest way to feel the engine and to layer
   its guards and session skills onto how you already work.</li>
-<li><strong>A full clone</strong> (<a href="DEPLOYMENT.md">DEPLOYMENT.md</a>) gives you the whole engine,
+<li><strong>A full clone</strong> (<a href="DEPLOYMENT.html">DEPLOYMENT.md</a>) gives you the whole engine,
   your own private data overlay, the daemons, and every skill. It is the operator
   setup: the engine you run your company from.</li>
 </ul>
@@ -282,7 +284,7 @@ devcontainer uses.</p>
 content scan and the <code>send_capable -&gt; gated</code> invariant remain the backstops.
 Outbound send stays human-gated everywhere. A plugin install adds capability, it
 never adds a path around the human approve click. See
-<a href="SECURITY-MODEL.md">SECURITY-MODEL.md</a>.</p>
+<a href="SECURITY-MODEL.html">SECURITY-MODEL.md</a>.</p>
 <h2 id="for-maintainers-publishing">For maintainers: publishing</h2>
 <p>The marketplace repo is a generated distribution artifact. Never hand-edit it.
 To cut a new release, run the publisher from the engine. It builds the bundles
@@ -293,7 +295,7 @@ and license, and pushes:</p>
 <p>One-time bootstrap of the marketplace checkout is documented at the top of
 <code>scripts/dev/publish-marketplace.py</code>. The bundle manifest is
 <code>config/plugin-bundles.yaml</code>, and the generator is <code>scripts/dev/build-plugins.py</code>;
-both are described in <a href="EXTENDING.md">EXTENDING.md</a>.</p>
+both are described in <a href="EXTENDING.html">EXTENDING.md</a>.</p>
 <h3 id="automatic-publishing">Automatic publishing</h3>
 <p>You do not have to run the publisher by hand. The <code>publish-marketplace</code> GitHub
 Action republishes the marketplace whenever a push to <code>main</code> touches a bundle

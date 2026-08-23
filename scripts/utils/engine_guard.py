@@ -65,16 +65,24 @@ def repo_carried_paths(root: Path) -> list[str]:
 
     Respects .gitignore so build/venv noise is excluded, and is the exact set that
     could leak into the repo on the next commit/push.
+
+    `-z` is load-bearing, not tidiness. Without it git C-quotes any path holding a
+    non-ASCII byte, so `crm/contacts/иван.md` arrives wrapped in a double quote
+    with each Cyrillic byte written as a backslash escape. The leading quote breaks
+    the `crm/contacts/` prefix, the routing lookup falls through to the
+    `engine` default, and the wall clears exactly the file it exists to stop. This
+    is a bilingual RU/EN workspace, so such a filename is ordinary. NUL-terminated
+    output is never quoted and never escaped.
     """
     paths: list[str] = []
     for args in (
-        ["git", "ls-files"],
-        ["git", "ls-files", "--others", "--exclude-standard"],
+        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "-z", "--others", "--exclude-standard"],
     ):
         out = subprocess.run(
             args, cwd=str(root), capture_output=True, text=True, check=True
         ).stdout
-        paths.extend(line for line in out.splitlines() if line.strip())
+        paths.extend(entry for entry in out.split("\0") if entry.strip())
     return paths
 
 

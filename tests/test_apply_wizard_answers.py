@@ -950,3 +950,44 @@ def test_question_result_includes_files_skipped(tmp_workspace):
     out = json.loads(result.stdout)
     assert "files_skipped" in out, "files_skipped field required per spec"
     assert isinstance(out["files_skipped"], int)
+
+
+# ============================================================
+# A missing --value-from-stdin must refuse, never erase
+# ============================================================
+def test_question_without_a_value_refuses_instead_of_erasing(tmp_workspace):
+    """The 2026-08-23 defect: `payload = _read_stdin_payload() if
+    args.value_from_stdin else {}` meant a forgotten flag produced an empty
+    payload, `payload.get("value", "")` produced the empty string, and every
+    file the question targets had its placeholder replaced by nothing -- then
+    the question was marked answered and stamped applied_at. One mistyped
+    invocation, silent corruption of a fresh clone.
+
+    The workspace is set up for real here. My first draft ran from a bare
+    tmp_path, so the script died on a missing question bank and the test passed
+    for the wrong reason -- the same vacuity this batch of work is about.
+    """
+    # No identity file -> audience "public", which is where the placeholder
+    # questions live.
+    (tmp_workspace / "config").mkdir(exist_ok=True)
+    shutil.copy(REPO / "config" / "wizard-questions.yaml",
+                tmp_workspace / "config" / "wizard-questions.yaml")
+    victim = tmp_workspace / "target.md"
+    victim.write_text("owner: {{OPERATOR_NAME}}\n", encoding="utf-8")
+
+    bank = yaml.safe_load(
+        (tmp_workspace / "config" / "wizard-questions.yaml").read_text(encoding="utf-8"))
+    questions = bank["questions"] if isinstance(bank, dict) else bank
+    placeholder_q = next(q for q in questions
+                         if q.get("type") == "placeholder"
+                         and "public" in (q.get("audience") or []))
+
+    result = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "apply-wizard-answers.py"),
+         "--question", placeholder_q["id"]],
+        cwd=tmp_workspace, capture_output=True, text=True,
+    )
+    combined = (result.stderr + result.stdout).lower()
+    assert result.returncode != 0, f"a value-less --question succeeded: {combined}"
+    assert "question bank not found" not in combined, "the test set-up is wrong, not the script"
+    assert "value" in combined and "stdin" in combined

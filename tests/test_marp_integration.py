@@ -85,10 +85,31 @@ class TestSampleDeckRender:
             f"render failed, cannot check structure: {sample_deck_result.get('errors', 'unknown error')}"
         )
 
-        # Structural check would parse the HTML for section elements
-        # For now, verify the render succeeded and golden file can be loaded
+        # Compare the RENDER against the golden file. Until 2026-08-23 this
+        # loaded the golden file and asserted a property of the golden file --
+        # `section_count > 0` -- so any structural regression in the rendered
+        # HTML passed as long as the baseline was non-empty, and the golden
+        # mechanism could rot invisibly. A golden test that never reads the
+        # artefact under test is not a golden test.
+        import re
+
         golden = json.loads(golden_path.read_text(encoding="utf-8"))
-        assert golden.get("section_count", 0) > 0
+        html_outputs = [o for o in sample_deck_result["outputs"] if o["type"] == "html"]
+        assert html_outputs, "no HTML output to compare against the golden file"
+        html = Path(html_outputs[0]["path"]).read_text(encoding="utf-8")
+
+        rendered = [set(m.group(1).split())
+                    for m in re.finditer(r'<section[^>]*\bclass="([^"]*)"', html)]
+        assert len(rendered) == golden["section_count"], (
+            f"section count drifted: rendered {len(rendered)}, "
+            f"golden {golden['section_count']}")
+
+        for expected in golden["sections"]:
+            got = rendered[expected["index"]]
+            missing = set(expected["classes"]) - got
+            assert not missing, (
+                f"section {expected['index']} lost class(es) {sorted(missing)}; "
+                f"rendered classes were {sorted(got)}")
 
 
 class TestWorkspaceTransform:

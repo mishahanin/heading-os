@@ -1,0 +1,50 @@
+# Which ollama serves THIS machine. Template -- copy to config/ollama-hosts.yaml.
+#
+#   cp config/ollama-hosts.example.yaml config/ollama-hosts.yaml
+#
+# The live file is gitignored on purpose. Every address below is a fact about
+# one computer: `auto:11434` means "whatever answers at this machine's default
+# gateway on port 11434", which on a WSL2 laptop is the Windows side and on a
+# server is the router. Committing it would point every other clone at nothing.
+#
+# NO FILE AT ALL IS A VALID SETUP. Then both jobs use http://localhost:11434,
+# nothing is probed, and a clone with one local ollama works with zero setup.
+# Only fill this in when a second, faster ollama exists somewhere else.
+#
+# Entry forms:
+#   auto            the default gateway, port 11434 (resolved at run time)
+#   auto:11436      the default gateway, port 11436
+#   http://10.0.0.5:11434    a literal base URL
+#
+# `auto` is resolved on every call rather than written out once because WSL2
+# picks a new gateway address on restart: a literal that works today is a
+# silent outage after the next reboot.
+#
+# A list is tried in order, first to answer wins. List several ports on the same
+# machine when you cannot control which one it binds: the Ollama desktop app for
+# Windows manages its own bind address from its settings and IGNORES the
+# OLLAMA_HOST environment variable, so an auto-update restart can move it back
+# to 11434 under a pin that says 11436.
+
+# EMBEDDING -- this is a PIN. When nothing here answers, the run FAILS instead of
+# embedding somewhere else. Vectors from two model builds are not comparable,
+# and a silent switch to a second embedder looks exactly like working software.
+# The named way out is `memory-index build --allow-host-fallback`.
+embed: []
+# embed:
+#   - "auto:11434"
+#   - "auto:11436"
+
+# GENERATION (the local summarizer model) -- also a PIN. When nothing here
+# answers, the run FAILS and names the addresses it tried.
+#
+# It is a pin for a blunter reason than embedding's: on the machine this was
+# written for there is no second ollama to fall back to. Falling back to
+# localhost when no daemon is installed there produces a connection error two
+# layers deeper, which reads as a bug in the caller. If your machine DOES run a
+# usable local model, leaving this empty is the better setup - then the local
+# daemon is used directly, with no pin and no probe.
+generate: []
+# generate:
+#   - "auto:11434"
+#   - "auto:11436"

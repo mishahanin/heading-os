@@ -42,9 +42,11 @@ same way (`/plugin install <bundle>@heading-os-marketplace`):
   (editorial-review).
 
 Bundles ship only skills that run without your private data, credentials, or
-daemons. Skills that need those stay in the full engine. The `heading-crm`
-skills (crm, viraid, google-contacts) need a private CRM overlay or Google
-OAuth. Skills like email-intel, telegram, osint, and council need Exchange,
+daemons. Skills that need those stay in the full engine. There is no CRM
+bundle to install. The crm, viraid and google-contacts skills need a private
+CRM overlay or Google OAuth. So `heading-crm` is a reserved name in
+`config/plugin-bundles.yaml` with no skills in it, and the build skips it.
+Skills like email-intel, telegram, osint, and council need Exchange,
 a session, or third-party API keys. To run those, clone the engine
 ([DEPLOYMENT.md](DEPLOYMENT.md)).
 

@@ -160,13 +160,31 @@ def main() -> None:
         _log("recall subprocess failed", exc)
         _emit("")
 
+    # Parse BEFORE judging the exit code. A non-zero exit still carries JSON when
+    # the backend refused to embed, and that refusal is the one failure the
+    # operator must see rather than mistake for an empty memory.
+    try:
+        result = json.loads(proc.stdout or "{}")
+    except Exception:
+        result = {}
+
+    down = result.get("embed_unavailable") or {}
+    if down:
+        _emit(
+            "## WARNING: memory did NOT run — the embedder is down\n\n"
+            f"{down.get('reason')}\n\n"
+            "Recall answered nothing for this message, and that is an outage, not "
+            "an empty memory. Tell the operator in your reply, at the top, before "
+            "anything else. Embedding is pinned to the Windows-side ollama: start "
+            "the Ollama tray app on Windows. Do not treat any 'not in memory' "
+            "conclusion in this session as established until it is back.\n\n"
+        )
+
     if proc.returncode != 0:
         _log(f"recall exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
         _emit("")
-    try:
-        result = json.loads(proc.stdout or "{}")
-    except Exception as exc:
-        _log("recall emitted unparseable JSON", exc)
+    if not result:
+        _log("recall emitted unparseable JSON")
         _emit("")
 
     # The backend prints its red banner on stderr, which this hook captures and

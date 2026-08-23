@@ -29,6 +29,7 @@ from typing import Any
 
 import yaml
 
+from scripts.utils.sensitive import sensitivity_is_declared
 from scripts.utils.workspace import get_workspace_root
 
 logger = logging.getLogger(__name__)
@@ -273,6 +274,29 @@ def call_anthropic_with_fallback(
             raise
 
     # ---- Cascade ----
+    # A declared-sensitive session never reaches a second vendor. The prompts
+    # this module carries are daemon prompts - sentinel and email-intelligence
+    # are named Track A targets in the docstring above - so a cascade ships email
+    # bodies and calendar subjects to Gemini, Grok or Kimi. That the chain exists
+    # at all is a deliberate, configured arrangement and stays; what was missing
+    # until 2026-08-23 was the case where the operator has already said otherwise.
+    #
+    # `sensitivity_is_declared()`, NOT `is_sensitive()`. The latter is fail-closed
+    # and answers True whenever the variable was never set, which is every daemon
+    # host by default - gating on it would silently kill the whole failover chain
+    # in production, turning an Anthropic outage into a total outage. A
+    # DECLARATION is a different fact: a person typed it, and it knows something
+    # no denylist does.
+    if sensitivity_is_declared():
+        logging.warning(
+            "llm_fallback: SENSITIVE_MODE is declared; refusing to cascade "
+            "skill=%s err=%s", skill_name, primary_error,
+        )
+        raise RuntimeError(
+            f"anthropic failed ({primary_error}) and SENSITIVE_MODE is declared, "
+            f"so this prompt was not sent to another vendor"
+        )
+
     tier = _tier_for_model(model)
     chain = (_load_config().get("tiers", {}).get(tier, {}) or {}).get("chain", [])
     if not chain:

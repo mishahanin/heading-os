@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,8 +48,53 @@ def test_is_daemon_alive_false_when_no_pid_file(daemon_mod, tmp_path, monkeypatc
     assert daemon_mod.is_daemon_alive() is False
 
 
+def _reaped_pid() -> int:
+    """A PID that was alive, then exited and was reaped. Genuinely stale.
+
+    The 2026-08-23 audit caught the previous version asserting that PID 999999
+    "cannot" exist. On this machine `/proc/sys/kernel/pid_max` is 4194304, so
+    999999 is an ordinary allocatable PID: whether the test measured anything
+    depended on which processes the host happened to be running. A busy CI
+    runner or a container with a large PID space could fail it outright.
+
+    Spawning and reaping a child gives a PID that is dead by construction, on
+    every platform, and the caller can verify the daemon module agreed it was
+    alive first.
+    """
+    proc = subprocess.Popen([sys.executable, "-c", ""])
+    proc.wait(timeout=30)
+    return proc.pid
+
+
 def test_is_daemon_alive_false_when_pid_is_stale(daemon_mod, tmp_path, monkeypatch):
     pid_file = tmp_path / "daemon.pid"
-    pid_file.write_text("999999")  # implausible PID
+    pid_file.write_text(str(_reaped_pid()))
     monkeypatch.setattr(daemon_mod, "PID_FILE", pid_file)
     assert daemon_mod.is_daemon_alive() is False
+
+
+def test_is_daemon_alive_true_for_a_live_pid(daemon_mod, tmp_path, monkeypatch):
+    """The other direction. Without it, a probe stuck at False would pass.
+
+    That is not hypothetical: the stale-PID test above is the only caller of
+    `_pid_is_running`, and an `is_daemon_alive` that always returned False
+    satisfied the whole file.
+    """
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        pid_file = tmp_path / "daemon.pid"
+        pid_file.write_text(str(proc.pid))
+        monkeypatch.setattr(daemon_mod, "PID_FILE", pid_file)
+        assert daemon_mod.is_daemon_alive() is True
+    finally:
+        proc.kill()
+        proc.wait(timeout=30)
+
+
+def test_is_daemon_alive_false_for_a_nonsense_pid_file(daemon_mod, tmp_path,
+                                                       monkeypatch):
+    pid_file = tmp_path / "daemon.pid"
+    monkeypatch.setattr(daemon_mod, "PID_FILE", pid_file)
+    for junk in ("", "not-a-pid", "0", "-1", "  \n"):
+        pid_file.write_text(junk)
+        assert daemon_mod.is_daemon_alive() is False, repr(junk)

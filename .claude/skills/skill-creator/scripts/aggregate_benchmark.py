@@ -173,6 +173,39 @@ def load_run_results(benchmark_dir: Path) -> dict:
     return results
 
 
+# The two roles a config directory can play. The delta the benchmark exists to
+# report is always PRIMARY minus BASELINE.
+#
+# Until 2026-08-23 the roles were taken from `sorted()` discovery order, which
+# is correct for the new-skill layout ("with_skill" < "without_skill", "new" <
+# "old") and INVERTED for the improve-an-existing-skill layout that
+# references/running-evals.md prescribes: the baseline saves to `old_skill/`,
+# and "old_skill" sorts before "with_skill". A skill that genuinely improved
+# reported a negative pass-rate delta, against the one decision the whole
+# benchmark supports. `eval-viewer/viewer.html` already knew the answer:
+#   isBaseline = config === "without_skill" || config === "old_skill"
+BASELINE_CONFIGS = ("without_skill", "old_skill")
+PRIMARY_CONFIGS = ("with_skill", "new_skill")
+
+
+def split_configs(configs: list[str]) -> tuple[str | None, str | None]:
+    """Return (primary, baseline) config names, resolved by role.
+
+    Falls back to discovery order only when neither name is recognised, so an
+    unnamed layout keeps its old behaviour instead of silently reporting 0.
+    """
+    primary = next((c for c in configs if c in PRIMARY_CONFIGS), None)
+    baseline = next((c for c in configs if c in BASELINE_CONFIGS), None)
+    if primary is None and baseline is None:
+        primary = configs[0] if configs else None
+        baseline = configs[1] if len(configs) >= 2 else None
+    elif primary is None:
+        primary = next((c for c in configs if c != baseline), None)
+    elif baseline is None:
+        baseline = next((c for c in configs if c != primary), None)
+    return primary, baseline
+
+
 def aggregate_results(results: dict) -> dict:
     """
     Aggregate run results into summary statistics.
@@ -203,13 +236,11 @@ def aggregate_results(results: dict) -> dict:
             "tokens": calculate_stats(tokens)
         }
 
-    # Calculate delta between the first two configs (if two exist)
-    if len(configs) >= 2:
-        primary = run_summary.get(configs[0], {})
-        baseline = run_summary.get(configs[1], {})
-    else:
-        primary = run_summary.get(configs[0], {}) if configs else {}
-        baseline = {}
+    # Delta is primary MINUS baseline, and the roles come from the config
+    # NAMES, never from discovery order. See split_configs.
+    primary_name, baseline_name = split_configs(configs)
+    primary = run_summary.get(primary_name, {}) if primary_name else {}
+    baseline = run_summary.get(baseline_name, {}) if baseline_name else {}
 
     delta_pass_rate = primary.get("pass_rate", {}).get("mean", 0) - baseline.get("pass_rate", {}).get("mean", 0)
     delta_time = primary.get("time_seconds", {}).get("mean", 0) - baseline.get("time_seconds", {}).get("mean", 0)
@@ -283,10 +314,14 @@ def generate_markdown(benchmark: dict) -> str:
     metadata = benchmark["metadata"]
     run_summary = benchmark["run_summary"]
 
-    # Determine config names (excluding "delta")
+    # Determine config names (excluding "delta"). Column A is the primary and
+    # column B the baseline, matching the Delta column's own subtraction —
+    # otherwise the table shows baseline-first with a primary-minus-baseline
+    # delta beside it, and reads backwards.
     configs = [k for k in run_summary if k != "delta"]
-    config_a = configs[0] if len(configs) >= 1 else "config_a"
-    config_b = configs[1] if len(configs) >= 2 else "config_b"
+    primary_name, baseline_name = split_configs(configs)
+    config_a = primary_name or "config_a"
+    config_b = baseline_name or "config_b"
     label_a = config_a.replace("_", " ").title()
     label_b = config_b.replace("_", " ").title()
 

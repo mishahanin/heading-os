@@ -11,14 +11,23 @@
 # Local embedder (ollama). bge-m3 is multilingual (RU/EN), 1024-dim.
 # Локальный эмбеддер. host вынесен сюда => будущий VM-офлоад = смена строки.
 model: bge-m3
-# `auto:<port>` resolves the current default gateway at run time, so this
-# follows the WSL NAT address instead of pinning one that changes on the next
-# WSL restart. It points at the Windows-side ollama, whose iGPU embeds ~1.9x
-# faster than the WSL CPU daemon (median 18.2 vs 9.5 vectors/s, measured
-# 2026-08-18). Unreachable - Windows rebooted, tray not up - degrades to
-# http://localhost:11434 with one stderr line, never a failed refresh.
-# A plain URL still works here; see scripts/utils/ollama_host.py.
-host: "auto:11436"
+# WHERE EMBEDDING RUNS: NOT HERE. This file is tracked and ships to every clone,
+# and a host address is a fact about one computer -- `auto:11434` means "whatever
+# answers at this machine's default gateway", which is the Windows side on a WSL2
+# laptop and a router anywhere else. A pin REFUSES rather than degrades
+# (operator directive, 2026-08-23), so for one day a pin written here made
+# `memory-index build` fail on every clone that was not this laptop, while the
+# clone's own ollama sat there working.
+#
+# The pin therefore lives in `config/ollama-hosts.yaml`, gitignored, machine-
+# local, one entry for `embed` and one for `generate`. Template and the full
+# rationale: `config/ollama-hosts.example.yaml`. No file there is a valid setup:
+# both jobs then use http://localhost:11434 and nothing is probed.
+#
+# `host:` below still WINS when it is set, because an operator who writes an
+# address into the shared config means it for the whole workspace. Leave it empty
+# unless you know every clone of this repo should follow.
+host:
 
 # How long ollama keeps the embed model resident after a request. Ollama's own
 # default is 5 minutes, and a working session pauses for longer than that

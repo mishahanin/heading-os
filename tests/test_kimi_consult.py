@@ -102,3 +102,62 @@ def test_cli_reasoning_effort_passed_through(monkeypatch):
                     "--model", "k3", "--reasoning-effort", "max", "--timeout", "480"]) == 0
     assert captured["reasoning_effort"] == "max"
     assert captured["timeout"] == 480.0
+
+
+# ============================================================
+# The documented exit contract is 0 / 2 / 3 -- nothing else
+# ============================================================
+def test_an_unwrapped_error_still_exits_three(monkeypatch):
+    """`call_model` wraps the API errors it knows into RuntimeError, but not
+    every one. An unlisted APIStatusError subclass, or a KeyError on an
+    unexpected response shape, used to escape as a traceback and exit 1 -- a
+    code the module docstring does not define, so a caller following the
+    contract mis-handled it.
+    """
+    def _boom(*a, **k):
+        raise KeyError("choices")
+
+    monkeypatch.setattr(kc, "call_model", _boom)
+    rc = kc.main(["--mode", "independent", "--question", "why"])
+    assert rc == 3, f"expected the documented API-failure code 3, got {rc}"
+
+
+def test_a_missing_key_still_exits_two(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("KIMI_API_KEY is missing from .env")
+
+    monkeypatch.setattr(kc, "call_model", _boom)
+    assert kc.main(["--mode", "independent", "--question", "why"]) == 2
+
+
+# --------------------------------------------------------- the length cap CLI
+#
+# `--length-hint` landed 2026-08-23. The 2026-08-23 engine audit ran its
+# per-file shards through this wrapper, and every shard silently inherited
+# "Aim for 200-400 words." from `council_prompts` while its own question said
+# "list EVERY defect". The cap belongs to a council consult, not to enumeration.
+
+def test_the_council_word_cap_is_still_the_default(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(kc, "consult_kimi",
+                        lambda prompt, **k: captured.setdefault("p", prompt) or "answer")
+    assert kc.main(["--mode", "independent", "--question", "Q?"]) == 0
+    assert kc.DEFAULT_LENGTH_HINT in captured["p"]
+
+
+def test_an_empty_length_hint_removes_the_cap_from_the_prompt(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(kc, "consult_kimi",
+                        lambda prompt, **k: captured.setdefault("p", prompt) or "answer")
+    assert kc.main(["--mode", "independent", "--question", "List every defect.",
+                    "--length-hint", ""]) == 0
+    assert "200-400" not in captured["p"]
+    assert "List every defect." in captured["p"], "the question itself was lost"
+
+
+def test_the_flag_reaches_critique_mode_too(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(kc, "consult_kimi",
+                        lambda prompt, **k: captured.setdefault("p", prompt) or "answer")
+    assert kc.main(["--mode", "critique", "--draft", "D", "--length-hint", ""]) == 0
+    assert "200-400" not in captured["p"]

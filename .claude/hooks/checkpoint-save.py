@@ -187,6 +187,17 @@ def main() -> int:
         )
         return 0
 
+    # A payload that is valid JSON but not an object still has `.get` called on
+    # it. `[]`, `"x"` and `3` all parse, then raise an uncaught AttributeError.
+    # Measured 2026-08-23 with `echo '[]' | python <hook>`: exit 1, traceback.
+    # `.claude/hooks/checkpoint-inject.py` fixed this shape on 2026-08-20 and
+    # these were missed. Degrade to the empty dict, which every path below
+    # already handles, rather than dropping the hook's whole job.
+    if not isinstance(payload, dict):
+        print(f"checkpoint-save: payload was {type(payload).__name__}, not an "
+              "object; continuing with defaults", file=sys.stderr)
+        payload = {}
+
     raw_session_id = payload.get("session_id", "session")
     raw_trigger = payload.get("trigger", "unknown")
     raw_transcript_path = payload.get("transcript_path", "")

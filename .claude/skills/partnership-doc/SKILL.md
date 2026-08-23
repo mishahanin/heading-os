@@ -119,7 +119,7 @@ Outputs: PDF + DOCX.
 
 ## Phase 5: Report
 
-Full absolute paths. "Word count: X. Hidden characters: clean."
+Full absolute paths, then the confirmation line from `.claude/rules/hidden-chars.md`.
 
 ## Reference Numbering
 

@@ -192,6 +192,85 @@ def test_handoff_fails_when_only_the_post_compaction_archive_exists(tree):
 
 
 # ============================================================
+# The two clocks
+# ============================================================
+#
+# Found by the 2026-08-23 audit, and invisible to every test above because they
+# all invent an archive stamp in the same numeric frame as the boundary.
+#
+# A boundary timestamp comes out of the transcript in UTC. An archive FILENAME
+# stamp comes out of `checkpoint-save.py`, which uses `CP.local_now()` — the
+# operator's own zone, deliberately, so a handoff written at 02:56 Dubai time
+# does not land on yesterday's date. Comparing the two as strings is comparing
+# two different clocks, and on Asia/Dubai the archive reads four hours late.
+#
+# Measured before the fix: `--assert-handoff-precedes-compaction` reported 40
+# violations on this workspace's real transcripts, including session c2f703f7 at
+# 2026-08-21T13:08:05Z, whose `auto` handoff sits at `2026-08-21-170420` — that
+# is 13:04:20 UTC, four minutes BEFORE the boundary it was accused of missing.
+
+
+@pytest.fixture()
+def dubai(monkeypatch):
+    """Pin the probe's display zone to UTC+4, whatever the host is set to."""
+    from datetime import timedelta, timezone as _tz
+
+    monkeypatch.setattr(probe, "get_default_tz", lambda: _tz(timedelta(hours=4)))
+
+
+def test_handoff_reads_the_archive_stamp_on_the_archive_clock(tree, dubai):
+    """The real c2f703f7 case: a handoff four minutes early, filed four hours on."""
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-21T13:08:05.956Z", "manual", 324190, 10929),
+    ])
+    _archive(tree, SESSION, "auto", "2026-08-21-170420")
+    assert probe.assert_handoff_precedes(_scan_all(tree), tree["project"]) == [], (
+        "a handoff written before the boundary was read as written after it, "
+        "because the event stamp is UTC and the filename stamp is local"
+    )
+
+
+def test_handoff_still_fails_when_the_archive_really_is_later(tree, dubai):
+    """The fix must not simply widen the window by four hours.
+
+    17:09:00 local is 13:09:00 UTC — one minute AFTER the boundary. This is the
+    mutation that catches a fix that converts in the wrong direction.
+    """
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-21T13:08:05.956Z", "manual", 324190, 10929),
+    ])
+    _archive(tree, SESSION, "auto", "2026-08-21-170900")
+    assert probe.assert_handoff_precedes(_scan_all(tree), tree["project"]), (
+        "an archive written after the boundary satisfied the assertion"
+    )
+
+
+def test_the_driven_assertion_stays_on_the_utc_clock(tree, dubai):
+    """The other half of the split, and the reason for two helpers.
+
+    `compact_requests[].at` is written with `CP.utc_now()`, so THAT comparison
+    was always right. Converting the event stamp globally would break it: a
+    request at 13:07:00Z would be read against a 17:08:05 event stamp and every
+    later request would look like it preceded the boundary.
+    """
+    _transcript(tree["transcripts"], SESSION, [
+        _boundary("2026-08-21T13:08:05.956Z", "manual", 324190, 10929),
+    ])
+    _write_state(tree, SESSION, compact_requests=[
+        {"at": "2026-08-21T13:07:00+00:00", "bucket": 45}
+    ])
+    assert probe.assert_driven(_scan_all(tree), tree["project"]) == []
+
+    _write_state(tree, SESSION, compact_requests=[
+        {"at": "2026-08-21T13:09:00+00:00", "bucket": 45}
+    ])
+    assert probe.assert_driven(_scan_all(tree), tree["project"]), (
+        "a request made after the boundary was accepted, so the driven check "
+        "is now reading the event on the display clock"
+    )
+
+
+# ============================================================
 # --assert-no-native-compaction and --assert-no-cascade
 # ============================================================
 

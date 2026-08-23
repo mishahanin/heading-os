@@ -1,0 +1,20 @@
+[Unit]
+Description=31C ollama guard (start the pinned ollama when nothing answers)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{WORKSPACE}}
+# `heal`, not `check`: probe, and start the Windows-side application only when
+# no pinned address answers. It never restarts a healthy daemon -- a periodic
+# restart would evict the resident model and turn every following first query
+# from 0.87 s back into 7.00 s (measured 2026-08-22).
+ExecStart={{PYTHON}} {{WORKSPACE}}/scripts/ollama-guard.py heal
+# Exit 1 means "still down after trying", which is information, not a unit
+# failure to alarm on: the ops radar is what reports a sustained outage. Exit 2
+# (unreadable host config) is left failing, because that IS a broken install.
+SuccessExitStatus=0 1
+Environment=TZ={{TZ}}
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal

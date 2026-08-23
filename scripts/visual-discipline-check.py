@@ -498,7 +498,12 @@ def _run_audit(root, *, strict, deep, profile, use_baseline, include_internal):
         key = impeccable_engine.relative_path(f)
         try:
             res = audit_file(f, strict=strict, deep_findings=deep_map.pop(key, None))
-        except RuntimeError as exc:
+        # OSError and UnicodeError as well as RuntimeError. Only scan_pptx wraps
+        # its failures; the HTML/SVG path calls read_text directly, so one
+        # unreadable file -- a permission bit, a dangling symlink -- killed a
+        # whole scan with a traceback and an uncontrolled exit code instead of
+        # reporting that file and carrying on.
+        except (RuntimeError, OSError, UnicodeError) as exc:
             print(f"  {RED}error{RESET}: {exc}", file=sys.stderr)
             any_fail = True
             continue
@@ -543,16 +548,25 @@ def _cmd_baseline(args):
         return 2
 
     if args.action == "record":
-        if args.deep and impeccable_engine.resolve_cli() is None:
+        # `check` below always runs deep, so `record` must too, whatever the
+        # caller passed. It used to pass `deep=args.deep`: a baseline recorded
+        # without --deep froze only the regex engine, and every deep finding
+        # that existed at record time then failed every later check, forever.
+        # That is precisely the asymmetry the comment below warns about, in the
+        # line the comment sits above. Requiring the CLI here is the point: a
+        # baseline that cannot see what the gate sees is not a baseline.
+        if impeccable_engine.resolve_cli() is None:
             print(f"  {RED}refusing to record a baseline from a degraded run{RESET} "
-                  f"(--deep was asked for and the CLI is unresolvable)", file=sys.stderr)
+                  f"(the deep CLI is unresolvable, and `baseline check` always "
+                  f"runs deep -- a regex-only baseline would fail every check)",
+                  file=sys.stderr)
             return 2
 
         # Freeze what BOTH engines see, so the recorded line matches what a
         # later `check` will compare against. A record that captured only one
         # engine would leave the other's pre-existing debt failing forever.
         results, _ = _run_audit(
-            root, strict=args.strict, deep=args.deep, profile=args.profile,
+            root, strict=args.strict, deep=True, profile=args.profile,
             use_baseline=False, include_internal=args.include_internal,
         )
         findings = []

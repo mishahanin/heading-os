@@ -125,6 +125,10 @@ def test_summarize_sends_the_directive(chronicle, monkeypatch):
         sent.update(json.loads(req.data.decode()))
         return FakeResponse()
 
+    # The endpoint is resolved lazily since 2026-08-23 and its probe would go
+    # through the very `urlopen` this test replaces, so pin it instead of
+    # letting a fake summarizer response answer a version probe.
+    monkeypatch.setattr(chronicle, "ollama_url", lambda: "http://pinned.test:11434/api/generate")
     monkeypatch.setattr(chronicle.urllib.request, "urlopen", fake_urlopen)
     chronicle.summarize("USER: подними окно хранения транскриптов до года")
 

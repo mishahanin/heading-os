@@ -161,7 +161,18 @@ Optional model overrides (these take **proxy** ids — check `cliproxy models` f
 - `--grok-model grok-3-mini` — passed to the Grok call as `--model grok-3-mini`
 - `--kimi-model <id>` — override the Kimi voice's model (default: `k3`, see fallback above)
 
-Other passthrough flags (apply to all calls): `--temperature`, `--max-tokens`.
+Other passthrough flags (apply to all calls): `--temperature`, `--max-tokens`,
+`--length-hint`.
+
+**A cut-off answer is an ERROR since 2026-08-23, not a short answer.** The
+transport used to return whatever escaped before the budget ran out, exit 0, so
+a half-written critique read as a finished one. On "the answer is cut off
+mid-word", raise `--max-tokens` and `--timeout` together and re-dispatch that
+voice. Never report the failure as the model's opinion.
+
+**`--length-hint` is the closing "Aim for 200-400 words."** Leave it alone here;
+that cap is what a council consult wants. Pass `""` only for an enumerating task
+("list every X"), where a word cap truncates the list.
 
 ### Dispatch IN PARALLEL
 
@@ -318,4 +329,5 @@ The CEO may not have replied when you would otherwise close out, because they we
 - `.claude/rules/terminology.md` - Tribe, ODUN.ONE, DPI+, Five Principles
 - `.claude/rules/hidden-chars.md` - zero invisible Unicode in the transcript
 
-Validation before declaring done: run `python scripts/sanitize-text.py {transcript-path} --scan`. Confirmation line in chat: `Word count: X. Hidden characters: clean.`
+Validation before declaring done: run `python scripts/sanitize-text.py {transcript-path} --scan`
+and report both numbers it prints, per `.claude/rules/hidden-chars.md`.

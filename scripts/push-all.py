@@ -122,21 +122,43 @@ class RepoNotPushable(Exception):
 
 
 def _push_delta_files(repo: Path) -> set[str]:
-    """Files about to be pushed: the committed-but-unpushed delta plus staged and
-    unstaged tracked edits (or all tracked files when origin/main is absent)."""
+    """Files about to be pushed: the committed-but-unpushed delta, staged and
+    unstaged tracked edits, and every untracked file git is not ignoring.
+
+    The untracked leg was missing until 2026-08-23, and the gap was structural
+    rather than incidental. `engine_content_scan` runs at step 0 of `push_repo`,
+    deliberately BEFORE the commit, so that a tree staged with `--no-verify`
+    cannot slip past. But `git diff` sees only tracked files, so a brand-new file
+    was invisible at scan time and committed by `git add -A` a moment later. The
+    routing wall next to it has always used `git ls-files --others`, and the two
+    have to agree about what "about to be pushed" means.
+
+    Ignored files stay out: they are not going to be pushed, and scanning them
+    would refuse a push over the contents of `.sessions/` or a scratch file.
+
+    Every command runs with `-z`. Without it git C-quotes any path holding a
+    non-ASCII byte, and the quoted string matches no routing rule and opens no
+    file - so a Cyrillic-named artifact walked through the content walls on a
+    workspace whose operator writes in Russian. Same defect, same day, as
+    `engine_guard.repo_carried_paths`.
+    """
     have_base = run(
         ["git", "rev-parse", "--verify", "-q", "origin/main"], repo, check=False
     ).returncode == 0
     files: set[str] = set()
     if have_base:
         for args in (
-            ["git", "diff", "--name-only", "--diff-filter=ACM", "origin/main..HEAD"],
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-            ["git", "diff", "--name-only", "--diff-filter=ACM"],
+            ["git", "diff", "-z", "--name-only", "--diff-filter=ACM", "origin/main..HEAD"],
+            ["git", "diff", "-z", "--cached", "--name-only", "--diff-filter=ACM"],
+            ["git", "diff", "-z", "--name-only", "--diff-filter=ACM"],
         ):
-            files.update(run(args, repo).stdout.splitlines())
+            files.update(run(args, repo).stdout.split("\0"))
     else:
-        files.update(run(["git", "ls-files"], repo).stdout.splitlines())
+        files.update(run(["git", "ls-files", "-z"], repo).stdout.split("\0"))
+    files.update(
+        run(["git", "ls-files", "-z", "--others", "--exclude-standard"],
+            repo).stdout.split("\0")
+    )
     return {f for f in files if f}
 
 
@@ -214,7 +236,22 @@ def engine_content_scan(repo: Path, data_root: Path) -> None:
     """
     dl = build_denylist(data_root)
     if dl.degraded or not dl.tokens:
-        return
+        # No overlay = a public clone or CI. Skipping is correct and quiet: the
+        # structural layers still hold and there is nothing to harvest.
+        if data_root is None or not Path(data_root).is_dir():
+            return
+        # An overlay that IS present and still produced a degraded or empty list
+        # means the harvest broke. Refuse: this gate is the only layer that reads
+        # WHAT is inside an engine-routed file, and a silent skip here is exactly
+        # the "looks like coverage" failure the flag exists to prevent.
+        print(f"{RED}REFUSING TO PUSH — the real-entity denylist could not be "
+              f"built from {data_root}.{RESET}")
+        print(f"{GRAY}The content gate reads no file until this is fixed. Check "
+              f"config/content-denylist.yaml for a parse error, and the "
+              f"crm/, admin/ and config/ trees for readability.{RESET}")
+        log_denial(mechanism="push:engine-content-scan", action="push",
+                   path=str(data_root), reason="denylist degraded with an overlay present")
+        sys.exit(2)
     findings: list[tuple[str, int, str, str]] = []
     for rel in sorted(_push_delta_files(repo)):
         if get_routing_destination(rel) != "engine":

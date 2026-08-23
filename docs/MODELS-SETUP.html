@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI models &amp; integrations</title>
-<meta name="description" content="How to connect every AI model HEADING OS uses beyond Claude itself. That means the">
+<meta name="description" content="How to connect every AI model HEADING OS uses beyond Claude itself.">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,7 +77,7 @@
 </aside>
 <main class="content">
   <h1>AI models &amp; integrations</h1>
-  <p class="page-meta">How to connect every AI model HEADING OS uses beyond Claude itself. That means the</p>
+  <p class="page-meta">How to connect every AI model HEADING OS uses beyond Claude itself.</p>
   <!-- version: 1.0.1 | last-updated: 2026-07-03 -->
 
 <p>How to connect every AI model HEADING OS uses beyond Claude itself. That means the
@@ -151,7 +151,7 @@ want a subset, set up only those rows.</p>
 </table>
 <p>Two of these ride on Ollama (the local embedder and Kimi), so install Ollama first
 if you want either. Gemini and Grok are pure cloud APIs and need no local runtime.</p>
-<p>All credentials live in the engine&rsquo;s gitignored <code>.env</code>. See <a href="#6-the-env-block">section 6</a> for
+<p>All credentials live in the engine&rsquo;s gitignored <code>.env</code>. See <a href="#7-the-env-block">section 7</a> for
 the exact block to paste.</p>
 <hr />
 <h2 id="2-ollama-local-runtime">2. Ollama (local runtime)</h2>
@@ -161,7 +161,7 @@ the exact block to paste.</p>
    API key, zero cost. This is what <code>/recall</code> and the memory index run on.</li>
 <li><strong>Cloud routing</strong> for Kimi, where Ollama proxies a request to a hosted
    <code>kimi-k2.6:cloud</code> model. Here the prompt does leave the machine (see the
-   <a href="#52-privacy-guardrail-read-before-using-cloud-voices">privacy guardrail</a>).</li>
+   <a href="#55-privacy-guardrail-read-before-using-cloud-voices">privacy guardrail</a>).</li>
 </ol>
 <p>You need Ollama installed and running for either. If you want neither recall nor
 Kimi, skip this whole section.</p>
@@ -208,17 +208,43 @@ answer queries by meaning rather than exact words. The embeddings are computed l
 <p><code>bge-m3</code> is multilingual (Russian and English), 1024-dimensional, and roughly 1.2 GB
 on disk. The pull is a one-time download.</p>
 <h3 id="32-configuration">3.2 Configuration</h3>
-<p>The embedder is declared in <code>config/memory-index.yaml</code>. The two lines that matter:</p>
+<p>The embed <strong>model</strong> is declared in <code>config/memory-index.yaml</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bge-m3</span>
-<span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://localhost:11434&quot;</span>
 </code></pre></div>
-<p><code>host</code> is broken out deliberately: pointing it at a remote Ollama instance (for
-example a GPU box) is a single-line change. Everything else in that file tunes
-ranking, chunking, and which workspace layers get indexed; the defaults are sound.</p>
-<p><code>host</code> also accepts <code>auto:&lt;port&gt;</code>. The engine then finds the current default
-gateway and uses that address on the named port. Use this form to reach an Ollama
-that runs on the Windows side of WSL2, where the gateway address changes on every
-WSL restart. An unreachable host falls back to <code>http://localhost:11434</code>.</p>
+<p>The <strong>host</strong> is declared somewhere else, and the split is deliberate.
+<code>config/memory-index.yaml</code> is tracked and ships to every clone, while a host
+address is a fact about one computer. So the host lives in
+<code>config/ollama-hosts.yaml</code>, which is gitignored:</p>
+<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>config/ollama-hosts.example.yaml<span class="w"> </span>config/ollama-hosts.yaml
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="nt">embed</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;auto:11434&quot;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;auto:11436&quot;</span>
+<span class="nt">generate</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;auto:11434&quot;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;auto:11436&quot;</span>
+</code></pre></div>
+<p><strong>No file at all is a valid setup</strong>, and it is the default. Both jobs then use
+<code>http://localhost:11434</code>, nothing is probed, and a machine with one local Ollama
+works with zero configuration. Fill the file in only when a second, faster Ollama
+lives somewhere else.</p>
+<p>Two roles, because they may differ: <code>embed</code> is what <code>/recall</code> and the index use,
+<code>generate</code> is what the local summarizer (<code>scripts/chronicle.py</code>) uses.</p>
+<p>Every entry is tried in order. An entry is either a literal base URL or
+<code>auto:&lt;port&gt;</code>, which resolves the current default gateway at run time. Use the
+<code>auto</code> form to reach an Ollama on the Windows side of WSL2. That gateway address
+changes on every WSL restart. A literal address written there works until the
+next reboot, and then stops.</p>
+<p>List several ports of one machine when you cannot control which one it binds. The
+Ollama desktop app on Windows manages its own bind address. It ignores the
+<code>OLLAMA_HOST</code> environment variable and answers on its default <code>11434</code>. A
+hand-started <code>ollama serve</code> answers wherever <code>OLLAMA_HOST</code> told it to. Name both
+ports, and an update that restarts the daemon cannot move it out of reach.</p>
+<p><strong>A configured host is a pin, not a preference.</strong> When none of its entries
+answers, the run FAILS — it does not quietly compute somewhere else. Overrides,
+highest first: <code>host:</code> in <code>config/memory-index.yaml</code> (a deliberate choice for
+every clone), then <code>HEADING_OS_OLLAMA_EMBED_HOST</code> / <code>HEADING_OS_OLLAMA_HOST</code> (a
+one-off), then this file.</p>
 <h3 id="321-one-embedder-or-a-split-store">3.2.1 One embedder, or a split store</h3>
 <blockquote>
 <p><strong>Warning.</strong> Vectors from two different models are not comparable. Cosine
@@ -230,10 +256,12 @@ confident wrong answers.</p>
 <ul>
 <li>The store keeps three values in its <code>meta</code> table: <code>model</code>, <code>embed_host</code>, and
   <code>model_digest</code>. The digest is the sha256 of the model weights.</li>
-<li>A build refuses to run when the preferred host does not answer. Pass
+<li>A build refuses to run when no pinned host answers. Pass
   <code>--allow-host-fallback</code> to accept a mixed-provenance store.</li>
-<li>A query runs on the fallback host and prints a red banner on stderr. The banner
-  names the host you asked for and the host you got.</li>
+<li>A query refuses too, and says so in both renderings: a red banner on stderr, and
+  <code>embed_unavailable</code> in <code>--json</code> with exit code 3. The recall hook turns that
+  into a visible warning. An empty answer from a down embedder reads exactly like
+  a genuine gap in memory, and it is not one.</li>
 <li>A build compares all three values against the store. Different weights under the
   same model tag print <code>WEIGHTS CHANGED</code>.</li>
 </ul>
@@ -246,6 +274,15 @@ so the tag alone cannot detect the change.</p>
 <p>To make a mixed store one provenance again, start the preferred host and rebuild:</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/memory-index.py<span class="w"> </span>build<span class="w"> </span>--force
 </code></pre></div>
+<h3 id="322-keeping-it-answering">3.2.2 Keeping it answering</h3>
+<p>Nothing falls back, so availability matters. <code>scripts/ollama-guard.py</code> probes the
+configured addresses and starts the Windows-side application when none answers:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>scripts/ollama-guard.py<span class="w"> </span>check<span class="w">      </span><span class="c1"># probe only; exit 0 up, 1 down</span>
+python<span class="w"> </span>scripts/ollama-guard.py<span class="w"> </span>heal<span class="w">       </span><span class="c1"># probe, start if needed, re-probe</span>
+bash<span class="w"> </span>scripts/install-ollama-guard-timer.sh<span class="w">   </span><span class="c1"># run `heal` every five minutes</span>
+</code></pre></div>
+<p>It never restarts a daemon that is answering: a periodic restart would evict the
+resident model and pay a cold load on the next query.</p>
 <h3 id="33-build-and-query">3.3 Build and query</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># build (or incrementally refresh) the index. Safe to rerun; only changed files re-embed.</span>
 uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/memory-index.py<span class="w"> </span>build
@@ -460,7 +497,7 @@ voice is live.</p>
 </tr>
 <tr>
 <td><code>memory-index.py</code> errors mentioning the embed endpoint</td>
-<td><code>bge-m3</code> not pulled, or wrong host. <code>ollama pull bge-m3</code>; confirm <code>host:</code> in <code>config/memory-index.yaml</code>.</td>
+<td><code>bge-m3</code> not pulled, or nothing answering at the pinned host. <code>ollama pull bge-m3</code>; run <code>python scripts/ollama-guard.py check</code>; confirm <code>embed:</code> in <code>config/ollama-hosts.yaml</code>.</td>
 </tr>
 <tr>
 <td>First <code>memory-index build</code> runs for a very long time</td>
@@ -504,7 +541,11 @@ voice is live.</p>
 <tbody>
 <tr>
 <td><code>config/memory-index.yaml</code></td>
-<td>Embedder model + host, ranking, chunking, indexed layers</td>
+<td>Embed model, ranking, chunking, indexed layers</td>
+</tr>
+<tr>
+<td><code>config/ollama-hosts.yaml</code></td>
+<td>Which Ollama serves this machine (<code>embed</code> / <code>generate</code>). Gitignored; template <code>config/ollama-hosts.example.yaml</code></td>
 </tr>
 <tr>
 <td><code>scripts/memory-index.py</code></td>

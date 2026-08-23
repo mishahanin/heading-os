@@ -300,10 +300,20 @@ def test_watch_start_writes_pid_file():
     assert ".marp" in str(WATCH_STATE_FILE)
 
 
-def test_watch_stop_handles_missing_state():
-    from scripts.marp_render import watch_stop, WATCH_STATE_FILE
-    WATCH_STATE_FILE.unlink(missing_ok=True)
-    result = watch_stop()
+def test_watch_stop_handles_missing_state(tmp_path, monkeypatch):
+    """Point the module at a tmp path; never unlink the operator's real one.
+
+    The old body did `WATCH_STATE_FILE.unlink(missing_ok=True)` on the REAL
+    `~/.marp/watch.json`. With an actual `marp --watch` session running, this
+    test deleted its live PID/state file, orphaning the process and leaving the
+    real watch unmanageable — a test that mutates production state to check a
+    not-found branch.
+    """
+    import scripts.marp_render as marp
+
+    monkeypatch.setattr(marp, "WATCH_STATE_FILE", tmp_path / ".marp" / "watch.json")
+    assert not marp.WATCH_STATE_FILE.exists()
+    result = marp.watch_stop()
     assert result["ok"] is False
     assert "No active" in result["message"]
 

@@ -123,57 +123,56 @@ otherwise default to `$DECK_DIR`.
 
 ## Combining Batches
 
-**CRITICAL BUG: BACKGROUND MUST BE SET WHEN COMBINING**
+**Do not hand-roll the combine. Run the script.**
 
-When combining, `add_slide()` creates slides with DEFAULT WHITE BACKGROUNDS. Shape copying does NOT copy the slide background. You MUST set the background immediately after creating each new slide.
-
-```python
-from pptx import Presentation
-from pptx.dml.color import RGBColor
-from pathlib import Path
-import os, shutil, copy
-
-def hex_to_rgb(hex_color: str) -> RGBColor:
-    h = hex_color.lstrip("#")
-    return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-
-BRAND_BG = "REPLACE_WITH_BRAND_BACKGROUND"  # from brand.json
-
-output_dir = Path(os.environ["DECK_DIR"])  # data-overlay deck dir (see Execution Methods)
-part_files = sorted(output_dir.glob("{name}-part*.pptx"))
-
-if len(part_files) > 1:
-    combined = Presentation(str(part_files[0]))
-
-    for part_file in part_files[1:]:
-        part_prs = Presentation(str(part_file))
-        for slide in part_prs.slides:
-            new_slide = combined.slides.add_slide(combined.slide_layouts[6])
-
-            # CRITICAL: Set background IMMEDIATELY
-            new_slide.background.fill.solid()
-            new_slide.background.fill.fore_color.rgb = hex_to_rgb(BRAND_BG)
-
-            # Copy all shapes
-            for shape in slide.shapes:
-                el = copy.deepcopy(shape.element)
-                new_slide.shapes._spTree.append(el)
-
-    combined.save(output_dir / "{name}-final.pptx")
-
-    # MANDATORY: Clean up part files
-    for part_file in part_files:
-        part_file.unlink()
-else:
-    shutil.move(str(part_files[0]), str(output_dir / "{name}-final.pptx"))
+```bash
+python3 .claude/skills/pptx-generator/scripts/combine_decks.py \
+  --parts "$DECK_DIR/{name}-part*.pptx" \
+  --out   "$DECK_DIR/{name}-final.pptx" \
+  --background REPLACE_WITH_BRAND_BACKGROUND \
+  --delete-parts
 ```
 
-**Why this bug happens:**
-- `add_slide()` creates a NEW slide with PowerPoint's default white background
-- `shapes._spTree` copies shapes but NOT the background (it's a slide property, not a shape)
-- Without explicit background setting, added slides will be white
+`--background` is the brand background hex from `brand.json`, without the `#`.
+`--delete-parts` performs step 4 of the batched workflow. A single part file is
+copied straight through.
+
+**Two things a naive combine loses, both of them silently.**
+
+*Slide background.* `add_slide()` creates a slide with PowerPoint's default
+white background, and copying shapes does not carry it - the background is a
+slide property, not a shape. The script sets it on every slide it appends.
+
+*Charts and pictures.* This one is newer, found by the 2026-08-23 audit. The
+loop this section used to prescribe was:
+
+```python
+el = copy.deepcopy(shape.element)
+new_slide.shapes._spTree.append(el)   # WRONG for charts and pictures
+```
+
+A chart lives in its own package part; a picture lives in `ppt/media/`. The
+shape XML holds only a relationship id pointing at them, so copying the element
+into a slide whose part has no such relationship leaves the id dangling.
+Measured on python-pptx 1.0.2 with one chart slide and one picture slide:
+
+```
+charts in package : []
+media in package  : []
+slide 2 chart   -> KeyError "no relationship with key 'rId2'"
+slide 3 picture -> KeyError "no relationship with key 'rId2'"
+```
+
+Zero chart parts and zero media parts in the combined file; in PowerPoint those
+slides render blank or broken. The cookbook ships `chart-slide.py` and
+`image-caption-slide.py` and batching is MANDATORY over five slides, so this hit
+the ordinary path. `combine_decks.py` walks every relationship-namespace
+attribute in the copied XML, re-attaches the target part to the destination, and
+writes back the new id - charts, their embedded workbook, and images all
+survive.
 
 **Testing after combining:**
 - Open the combined PPTX
 - Scroll through ALL slides (not just the first few)
 - Verify EVERY slide has the correct background color
+- Verify every chart still plots and every image still renders

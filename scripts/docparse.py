@@ -41,6 +41,15 @@ CACHE_DIR = WORKSPACE / ".cache" / "docparse"
 DEFAULT_DPI = 150
 DEFAULT_OUTPUT_DIR = get_outputs_dir() / "intel" / "docparse"
 CACHE_TTL_HOURS = 168  # 7 days
+
+# One constant, because three copies disagreed. Until 2026-08-23 the installer
+# pinned 1.2.1 while `parse_document` was written against the 2.0 constructor
+# (`dpi`, `target_pages` and `password` moved into `LiteParse(...)` there), so
+# running the documented `setup --install` produced a package whose constructor
+# rejects every one of those keywords -- a "successful" setup followed by a
+# TypeError on the first document. `tests/test_docparse_liteparse_pin.py` fails
+# if the three places drift apart again.
+LITEPARSE_VERSION = "2.0.0"
 MAX_REPORT_PAGES = 20
 
 # Supported file extensions for auto-discovery
@@ -696,7 +705,7 @@ def _setup_check() -> bool:
         print(f"  {GREEN}OK{RESET}  liteparse Python package installed")
     except ImportError:
         print(f"  {RED}FAIL{RESET}  liteparse Python package not installed")
-        print(f"         Install: pip install liteparse==2.0.0")
+        print(f"         Install: pip install liteparse=={LITEPARSE_VERSION}")
         all_ok = False
 
     if all_ok:
@@ -732,7 +741,7 @@ def _setup_install():
     except ImportError:
         print(f"  {CYAN}Installing{RESET} liteparse Python package...")
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "liteparse==1.2.1"],
+            [sys.executable, "-m", "pip", "install", f"liteparse=={LITEPARSE_VERSION}"],
             capture_output=True, text=True, timeout=120,
         )
         if result.returncode == 0:

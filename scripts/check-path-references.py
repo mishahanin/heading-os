@@ -50,10 +50,17 @@ from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, GRAY, BOLD, RESET  # 
 
 # Repo-relative paths, anchored on the top-level directories the engine owns.
 # The trailing class refuses a bare trailing dot so `foo.py.` yields `foo.py`.
+#
+# The extension length was {2,5} until 2026-08-23, which SILENTLY TRUNCATED any
+# longer one: prose naming `reference/sentinel.service` was scanned as
+# `reference/sentinel.servi`, a path that of course does not exist, so a real
+# file was reported as rot. Under-matching here is the worse direction, because
+# it manufactures a finding against correct prose. Widened to 9, which covers
+# `.service` and `.template`.
 _PATH = re.compile(
     r"(?<![\w/.-])"
     r"((?:scripts|config|docs|reference|tests|examples|templates|\.claude|\.github)"
-    r"/[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.[a-z]{2,5})"
+    r"/[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.[a-z]{2,9})"
 )
 
 # History by design: a changelog names what a release removed. Never rot.
@@ -65,8 +72,11 @@ _SKIP_FILES = {"CHANGELOG.md"}
 # an entry without one is indistinguishable from rot somebody gave up on.
 BASELINE = {
     # Regex fragments: a sentence continued past what looked like a path.
-    "scripts/bridge_daemon/sources/action_queue.appen": "fragment of `.append(`",
-    "scripts/scrutinize-dispatch.assig": "fragment of `.assign`",
+    # These two were spelled `.appen` / `.assig` until 2026-08-23, when the
+    # extension cap above went from 5 to 9 and the scanner started seeing the
+    # whole word.
+    "scripts/bridge_daemon/sources/action_queue.append": "fragment of `.append(`",
+    "scripts/scrutinize-dispatch.assign": "fragment of `.assign`",
     "scripts/scrutinize-dispatch.swap": "prose, not a filename",
     "scripts/utils/tool_risk.tier": "fragment of `tool_risk.tier_for()`",
     ".claude/settings.local": "fragment of `.claude/settings.local.json`",

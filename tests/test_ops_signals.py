@@ -133,8 +133,17 @@ def test_ollama_accel():
     _check("accel not configured -> not due", not s["due"] and s["severity"] == "ok")
     s = ops.classify_ollama_accel(True, True)
     _check("accel up -> not due", not s["due"] and s["severity"] == "ok")
+    # `high`, not `warn`, since 2026-08-23: embedding is PINNED to this host, so
+    # it being down no longer means "slower on the local daemon", it means
+    # nothing embeds at all. A warn here would rank an outage below a nudge.
     s = ops.classify_ollama_accel(True, False)
-    _check("accel configured but down -> due warn", s["due"] and s["severity"] == "warn")
+    _check("accel configured but down -> due high", s["due"] and s["severity"] == "high")
+    # Up, but the embed model was never pulled there: the host answers and still
+    # cannot embed. Reachability alone would call this green.
+    s = ops.classify_ollama_accel(True, True, model_present=False)
+    _check("accel up but model missing -> due high", s["due"] and s["severity"] == "high")
+    s = ops.classify_ollama_accel(True, True, model_present=None)
+    _check("accel model unknown -> not due", not s["due"])
     _check("accel tier B", s["tier"] == "B")
     _check("accel key", s["key"] == "ollama_accel")
     # Tier B is the point, not a detail: a Tier-A signal stays invisible until
@@ -257,3 +266,46 @@ def test_summaries_counts_only():
     # every summary is a short single line
     _check("summaries single-line", all("\n" not in s for s in samples))
     _check("summaries non-empty", all(s.strip() for s in samples))
+
+
+def test_cold_sweep_survives_an_unexpected_crm_health_shape(tmp_path, monkeypatch):
+    """The monitor may not die on the shape of what it monitors.
+
+    Found by the 2026-08-23 audit. `cold_sweep_state` iterates the parsed JSON
+    with `c.get("health")`, guarded only against OSError, SubprocessError and
+    JSONDecodeError. A dict, a list of strings, or a bare null all parse fine
+    and then raise AttributeError or TypeError, which is not in that set — so
+    the whole ops-radar run dies, and the docstring's promise ("degrades to
+    red_count=0 ... a missing CRM is not a cold-sweep emergency") is false for
+    every case except an absent file.
+
+    `publish_state`, twenty lines below in the same file, already writes
+    `if isinstance(data, dict)`. The shape risk was known and handled once.
+    """
+    import subprocess
+    from collections import namedtuple
+
+    script = tmp_path / "scripts" / "crm-health.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    Proc = namedtuple("Proc", "returncode stdout stderr")
+
+    def _run_returning(payload):
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: Proc(0, payload, ""))
+        return ops.cold_sweep_state(tmp_path)
+
+    # The shape it really emits today: a list of contact dicts.
+    healthy = _run_returning('[{"health": "red"}, {"health": "green"}]')
+    _check("a real payload still counts reds", healthy["value"] == 1)
+
+    for payload, label in [
+        ('{"contacts": []}', "a dict"),
+        ('["alice", "bob"]', "a list of strings"),
+        ("null", "a bare null"),
+        ("42", "a bare number"),
+    ]:
+        signal = _run_returning(payload)
+        _check(f"{label} did not kill the radar", signal["value"] == 0)
+        _check(f"{label} is not reported as due", not signal["due"])

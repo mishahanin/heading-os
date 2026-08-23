@@ -1,4 +1,4 @@
-<!-- version: 1.2.1 | last-updated: 2026-08-11 -->
+<!-- version: 1.2.3 | last-updated: 2026-08-23 -->
 
 # Emergency Procedures
 
@@ -175,7 +175,7 @@ CEO-side recovery:
 1. Revert the corporate repo:
 
    ```bash
-   cd ../31c-corporate
+   cd ../heading-os-corporate
    git log -- daemon/config.yaml  # find the last-good commit
    git revert <bad-commit-hash>
    git push origin main
@@ -215,6 +215,8 @@ CEO-side recovery:
 - Never attempt to "just quickly" bypass a safety gate (pre-commit hook, classification check, sanitize-check, VPN pre-flight) without CEO approval.
 - Never modify `corporate/` on an exec workspace.
 - Never push to the corporate repo from an exec workspace.
-- Never disable the sync schedule permanently - only as a temporary response to a known outage.
+- Never disable the 15-min Sentinel schedule permanently - only as a temporary response to a known outage.
+  (This bullet said "the sync schedule" until 2026-08-23. There is no sync schedule: Scenario 4 above
+  says so in the same document. Sentinel is the one scheduled task an exec can disable.)
 
 For routine workflow: `GETTING-STARTED.md`. For admin procedures: `CEO-ADMIN-GUIDE.md`. For deeper security policy: `docs/security/SECURITY-CONSTITUTION.md`.

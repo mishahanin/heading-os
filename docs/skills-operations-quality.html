@@ -10,17 +10,12 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/docs.css">
 <style>
-  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
-  h3.cat:first-of-type { margin-top: 24px; }
   section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
   section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
   section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
   section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
   section.skill p { margin: 8px 0; }
   section.skill pre { margin: 10px 0; }
-  a.cmd-link { text-decoration: none; }
-  a.cmd-link code { color: var(--link); }
-  a.cmd-link:hover code { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -92,7 +87,6 @@
 
   <h1>Operations: planning &amp; review</h1>
   <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
-Operations: planning &amp; review</h3>
 
 <section class="skill">
 <h3 id="s-create-plan"><code>/create-plan [describe what to plan]</code><span class="badge">Operations</span></h3>
@@ -106,8 +100,8 @@ Operations: planning &amp; review</h3>
 </section>
 
 <section class="skill">
-<h3 id="s-canopus"><code>/canopus [note | check | probe]</code><span class="badge">Operations &#128274;</span></h3>
-<p class="skill-meta">Explicit invocation only (&#128274;) &middot; writes to <code>records/slices/</code></p>
+<h3 id="s-canopus"><code>/canopus [note | check | probe]</code><span class="badge">Operations 🔒</span></h3>
+<p class="skill-meta">Explicit invocation only (🔒) &middot; writes to <code>records/slices/</code></p>
 <p><strong>What it is.</strong> The engineering standard as a command: seven numbered steps in four acts, two of which are the operator's own (step 4, his commit of the plan and the red contract, and step 7, his word to ship). It exists to stop one thing, a contract too weak to decide anything passing as one that decided.</p>
 <p><strong>What it does.</strong> Bare <code>/canopus</code> prints the seven steps and where the operator's two moments sit in them; it runs nothing and reads nothing off the disk, because only steps 4 and 7 leave a trace in this repository and a position inferred from the rest would be a guess dressed as a measurement. The three subcommands are thin. <code>note</code> writes the slice's committed record under <code>records/slices/</code>, and the schema refuses a note missing any required field rather than writing a half-formed one. <code>check</code> runs the four clauses: the contract did not move between the approval sha and the end state, the implementation descends from that approval, the contract was red when checked out at the approval sha and run there, and the target is green at HEAD. <code>probe</code> measures whether a contract's redness means anything, by null-stubbing the modules it imports and running it twice with different stub values: a test that never fails under either run is vacuous. It also puts three wrong implementations that exist in front of the contract and prints what each one took of the red set, and it refuses a skip-family marker that states no reason, whether it sits on a test, on a class, or on <code>pytestmark</code>. <code>probe --after-build &lt;test paths&gt;</code> asks that last question again after the slice has shipped and its contract has been retired: it puts the same three wrong implementations in front of code that ALREADY EXISTS and names every test that stayed green under all three. That page says which modules were actually replaced and which were not, and names a skipped test separately from one that went red, because a test that never ran is neither. It reports and never refuses, and nobody has calibrated it, so it must not be wired into a gate.</p>
 <p><strong>How to use it.</strong> Run bare first for the agenda; skip the whole standard for typo fixes and config-only edits. The freeze is a commit and the separation is a dispatch, so there is no lock to take and no release to run: step 4 is <code>/scrutinize</code> on the plan followed by the operator's own commit, step 5 is <code>superpowers:subagent-driven-development</code>, step 6 is <code>/scrutinize --relentless</code>, and step 7 is his word plus <code>/canopus note</code>.</p>
@@ -175,9 +169,9 @@ python scripts/canopus.py check --range origin/main..HEAD</code></pre>
 </section>
 
 <section class="skill">
-<h3 id="s-workspace-deep-audit"><code>/workspace-deep-audit [--mode={full|quick|focus}] [--focus={skills|rules|deps|security|architecture}] [--vs=&lt;previous_audit_path&gt;]</code><span class="badge">Operations 🔒</span></h3>
+<h3 id="s-workspace-deep-audit"><code>/workspace-deep-audit [--mode={full|quick|focus}] [--focus={skills|rules|deps|security|architecture|observability}] [--vs=&lt;previous_audit_path&gt;]</code><span class="badge">Operations 🔒</span></h3>
 <p class="skill-meta">Explicit invocation only (🔒) · writes to <code>outputs/operations/workspace/</code></p>
-<p><strong>What it is.</strong> The heaviest workspace skill: a comprehensive 8-section deep audit of the entire workspace (executive summary, inventory matrix, architectural findings, dependency validation, a best-practices gap score, competitive mapping, prioritized recommendations).</p>
+<p><strong>What it is.</strong> The heaviest workspace skill: a comprehensive 8-section deep audit of the entire workspace: executive summary, methodology, inventory matrix, architectural findings, Context7 validation, best-practices gap analysis, competitive mapping, and prioritized recommendations.</p>
 <p><strong>What it does.</strong> Dispatches up to seven parallel read-only inventory agents (batched under the concurrency cap), validates every dependency pin against current docs via Context7, scores the workspace against a 34-point best-practices rubric, maps it against a competitive baseline, and emits prioritized P0 to P3 recommendations. Output renders to markdown plus branded HTML and logs to an audit thread. It is read-only against the workspace: fix application belongs to <code>/scrutinize</code>. <code>--mode=quick</code> skips competitive and best-practices analysis (roughly half the runtime), <code>--mode=focus</code> plus <code>--focus</code> scopes to one subsystem, and <code>--vs</code> produces a before/after delta report.</p>
 <p><strong>How to use it.</strong> Use at a major milestone or when checking ecosystem drift. For a single-skill review use <code>/evaluate</code>; to apply fixes use <code>/scrutinize</code>; for a quick operational health check use <code>/state-check</code>.</p>
 <pre><code>/workspace-deep-audit --mode=focus --focus=security

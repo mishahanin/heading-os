@@ -63,7 +63,13 @@ rules:
   "config/x-pulse-accounts.yaml": private    # decision: CEO's monitored-account list; engine ships an EXAMPLE instead
   # 2026-06-13 CEO audit: these config files carry real identity / contacts / deal
   # intelligence and must never ship in a public engine. Engine ships examples at cutover.
-  "config/exec-registry.json": private       # full executive roster: names, @31c.io/@odinix.com emails, repos, github users
+  # The whole fleet-administration tree. It had NO rule until 2026-08-23 and so
+  # resolved to the `engine` default, meaning "shareable, eventually public",
+  # while docs/data-structure.html already described it as PRIVATE and
+  # scripts/utils/content_denylist.py already harvested admin/executives.json as
+  # a source of private terms. Two subsystems, one file, opposite answers.
+  "admin/": private                          # fleet roster, provisioning tooling, staged onboarding packets, admin guides
+  "config/exec-registry.json": private       # the 31C ORG CHART: names, titles, emails, business roles (see admin/executives.json for the HEADING OS fleet roster)
   "config/admin.json": private               # per-instance admin identity (slugs, org, corporate repo)
   "config/operator.yaml": private            # per-instance operator identity (name/slug/github_org/voice/email); data-config (engine ships scripts/operator.example.yaml). Real file lives in the data overlay at <data-root>/config/operator.yaml.
   "config/email-triage-rules.yaml": private  # real internal sender addresses + deal-keyword overrides
@@ -137,6 +143,7 @@ rules:
   "reference/search-domains.md": private               # CEO research-targeting config: names the priority regions + curated regional news domains; engine ships a generic example
   "reference/jurisdiction-compliance.md": private       # supplier jurisdiction restrictions overlaid on the LIVE pipeline (named deals/counterparties) — CEO-only; the underlying checklist itself is corporate in datastore/operations/legal/export-control/
   "reference/content-calendar.md": private             # CEO decision 2026-08-08: named whitepaper roadmap, award-submission targets, and press outlet list are this instance's unpublished plans, not framework
+  "reference/content-performance.md": private        # CEO decision 2026-08-23: a ledger of REAL engagement figures for real published posts, and it says "CEO-only" on line 3 — it was the only engine-routed file self-declaring private that holds live data rather than policy
   "c.bat": private                             # CEO machine-local launcher; not needed in the engine clone
   "reference/email-signature.html": private    # CEO's real signature: personal phone (reveals geo) + contact; engine ships an example at cutover
   # (Odin cadence timer/installer/templates were ceo-only private until the CEO

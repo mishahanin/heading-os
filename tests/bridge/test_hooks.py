@@ -44,14 +44,22 @@ def test_session_start_writes_registry(tmp_path, monkeypatch):
     reg = tmp_path / ".claude" / "state" / "active-sessions.json"
     assert reg.exists()
     data = json.loads(reg.read_text())
-    assert data[str(tmp_path / "ws")]["session_id"] == "sid-abc"
-    assert data[str(tmp_path / "ws")]["transcript_path"] == "/path/to/transcript.jsonl"
-    assert "started_at" in data[str(tmp_path / "ws")]
+    # Keyed by session_id since 2026-08-23. It was cwd, which collapsed two
+    # sessions in one directory into one entry and let the first to exit
+    # deregister the live one. See tests/test_bridge_hook_session_registry.py.
+    assert data["sid-abc"]["session_id"] == "sid-abc"
+    assert data["sid-abc"]["cwd"] == str(tmp_path / "ws")
+    assert data["sid-abc"]["transcript_path"] == "/path/to/transcript.jsonl"
+    assert "started_at" in data["sid-abc"]
 
 
-def test_session_start_dedupes_on_cwd(tmp_path, monkeypatch):
-    """Two SessionStart events with the same cwd produce ONE registry entry
-    (the second overwrites the first; no duplicate accumulation)."""
+def test_session_start_dedupes_on_session_id(tmp_path, monkeypatch):
+    """Two SessionStart events for the SAME session produce one registry entry.
+
+    This used to dedupe on cwd, which also collapsed two DIFFERENT sessions in
+    one directory. Re-registering one session is the case worth deduping;
+    two sessions sharing a directory is not, and is covered by
+    tests/test_bridge_hook_session_registry.py."""
     _setup_env(tmp_path, monkeypatch)
     payload = {
         "session_id": "sid-abc",
@@ -77,12 +85,14 @@ def test_session_end_removes_registry_entry(tmp_path, monkeypatch):
         "source": "startup", "hook_event_name": "SessionStart",
     }
     _invoke("session-start", start_payload)
-    end_payload = {"cwd": cwd, "hook_event_name": "SessionEnd"}
+    end_payload = {"session_id": "sid-abc", "cwd": cwd,
+                   "hook_event_name": "SessionEnd"}
     r = _invoke("session-end", end_payload)
     assert r.returncode == 0
     assert r.stdout == "", f"SessionEnd hook leaked to stdout: {r.stdout!r}"
     reg = tmp_path / ".claude" / "state" / "active-sessions.json"
     data = json.loads(reg.read_text())
+    assert "sid-abc" not in data
     assert cwd not in data
 
 
@@ -140,7 +150,7 @@ def test_session_start_recovers_from_corrupt_registry(tmp_path, monkeypatch):
     r = _invoke("session-start", payload)
     assert r.returncode == 0
     data = json.loads(reg.read_text())
-    assert data[str(tmp_path / "ws")]["session_id"] == "sid-after-corruption"
+    assert data["sid-after-corruption"]["session_id"] == "sid-after-corruption"
 
 
 def test_session_start_records_parseable_started_at(tmp_path, monkeypatch):
@@ -155,7 +165,7 @@ def test_session_start_records_parseable_started_at(tmp_path, monkeypatch):
     r = _invoke("session-start", payload)
     assert r.returncode == 0
     data = json.loads((tmp_path / ".claude" / "state" / "active-sessions.json").read_text())
-    parsed = datetime.fromisoformat(data[cwd]["started_at"])
+    parsed = datetime.fromisoformat(data["sid-ts"]["started_at"])
     assert parsed.tzinfo == timezone.utc
 
 
@@ -170,7 +180,7 @@ def test_session_start_records_int_pid(tmp_path, monkeypatch):
     r = _invoke("session-start", payload)
     assert r.returncode == 0
     data = json.loads((tmp_path / ".claude" / "state" / "active-sessions.json").read_text())
-    pid = data[cwd]["pid"]
+    pid = data["sid-pid"]["pid"]
     assert isinstance(pid, int)
     assert pid > 0
 

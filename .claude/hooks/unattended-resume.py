@@ -45,6 +45,14 @@ def main() -> int:
     except Exception:  # noqa: BLE001 - a malformed payload must not surface
         return 0
 
+    # A payload that is valid JSON but not an object still reaches `.get`.
+    # `[]`, `"x"`, `3` and `null` all parse, then raise an uncaught
+    # AttributeError. Swept 2026-08-23 across every stdin hook: six crashed on
+    # all four shapes. Same defect checkpoint-inject.py fixed on 2026-08-20;
+    # the sweep is how the rest were found.
+    if not isinstance(payload, dict):
+        return 0
+
     if str(payload.get("prompt") or "").strip() == COMPACT_COMMAND:
         return 0
 

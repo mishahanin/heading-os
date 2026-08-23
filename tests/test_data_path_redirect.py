@@ -142,3 +142,63 @@ def test_non_path_tool_ignored(data_sibling):
         str(data_sibling),
     )
     assert res == {}
+
+
+# ----------------------------------------------------------------------
+# `..` segments: normalized before classifying, never concatenated raw
+# ----------------------------------------------------------------------
+#
+# Found by the 2026-08-23 engine audit and reproduced. `_first_segment` read the
+# RAW first segment, so a path beginning with a data dir was classified
+# data-relative however it continued, and `_redirect` then joined the raw string
+# onto the data root:
+#
+#     outputs/../scripts/foo.py    -> <data-root>/scripts/foo.py
+#     outputs/../../x              -> <workspaces>/x
+#     outputs/../../../etc/passwd  -> <home>/ai/etc/passwd
+#
+# The first is the quiet one: a path that resolves to the ENGINE tree from cwd,
+# silently redirected into the data tree, in a hook whose docstring promises
+# engine paths are "left untouched". The last two leave the data root entirely.
+# The fix normalizes lexically first, and refuses any path that climbs out.
+
+def test_a_dotdot_climb_back_into_the_engine_is_not_redirected(data_sibling):
+    """The path resolves to the engine tree, so the hook must leave it alone."""
+    res = _run(
+        {"tool_name": "Write",
+         "tool_input": {"file_path": "outputs/../scripts/foo.py", "content": "x"}},
+        str(data_sibling),
+    )
+    assert _updated(res) is None, (
+        "a path resolving into the engine tree was rewritten into the data tree"
+    )
+
+
+@pytest.mark.parametrize("escaping", [
+    "outputs/../../x",
+    "outputs/../../../etc/passwd",
+    "crm/../../../../tmp/evil.md",
+])
+def test_a_path_that_escapes_the_relative_root_is_refused(data_sibling, escaping):
+    res = _run(
+        {"tool_name": "Read", "tool_input": {"file_path": escaping}},
+        str(data_sibling),
+    )
+    assert _updated(res) is None, f"{escaping} was rewritten"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("outputs/./report.md", "outputs/report.md"),
+    ("outputs/sub/../report.md", "outputs/report.md"),
+    ("./outputs/report.md", "outputs/report.md"),
+])
+def test_an_inner_dot_segment_is_collapsed_not_carried(data_sibling, raw, expected):
+    """Still a data path, and the rewrite must use the normalized form rather
+    than pasting `outputs/sub/..` into the destination."""
+    res = _run(
+        {"tool_name": "Read", "tool_input": {"file_path": raw}},
+        str(data_sibling),
+    )
+    upd = _updated(res)
+    assert upd is not None, f"{raw} should still redirect"
+    assert upd["file_path"] == str(data_sibling / expected)

@@ -65,21 +65,30 @@ def reconcile(dir_a: Path, dir_b: Path) -> tuple[int, int]:
     a_upd = b_upd = 0
     for name in sorted(names):
         fa, fb = dir_a / name, dir_b / name
-        if fa.exists() and not fb.exists():
-            shutil.copy2(fa, fb)
-            b_upd += 1
-        elif fb.exists() and not fa.exists():
-            shutil.copy2(fb, fa)
-            a_upd += 1
-        else:
-            if fa.read_bytes() == fb.read_bytes():
-                continue
-            if fa.stat().st_mtime > fb.stat().st_mtime:
+        # Per-entry, not per-run. One unreadable file, a directory that happens
+        # to end in `.md`, or a file that vanishes between exists() and
+        # read_bytes() used to raise straight out of this loop; main() caught it
+        # once and returned, so a single bad entry left every REMAINING memory
+        # unsynced. Found by the 2026-08-23 audit. Skipping the entry and
+        # continuing syncs the other N-1; failing the run syncs none of them.
+        try:
+            if fa.exists() and not fb.exists():
                 shutil.copy2(fa, fb)
                 b_upd += 1
-            else:
+            elif fb.exists() and not fa.exists():
                 shutil.copy2(fb, fa)
                 a_upd += 1
+            else:
+                if fa.read_bytes() == fb.read_bytes():
+                    continue
+                if fa.stat().st_mtime > fb.stat().st_mtime:
+                    shutil.copy2(fa, fb)
+                    b_upd += 1
+                else:
+                    shutil.copy2(fb, fa)
+                    a_upd += 1
+        except OSError as exc:
+            print(f"[memory-reconcile] skipped {name}: {exc}", file=sys.stderr)
     return a_upd, b_upd
 
 
@@ -88,10 +97,27 @@ def _native_from_hook(data: dict) -> Path | None:
 
     Prefer transcript_path (authoritative: its parent IS the project dir). Fall back
     to deriving the project-hash from cwd the way Claude Code does (each '/' and '.'
-    in the absolute path becomes '-')."""
+    in the absolute path becomes '-').
+
+    The fallback is POSIX-only, and says so rather than guessing. On Windows
+    `Path(cwd).resolve()` yields `C:\\Users\\...`: the backslashes and the drive
+    colon are not covered by the two replacements, so the computed slug never
+    matched a real store and the hook reconciled against an invented directory,
+    creating it. Found by the 2026-08-23 audit.
+
+    Returning None is the right answer there, not a repaired guess. The caller
+    already treats None as "nothing to reconcile" and exits 0, and the correct
+    Windows slug format is not something this file can verify. transcript_path
+    is present in practice, so the fallback is the rare path either way.
+    """
     tp = data.get("transcript_path")
     if tp:
         return Path(tp).expanduser().parent / "memory"
+    if os.name != "posix":
+        print("[memory-reconcile] no transcript_path and the cwd-slug fallback is "
+              "POSIX-only; skipping rather than guessing a store path",
+              file=sys.stderr)
+        return None
     cwd = data.get("cwd") or os.getcwd()
     slug = str(Path(cwd).resolve()).replace("/", "-").replace(".", "-")
     return Path.home() / ".claude" / "projects" / slug / "memory"
@@ -112,6 +138,13 @@ def main() -> int:
         try:
             data = json.loads(sys.stdin.read() or "{}")
         except (json.JSONDecodeError, ValueError):
+            data = {}
+        # A payload that is valid JSON but not an object still reaches `.get`.
+        # `[]`, `"x"`, `3` and `null` all parse, then raise an uncaught
+        # AttributeError. Swept 2026-08-23 across every stdin hook: six crashed
+        # on all four shapes. Same defect checkpoint-inject.py fixed on
+        # 2026-08-20; the sweep is how the rest were found.
+        if not isinstance(data, dict):
             data = {}
         native = _native_from_hook(data)
         try:

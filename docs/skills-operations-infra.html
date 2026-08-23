@@ -10,17 +10,12 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/docs.css">
 <style>
-  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
-  h3.cat:first-of-type { margin-top: 24px; }
   section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
   section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
   section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
   section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
   section.skill p { margin: 8px 0; }
   section.skill pre { margin: 10px 0; }
-  a.cmd-link { text-decoration: none; }
-  a.cmd-link code { color: var(--link); }
-  a.cmd-link:hover code { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -92,7 +87,6 @@
 
   <h1>Operations: publishing, infra &amp; tooling</h1>
   <p class="page-meta"><a href="skills-mcp-plugins.html">Back to the full skill catalog</a>. Each entry states what the skill is, what it does under the hood, how to invoke it, and what you can customize. Commands marked 🔒 are explicit-invocation only.</p>
-Operations: publishing, infra &amp; tooling</h3>
 
 <section class="skill">
 <h3 id="s-backup"><code>/backup</code><span class="badge">Operations 🔒</span></h3>
@@ -135,28 +129,6 @@ python scripts/push-all.py --dry-run    # show what would happen, change nothing
 <p><strong>How to use it.</strong> Use for selective targeted publishing. For a full versioned push including <code>BUILD.json</code> and CRM aggregate use <code>/push-updates</code>; for a personal workspace backup use <code>/backup</code>.</p>
 <pre><code>/publish-corporate "Updated a competing vendor competitive document"</code></pre>
 <p><strong>Customize.</strong> Classification input is <code>config/routing-map.yaml</code>; run <code>scripts/publish-corporate.py --preview|--copy|--verify</code>. CEO-only via admin role in <code>.workspace-identity.json</code>; <code>disable-model-invocation: true</code>.</p>
-</section>
-
-<section class="skill">
-<h3 id="s-promote-corporate"><code>/promote-corporate [--force] [--dry-run]</code><span class="badge">Operations 🔒</span></h3>
-<p class="skill-meta">Explicit invocation only (🔒), CEO-only (admin role) · writes to <code>../heading-os-corporate/</code> (main branch)</p>
-<p><strong>What it is.</strong> CEO-only staged-rollout gate: fast-forward merges the corporate <code>staging</code> branch to <code>main</code> after canary validation, so all execs receive a soaked build.</p>
-<p><strong>What it does.</strong> It runs <code>scripts/promote-corporate.py --dry-run</code> to print the gate report (canary slug, staging tip, soak hours), then enforces the soak (at least 4 hours since the latest staging commit), canary-freshness, and smoke gates plus an advisory eval status. On CEO go-ahead it does <code>git checkout main &amp;&amp; git merge origin/staging --ff-only &amp;&amp; git push origin main</code>. The fast-forward preserves staging's <code>BUILD.json</code> verbatim: promote never bumps the build. Blocking gates require the CEO to type the failing flag name to force.</p>
-<p><strong>How to use it.</strong> Use to promote a soaked staging build to all execs. For a routine publish use <code>/push-updates</code>; to undo a bad build use <code>/rollback-corporate</code>.</p>
-<pre><code>/promote-corporate --dry-run    # gate report, no merge
-/promote-corporate</code></pre>
-<p><strong>Customize.</strong> A canary exec must be flagged <code>canary: true</code> in <code>config/exec-registry.json</code>. CEO-only via admin role in <code>.workspace-identity.json</code>; <code>disable-model-invocation: true</code>. Never rebase/squash-merge (breaks rollback's HEAD-revert semantics).</p>
-</section>
-
-<section class="skill">
-<h3 id="s-rollback-corporate"><code>/rollback-corporate [--dry-run]</code><span class="badge">Operations 🔒</span></h3>
-<p class="skill-meta">Explicit invocation only (🔒), CEO-only (admin role) · writes to <code>../heading-os-corporate/</code> (main branch)</p>
-<p><strong>What it is.</strong> CEO-only safety net: rolls the corporate <code>main</code> branch back to the previous BUILD when a published build broke something the canary missed.</p>
-<p><strong>What it does.</strong> It previews via <code>scripts/rollback-corporate.py --dry-run</code> (current build and the <code>HEAD~1</code> target), then does <code>git revert --no-edit HEAD &amp;&amp; git push origin main</code>: a forward revert, not a hard reset, so no history is rewritten and branch protection on <code>main</code> holds. It fails closed and refuses when <code>HEAD~1</code> does not carry the previous build (a multi-commit publish would not restore correctly). The bad commit stays on <code>staging</code> for investigation, never re-propagated. Execs pull the reverted state on their next sync.</p>
-<p><strong>How to use it.</strong> Use only when a published corporate build broke something the canary missed. For a routine publish use <code>/push-updates</code>; for the promote-to-main gate use <code>/promote-corporate</code>.</p>
-<pre><code>/rollback-corporate --dry-run
-/rollback-corporate</code></pre>
-<p><strong>Customize.</strong> Assumes the prior promote was <code>--ff-only</code>. CEO-only via admin role in <code>.workspace-identity.json</code>; <code>disable-model-invocation: true</code>. Never hard-reset and force-push <code>main</code>.</p>
 </section>
 
 <section class="skill">
@@ -278,17 +250,6 @@ ast-grep run --pattern 'console.log($ARG)' --lang javascript .</code></pre>
 <pre><code>/mullvad
 connect 2</code></pre>
 <p><strong>Customize.</strong> Owned-only (provider 31173/Blix) is the default; region defaults to EU plus Middle East. Never silently pick a relay: every connect requires explicit selection. Never write account numbers, session tokens, or exit IPs to shared files.</p>
-</section>
-
-<section class="skill">
-<h3 id="s-modem-tune"><code>/modem-tune [status | revert]</code><span class="badge">Operations 🔒</span></h3>
-<p class="skill-meta">Explicit invocation only (🔒), CEO-only personal-hardware tool (not synced to execs) · writes to <code>outputs/operations/reference/modem-imei-ledger.json</code></p>
-<p><strong>What it is.</strong> Changes the reported IMEI on the configured GL.iNet GL-XE300 travel router over SSH for work testing, generating a fresh never-reused value, staging it, then resetting and verifying it live.</p>
-<p><strong>What it does.</strong> All mechanics live in <code>scripts/modem-tune.py</code>; the skill is the conversational wrapper that owns the reset confirmation gate. It runs <code>status</code> (live IMEI, SIM, network, signal), <code>generate</code> (a valid unique device-class IMEI), <code>apply</code> (records the outgoing IMEI to the ledger with a timestamp before sending <code>AT+EGMR</code>), a hard confirmation gate before <code>reset</code> (full router reboot, roughly 2-3 minutes of downtime), and <code>verify</code>. It is dormant on any instance without its own private <code>config/modem.json</code>. SSH credentials load from <code>.env</code>.</p>
-<p><strong>How to use it.</strong> Use to rotate or check the router IMEI for work testing. There is no alternative skill: it is the sole owner of the IMEI ledger. Run <code>/modem-tune status</code> for a read-only check.</p>
-<pre><code>/modem-tune status
-/modem-tune</code></pre>
-<p><strong>Customize.</strong> Device identity in <code>config/modem.json</code>; SSH via <code>MODEM_HOST</code>, <code>MODEM_USER</code>, <code>MODEM_SSH_PASSWORD</code> in <code>.env</code>. <code>disable-model-invocation: true</code>. Never reboot without the confirmation gate, never reuse an IMEI, and never document this tool or its credentials in corporate or exec-facing files.</p>
 </section>
 
   <footer class="foot">

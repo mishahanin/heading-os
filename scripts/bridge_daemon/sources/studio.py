@@ -20,13 +20,13 @@ from scripts.utils.paths import get_data_root
 # Must stay in sync with sources/pulse.IN_FLIGHT_DIRS (path components).
 # Pulse's count and Studio's item list must agree on the in-flight scope.
 IN_FLIGHT_DIRS = (
-    ("outputs/operations/email-intelligence", "email"),  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    ("outputs/content/linkedin", "linkedin"),  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    ("outputs/intel", "intel"),  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    ("outputs/negotiations", "negotiations"),  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    ("outputs/documents", "documents"),  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    ("outputs/content/tribe", "tribe"),  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    ("outputs/operations/fundraising", "fundraising"),  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
+    ("outputs/operations/email-intelligence", "email"),  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    ("outputs/content/linkedin", "linkedin"),  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    ("outputs/intel", "intel"),  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    ("outputs/negotiations", "negotiations"),  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    ("outputs/documents", "documents"),  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    ("outputs/content/tribe", "tribe"),  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    ("outputs/operations/fundraising", "fundraising"),  # leak-guard: ok (in-flight scan suffix rooted by caller)
 )
 IN_FLIGHT_WINDOW_DAYS = 7
 STUDIO_ROW_CAP = 50

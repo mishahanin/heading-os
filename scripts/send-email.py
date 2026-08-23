@@ -197,6 +197,45 @@ def load_config():
 
 
 # ============================================================
+# Resend safety
+# ============================================================
+
+# Errors that PROVE the request never reached the server, so sending again
+# cannot produce a second copy. Matched by class name through the MRO, which
+# avoids importing the requests and exchangelib exception hierarchies here and
+# lets the tests exercise the rule with plain stand-ins.
+#
+# The list is deliberately short. Until 2026-08-23 both send paths retried a
+# bare `except Exception` three times, so the one failure that is not a failure
+# — the server accepted the message and the response was lost coming back —
+# delivered the email twice to a real recipient and reported "send failed".
+_SAFE_TO_RESEND = frozenset({
+    "ConnectTimeout",       # requests: the connection was never established
+    "NewConnectionError",   # urllib3: DNS or refused, nothing was transmitted
+    "ErrorServerBusy",      # exchangelib: the server said it did not process it
+    "RateLimitError",       # exchangelib: throttled, request rejected outright
+})
+
+# A ReadTimeout is the dangerous one and is deliberately absent: the request went
+# out and the answer did not come back, which looks identical whether the server
+# delivered the mail or dropped it.
+_UNSURE_NOTE = (
+    "This send was NOT retried, because the error does not prove the message "
+    "never left. Check Sent Items before sending it again — it may already be out."
+)
+
+
+def _is_safe_to_resend(exc: BaseException) -> bool:
+    """True only when resending `exc`'s request cannot duplicate an email.
+
+    Fails toward one copy. An unrecognised error carries no proof either way,
+    and the two mistakes do not cost the same: a missing email is noticed and
+    re-sent by a person, a duplicate one cannot be recalled.
+    """
+    return any(cls.__name__ in _SAFE_TO_RESEND for cls in type(exc).__mro__)
+
+
+# ============================================================
 # Exchange Connection
 # ============================================================
 
@@ -448,7 +487,8 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
     for att in file_attachments:
         msg.attach(att)
 
-    # Send with retry
+    # Send with retry. See `_is_safe_to_resend`: only a failure that proves the
+    # request never reached the server is retried.
     last_error = None
     for attempt in range(1, 4):
         try:
@@ -468,6 +508,14 @@ def _send_email_core(account, to, subject, body, cc=None, bcc=None, attach=None,
             return {"to": list(to), "status": "sent", "error": None}
         except Exception as e:
             last_error = e
+            if not _is_safe_to_resend(e):
+                print(f"[ERROR] Send failed: {e}")
+                print(f"[ERROR] {_UNSURE_NOTE}")
+                return {
+                    "to": list(to),
+                    "status": "failed",
+                    "error": f"send failed ({e}). {_UNSURE_NOTE}",
+                }
             if attempt < 3:
                 import time
                 wait = 2 ** attempt
@@ -613,6 +661,11 @@ def _send_threaded_core(account, mode, original, body, to=None, cc=None, bcc=Non
             return {"to": actual_to, "status": "sent", "error": None}
         except Exception as e:
             last_error = e
+            if not _is_safe_to_resend(e):
+                print(f"[ERROR] {mode} send failed: {e}")
+                print(f"[ERROR] {_UNSURE_NOTE}")
+                return {"to": to or [], "status": "failed",
+                        "error": f"{mode} send failed ({e}). {_UNSURE_NOTE}"}
             if attempt < 3:
                 import time
                 wait = 2 ** attempt

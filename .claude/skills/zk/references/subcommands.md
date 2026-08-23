@@ -15,22 +15,57 @@ Create a new note in the personal knowledge directory.
 
 1. Parse remaining arguments for note type. Valid types: `fleeting` (default), `signal`, `decision`, `meeting`, `research`, `strategy`, `people`, `technology`
 2. If the user provided content inline, use it. Otherwise ask: "What's the idea?" (one question only)
-3. Generate the note ID: current timestamp as `YYYYMMDDHHMMSS`
+3. Generate the note ID: current timestamp as `YYYYMMDDHHMMSS`. **The ID must be
+   unique across the knowledge root.** A second-resolution stamp is not unique on
+   its own: `distill` creates three to seven notes in one batch, inside the same
+   second, and `connect` and `garden` address notes by `[[ID|Title]]`, so a
+   repeated ID silently points two links at one note. Before writing, glob
+   `{knowledge_root}**/{ID}-*.md`; if anything matches, add one second and check
+   again until the ID is free.
 4. Generate slug from the core idea (kebab-case, max 6 words)
 5. Determine the knowledge root based on workspace type:
    - **CEO workspace:** `knowledge/`
    - **Exec workspace:** `personal/knowledge/`
-6. Determine the target subdirectory from type (unified brain architecture):
-   - fleeting -> `{knowledge_root}odin-brain/sources/` (with `format: fleeting`, `status: seed`)
-   - signal -> `{knowledge_root}odin-brain/sources/` (with `format: signal`)
-   - decision -> `{knowledge_root}odin-brain/positions/`
-   - meeting -> `{knowledge_root}odin-brain/sources/` (with `format: meeting`)
-   - research -> `{knowledge_root}odin-brain/sources/` (with `format: research`)
-   - strategy -> `{knowledge_root}odin-brain/principles/` or `positions/` (ask user)
+6. Determine the target subdirectory from type (unified brain architecture).
+   These are RELATIVE to the knowledge root chosen in step 5, because step 8
+   prepends that root. Do not repeat it here, or the path doubles into
+   `knowledge/knowledge/odin-brain/...`, which nothing else in this file ever
+   scans:
+   - fleeting -> `odin-brain/sources/` (with `format: fleeting`, `status: seed`)
+   - signal -> `odin-brain/sources/` (with `format: signal`)
+   - decision -> `odin-brain/positions/`
+   - meeting -> `odin-brain/sources/` (with `format: meeting`)
+   - research -> `odin-brain/sources/` (with `format: research`)
+   - strategy -> `odin-brain/principles/` or `odin-brain/positions/` (ask user)
    - people -> Redirect: "People intel belongs in CRM. Use `/crm add`."
-   - technology -> `{knowledge_root}odin-brain/reference/`
-7. **Classification:** Ask "CEO-only or Corporate-wide?" (default: CEO-only; suggest Corporate for notes tagged `#propose-shared`). If classified as corporate, add a `corporate` rule for the file path to `config/routing-map.yaml`. Note that the next `/push-updates` should promote it to `knowledge/shared/`.
-8. Create the note file `{knowledge_root}{subdir}/{ID}-{slug}.md` with this template:
+   - technology -> `odin-brain/reference/`
+7. **Classification:** Ask "CEO-only or Corporate-wide?" (default: CEO-only; suggest Corporate for notes tagged `#propose-shared`). If classified as corporate, add a `corporate` rule for the file path to `config/routing-map.yaml`. Note that the next `/push-updates` should promote it to `knowledge/shared/` on THIS workspace. That is the publish-side path; execs read the published copy at `corporate/knowledge/shared/`, which is why `find` and `garden` name the other one. The two are the two ends of one pipeline, not a contradiction.
+8. Create the note file `{knowledge_root}{subdir}/{ID}-{slug}.md`.
+
+   **The frontmatter depends on where the note lands.** `scripts/odin-brain-health.py`
+   holds a DIFFERENT required-field list per brain directory, and a note missing
+   one of them is reported as a schema violation on every `/zk stats` and every
+   `/zk garden` run. Take the base template below, then add the extra fields for
+   the destination:
+
+   <!-- zk-required-extras:start -->
+   | Destination | Brain kind | Extra frontmatter fields, on top of the base |
+   |---|---|---|
+   | `odin-brain/sources/` | source | `format`, `author`, `ingested` |
+   | `odin-brain/principles/` | principle | `sources` |
+   | `odin-brain/positions/` | position | `principles`, `sources`, `revisit_when` |
+   | `odin-brain/episodes/` | episode | `date` |
+   | `odin-brain/conflicts/` | conflict | `side_a`, `side_b` |
+   | `odin-brain/reference/` | reference | none |
+   <!-- zk-required-extras:end -->
+
+   This is where step 6's `format:` annotation goes: it is a real required field
+   for a `sources/` note, not a decoration. `tests/test_zk_template_matches_the_brain_schema.py`
+   fails if this table and `REQUIRED_FIELDS` ever drift apart.
+
+   A `conflicts/` note needs `status` too, but the base template already writes
+   it, so change its VALUE (`open` / `resolved`) rather than adding the key a
+   second time. A duplicated YAML key is a silent overwrite, not an error.
 
 > **Shared knowledge:** Execs can propose notes for corporate shared knowledge by tagging with `#propose-shared` in keywords. These are reviewed during `/publish-corporate`.
 
@@ -68,7 +103,9 @@ confidence: medium
 ```
 
 7. Run `python3 scripts/sanitize-text.py` on the created file to validate
-8. Confirm with: "Note created: `{path}`. Status: seed. Hidden characters: clean."
+8. Confirm with: "Note created: `{path}`. Status: seed." followed by the
+   confirmation line from `.claude/rules/hidden-chars.md`, carrying what the
+   scan actually reported.
 
 ---
 
@@ -95,7 +132,8 @@ Read a seed or growing note, research it, add connections, and upgrade its statu
    - `updated`: today's date
    - `confidence`: adjust if research confirms or weakens the idea
 7. Run `python3 scripts/sanitize-text.py` on the file
-8. Present changes summary: "Enriched: {title}. Status: {old} -> {new}. Added {N} connections. Hidden characters: clean."
+8. Present changes summary: "Enriched: {title}. Status: {old} -> {new}. Added {N} connections."
+   plus the confirmation line from `.claude/rules/hidden-chars.md`.
 
 ---
 
@@ -126,7 +164,12 @@ Analyze a note and suggest links to other notes and workspace files.
 
 1. Find and read the target note (same matching as `enrich`)
 2. Extract the note's keywords and core idea
-3. Search `knowledge/` for notes sharing 2+ keywords or containing related terms
+3. Search the knowledge root for notes sharing 2+ keywords or containing related
+   terms. Step 1 says "same matching as `enrich`", and `enrich` searches personal
+   PLUS corporate shared on an exec workspace, so do the same here: `knowledge/`
+   on the CEO workspace, `personal/knowledge/` and `corporate/knowledge/shared/`
+   on an exec one. The literal `knowledge/` that used to stand here missed both
+   on every exec workspace.
 4. Search workspace files for relevant cross-references:
    - `crm/contacts/` for people mentions
    - `context/pipeline.md` for deal references
@@ -160,7 +203,8 @@ Extract atomic insights from an output file into knowledge notes. This is the br
 8. Link back to the source file in each note's Context section
 9. Set origin footer to: `*Origin: skill-output ({skill name})*`
 10. Run `python3 scripts/sanitize-text.py` on each created file
-11. Report: "Distilled {N} notes from {source}. Hidden characters: clean."
+11. Report: "Distilled {N} notes from {source}." plus the confirmation line from
+    `.claude/rules/hidden-chars.md`.
 
 ---
 
@@ -200,7 +244,10 @@ Maintenance pass - find orphans, stale seeds, broken links, and suggest connecti
 Regenerate INDEX.md with current knowledge base statistics.
 
 1. Run `python3 scripts/odin-brain-health.py --update-index`
-2. Read and display the updated `knowledge/INDEX.md`
+2. Read and display the updated `INDEX.md` from the knowledge root: `knowledge/`
+   on the CEO workspace, `personal/knowledge/` on an exec one. Reading the
+   literal `knowledge/INDEX.md` on an exec workspace shows a file step 1 did not
+   regenerate, or nothing at all.
 3. Highlight any health concerns (stale seeds, orphans, schema issues)
 
 ---
@@ -210,7 +257,7 @@ Regenerate INDEX.md with current knowledge base statistics.
 Synthesize all notes related to a topic into a narrative summary. Searches both personal and corporate shared knowledge.
 
 1. Parse the topic from arguments
-2. Search all knowledge directories for notes matching the topic by keyword, title, or content. On exec workspaces that means personal and corporate shared. ALSO search `knowledge/odin-brain/principles/` and `knowledge/odin-brain/positions/` for files matching the topic by `domain` field or content.
+2. Search all knowledge directories for notes matching the topic by keyword, title, or content. On exec workspaces that means personal and corporate shared. ALSO search `odin-brain/principles/` and `odin-brain/positions/` UNDER THE KNOWLEDGE ROOT (`knowledge/` on the CEO workspace, `personal/knowledge/` on an exec one) for files matching the topic. Match on content: the note template in `add` step 8 defines no `domain` field, so nothing this skill creates has one, and a `domain`-only match can never hit.
 3. Read each matching note
 4. Synthesize into a narrative summary structured as:
    - **What we know** - confirmed insights (evergreen + high confidence). Include matching Odin principles/positions tagged with `[Odin]`.

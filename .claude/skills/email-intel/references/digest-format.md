@@ -141,8 +141,9 @@ The CEO replies against the numbers. All of these are valid; plain English is al
 |---|---|
 | `ok` / `да` | approve the recommended set exactly (the `[DO]` items, minus any send-gated action not separately confirmed) |
 | `1,3,5` | approve those actions |
-| `all` | approve every proposed action |
-| `all crm` / `all notify` / `all send` | approve every action of that tier |
+| `all` | approve every proposed action **except send-gated ones** — same carve-out as `ok`. A bare word never fires outbound mail; name the numbers, or say `all send` |
+| `all crm` / `all notify` | approve every action of that tier |
+| `all send` | approve every send-gated action. The one reply that does, and it says so |
 | `2 edit: drop the second paragraph` | approve #2, recording the change as a note the executor applies |
 | `skip 4` / `rest skip` | decline #4 / decline everything still proposed |
 | `4 go` | approve #4 (natural phrasing for a send) |

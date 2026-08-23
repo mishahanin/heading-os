@@ -96,10 +96,10 @@ STALE_CLUSTER_DAYS = 14     # unreviewed cluster material waiting this long esca
 # over-clustering produces a nudge that is always on, which costs the signal.
 CLUSTER_MIN_SHARED = 3
 
-MARKER = "knowledge/odin-brain/.last-collect"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+MARKER = "knowledge/odin-brain/.last-collect"  # leak-guard: ok (relative suffix rooted by caller)
 REFLECT_MARKER = "knowledge/odin-brain/.last-reflect"  # leak-guard: ok (relative suffix rooted by caller)
-VIRAID_STATE = "outputs/operations/viraid/state.json"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
-EPISODES_DIR = "knowledge/odin-brain/episodes"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+VIRAID_STATE = "outputs/operations/viraid/state.json"  # leak-guard: ok (relative suffix rooted by caller)
+EPISODES_DIR = "knowledge/odin-brain/episodes"  # leak-guard: ok (relative suffix rooted by caller)
 
 # Floor used when no marker exists: count everything (a "never collected" state
 # still nudges regardless of count, but the figures stay meaningful).

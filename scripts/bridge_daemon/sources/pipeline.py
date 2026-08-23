@@ -26,7 +26,7 @@ PIPELINE_FILE = "context/pipeline.md"
 PIPELINE_ROW_CAP = 100  # safety upper bound
 
 # Phase 1.55 touch log.
-TOUCH_LOG_FILE = "outputs/operations/pipeline/_touch-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+TOUCH_LOG_FILE = "outputs/operations/pipeline/_touch-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 TOUCH_LOG_MAX_BYTES = 1_000_000   # 1MB safety cap on log size
 TOUCH_NOTE_MAX_CHARS = 200
 _TOUCH_LOG_LOCK = threading.Lock()

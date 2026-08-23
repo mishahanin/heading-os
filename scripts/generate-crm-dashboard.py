@@ -29,6 +29,7 @@ from scripts.utils.image import load_logo_base64
 from scripts.utils.workspace import (
     get_workspace_root,
     get_crm_contacts_dir,
+    get_data_config_dir,
     get_context_dir,
     get_datastore_dir,
     get_default_tz,
@@ -49,7 +50,7 @@ HTML_TO_PDF_SCRIPT = SCRIPT_DIR / "html-to-pdf.py"
 COMPANY_RADAR_FILE = AGGREGATED_DIR / "company-radar.md"
 OWNERSHIP_MAP_FILE = AGGREGATED_DIR / "ownership-map.md"
 SHARED_CONTACTS_FILE = AGGREGATED_DIR / "shared-contacts.md"
-EXEC_REGISTRY_FILE = WORKSPACE / "config" / "exec-registry.json"
+EXEC_REGISTRY_FILE = get_data_config_dir() / "exec-registry.json"
 PIPELINE_FILE = get_context_dir() / "pipeline.md"
 
 LOGO_PATH = (
@@ -276,12 +277,12 @@ def collect_exec_registry():
 
 def collect_heartbeat():
     """Count contact files per exec by reading per-exec CRM repos."""
-    from scripts.utils.workspace import get_all_active_exec_slugs, get_per_exec_repo_path
+    from scripts.utils.workspace import get_all_active_exec_slugs, get_per_exec_contacts_dir
     heartbeat = {}
     try:
         for slug in get_all_active_exec_slugs():
             repo_path = get_per_exec_repo_path(slug)
-            contacts_dir = repo_path / "contacts"
+            contacts_dir = get_per_exec_contacts_dir(slug)
             heartbeat[slug] = count_files_in_dir(contacts_dir)
     except (OSError, ImportError, KeyError, ValueError) as e:
         # Best-effort per-exec heartbeat; return whatever was collected but surface why.

@@ -25,13 +25,13 @@ ODIN_5_TARGET_DEFAULT = "2026-12-31"
 # Both surfaces (Pulse count + Studio item list) need to agree so the CEO
 # sees consistent numbers across pages.
 IN_FLIGHT_DIRS = (
-    "outputs/operations/email-intelligence",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    "outputs/content/linkedin",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    "outputs/intel",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    "outputs/negotiations",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    "outputs/documents",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    "outputs/content/tribe",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    "outputs/operations/fundraising",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
+    "outputs/operations/email-intelligence",  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    "outputs/content/linkedin",  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    "outputs/intel",  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    "outputs/negotiations",  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    "outputs/documents",  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    "outputs/content/tribe",  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    "outputs/operations/fundraising",  # leak-guard: ok (in-flight scan suffix rooted by caller)
 )
 IN_FLIGHT_WINDOW_DAYS = 7
 
@@ -528,7 +528,7 @@ TRIBE_PREVIEW_ROW_CAP = 6
 TRIBE_ON_WATCH_DAYS = 7
 
 THREADS_PREVIEW_ROW_CAP = 6
-THREADS_BUSINESS_DIR = "threads/business"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+THREADS_BUSINESS_DIR = "threads/business"  # leak-guard: ok (relative suffix rooted by caller)
 # Status values we treat as active. Spec uses 'active'; 'open' is a common
 # variant. Anything else (closed, held, abandoned) is excluded.
 THREADS_ACTIVE_STATUSES = {"active", "open"}

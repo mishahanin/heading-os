@@ -92,6 +92,11 @@ NON_SCOPE_CLAIMS = {
     ".claude/hooks/checkpoint-save.py":
         "'the work this session was doing' appears in a handoff the hook writes FOR "
         "the session whose transcript it was handed; the subject is its own caller",
+    ".claude/hooks/recall-inject.py":
+        "'in this session' instructs the model about what NOT to conclude while the "
+        "pinned embedder is down; it claims no coverage over a set of files, and "
+        "the fact it reports - that this hook's own recall call returned nothing - "
+        "the hook observed directly in its own subprocess result",
 }
 
 

@@ -23,12 +23,23 @@ name: publish-marketplace
 on:
   push:
     branches: [main]
+    # These must cover EVERY input a bundle can carry, or the marketplace goes
+    # stale with no signal: this workflow is the only sync path, and a push that
+    # matches nothing here simply does not run. Until 2026-08-23 the list watched
+    # only skills and hooks, while config/plugin-bundles.yaml also declares
+    # `scripts:` and `commands:` entries and states that scripts/utils/ "is
+    # implied and always copied". So a change to scripts/docparse.py, anything
+    # under scripts/utils/, or .claude/commands/** shipped nothing.
+    #
+    # scripts/** deliberately over-matches: most scripts are not bundled, so some
+    # runs rebuild to an identical result. Over-triggering costs one idempotent
+    # CI run; under-triggering serves old code to every installer, silently.
     paths:
       - "config/plugin-bundles.yaml"
-      - "scripts/dev/build-plugins.py"
-      - "scripts/dev/publish-marketplace.py"
+      - "scripts/**"
       - ".claude/skills/**"
       - ".claude/hooks/**"
+      - ".claude/commands/**"
       - ".github/workflows/publish-marketplace.yml"
   workflow_dispatch: {}
 

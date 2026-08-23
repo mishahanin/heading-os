@@ -541,7 +541,7 @@ def test_index_hook_is_derived_state_not_the_event_text(tmp_path: Path, monkeypa
 
     subprocess.run([sys.executable, "scripts/thread.py", "open", "business", "Hook shape"], check=True)
     thread_id = list((threads_root / "business").glob("*.md"))[0].stem
-    event_text = "Vu Nguyen answered at 08:00 UTC and the answer is a commercial objection"
+    event_text = "Marlow Carter answered at 08:00 UTC and the answer is a commercial objection"
     subprocess.run(
         [sys.executable, "scripts/thread.py", "log", thread_id, event_text], check=True)
 
@@ -550,7 +550,7 @@ def test_index_hook_is_derived_state_not_the_event_text(tmp_path: Path, monkeypa
 
     # The event text belongs in the thread body, and ONLY there.
     assert event_text in parsed.body
-    assert "Vu Nguyen" not in mem
+    assert "Marlow Carter" not in mem
 
     line = next(ln for ln in mem.splitlines() if "Hook shape" in ln)
     assert line.endswith(f"- active, last {parsed.last_touched}")

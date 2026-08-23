@@ -74,6 +74,57 @@ def test_engine_clean_scan_refuses_on_untracked_data(tmp_path, capsys):
     assert "outputs/operations/leak.md" in capsys.readouterr().out
 
 
+def test_the_push_delta_includes_untracked_files(tmp_path):
+    """The content walls scan this set, and `git add -A` sweeps untracked in.
+
+    Found by the 2026-08-23 audit and confirmed by reading the call order:
+    `engine_content_scan` runs at step 0 of `push_repo`, BEFORE the commit, over
+    `_push_delta_files`. That set was built from `git diff` alone, which sees
+    only tracked files - so a brand-new file was committed and pushed a moment
+    later without its CONTENT ever being read. The routing wall beside it
+    (`engine_clean_scan`) has always seen untracked files, and the two must
+    agree about what is about to be pushed.
+
+    Scanning an untracked file that `--no-commit` will leave behind is the safe
+    direction and is what the routing wall already does.
+    """
+    repo = _init_repo(tmp_path)
+    _write(repo, "scripts/tracked.py", "print(1)\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    _write(repo, "docs/brand-new.md", "real name here\n")   # never added
+
+    assert "docs/brand-new.md" in push_all._push_delta_files(repo)
+
+
+def test_the_push_delta_leaves_ignored_files_out(tmp_path):
+    """An ignored file is not going to be pushed, so scanning it would only
+    produce refusals over scratch files nobody is sending anywhere."""
+    repo = _init_repo(tmp_path)
+    _write(repo, ".gitignore", ".sessions/\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    _write(repo, ".sessions/token.json", "secret\n")
+
+    assert ".sessions/token.json" not in push_all._push_delta_files(repo)
+
+
+def test_the_push_delta_reports_non_ascii_names_unquoted(tmp_path):
+    """Same 2026-08-23 defect as in `engine_guard.repo_carried_paths`.
+
+    Without `-z`, git returns `"docs/\\320\\276\\320\\261\\320\\267\\320\\276\\321\\200.md"`.
+    The content scanner is then handed a name that opens no file, so the scan
+    reads nothing and reports clean.
+    """
+    repo = _init_repo(tmp_path)
+    _write(repo, "docs/обзор.md", "text\n")
+    _git(repo, "add", "-A")
+
+    delta = push_all._push_delta_files(repo)
+    assert "docs/обзор.md" in delta, delta
+    assert not any(f.startswith('"') for f in delta)
+
+
 def _make_hook(tmp_path, body: str):
     hooks = tmp_path / ".git" / "hooks"
     hooks.mkdir(parents=True, exist_ok=True)
@@ -318,3 +369,51 @@ def test_the_end_to_end_refusal_pushes_nothing(monkeypatch, tmp_path):
         capture_output=True,
     )
     assert has_main.returncode != 0
+
+
+# ============================================================
+# The content gate must not skip silently when the overlay IS present
+# ============================================================
+def _overlay(tmp_path: Path, curated: str | None = None) -> Path:
+    data = tmp_path / "data"
+    (data / "crm" / "contacts").mkdir(parents=True)
+    (data / "config").mkdir(parents=True)
+    (data / "crm" / "contacts" / "zenon-makarios.md").write_text(
+        "---\nname: Zenon Makarios\n---\n", encoding="utf-8")
+    if curated is not None:
+        (data / "config" / "content-denylist.yaml").write_text(curated, encoding="utf-8")
+    return data
+
+
+def test_the_content_gate_refuses_when_the_denylist_breaks_with_an_overlay(tmp_path, capsys):
+    """The 2026-08-23 hole's other half. `build_denylist` degrading made
+    `engine_content_scan` return silently, so a broken curated list produced a
+    clean-looking push with no content wall at all. Silence is only correct when
+    there is no overlay to harvest.
+    """
+    repo = _init_repo(tmp_path)
+    _write(repo, "scripts/foo.py", "print(1)\n")
+    _git(repo, "add", "-A")
+    data = _overlay(tmp_path, curated="companies: [unclosed\n  - x: : :\n")
+
+    with pytest.raises(SystemExit) as exc:
+        push_all.engine_content_scan(repo, data)
+    assert exc.value.code == 2
+    out = capsys.readouterr().out
+    assert "denylist could not be built" in out
+
+
+def test_the_content_gate_stays_quiet_with_no_overlay(tmp_path):
+    """A public clone or CI run has no overlay. Skipping is correct and silent."""
+    repo = _init_repo(tmp_path)
+    _write(repo, "scripts/foo.py", "print(1)\n")
+    _git(repo, "add", "-A")
+    assert push_all.engine_content_scan(repo, tmp_path / "no-such-overlay") is None
+
+
+def test_the_content_gate_runs_normally_on_a_healthy_overlay(tmp_path):
+    repo = _init_repo(tmp_path)
+    _write(repo, "scripts/foo.py", "print(1)\n")
+    _git(repo, "add", "-A")
+    data = _overlay(tmp_path, curated='companies: ["Krellide Systems"]\n')
+    assert push_all.engine_content_scan(repo, data) is None

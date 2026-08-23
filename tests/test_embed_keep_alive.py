@@ -40,7 +40,7 @@ def captured(monkeypatch):
 
 
 def test_payload_carries_the_configured_keep_alive(captured, monkeypatch):
-    monkeypatch.setattr(embeddings, "_index_config", lambda: {"keep_alive": "45m"})
+    monkeypatch.setattr(embeddings, "_index_config", lambda root=None: {"keep_alive": "45m"})
     embeddings.embed(["a"], model="bge-m3", host="http://h:1")
     assert captured[0]["keep_alive"] == "45m"
 
@@ -54,7 +54,7 @@ def test_keep_alive_defaults_when_the_config_does_not_say(captured, monkeypatch)
 
 
 def test_an_explicit_argument_beats_the_config(captured, monkeypatch):
-    monkeypatch.setattr(embeddings, "_index_config", lambda: {"keep_alive": "45m"})
+    monkeypatch.setattr(embeddings, "_index_config", lambda root=None: {"keep_alive": "45m"})
     embeddings.embed(["a"], model="bge-m3", host="http://h:1", keep_alive="2h")
     assert captured[0]["keep_alive"] == "2h"
 
@@ -68,7 +68,7 @@ def test_every_batch_carries_it_so_the_last_one_does_not_reset_the_window(
     value, the final batch would post a default-carrying payload and hand the
     model back a five-minute lease -- the exact state this change removes.
     """
-    monkeypatch.setattr(embeddings, "_index_config", lambda: {"keep_alive": "30m"})
+    monkeypatch.setattr(embeddings, "_index_config", lambda root=None: {"keep_alive": "30m"})
     embeddings.embed(["a", "b", "c", "d", "e"], model="bge-m3", host="http://h:1",
                      batch=2)
     assert len(captured) == 3, "expected three batches"
@@ -103,7 +103,7 @@ def test_no_texts_makes_no_request_and_reads_no_config(monkeypatch):
 
 
 def test_index_embed_keep_alive_reads_the_config(monkeypatch):
-    monkeypatch.setattr(embeddings, "_index_config", lambda: {"keep_alive": "1h"})
+    monkeypatch.setattr(embeddings, "_index_config", lambda root=None: {"keep_alive": "1h"})
     assert embeddings.index_embed_keep_alive() == "1h"
     monkeypatch.setattr(embeddings, "_index_config", dict)
     assert embeddings.index_embed_keep_alive() == "30m"

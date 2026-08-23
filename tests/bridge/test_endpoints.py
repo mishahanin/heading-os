@@ -27,12 +27,32 @@ def test_health_no_auth(workspace_root):
     assert "uptime_s" in body
 
 def test_bootstrap_returns_token(workspace_root):
+    """`/_bootstrap` is unauthenticated and hands out the bearer token.
+
+    That is deliberate, and it is a KNOWN, ACCEPTED risk rather than an
+    oversight, recorded here on 2026-08-23 so that tightening it later reads as
+    a security decision instead of "breaking a test".
+
+    What it buys: the browser tab has no other way to learn the token, and the
+    Host/Origin guard already refuses a hostile cross-origin page.
+
+    What it costs: the token file is 0600, but this endpoint hands the same
+    token to any process that can reach loopback -- including another local
+    user's. On a single-user machine that is no gap; on a shared host it defeats
+    the file mode. The daemon binds 127.0.0.1 only, and is currently stopped and
+    disabled by operator decision, so the exposure today is nil.
+
+    If it is ever re-enabled on a shared host, gate this behind a one-time
+    pairing code and change this test on purpose.
+    """
     client, _ = _make_client(workspace_root, token="t1")
     r = client.get("/_bootstrap")
     assert r.status_code == 200
     body = r.json()
     assert body["token"] == "t1"
     assert body["user"] == "misha"
+    # The token must never be cacheable, whatever else is true of this endpoint.
+    assert r.headers.get("cache-control") == "no-store"
 
 def test_authed_endpoint_rejects_no_token(workspace_root):
     client, _ = _make_client(workspace_root)
@@ -497,9 +517,15 @@ def test_finalize_requires_auth(workspace_root):
     assert r.status_code == 401
 
 
-def test_finalize_send_email_with_existing_draft(workspace_root):
-    """When the draft sidecar exists on disk, /finalize send-email returns
-    {sent: True, draft: <path>}."""
+def test_finalize_send_email_finds_the_draft_and_reports_no_send(workspace_root):
+    """This asserted `sent: True` until 2026-08-23, and that was the defect.
+
+    The handler behind this route reads a file and returns. It calls no
+    transport, and it must not: a browser POST is not the human approval that
+    `.claude/rules/lethal-trifecta.md` requires before anything leaves the
+    machine. The route reports what it did — it located a draft — and names
+    where the send actually happens.
+    """
     drafts_dir = workspace_root / "outputs" / "operations" / "email-intelligence" / "drafts"
     drafts_dir.mkdir(parents=True)
     (drafts_dir / "abc123.json").write_text('{"to": "alice@31c.io", "subject": "ok"}')
@@ -509,8 +535,10 @@ def test_finalize_send_email_with_existing_draft(workspace_root):
         json={"action": "send-email", "artifact_id": "abc123"})
     assert r.status_code == 200
     body = r.json()
-    assert body["sent"] is True
+    assert body["sent"] is False
+    assert body["found"] is True
     assert body["draft"].endswith("abc123.json")
+    assert "action-queue.py approve" in body["error"]
 
 
 def test_finalize_send_email_missing_draft_returns_not_found_envelope(workspace_root):

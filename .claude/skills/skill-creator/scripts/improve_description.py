@@ -13,6 +13,15 @@ from pathlib import Path
 
 import anthropic
 
+# Resolve `scripts.*` to THIS skill's package, not the workspace's.
+# `python -m scripts.<name>` from the skill root already does; running the
+# file by path (`python scripts/<name>.py`) puts scripts/ on sys.path[0]
+# instead of the skill root, so the absolute name resolves to whatever
+# other `scripts` package is importable - in this workspace the repo root's,
+# pinned there by an editable install. Measured 2026-08-23: all four
+# intra-skill importers died on import under `python scripts/<name>.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from scripts.utils import parse_skill_md
 
 

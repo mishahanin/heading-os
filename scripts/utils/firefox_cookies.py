@@ -34,6 +34,7 @@ from pathlib import Path
 # evaluator's workspace_import check is a false positive here.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from scripts.utils.sqlite_uri import read_only_uri
 
 _SUPPORTED_BROWSERS = ("firefox", "floorp", "librewolf", "waterfox")
 
@@ -174,7 +175,7 @@ def _snapshot_db(src: Path) -> Path:
     os.close(tmp_fd)
     tmp_path = Path(tmp_path_str)
 
-    src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=5)
+    src_conn = sqlite3.connect(read_only_uri(src), uri=True, timeout=5)
     try:
         dst_conn = sqlite3.connect(tmp_path)
         try:
@@ -212,7 +213,7 @@ def get_cookies(
 
     snapshot = _snapshot_db(db_path)
     try:
-        conn = sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)
+        conn = sqlite3.connect(read_only_uri(snapshot), uri=True)
         try:
             if include_subdomains:
                 sql = (

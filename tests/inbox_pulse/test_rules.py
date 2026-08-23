@@ -1058,3 +1058,125 @@ def test_classify_multiple_internal_domains(make_workspace, tmp_path):
     )
     assert result["tier_guess"] == "HIGH_LIKELY"
     assert result["reason_breakdown"]["sender_override"] == "tl_to_important"
+
+
+# ---------------------------------------------------------------------------
+# "Sender overrides take absolute precedence" -- made true
+#
+# Found by the 2026-08-23 audit. The comment at step 1 of `classify` says
+# sender overrides take absolute precedence, and step 0 -- the recipient-aware
+# block added by the 2026-05-29 directive -- ran before it and returned first.
+#
+# So an internal colleague the operator had explicitly put on `always_critical`
+# was silently demoted to LOW whenever they wrote to the operator directly. That
+# is the one case the allowlist exists for: it is the operator saying "always
+# show me this person", and it stopped working for everyone inside the Tribe,
+# with the breakdown blaming `internal_nonlead_to_normal`.
+# ---------------------------------------------------------------------------
+
+
+def _rules_yaml_with_overrides(tmp_path: Path, *, critical=(), normal=()) -> Path:
+    lines = ["sender_overrides:"]
+    if critical:
+        lines.append("  always_critical:")
+        lines.extend(f'    - "{a}"' for a in critical)
+    else:
+        lines.append("  always_critical: []")
+    lines.append("  always_important: []")
+    if normal:
+        lines.append("  always_normal:")
+        lines.extend(f'    - "{a}"' for a in normal)
+    else:
+        lines.append("  always_normal: []")
+    lines += [
+        "keyword_overrides:",
+        "  promote_to_critical: []",
+        "  promote_to_important: []",
+        "quiet_hours:",
+        '  start: "23:00"',
+        '  end: "07:00"',
+        '  timezone: "Etc/GMT-4"',
+        "breakthrough_allowlist: []",
+        "internal_domains:",
+        '  - "31c.io"',
+        "cost_ceiling:",
+        "  monthly_anthropic_usd: 50",
+        "  warn_at_percent: 80",
+    ]
+    p = tmp_path / "override_precedence_rules.yaml"
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return p
+
+
+def _internal_classifier(make_workspace, tmp_path, *, critical=(), normal=()):
+    from scripts.inbox_pulse.overrides import RulesEngine
+    from scripts.inbox_pulse.rules import CheapClassifier
+
+    engine = RulesEngine(
+        yaml_path=_rules_yaml_with_overrides(tmp_path, critical=critical, normal=normal))
+    _write_crm_contact(
+        make_workspace / "crm" / "contacts",
+        slug="alice-31c",
+        email="alice@31c.io",
+        relationship_type="customer-active",   # NOT leadership
+    )
+    return CheapClassifier(rules=engine, workspace_root=make_workspace,
+                           account=None, my_email="ceo@31c.io")
+
+
+def test_always_critical_beats_the_internal_recipient_demotion(make_workspace, tmp_path):
+    """The defect, in the shape it fires: an allowlisted colleague writes to you."""
+    clf = _internal_classifier(make_workspace, tmp_path, critical=["alice@31c.io"])
+    result = clf.classify(
+        sender_email="alice@31c.io",
+        subject="Status update",
+        now=_fixed_now(),
+        recipients_to=["ceo@31c.io"],
+        recipients_cc=[],
+    )
+    assert result["tier_guess"] == "HIGH_LIKELY", (
+        "an always_critical sender was demoted to LOW because the mail was "
+        "internal -- the allowlist does not work for anyone in the Tribe"
+    )
+    assert result["reason_breakdown"]["sender_override"] == "always_critical"
+
+
+def test_always_critical_beats_the_cc_demotion_too(make_workspace, tmp_path):
+    clf = _internal_classifier(make_workspace, tmp_path, critical=["alice@31c.io"])
+    result = clf.classify(
+        sender_email="alice@31c.io",
+        subject="Weekly summary",
+        now=_fixed_now(),
+        recipients_to=["someone@31c.io"],
+        recipients_cc=["ceo@31c.io"],
+    )
+    assert result["tier_guess"] == "HIGH_LIKELY"
+    assert result["reason_breakdown"]["sender_override"] == "always_critical"
+
+
+def test_always_normal_reports_itself_rather_than_the_recipient_rule(make_workspace, tmp_path):
+    """Same tier either way, but the breakdown must name the rule that decided."""
+    clf = _internal_classifier(make_workspace, tmp_path, normal=["alice@31c.io"])
+    result = clf.classify(
+        sender_email="alice@31c.io",
+        subject="Status update",
+        now=_fixed_now(),
+        recipients_to=["ceo@31c.io"],
+        recipients_cc=[],
+    )
+    assert result["tier_guess"] == "LOW"
+    assert result["reason_breakdown"]["sender_override"] == "always_normal"
+
+
+def test_the_recipient_demotion_still_fires_without_an_override(make_workspace, tmp_path):
+    """The mutation guard. The 2026-05-29 directive must survive the fix."""
+    clf = _internal_classifier(make_workspace, tmp_path)
+    result = clf.classify(
+        sender_email="alice@31c.io",
+        subject="Status update",
+        now=_fixed_now(),
+        recipients_to=["ceo@31c.io"],
+        recipients_cc=[],
+    )
+    assert result["tier_guess"] == "LOW"
+    assert result["reason_breakdown"]["sender_override"] == "internal_nonlead_to_normal"

@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
     get_workspace_root, validate_admin, get_exec_slug, load_exec_registry,
+    get_data_config_dir,
     get_crm_central_path, get_corporate_repo_path, load_admin_config,
     load_github_org
 )
@@ -153,11 +154,9 @@ def audit_recent_commits(slug: str) -> list:
 def update_registry_status(slug: str) -> None:
     """Set exec status to 'revoked' in exec-registry.json."""
     print(f"\n{BOLD}Step 3: Updating exec registry{RESET}")
-    corp_repo = get_corporate_repo_path()
-    registry_file = corp_repo / "config" / "exec-registry.json"
-
-    if not registry_file.exists():
-        registry_file = get_workspace_root() / "config" / "exec-registry.json"
+    # Per-instance DATA. See offboard-exec.update_exec_registry for why the
+    # corporate-repo and engine-root fallbacks were removed rather than kept.
+    registry_file = get_data_config_dir() / "exec-registry.json"
 
     if not registry_file.exists():
         print(f"  {YELLOW}[warn]{RESET} exec-registry.json not found")

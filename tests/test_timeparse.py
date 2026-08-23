@@ -38,7 +38,7 @@ def test_non_utc_offset_preserved_not_reinterpreted():
 
 
 def test_z_suffix_parses_as_utc():
-    """Callers (promote-corporate reading `git --format=%cI`) may see a Z."""
+    """Callers reading `git --format=%cI` may see a Z."""
     assert parse_iso("2026-08-19T10:00:00Z") == datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc)
 
 

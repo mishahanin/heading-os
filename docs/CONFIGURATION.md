@@ -15,6 +15,9 @@ Everything in `config/` that shapes how the engine classifies, routes, and fails
 | `wizard-templates/` | Document templates the setup wizard fills in. |
 | `skill-custom/` | Local per-clone skill overrides. |
 
+Two more per-instance files live in your **data overlay**, not here: the fleet
+roster and the org chart. See [running HEADING OS for a team](#running-heading-os-for-a-team-the-two-fleet-files).
+
 ## `routing-map.yaml`: the classifier
 
 The single source of truth for where a record belongs. Every path resolves to one of three destinations:
@@ -50,6 +53,54 @@ JSON schemas for CRM records: `crm-contact.schema.json`, `crm-relationship.schem
 ## `skill-custom/`
 
 A place for local, per-clone skill overrides that should not ship with the engine. See its `README.md` for the override convention.
+
+## Running HEADING OS for a team: the two fleet files
+
+Skip this if you run HEADING OS for yourself. A single-operator install needs
+neither file, both loaders return empty, and nothing errors.
+
+If you run it for a team, the engine reads two registries. **Both live in your
+data overlay, never in the engine repo**, and both are classified `private`:
+
+| File | Question it answers | Written by |
+|------|--------------------|------------|
+| `<data-root>/admin/executives.json` | Who is provisioned as a HEADING OS **user** | `admin/provision/registry.py` |
+| `<data-root>/config/exec-registry.json` | Who is an executive in your **organisation** | you, by hand |
+
+Copy the shape from `scripts/executives.example.json` and
+`scripts/exec-registry.example.json`. Each example carries its own field
+reference in a `_README` block.
+
+**Keep them separate.** They look like the same list and are not. Someone can be
+one and not the other. An executive may never use HEADING OS. An assistant may
+use it and sit on no org chart. One row cannot carry two independent
+lifecycles, and the fact you copy across is the one that goes stale. This is not
+hypothetical. The org chart in this project once carried a flag meaning "not a
+HEADING OS user". By the time anyone read it again, the two people it named had
+been active users for two months.
+
+Stable identifiers (`name`, `github_user`) may appear in both. They do not
+drift, and an executive with no roster row still needs a handle. Only lifecycle
+facts are kept apart.
+
+Read them joined, not separately:
+
+```python
+from scripts.utils.workspace import load_fleet
+
+for person in load_fleet():
+    print(person["slug"], person["is_business_exec"], person["is_heading_os_user"])
+```
+
+`load_fleet()` returns one record per person appearing in either file. Each
+record carries `is_business_exec` and `is_heading_os_user` flags. The two
+same-named `status` fields are renamed apart, into `employment_status` and
+`provisioning_status`.
+
+**Roster status vocabulary**, in order: `provisioning` (setup in flight),
+`provisioned` (setup finished, not yet used), `active`, then `offboarded` or
+`revoked`. Only `active` counts as fleet membership: aggregation, sync and fleet
+health all filter on it.
 
 ## Data root: pinning `HEADING_OS_DATA`
 

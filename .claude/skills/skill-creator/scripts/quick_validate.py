@@ -1,6 +1,27 @@
 #!/usr/bin/env python3
 """
 Quick validation script for skills - minimal version
+
+FRONTMATTER ALLOWLIST (widened 2026-08-23). This file arrived carrying only the
+six upstream Anthropic keys, and rejected every key this workspace adds on top
+of them. Measured: 96 of 96 skills failed. `package_skill.package_skill()`
+hard-gates on `validate_skill`, so packaging was broken for every real skill and
+nothing reported it.
+
+Two groups are now accepted beyond the upstream six:
+
+- Harness keys Claude Code itself reads from SKILL.md frontmatter:
+  `argument-hint`, `model`, `disable-model-invocation`, `context`, `background`,
+  `effort`.
+- Anything under the `x-heading-` namespace. `scripts/skill-metadata-check.py`
+  is the workspace's real frontmatter contract and states the reason for the
+  prefix: it signals "workspace extension, not part of Anthropic's standard
+  SKILL.md spec" so future stricter validation does not strip it. A bare
+  `heading-orchestration:` is still rejected — the prefix IS the contract.
+
+Guarded by tests/test_skill_creator_validator_accepts_real_skills.py, which
+checks both directions: every shipped skill passes, and a typo'd or
+un-namespaced key still fails.
 """
 
 import sys
@@ -8,6 +29,18 @@ import os
 import re
 import yaml
 from pathlib import Path
+
+# Upstream Anthropic keys, plus the harness keys Claude Code reads itself.
+ALLOWED_PROPERTIES = {
+    'name', 'description', 'license', 'allowed-tools', 'metadata',
+    'compatibility',
+    'argument-hint', 'model', 'disable-model-invocation', 'context',
+    'background', 'effort',
+}
+
+# Workspace extension blocks. Namespaced on purpose; see the module docstring.
+NAMESPACE_PREFIX = 'x-heading-'
+
 
 def validate_skill(skill_path):
     """Basic validation of a skill"""
@@ -38,15 +71,17 @@ def validate_skill(skill_path):
     except yaml.YAMLError as e:
         return False, f"Invalid YAML in frontmatter: {e}"
 
-    # Define allowed properties
-    ALLOWED_PROPERTIES = {'name', 'description', 'license', 'allowed-tools', 'metadata', 'compatibility'}
-
-    # Check for unexpected properties (excluding nested keys under metadata)
-    unexpected_keys = set(frontmatter.keys()) - ALLOWED_PROPERTIES
+    # Check for unexpected properties (excluding nested keys under metadata,
+    # and anything under the x-heading- extension namespace)
+    unexpected_keys = {
+        k for k in frontmatter
+        if k not in ALLOWED_PROPERTIES and not k.startswith(NAMESPACE_PREFIX)
+    }
     if unexpected_keys:
         return False, (
             f"Unexpected key(s) in SKILL.md frontmatter: {', '.join(sorted(unexpected_keys))}. "
-            f"Allowed properties are: {', '.join(sorted(ALLOWED_PROPERTIES))}"
+            f"Allowed properties are: {', '.join(sorted(ALLOWED_PROPERTIES))}, "
+            f"plus any '{NAMESPACE_PREFIX}*' extension key"
         )
 
     # Check required fields

@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
-from scripts.utils.workspace import get_outputs_dir, get_workspace_root
+from scripts.utils.workspace import get_data_root, get_outputs_dir, get_workspace_root
 
 try:
     from playwright.sync_api import sync_playwright
@@ -62,6 +62,35 @@ def timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
+_FONT_URL_RE = re.compile(r"""url\(\s*['"]?((?:\.\./)+datastore/brand/fonts/[^'")]+)['"]?\s*\)""")
+
+
+def _resolve_font_urls(css: str) -> str:
+    """Rewrite the @font-face URLs to absolute file:// paths under the data root.
+
+    Two things were wrong with the relative form. `../../../` from
+    `.claude/skills/design/references/` lands on `.claude/`, not the workspace
+    root, so it pointed at nothing. And it could not have worked anyway: this CSS
+    is INLINED into a document written under `outputs/`, and a browser resolves a
+    relative url() against the DOCUMENT, not against the file the CSS came from.
+    Either way GT Standard and 31C TypeFace fell back to Inter silently on every
+    render.
+
+    A missing font file leaves the URL alone: the fallback is what already
+    happened, and rewriting to a path that also does not exist helps nobody.
+    """
+    fonts_root = get_data_root() / "datastore" / "brand" / "fonts"
+
+    def _sub(match: re.Match) -> str:
+        tail = match.group(1).split("datastore/brand/fonts/", 1)[1]
+        target = fonts_root / tail
+        if not target.is_file():
+            return match.group(0)
+        return f"url('{target.as_uri()}')"
+
+    return _FONT_URL_RE.sub(_sub, css)
+
+
 def inject_brand_css(html_content: str, brand: str) -> str:
     """Inject brand CSS into HTML content."""
     if brand != "31c":
@@ -74,6 +103,7 @@ def inject_brand_css(html_content: str, brand: str) -> str:
         return html_content
 
     css = css_path.read_text(encoding="utf-8")
+    css = _resolve_font_urls(css)
     style_tag = f"<style>\n{css}\n</style>"
 
     if "</head>" in html_content.lower():

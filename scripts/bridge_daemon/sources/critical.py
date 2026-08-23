@@ -33,7 +33,7 @@ from pathlib import Path
 
 from scripts.bridge_daemon._atomic import atomic_write_text
 
-CRITICAL_LOG_FILE = "outputs/operations/bridge/critical-items.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+CRITICAL_LOG_FILE = "outputs/operations/bridge/critical-items.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 CRITICAL_LOG_MAX_BYTES = 1_000_000  # 1 MB safety cap
 NOTE_MAX_CHARS = 280
 ALLOWED_KINDS = {"deal", "task", "draft", "conversation", "other"}

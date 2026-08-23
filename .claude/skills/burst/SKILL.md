@@ -6,7 +6,7 @@ description: >
   rewritten artifact. The N variants span deliberately diverse axes
   (length, opener, tone, structure, lens) with one mandatory
   "swing-the-other-way" variant taking the opposite approach. Target is
-  either inline (`/burst 3: <seed>`) or walked back to the latest
+  either inline (`/burst 3: seed text`) or walked back to the latest
   assistant-produced content turn. Convergence pattern: pick a variant,
   /burst again from there - works free under the walk-back rules.
   Single-shot per invocation.
@@ -274,6 +274,13 @@ posture.
    artifact, drop-in replaceable.
 6. Never persist variants to disk. Pure conversational.
 7. Never enter persistent / always-on mode. Single-shot per invocation.
+8. Never invent a statistic, price, date, or source to make a variant land.
+   A data-led axis with no figure to hand emits a named placeholder plus a
+   `[NEEDS FIGURE: ...]` line, and says so in the pick. `voice.md` forbids
+   fabricated facts, statistics, names, and sources; a variant is prose the
+   operator may ship. Until 2026-08-23 `references/examples.md` modelled the
+   opposite. It invented "73% of national telco DPI deployments". The pick line
+   then claimed the audience recognised the number.
 8. Never auto-route from natural language. Slash-only.
 9. Never write to memory, settings, skills, or rules. /burst is read-only.
 10. Never block on user response after Phase 2. The closer line is

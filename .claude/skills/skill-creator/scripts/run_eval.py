@@ -3,20 +3,90 @@
 
 Tests whether a skill's description causes Claude to trigger (read the skill)
 for a set of queries. Outputs results as JSON.
+
+A RUN THAT NEVER HAPPENED IS NOT A NEGATIVE RESULT (2026-08-23). Until this
+date a missing or misconfigured `claude` produced a fully-formed, plausible
+score instead of an error:
+
+- absent from PATH: `Popen` raised FileNotFoundError, the worker loop caught
+  `Exception`, appended `False`, and every `should_trigger: false` case
+  PASSED. The report read "N passed" where N was the negative-case count.
+- present but failing (auth, bad --model, wrong version): no exception at all.
+  stderr went to DEVNULL, stdout carried nothing parseable, and every query
+  scored 0/1 triggers - identical to a description that genuinely never fires.
+
+Both are the `.claude/rules/scope-claims.md` shape: the method established
+nothing, the output asserted a measurement. Two guards now stand:
+
+1. `main()` refuses to start when `claude` is not on PATH (exit 2).
+2. A run whose subprocess emitted no parseable stream event at all raises
+   EvalRunError carrying the exit code and the stderr tail. Errored runs are
+   counted and reported separately, never folded into a trigger rate, and any
+   error makes the process exit 2.
+
+Guarded by tests/test_skill_creator_run_eval_reports_a_dead_cli.py.
 """
 
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+# Resolve `scripts.*` to THIS skill's package, not the workspace's.
+# `python -m scripts.<name>` from the skill root already does; running the
+# file by path (`python scripts/<name>.py`) puts scripts/ on sys.path[0]
+# instead of the skill root, so the absolute name resolves to whatever
+# other `scripts` package is importable - in this workspace the repo root's,
+# pinned there by an editable install. Measured 2026-08-23: all four
+# intra-skill importers died on import under `python scripts/<name>.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from scripts.utils import parse_skill_md
+
+
+class EvalRunError(RuntimeError):
+    """The `claude` subprocess produced no usable stream. Not a negative result."""
+
+
+def require_claude_cli() -> None:
+    """Refuse to score anything when the CLI under test is not installed.
+
+    Called by `run_eval` itself, so `run_loop` inherits it rather than
+    iterating a description forever against a subprocess that never starts.
+    """
+    if shutil.which("claude") is None:
+        raise EvalRunError(
+            "`claude` is not on PATH. Without it every query scores zero "
+            "triggers, which reads as a real result: the negative cases all "
+            "'pass' and the report looks like a partial score. Install the "
+            "Claude Code CLI, or put it on PATH, then re-run."
+        )
+
+
+def _no_stream_reason(process, stderr_file) -> str:
+    """Explain a run that emitted nothing, quoting the CLI's own stderr."""
+    rc = process.returncode
+    tail = ""
+    try:
+        stderr_file.seek(0)
+        tail = stderr_file.read().decode("utf-8", errors="replace").strip()
+    except OSError:
+        pass
+    if len(tail) > 500:
+        tail = "..." + tail[-500:]
+    return (
+        f"`claude` emitted no parseable stream event (exit code {rc}). "
+        "This is a broken run, not a query that failed to trigger. "
+        f"stderr: {tail or '(empty)'}"
+    )
 
 
 def find_project_root() -> Path:
@@ -52,6 +122,7 @@ def run_single_query(
     clean_name = f"{skill_name}-skill-{unique_id}"
     project_commands_dir = Path(project_root) / ".claude" / "commands"
     command_file = project_commands_dir / f"{clean_name}.md"
+    stderr_file = None
 
     try:
         project_commands_dir.mkdir(parents=True, exist_ok=True)
@@ -82,14 +153,22 @@ def run_single_query(
         # programmatic subprocess usage is safe.
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
+        # stderr to a temp file, not DEVNULL: when the CLI fails, its reason is
+        # the only thing that distinguishes "misconfigured" from "no trigger".
+        # A file rather than a PIPE so a chatty failure cannot deadlock us.
+        # noqa SIM115: a `with` cannot express this lifetime. The handle is
+        # handed to Popen here and read at line 269 after the loop; the
+        # enclosing try/finally (line 127 / 271) closes it on every path.
+        stderr_file = tempfile.TemporaryFile()  # noqa: SIM115 - closed in the finally at the end of this function
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=stderr_file,
             cwd=project_root,
             env=env,
         )
 
+        saw_event = False
         triggered = False
         start_time = time.time()
         # Track state for stream event detection
@@ -136,6 +215,7 @@ def run_single_query(
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    saw_event = True
 
                     # Early detection via stream events
                     if event.get("type") == "stream_event":
@@ -186,8 +266,14 @@ def run_single_query(
                 process.wait()
             reader_thread.join(timeout=2)
 
+        # Every early return above happened because we parsed an event, so this
+        # is the only path where "no stream at all" can surface.
+        if not saw_event:
+            raise EvalRunError(_no_stream_reason(process, stderr_file))
         return triggered
     finally:
+        if stderr_file is not None:
+            stderr_file.close()
         if command_file.exists():
             command_file.unlink()
 
@@ -204,6 +290,7 @@ def run_eval(
     model: str | None = None,
 ) -> dict:
     """Run the full eval set and return results."""
+    require_claude_cli()
     results = []
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -222,37 +309,56 @@ def run_eval(
                 future_to_info[future] = (item, run_idx)
 
         query_triggers: dict[str, list[bool]] = {}
+        query_errors: dict[str, list[str]] = {}
         query_items: dict[str, dict] = {}
         for future in as_completed(future_to_info):
             item, _ = future_to_info[future]
             query = item["query"]
             query_items[query] = item
-            if query not in query_triggers:
-                query_triggers[query] = []
+            query_triggers.setdefault(query, [])
+            query_errors.setdefault(query, [])
             try:
                 query_triggers[query].append(future.result())
             except Exception as e:
-                print(f"Warning: query failed: {e}", file=sys.stderr)
-                query_triggers[query].append(False)
+                # NOT `append(False)`. A run that never happened is not a run
+                # that failed to trigger; folding it in silently turns a dead
+                # CLI into a scored result. See the module docstring.
+                print(f"Error: query run failed: {e}", file=sys.stderr)
+                query_errors[query].append(str(e))
 
     for query, triggers in query_triggers.items():
         item = query_items[query]
-        trigger_rate = sum(triggers) / len(triggers)
+        errors = query_errors.get(query, [])
         should_trigger = item["should_trigger"]
-        if should_trigger:
-            did_pass = trigger_rate >= trigger_threshold
-        else:
-            did_pass = trigger_rate < trigger_threshold
+        if not triggers:
+            # Every run of this query errored. There is nothing to score.
+            results.append({
+                "query": query,
+                "should_trigger": should_trigger,
+                "trigger_rate": None,
+                "triggers": 0,
+                "runs": 0,
+                "errors": len(errors),
+                "error_message": errors[0] if errors else "",
+                "pass": None,
+            })
+            continue
+        trigger_rate = sum(triggers) / len(triggers)
+        did_pass = (trigger_rate >= trigger_threshold if should_trigger
+                    else trigger_rate < trigger_threshold)
         results.append({
             "query": query,
             "should_trigger": should_trigger,
             "trigger_rate": trigger_rate,
             "triggers": sum(triggers),
             "runs": len(triggers),
+            "errors": len(errors),
             "pass": did_pass,
         })
 
-    passed = sum(1 for r in results if r["pass"])
+    passed = sum(1 for r in results if r["pass"] is True)
+    failed = sum(1 for r in results if r["pass"] is False)
+    errored = sum(1 for r in results if r["pass"] is None)
     total = len(results)
 
     return {
@@ -262,7 +368,9 @@ def run_eval(
         "summary": {
             "total": total,
             "passed": passed,
-            "failed": total - passed,
+            "failed": failed,
+            "errored": errored,
+            "runs_errored": sum(len(v) for v in query_errors.values()),
         },
     }
 
@@ -279,6 +387,12 @@ def main():
     parser.add_argument("--model", default=None, help="Model to use for claude -p (default: user's configured model)")
     parser.add_argument("--verbose", action="store_true", help="Print progress to stderr")
     args = parser.parse_args()
+
+    try:
+        require_claude_cli()
+    except EvalRunError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     eval_set = json.loads(Path(args.eval_set).read_text())
     skill_path = Path(args.skill_path)
@@ -306,15 +420,25 @@ def main():
         model=args.model,
     )
 
+    summary = output["summary"]
     if args.verbose:
-        summary = output["summary"]
         print(f"Results: {summary['passed']}/{summary['total']} passed", file=sys.stderr)
         for r in output["results"]:
-            status = "PASS" if r["pass"] else "FAIL"
+            status = {True: "PASS", False: "FAIL", None: "ERROR"}[r["pass"]]
             rate_str = f"{r['triggers']}/{r['runs']}"
             print(f"  [{status}] rate={rate_str} expected={r['should_trigger']}: {r['query'][:70]}", file=sys.stderr)
 
     print(json.dumps(output, indent=2))
+
+    if summary["errored"]:
+        print(
+            f"Error: {summary['errored']} of {summary['total']} queries produced "
+            f"no usable run ({summary['runs_errored']} run(s) failed). The score "
+            "above is incomplete - do not read it as a measurement of the "
+            "description.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 if __name__ == "__main__":

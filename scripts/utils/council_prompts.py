@@ -18,14 +18,31 @@ You are advising the CEO of 31 Concept (31C). Quick context:
 - Operational vocabulary: heading, sea state, course correction, drift, state check, crunch mode, operational state.
 """
 
+# A council consult wants a compact position, not an essay, so both builders ask
+# for one. It became a parameter on 2026-08-23: the 2026-08-23 engine audit sent
+# its per-file shards through `kimi-consult --mode independent`, and every shard
+# inherited this cap while its own question said "list EVERY defect". The cap is
+# right for the thing these builders were written for and wrong for enumeration,
+# so the caller now chooses. Pass "" (or None) to omit the sentence entirely.
+DEFAULT_LENGTH_HINT = "Aim for 200-400 words."
 
-def build_independent_prompt(question: str, context: str = "") -> str:
+
+def _with_hint(instruction: str, length_hint: str | None) -> str:
+    """Append the length sentence to an Output instruction, or leave it off."""
+    hint = (length_hint or "").strip()
+    return f"{instruction} {hint}" if hint else instruction
+
+
+def build_independent_prompt(question: str, context: str = "",
+                             length_hint: str | None = DEFAULT_LENGTH_HINT) -> str:
     """Build the independent-perspective prompt for a council advisor.
 
     Frames the receiving model as a second-opinion advisor that reasons from
     first principles and reaches its own conclusion without deferring to any
     prior framing. ``context``, if non-empty, is appended under a ``## Context``
-    section. Returns the full prompt string.
+    section. ``length_hint`` is the closing length instruction; pass ``""`` or
+    ``None`` for an enumerating task that must not be capped. Returns the full
+    prompt string.
     """
     parts = [THIRTY_ONE_C_BLOCK.strip(), ""]
     parts.append("## Your role")
@@ -45,21 +62,27 @@ def build_independent_prompt(question: str, context: str = "") -> str:
     parts.append("")
     parts.append("## Output")
     parts.append(
-        "Reason through the problem. Provide your conclusion as a clear "
-        "position with the reasoning behind it. State explicitly what you "
-        "would do, what risks you see, and what assumptions you are "
-        "making. Aim for 200-400 words."
+        _with_hint(
+            "Reason through the problem. Provide your conclusion as a clear "
+            "position with the reasoning behind it. State explicitly what you "
+            "would do, what risks you see, and what assumptions you are "
+            "making.",
+            length_hint,
+        )
     )
     return "\n".join(parts)
 
 
-def build_critique_prompt(draft: str, context: str = "") -> str:
+def build_critique_prompt(draft: str, context: str = "",
+                          length_hint: str | None = DEFAULT_LENGTH_HINT) -> str:
     """Build the critique prompt for a council advisor.
 
     Frames the receiving model as a critical reviewer whose job is to find
     flaws, missing angles, weak assumptions, and unstated risks in ``draft``.
     ``context``, if non-empty, is appended under a ``## Context`` section.
-    Returns the full prompt string.
+    ``length_hint`` is the closing length instruction; pass ``""`` or ``None``
+    for an enumerating task that must not be capped. Returns the full prompt
+    string.
     """
     parts = [THIRTY_ONE_C_BLOCK.strip(), ""]
     parts.append("## Your role")
@@ -80,10 +103,12 @@ def build_critique_prompt(draft: str, context: str = "") -> str:
     parts.append("")
     parts.append("## Output")
     parts.append(
-        "Identify the strongest objections to this draft. List the "
-        "assumptions that, if wrong, would change the conclusion. Name "
-        "the angles or evidence that are missing. End with: would you "
-        "ship this as-is, or what would you change first? Aim for "
-        "200-400 words."
+        _with_hint(
+            "Identify the strongest objections to this draft. List the "
+            "assumptions that, if wrong, would change the conclusion. Name "
+            "the angles or evidence that are missing. End with: would you "
+            "ship this as-is, or what would you change first?",
+            length_hint,
+        )
     )
     return "\n".join(parts)

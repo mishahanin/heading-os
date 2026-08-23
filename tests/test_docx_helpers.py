@@ -82,8 +82,9 @@ CASES = {
         [],
     ),
     "md-to-docx-charter": (
-        # The charter builder takes an md_path argument but never reads it —
-        # every line of the letter is hardcoded. No seed input is needed.
+        # A fixed-template generator: the letter is hardcoded and no markdown
+        # is read, so there is no seed input. It used to advertise an `md_path`
+        # it ignored; corrected 2026-08-23.
         "scripts/md-to-docx-charter.py", [], {}, [],
     ),
     "gen-exec-meeting-docx": (

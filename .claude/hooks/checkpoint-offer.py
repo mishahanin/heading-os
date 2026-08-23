@@ -1170,6 +1170,14 @@ def main() -> int:
     except Exception:
         return 0
 
+    # A payload that is valid JSON but not an object still reaches `.get`.
+    # `[]`, `"x"`, `3` and `null` all parse, then raise an uncaught
+    # AttributeError. Swept 2026-08-23 across every stdin hook: six crashed on
+    # all four shapes. Same defect checkpoint-inject.py fixed on 2026-08-20;
+    # the sweep is how the rest were found.
+    if not isinstance(payload, dict):
+        payload = {}
+
     project = CP.project_root(payload)
     state_path = CP.state_path(project, CP.session_slug(payload))
     state = CP.read_json(state_path)

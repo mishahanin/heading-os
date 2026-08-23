@@ -84,3 +84,12 @@ setup-wizard,operations,,,,
 event-debrief,operations,,follow-up,outputs/operations,
 interview-prep,operations,,,outputs/operations,
 zk,operations,,,knowledge,
+recall,strategy,,,,knowledge|threads|crm
+census,operations,,,outputs/operations/census-bench,knowledge|threads|crm
+radar,operations,,queue|cold-sweep,outputs/operations/ops-radar,
+queue,operations,queue-draft,,outputs/operations/action-queue,
+queue-draft,operations,,queue,outputs/operations/action-queue,
+memory-hygiene,operations,,dream,outputs/operations/memory-hygiene,
+canopus,operations,create-plan,implement,,plans
+deep-research-advance,intel,,validate,outputs/research,datastore
+pencil-export,design,,,outputs/deliverables,datastore

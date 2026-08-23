@@ -9,7 +9,6 @@ manifest, so the branch fired ALWAYS, and four callers had been reporting a
 green CRM schema gate that ran zero validations:
 
   - the `validate-crm-schema` pre-commit hook
-  - `scripts/canary-smoke.py`
   - `scripts/aggregate-crm.py`, before it aggregates into crm-central
   - `scripts/crm_migrate_to_entity_model.py`, verifying a staged migration
 
@@ -50,20 +49,79 @@ def test_jsonschema_is_actually_importable():
     )
 
 
-def test_the_validator_reaches_its_validating_path():
-    """Drive the real entry point and assert it did NOT take the skip branch."""
+VALID_RELATIONSHIP = """---
+entity_ref: example-corp-alba-karimova
+relationship_type: prospect
+last_touch: 2026-08-01
+created: 2026-01-15
+cadence: 30
+---
+
+# Alba Karimova
+
+Body.
+"""
+
+INVALID_RELATIONSHIP = """---
+entity_ref: example-corp-ilya-vetrov
+relationship_type: prospect
+created: 2026-01-15
+---
+
+# Ilya Vetrov
+
+No `last_touch`, which the relationship schema requires.
+"""
+
+
+def _run(args, tmp_path):
     import json
     import subprocess
     import sys
 
     result = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "validate-crm-schema.py"), "--json"],
+        [sys.executable, str(ROOT / "scripts" / "validate-crm-schema.py"),
+         "--json", "--dir", str(tmp_path), *args],
         capture_output=True, text=True, cwd=ROOT, timeout=180,
     )
-    payload = json.loads(result.stdout)
+    return result.returncode, json.loads(result.stdout)
+
+
+def test_the_validator_reaches_its_validating_path(tmp_path):
+    """Drive the real entry point and assert it did NOT take the skip branch.
+
+    Against a FIXTURE tree, not the operator's live CRM. The original ran with
+    no `--dir` and asserted `total > 0`, so it measured how many contacts this
+    machine happens to hold: red on a fresh clone, red on CI, red for anyone
+    who runs the suite before importing their records — and red in a way that
+    reads as "the schema gate is broken" when the gate is fine and the data is
+    simply absent. Found by the 2026-08-23 audit.
+    """
+    contacts = tmp_path / "contacts"
+    contacts.mkdir()
+    (contacts / "alba-karimova.md").write_text(VALID_RELATIONSHIP, encoding="utf-8")
+
+    code, payload = _run([], tmp_path)
     assert payload.get("status") != "skipped", (
         f"the gate skipped instead of validating: {payload.get('reason')}"
     )
     # A non-skipped run reports a count. Zero records checked is the same
     # silence in a different shape, so assert the count, not just the branch.
-    assert payload.get("total", 0) > 0, f"the gate validated nothing: {payload}"
+    assert payload.get("total", 0) == 1, f"the gate validated nothing: {payload}"
+    assert code == 0, payload
+
+
+def test_the_validator_actually_rejects_a_bad_record(tmp_path):
+    """The mutation guard. A gate that passes everything is the same silence.
+
+    The original test could not tell "validated one record successfully" from
+    "validated one record and did not notice it was wrong", because it never
+    showed the validator anything invalid.
+    """
+    contacts = tmp_path / "contacts"
+    contacts.mkdir()
+    (contacts / "ilya-vetrov.md").write_text(INVALID_RELATIONSHIP, encoding="utf-8")
+
+    code, payload = _run([], tmp_path)
+    assert payload.get("status") != "skipped"
+    assert code != 0, f"an invalid record passed the gate: {payload}"

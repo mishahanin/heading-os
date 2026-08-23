@@ -10,14 +10,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/docs.css">
 <style>
-  h3.cat { font-size: 1.35rem; margin: 46px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--border); }
-  h3.cat:first-of-type { margin-top: 24px; }
-  section.skill { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 22px; }
-  section.skill h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 1.05rem; margin: 0 0 2px; }
-  section.skill h3 .badge { font-size: 0.72rem; padding: 2px 9px; }
-  section.skill p.skill-meta { color: var(--text-dim); font-size: 0.82rem; margin: 2px 0 12px; }
-  section.skill p { margin: 8px 0; }
-  section.skill pre { margin: 10px 0; }
   a.cmd-link { text-decoration: none; }
   a.cmd-link code { color: var(--link); }
   a.cmd-link:hover code { text-decoration: underline; }
@@ -90,7 +82,7 @@
 
 <main class="content">
   <h1>Skills, MCP &amp; plugins</h1>
-  <p class="page-meta">The full skill catalog by category, the MCP servers and how to register them, and the Claude Code plugins. The authoritative skill registry is <code>.claude/rules/skill-router.md</code>.</p>
+  <p class="page-meta">The skill catalog by category, the MCP servers and how to register them, and the Claude Code plugins. The authoritative skill registry is <code>.claude/rules/skill-router.md</code>.</p>
 
   <h2>How skills are invoked</h2>
   <p>A <strong>skill</strong> is a folder under <code>.claude/skills/&lt;name&gt;/SKILL.md</code> with a description, trigger phrases, and a body. You invoke a skill two ways:</p>
@@ -185,18 +177,20 @@
     <thead><tr><th>Command</th><th>What it does</th></tr></thead>
     <tbody>
       <tr><td><a class="cmd-link" href="skills-operations-daily.html#s-prime"><code>/prime</code></a> 🔒</td><td>Session boot context load + parallel health checks.</td></tr>
-      <tr><td><a class="cmd-link" href="skills-operations-daily.html#s-dashboard"><code>/dashboard</code></a>, <a class="cmd-link" href="skills-operations-daily.html#s-next"><code>/next</code></a>, <a class="cmd-link" href="skills-operations-daily.html#s-radar"><code>/radar</code></a>, <a class="cmd-link" href="skills-operations-daily.html#s-queue"><code>/queue</code></a></td><td>Daily brief; "what's next" recommender; overdue-action detector; the terminal-native Action Queue.</td></tr>
+      <tr><td><a class="cmd-link" href="skills-operations-daily.html#s-dashboard"><code>/dashboard</code></a>, <a class="cmd-link" href="skills-operations-daily.html#s-next"><code>/next</code></a>, <a class="cmd-link" href="skills-operations-daily.html#s-radar"><code>/radar</code></a>, <a class="cmd-link" href="skills-operations-daily.html#s-queue"><code>/queue</code></a>, <a class="cmd-link" href="skills-operations-daily.html#s-queue-draft"><code>/queue-draft</code></a> 🔒</td><td>Daily brief; "what's next" recommender; overdue-action detector; the terminal-native Action Queue, and the gated-draft depositor that feeds it.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-daily.html#s-weekly-review"><code>/weekly-review</code></a></td><td>End-of-week review.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-daily.html#s-dream"><code>/dream</code></a> 🔒, <a class="cmd-link" href="skills-operations-daily.html#s-memory-hygiene"><code>/memory-hygiene</code></a></td><td>Memory consolidation; memory rot scan. See <a href="memory-odin.html">Memory &amp; ODIN</a>.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-infra.html#s-backup"><code>/backup</code></a> 🔒, <a class="cmd-link" href="skills-operations-infra.html#s-sync"><code>/sync</code></a> 🔒</td><td>Commit + push both repos; pull updates (git ff-only + corporate refresh).</td></tr>
-      <tr><td><a class="cmd-link" href="skills-operations-infra.html#s-push-updates"><code>/push-updates</code></a> 🔒, <a class="cmd-link" href="skills-operations-infra.html#s-publish-corporate"><code>/publish-corporate</code></a> 🔒, <a class="cmd-link" href="skills-operations-infra.html#s-promote-corporate"><code>/promote-corporate</code></a> 🔒, <a class="cmd-link" href="skills-operations-infra.html#s-rollback-corporate"><code>/rollback-corporate</code></a> 🔒</td><td>Multi-user fleet publishing pipeline (corporate content down to executives).</td></tr>
+      <tr><td><a class="cmd-link" href="skills-operations-infra.html#s-push-updates"><code>/push-updates</code></a> 🔒, <a class="cmd-link" href="skills-operations-infra.html#s-publish-corporate"><code>/publish-corporate</code></a> 🔒</td><td>Multi-user fleet publishing pipeline (corporate content down to executives).</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-quality.html#s-create-plan"><code>/create-plan</code></a>, <a class="cmd-link" href="skills-operations-quality.html#s-canopus"><code>/canopus</code></a> 🔒, <a class="cmd-link" href="skills-operations-quality.html#s-implement"><code>/implement</code></a></td><td>Plan → the Canopus standard → execute.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-quality.html#s-evaluate"><code>/evaluate</code></a>, <a class="cmd-link" href="skills-operations-quality.html#s-scrutinize"><code>/scrutinize</code></a>, <a class="cmd-link" href="skills-operations-quality.html#s-validate"><code>/validate</code></a>, <a class="cmd-link" href="skills-operations-quality.html#s-editorial-review"><code>/editorial-review</code></a></td><td>Artifact grading; principal-level audit; fact-check; document-structure editor.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-quality.html#s-workspace-deep-audit"><code>/workspace-deep-audit</code></a> 🔒</td><td>Full 8-section comprehensive workspace audit.</td></tr>
+      <tr><td><a class="cmd-link" href="skills-operations-quality.html#s-brain-audit"><code>/brain-audit</code></a></td><td>Source-coverage footer for a synthesized answer: newest dates, modality gaps, disagreements.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-quality.html#s-calibrate"><code>/calibrate</code></a> 🔒, <a class="cmd-link" href="skills-operations-quality.html#s-checkpoint"><code>/checkpoint</code></a> 🔒</td><td>End-of-session self-improvement; manual session-handoff save.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-quality.html#s-align"><code>/align</code></a> 🔒, <a class="cmd-link" href="skills-operations-quality.html#s-devil"><code>/devil</code></a> 🔒, <a class="cmd-link" href="skills-operations-quality.html#s-burst"><code>/burst</code></a> 🔒</td><td>Forced scope clarification; contrarian critique; N content variants.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-daily.html#s-sentinel"><code>/sentinel</code></a> 🔒, <a class="cmd-link" href="skills-operations-daily.html#s-bridge-health"><code>/bridge-health</code></a> 🔒, <a class="cmd-link" href="skills-operations-daily.html#s-cold-sweep"><code>/cold-sweep</code></a></td><td>Comms-monitor control; daemon fleet health; CRM "red debt" drain.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-daily.html#s-thread"><code>/thread</code></a></td><td>Operational thread registry — open / log / close / find.</td></tr>
+      <tr><td><a class="cmd-link" href="skills-operations-daily.html#s-census"><code>/census</code></a></td><td>Aggregating questions over the whole corpus (counts, intersections, what has not moved).</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-infra.html#s-playwright"><code>/playwright</code></a>, <a class="cmd-link" href="skills-operations-infra.html#s-ast-grep"><code>/ast-grep</code></a>, <a class="cmd-link" href="skills-operations-infra.html#s-context7"><code>/context7</code></a>, <a class="cmd-link" href="skills-operations-infra.html#s-setup-browser-cookies"><code>/setup-browser-cookies</code></a></td><td>Headless browser; structural code search; library docs; cookie import.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-infra.html#s-skill-creator"><code>/skill-creator</code></a> 🔒, <a class="cmd-link" href="skills-operations-infra.html#s-request-skill"><code>/request-skill</code></a> 🔒, <a class="cmd-link" href="skills-operations-infra.html#s-setup-wizard"><code>/setup-wizard</code></a> 🔒</td><td>Author / request a skill; configure a fresh workspace.</td></tr>
       <tr><td><a class="cmd-link" href="skills-operations-infra.html#s-event-debrief"><code>/event-debrief</code></a>, <a class="cmd-link" href="skills-operations-infra.html#s-interview-prep"><code>/interview-prep</code></a>, <a class="cmd-link" href="skills-operations-infra.html#s-zk"><code>/zk</code></a>, <a class="cmd-link" href="skills-operations-infra.html#s-mullvad"><code>/mullvad</code></a></td><td>Post-event recap; hiring framework; Zettelkasten capture; Mullvad VPN control.</td></tr>
@@ -204,7 +198,7 @@
   </table></div>
 
   <h2 id="reference">Skill reference by category</h2>
-  <p class="page-meta">Every skill is documented in full, with a usage example and customization notes, on its category page below.</p>
+  <p class="page-meta">Each skill below is documented in full, with a usage example and customization notes, on its category page. One operator-only hardware tool is deliberately left off this site; its <code>SKILL.md</code> in the repository is the only reference for it.</p>
   <div class="cards">
     <a class="card" href="skills-intel.html">
       <h3>Intel skills</h3>
@@ -228,7 +222,7 @@
     </a>
     <a class="card" href="skills-operations-daily.html">
       <h3>Operations: daily drivers</h3>
-      <p>12 skills, documented in full.</p>
+      <p>14 skills, documented in full.</p>
     </a>
     <a class="card" href="skills-operations-quality.html">
       <h3>Operations: planning &amp; review</h3>
@@ -236,7 +230,7 @@
     </a>
     <a class="card" href="skills-operations-infra.html">
       <h3>Operations: publishing, infra &amp; tooling</h3>
-      <p>18 skills, documented in full.</p>
+      <p>15 skills, documented in full.</p>
     </a>
   </div>
 

@@ -81,7 +81,8 @@ The full method (document arcs, operation vocabulary, defect checklist, the hard
 2. Run the standard prose gates on the resulting document:
    - `python scripts/sanitize-text.py <path> --scan`
    - `python scripts/humanization-check.py <path>`
-3. Report the validation line: `Structural ops applied: N. Hidden characters: clean. Humanisation audit: <result>.`
+3. Report the validation line: `Structural ops applied: N. Word count: X. Hidden characters: <scan result>. Humanisation audit: <result>.`
+   The middle two fields come from `sanitize-text.py --scan`; see `.claude/rules/hidden-chars.md`.
 
 ---
 

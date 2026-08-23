@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.colors import RED, RESET  # noqa: E402
 from scripts.utils.council_models import get_model  # noqa: E402
 from scripts.utils.council_prompts import (  # noqa: E402
+    DEFAULT_LENGTH_HINT,
     build_independent_prompt,
     build_critique_prompt,
 )
@@ -101,6 +102,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Additional context for either mode.",
     )
     p.add_argument(
+        "--length-hint",
+        default=DEFAULT_LENGTH_HINT,
+        help="Closing length instruction appended to the Output section. "
+             f"Default: {DEFAULT_LENGTH_HINT!r}. Pass an empty string to omit it "
+             "for an enumerating task (\"list every defect\") that must not be "
+             "capped at a word count.",
+    )
+    p.add_argument(
         "--model",
         default=DEFAULT_MODEL,
         help=f"Grok model. Default: {DEFAULT_MODEL}",
@@ -145,9 +154,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return int(e.code) if isinstance(e.code, int) else 1
 
     if args.mode == "independent":
-        prompt = build_independent_prompt(args.question, args.context)
+        prompt = build_independent_prompt(args.question, args.context,
+                                          length_hint=args.length_hint)
     else:
-        prompt = build_critique_prompt(args.draft, args.context)
+        prompt = build_critique_prompt(args.draft, args.context,
+                                       length_hint=args.length_hint)
 
     try:
         response = consult_grok(

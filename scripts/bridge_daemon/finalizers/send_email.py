@@ -1,8 +1,21 @@
-"""Send-email finalizer.
+"""Send-email finalizer. It locates a draft. It has never sent anything.
 
-Phase 1: validates the draft sidecar exists on disk and returns metadata.
-The real send via scripts/send-email.py is wired in Phase 2 once the
-/email-respond skill is producing draft sidecars in the documented format.
+The name and the old return value both said otherwise. `send_drafted` answered
+`{"sent": True}` when the sidecar file merely existed, and the browser action it
+is wired to is called "send-email" — so a click reported a delivered email that
+was never handed to any transport. Found by the 2026-08-23 audit.
+
+**Phase 2 is not "wire the send in here", and that plan is withdrawn.** Two rules
+landed after this file was written:
+
+* `.claude/rules/lethal-trifecta.md` — every outbound send is gated behind an
+  explicit human approval, and since 2026-06-27 that approval IS the operator
+  typing `scripts/action-queue.py approve <id>`, which sends synchronously in
+  that same command. A browser POST is not that click.
+* `.claude/rules/console-first.md` — a web view is never the only mutator. The
+  bridge dashboard's action-queue page is read-only by design.
+
+So this stays a locator, and the send lives where the human is.
 """
 import re
 from pathlib import Path
@@ -14,20 +27,25 @@ from scripts.utils.paths import get_data_root
 # (no '.', '/', '\') and any other shape that could escape the drafts dir.
 _ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
+_NOT_A_SEND = (
+    "this endpoint locates a draft; it does not send. Approve and send with "
+    "`python scripts/action-queue.py approve <id>`"
+)
+
 
 def send_drafted(workspace_root: Path, artifact_id: str, data_root: "Path | None" = None) -> dict:
-    """PHASE 1 STUB: does NOT actually send; only verifies the sidecar exists.
+    """Locate a drafted email by `artifact_id`. NEVER sends.
 
-    Look up a drafted email by artifact_id under
-    outputs/operations/email-intelligence/drafts/{artifact_id}.json.
+    Looks under `outputs/operations/email-intelligence/drafts/{artifact_id}.json`.
+    The sidecar format is established by `/email-respond`.
 
-    The drafted-email file format is established by /email-respond, which
-    is expected to write a sidecar with to/cc/subject/body fields. Phase 1
-    only confirms the sidecar exists; Phase 2 reads it and subprocess.runs
-    scripts/send-email.py with the parsed fields.
+    Returns `sent: False` in every case, because nothing here can make it True.
+    `found` is what actually varies. The two keys are separate on purpose: a
+    caller that reads only `sent` gets the honest answer, and a caller that wants
+    to know whether the draft exists has a field that says so.
 
-    HEADING OS engine/data split: the draft sidecar is DATA, so it resolves
-    under ``data_root`` (falls back to ``workspace_root`` when not supplied).
+    HEADING OS engine/data split: the draft sidecar is DATA, so it resolves under
+    `data_root` (falls back to `workspace_root` when not supplied).
     """
     if data_root is None:
         data_root = get_data_root()
@@ -35,5 +53,5 @@ def send_drafted(workspace_root: Path, artifact_id: str, data_root: "Path | None
         raise ValueError(f"invalid artifact_id: {artifact_id!r}")
     draft = data_root / "outputs" / "operations" / "email-intelligence" / "drafts" / f"{artifact_id}.json"
     if not draft.exists():
-        return {"sent": False, "error": f"draft {artifact_id} not found"}
-    return {"sent": True, "draft": str(draft)}
+        return {"sent": False, "found": False, "error": f"draft {artifact_id} not found"}
+    return {"sent": False, "found": True, "draft": str(draft), "error": _NOT_A_SEND}

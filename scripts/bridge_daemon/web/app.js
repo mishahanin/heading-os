@@ -594,7 +594,7 @@ function pulseNextHtml(next) {
       : '';
     if (item.kind === 'meeting') {
       const loc = item.location && item.location.startsWith('http')
-        ? `<a href="${escapeHtml(item.location)}" target="_blank" rel="noopener noreferrer" class="next-join" onclick="event.stopPropagation()">join</a>`
+        ? `<a href="${escapeHtml(item.location)}" target="_blank" rel="noopener noreferrer" class="next-join" data-stop-prop>join</a>`
         : '';
       return `
         <div class="pulse-next-item${item.is_next_day ? ' pulse-next-item-future' : ''}">
@@ -612,8 +612,8 @@ function pulseNextHtml(next) {
       </div>`;
   }).join('');
   const footer = overflow > 0
-    ? `<a class="pulse-next-more" href="#/day" onclick="event.stopPropagation()">${escapeHtml(overflow)} more upcoming &rarr;</a>`
-    : `<a class="pulse-next-more pulse-next-more-quiet" href="#/day" onclick="event.stopPropagation()">Open Day &rarr;</a>`;
+    ? `<a class="pulse-next-more" href="#/day" data-stop-prop>${escapeHtml(overflow)} more upcoming &rarr;</a>`
+    : `<a class="pulse-next-more pulse-next-more-quiet" href="#/day" data-stop-prop>Open Day &rarr;</a>`;
   // Phase 1.108: section-head with neutral count chip (matches the v8
   // grouping pattern used by Approvals + Signals). Next is non-urgent
   // by nature, so the badge uses the muted surface-2 colour rather
@@ -667,12 +667,12 @@ async function pulseInboxUrgentHtml() {
         </div>
         <div class="card pulse-inbox-urgent-card">
           <div class="pulse-inbox-urgent-empty">Inbox clear. No urgent conversations right now.</div>
-          <a class="pulse-inbox-urgent-more pulse-inbox-urgent-more-quiet" href="#/inbox" onclick="event.stopPropagation()">Open Inbox &rarr;</a>
+          <a class="pulse-inbox-urgent-more pulse-inbox-urgent-more-quiet" href="#/inbox" data-stop-prop>Open Inbox &rarr;</a>
         </div>
       </section>`;
   }
   const items = top.map(m => `
-    <a class="pulse-inbox-urgent-item" href="#/inbox" onclick="event.stopPropagation()">
+    <a class="pulse-inbox-urgent-item" href="#/inbox" data-stop-prop>
       <span class="pulse-inbox-urgent-source">EMAIL</span>
       <div class="pulse-inbox-urgent-body">
         <div class="pulse-inbox-urgent-subject"><strong>${escapeHtml(m.subject || '(no subject)')}</strong></div>
@@ -680,8 +680,8 @@ async function pulseInboxUrgentHtml() {
       </div>
     </a>`).join('');
   const footer = overflow > 0
-    ? `<a class="pulse-inbox-urgent-more" href="#/inbox" onclick="event.stopPropagation()">${escapeHtml(overflow)} more &rarr;</a>`
-    : `<a class="pulse-inbox-urgent-more pulse-inbox-urgent-more-quiet" href="#/inbox" onclick="event.stopPropagation()">Open Inbox &rarr;</a>`;
+    ? `<a class="pulse-inbox-urgent-more" href="#/inbox" data-stop-prop>${escapeHtml(overflow)} more &rarr;</a>`
+    : `<a class="pulse-inbox-urgent-more pulse-inbox-urgent-more-quiet" href="#/inbox" data-stop-prop>Open Inbox &rarr;</a>`;
   return `
     <section class="pulse-section">
       <div class="pulse-section-head">
@@ -717,7 +717,7 @@ async function pulseActionQueueHtml() {
   const overflow = Math.max(0, pending.length - top.length);
   const label = at => (at === 'telegram_send' ? 'TELEGRAM' : 'EMAIL');
   const items = top.map(it => `
-    <a class="pulse-inbox-urgent-item" href="#/action-queue" onclick="event.stopPropagation()">
+    <a class="pulse-inbox-urgent-item" href="#/action-queue" data-stop-prop>
       <span class="pulse-inbox-urgent-source">${escapeHtml(label(it.action_type))}</span>
       <div class="pulse-inbox-urgent-body">
         <div class="pulse-inbox-urgent-subject"><strong>${escapeHtml(it.title || '(untitled)')}</strong></div>
@@ -725,8 +725,8 @@ async function pulseActionQueueHtml() {
       </div>
     </a>`).join('');
   const footer = overflow > 0
-    ? `<a class="pulse-inbox-urgent-more" href="#/action-queue" onclick="event.stopPropagation()">${escapeHtml(overflow)} more &rarr;</a>`
-    : `<a class="pulse-inbox-urgent-more" href="#/action-queue" onclick="event.stopPropagation()">Open Action Queue &rarr;</a>`;
+    ? `<a class="pulse-inbox-urgent-more" href="#/action-queue" data-stop-prop>${escapeHtml(overflow)} more &rarr;</a>`
+    : `<a class="pulse-inbox-urgent-more" href="#/action-queue" data-stop-prop>Open Action Queue &rarr;</a>`;
   return `
     <section class="pulse-section">
       <div class="pulse-section-head">
@@ -787,7 +787,7 @@ function pulseSuggestedHtml(d) {
     return 'content';
   };
   const renderRow = it => `
-    <a class="pulse-suggested-row" href="${escapeHtml(it.link || '#/pulse')}" onclick="event.stopPropagation()">
+    <a class="pulse-suggested-row" href="${escapeHtml(it.link || '#/pulse')}" data-stop-prop>
       <span class="pulse-suggested-agent" data-agent="${escapeHtml(_agentToken(it.agent))}">${escapeHtml(it.agent || '')}</span>
       <span class="pulse-suggested-reason">${escapeHtml(it.reason || '')}</span>
       <span class="pulse-suggested-arrow">&rarr;</span>
@@ -846,7 +846,7 @@ function pulseRecentOutputsHtml(d) {
     return m ? `${m[1]}-${m[2]}-${m[3]}` : iso;
   };
   const rows = items.map(it => `
-    <a class="pulse-recent-row" href="#/studio" onclick="event.stopPropagation()">
+    <a class="pulse-recent-row" href="#/studio" data-stop-prop>
       <span class="pulse-recent-cat" data-cat="${escapeHtml(it.category || 'other')}">${escapeHtml(it.category || 'other')}</span>
       <span class="pulse-recent-label">${escapeHtml(_label(it))}</span>
       <span class="pulse-recent-date">${escapeHtml(_shortDate(it.mtime))}</span>
@@ -855,7 +855,7 @@ function pulseRecentOutputsHtml(d) {
   // the other Pulse panels (Signals 1.101, Approvals 1.102, Next 1.103).
   // The card-level data-route still catches background clicks; the link
   // gives a discoverable text path for keyboard/screen-reader users.
-  const moreLink = `<a class="pulse-recent-more" href="#/studio" onclick="event.stopPropagation()">View all in Studio &rarr;</a>`;
+  const moreLink = `<a class="pulse-recent-more" href="#/studio" data-stop-prop>View all in Studio &rarr;</a>`;
   return `
     <article class="card pulse-footer-card pulse-recent-card" data-route="#/studio">
       <div class="pulse-footer-head">
@@ -878,7 +878,7 @@ function pulseThreadsHtml(d) {
       : (t.days_since === 0 ? 'today' : `${t.days_since}d ago`);
     const href = `#/threads?focus=${encodeURIComponent(String(t.id || ''))}`;
     return `
-      <a class="pulse-thread-row pulse-thread-link" href="${escapeHtml(href)}" onclick="event.stopPropagation()">
+      <a class="pulse-thread-row pulse-thread-link" href="${escapeHtml(href)}" data-stop-prop>
         <span class="pulse-thread-title">${escapeHtml(t.title)}</span>
         <span class="pulse-thread-meta">${escapeHtml(meta)}</span>
       </a>`;
@@ -903,7 +903,7 @@ function pulseTribeHtml(d) {
       : `${escapeHtml(m.role || '')} &middot; ${escapeHtml(m.days_since)}d`;
     const href = `#/tribe?focus=${encodeURIComponent(String(m.slug || ''))}`;
     return `
-      <a class="pulse-tribe-row pulse-tribe-link" href="${escapeHtml(href)}" onclick="event.stopPropagation()">
+      <a class="pulse-tribe-row pulse-tribe-link" href="${escapeHtml(href)}" data-stop-prop>
         <span class="pulse-tribe-dot" data-presence="${escapeHtml(m.presence)}"></span>
         <span class="pulse-tribe-name">${escapeHtml(m.name)}</span>
         <span class="pulse-tribe-meta">${meta}</span>
@@ -1066,13 +1066,13 @@ async function pulseApprovalsHtml() {
         <div class="pulse-approval-meta">to ${escapeHtml(it.to || '-')} &middot; ${escapeHtml(formatRelative(it.mtime))}</div>
         <div class="pulse-approval-actions-row">
           <button class="pulse-approval-inline-mark" title="Mark this draft sent" data-path="${escapeHtml(it.path)}">Mark sent</button>
-          <a class="pulse-approval-edit" href="#/approvals" onclick="event.stopPropagation()" title="Open in Approvals">Edit</a>
+          <a class="pulse-approval-edit" href="#/approvals" data-stop-prop title="Open in Approvals">Edit</a>
         </div>
       </div>`;
     }).join('');
     const footer = overflow > 0
-      ? `<a class="pulse-approvals-more" href="#/approvals" onclick="event.stopPropagation()">${escapeHtml(overflow)} more draft${overflow === 1 ? '' : 's'} waiting &rarr;</a>`
-      : `<a class="pulse-approvals-more pulse-approvals-more-quiet" href="#/approvals" onclick="event.stopPropagation()">Open Approvals &rarr;</a>`;
+      ? `<a class="pulse-approvals-more" href="#/approvals" data-stop-prop>${escapeHtml(overflow)} more draft${overflow === 1 ? '' : 's'} waiting &rarr;</a>`
+      : `<a class="pulse-approvals-more pulse-approvals-more-quiet" href="#/approvals" data-stop-prop>Open Approvals &rarr;</a>`;
     // Phase 1.106: header uses a real badge chip (replaces 'Approvals waiting · N')
     return `
       <section class="pulse-section">
@@ -1137,14 +1137,14 @@ function pulseNextFocalHtml(d) {
   // Pre-call notes (secondary outlined, routes to /day so the row's
   // expand panel + meeting-prep link is one click away).
   const joinBtn = loc.startsWith('http')
-    ? `<a class="pulse-focal-btn pulse-focal-btn-primary" href="${escapeHtml(loc)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">Join ${escapeHtml(loc.includes('zoom') ? 'Zoom' : loc.includes('teams') ? 'Teams' : 'meeting')}</a>`
+    ? `<a class="pulse-focal-btn pulse-focal-btn-primary" href="${escapeHtml(loc)}" target="_blank" rel="noopener noreferrer" data-stop-prop>Join ${escapeHtml(loc.includes('zoom') ? 'Zoom' : loc.includes('teams') ? 'Teams' : 'meeting')}</a>`
     : '';
-  const preCallBtn = `<a class="pulse-focal-btn pulse-focal-btn-secondary" href="#/day" onclick="event.stopPropagation()">Pre-call notes</a>`;
+  const preCallBtn = `<a class="pulse-focal-btn pulse-focal-btn-secondary" href="#/day" data-stop-prop>Pre-call notes</a>`;
 
   // Phase 1.106: v8 'Voss prep' secondary link sits below the buttons.
   // Routes to /day (Pulse hero is read-only; deeper prep happens via
   // the /voss skill from the CEO's terminal).
-  const vossLink = `<a class="pulse-focal-link" href="#/day" onclick="event.stopPropagation()">Voss prep</a>`;
+  const vossLink = `<a class="pulse-focal-link" href="#/day" data-stop-prop>Voss prep</a>`;
 
   // Countdown - re-uses event_utc_iso so the existing tick handler can
   // update it in place. Selector matches .next-mins[data-event-iso].
@@ -2868,6 +2868,13 @@ async function _wireFlagImportant(btn, kind, sourcePage) {
   // Initial state check - fetch /critical once, search for this ref.
   // Cached at the window level so each row check is O(1) after the
   // first fetch.
+  // EVERY branch stamps _criticalCacheAt. The two failure branches used to set
+  // only the cache object, leaving the timestamp undefined: `Date.now() -
+  // undefined` is NaN, `NaN > 30_000` is false, and `{}` is truthy - so after a
+  // single failed /critical fetch this block could never run again for the life
+  // of the page. Every flag button then read as unflagged even for flagged
+  // items, and clicking one created a duplicate server-side. Stamping 0 on
+  // failure makes the very next call retry. Found by the 2026-08-23 audit.
   if (!window._criticalCache || (Date.now() - window._criticalCacheAt) > 30_000) {
     try {
       const r = await authFetch('/critical');
@@ -2879,9 +2886,11 @@ async function _wireFlagImportant(btn, kind, sourcePage) {
         window._criticalCacheAt = Date.now();
       } else {
         window._criticalCache = {};
+        window._criticalCacheAt = 0;
       }
     } catch (e) {
       window._criticalCache = {};
+      window._criticalCacheAt = 0;
     }
   }
   const ref = btn.dataset.ref;
@@ -3704,7 +3713,7 @@ async function renderCritical(params) {
         </div>
       </div>
       <div class="critical-row-actions">
-        ${it.source_page ? `<a class="critical-row-open" href="${escapeHtml(_openHref(it))}" onclick="event.stopPropagation()">Open</a>` : ''}
+        ${it.source_page ? `<a class="critical-row-open" href="${escapeHtml(_openHref(it))}" data-stop-prop>Open</a>` : ''}
         <button class="critical-row-unmark" data-id="${escapeHtml(it.id)}" title="Remove from Important">Unflag</button>
       </div>
     </div>`).join('');
@@ -4329,7 +4338,7 @@ async function renderDay(params) {
     if (e.is_next) classes.push('day-next');
     const locText = e.location && !e.location.startsWith('http') ? e.location : '';
     const joinBtn = (e.location && e.location.startsWith('http'))
-      ? `<a class="btn-sm btn-sm-primary" href="${escapeHtml(e.location)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">Join</a>`
+      ? `<a class="btn-sm btn-sm-primary" href="${escapeHtml(e.location)}" target="_blank" rel="noopener noreferrer" data-stop-prop>Join</a>`
       : '';
     const briefBits = [];
     if (locText) briefBits.push(escapeHtml(locText));
@@ -5874,5 +5883,25 @@ document.addEventListener('DOMContentLoaded', () => {
     _cmdkSearchTimer = setTimeout(() => _cmdkRunSearch(q), 150);
   });
 });
+
+// CSP-SAFE STOP-PROPAGATION. Until 2026-08-23 twenty-three generated links
+// carried `onclick="event.stopPropagation()"` so a click on "join", "Open
+// Inbox", "Edit" and friends would not also fire the surrounding card's
+// `data-route` handler. index.html sets `script-src 'self'` with no
+// `'unsafe-inline'`, so browsers refused every one of those attributes: the
+// handler never ran and clicking a link inside a card navigated the card
+// instead. The file already showed CSP awareness elsewhere ("CSP-safe bar
+// widths ... apply each pipeline-stage fill width via CSSOM") and missed this.
+// Found by the 2026-08-23 audit.
+//
+// One CAPTURE listener replaces all twenty-three. Capture reaches document
+// before the card, so stopping here keeps the card handler from running;
+// stopPropagation does not touch the default action, so the link still
+// navigates. Registered once, which is what makes it survive the dozens of
+// innerHTML re-renders that have no shared mount seam.
+document.addEventListener('click', (e) => {
+  const link = e.target.closest?.('[data-stop-prop]');
+  if (link) e.stopPropagation();
+}, true);
 
 init().catch(e => console.error('bridge init failed:', e));

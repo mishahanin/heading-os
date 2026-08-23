@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""Convert a charter confirmation letter to a professionally formatted DOCX.
+"""Write the example charter-confirmation letter as a formatted DOCX.
+
+This is a FIXED-TEMPLATE generator, not a converter. Every line of the letter
+lives in `create_charter_docx` below; no markdown file is read, and editing one
+changes nothing in the output.
+
+It said otherwise until 2026-08-23 -- the docstring read "Convert a charter
+confirmation letter", and the function took an `md_path` it never opened, which
+is exactly the sentence-asserting-more-than-the-method shape
+`.claude/rules/scope-claims.md` exists to catch. The sibling that DOES convert is
+`scripts/md-to-docx-letter.py`; use that one when the source is markdown.
+
+The letter body is placeholder data (Example Charters, an invented Athens
+address), kept because the layout is the deliverable here, not the content.
 
 Usage:
     python scripts/md-to-docx-charter.py
@@ -61,7 +74,12 @@ def add_formatted_text(paragraph, text, default_size=None):
         run.font.name = 'Arial'
 
 
-def create_charter_docx(md_path, docx_path):
+def create_charter_docx(docx_path):
+    """Render the built-in charter-confirmation template to `docx_path`.
+
+    Takes no source path on purpose: there is no source. See the module
+    docstring.
+    """
     _ensure_docx()
     doc = Document()
 
@@ -330,6 +348,5 @@ def create_charter_docx(md_path, docx_path):
 
 
 if __name__ == '__main__':
-    md_path = str(get_outputs_dir() / 'documents' / 'example-charter-confirmation.md')
     docx_path = str(get_outputs_dir() / 'documents' / 'example-charter-confirmation.docx')
-    create_charter_docx(md_path, docx_path)
+    create_charter_docx(docx_path)

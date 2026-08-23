@@ -57,16 +57,34 @@ def _rel(path: Path) -> str:
     return str(path.relative_to(ROOT)).replace("\\", "/")
 
 
+def _target_name(target: ast.AST) -> str:
+    """The written name of an assignment target, whatever its node shape.
+
+    `getattr(target, "id", "")` alone saw only bare `ast.Name`. It returned ""
+    for `Config.MODEL = "bge-m3"` and `self.MODEL = "bge-m3"`, which are
+    `ast.Attribute` with no `.id` -- so a fourth model copy in either shape kept
+    this guard green, which is exactly what the guard exists to stop.
+    """
+    if isinstance(target, ast.Name):
+        return target.id
+    if isinstance(target, ast.Attribute):
+        return target.attr
+    return ""
+
+
 def _offending_nodes(tree: ast.AST) -> list[tuple[int, str]]:
     """(line, why) for every model literal used as configuration, not as prose."""
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
+        # AnnAssign as well as Assign: `EMBED_MODEL: str = "bge-m3"` is an
+        # AnnAssign and slipped through entirely.
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
             if not (isinstance(node.value, ast.Constant)
                     and node.value.value in EMBED_MODEL_TAGS):
                 continue
-            for target in node.targets:
-                name = getattr(target, "id", "")
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                name = _target_name(target)
                 if "MODEL" in name.upper():
                     found.append((node.lineno, f"{name} = {node.value.value!r}"))
         elif isinstance(node, ast.Call):

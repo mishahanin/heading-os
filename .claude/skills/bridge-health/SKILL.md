@@ -1,6 +1,6 @@
 ---
 name: bridge-health
-description: Quick health check on the bridge daemon (CEO machine + any exec mirrors). Surfaces heartbeat staleness, version drift, active sessions, and the Phase 1 -> Phase 2 adoption gate metrics. Use when the dashboard feels stale, the sync-pill is red, the daemon may have crashed, or before a /push-updates that changes daemon config. NEVER auto-trigger - invoke explicitly via /bridge-health.
+description: Quick health check on the bridge daemon (CEO machine + any exec mirrors). Surfaces heartbeat staleness, version drift, active sessions, and the Phase 1 to Phase 2 adoption gate metrics. Use when the dashboard feels stale, the sync-pill is red, the daemon may have crashed, or before a /push-updates that changes daemon config. NEVER auto-trigger - invoke explicitly via /bridge-health.
 argument-hint: "[--stale SECONDS] [--gate] [--json]"
 allowed-tools: "Bash(python3:*), Bash(python:*)"
 disable-model-invocation: true

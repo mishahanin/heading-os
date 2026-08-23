@@ -68,24 +68,40 @@ SUGGEST_CRM_KNOWN_LOW_MIN_ENTRIES = 3
 # ===========================================================================
 
 
+SSH_TRANSPORT_FAILURE = 255  # ssh(1)'s own exit status when it cannot connect
+
+
 def ssh_read(remote_path: str) -> str | None:
-    """Read a remote file via SSH. Returns text or None on failure."""
-    result = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-         VM_HOST, "cat", remote_path],
-        capture_output=True,
-        text=True,
-        timeout=SSH_TIMEOUT,
-    )
-    if result.returncode != 0:
+    """Read a remote file via SSH.
+
+    Returns the text, `""` when the remote file is simply absent, or None when
+    the TRANSPORT failed. The three are different answers and the caller needs
+    them apart: an absent day-log means the daemon wrote nothing, an unreachable
+    host means this report knows nothing at all.
+    """
+    try:
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+             VM_HOST, "cat", remote_path],
+            capture_output=True,
+            text=True,
+            timeout=SSH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
         return None
+    if result.returncode == SSH_TRANSPORT_FAILURE:
+        return None
+    if result.returncode != 0:
+        return ""          # reached the host; `cat` found no such file
     return result.stdout
 
 
-def fetch_jsonl_for_date(target_date: date) -> list[dict[str, Any]]:
-    """Fetch and parse JSONL entries for one day from the VM."""
+def fetch_jsonl_for_date(target_date: date) -> "list[dict[str, Any]] | None":
+    """Entries for one day, `[]` for a genuinely empty day, None if unreachable."""
     remote_path = f"{VM_STATE_DIR}/log-{target_date.isoformat()}.jsonl"
     raw = ssh_read(remote_path)
+    if raw is None:
+        return None
     if not raw:
         return []
     entries = []
@@ -688,7 +704,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def main() -> int:
     args = parse_args()
     days = max(1, args.days)
     today = datetime.now(get_default_tz()).date()
@@ -702,10 +718,16 @@ def main() -> None:
     # Fetch all entries
     all_entries_by_date: dict[date, list[dict[str, Any]]] = {}
     all_entries: list[dict[str, Any]] = []
+    unreachable: list[date] = []
     for i in range(days):
         target = today - timedelta(days=i)
         print(f"  {GRAY}SSH cat log-{target}.jsonl ...{RESET}", end=" ", flush=True)
         day_entries = fetch_jsonl_for_date(target)
+        if day_entries is None:
+            unreachable.append(target)
+            all_entries_by_date[target] = []
+            print(f"{RED}UNREACHABLE{RESET}")
+            continue
         all_entries_by_date[target] = day_entries
         all_entries.extend(day_entries)
         print(f"{GREEN}{len(day_entries)} entries{RESET}")
@@ -716,6 +738,9 @@ def main() -> None:
             target = today - timedelta(days=i)
             if target not in all_entries_by_date:
                 day_entries = fetch_jsonl_for_date(target)
+                if day_entries is None:
+                    unreachable.append(target)
+                    day_entries = []
                 all_entries_by_date[target] = day_entries
 
     # Fetch state.json
@@ -801,6 +826,17 @@ def main() -> None:
     print(f"Tuning suggestions: {suggestion_count}")
     print(f"Report: {out_path}")
 
+    if unreachable:
+        # Say what the report does NOT cover, and exit non-zero so a scheduler
+        # cannot read a broken data path as a quiet inbox.
+        print(f"{RED}{len(unreachable)} day(s) could not be read from {VM_HOST}: "
+              f"{', '.join(d.isoformat() for d in sorted(unreachable))}.{RESET}",
+              file=sys.stderr)
+        print(f"{RED}The counts above EXCLUDE those days. This is not a quiet "
+              f"inbox -- the host was unreachable.{RESET}", file=sys.stderr)
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

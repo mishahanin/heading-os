@@ -1,0 +1,66 @@
+{
+  "_README": [
+    "EXAMPLE ONLY. The real file lives in YOUR DATA OVERLAY, never in the engine",
+    "repo: <data-root>/admin/executives.json (normally ../.heading-os-data/admin/).",
+    "It is classified `private` in config/routing-map.yaml and must stay that way:",
+    "it carries real names, GitHub handles and repository names.",
+    "",
+    "WHAT IT IS: the HEADING OS FLEET ROSTER. It answers exactly one question:",
+    "who is provisioned as a HEADING OS user. Nothing else belongs in it.",
+    "",
+    "You only need this file if you run HEADING OS for more than one person. A",
+    "single-operator install has no fleet, the loader returns an empty roster,",
+    "and that is not an error.",
+    "",
+    "ITS SIBLING: <data-root>/config/exec-registry.json is a DIFFERENT file",
+    "answering a DIFFERENT question: who is an executive in your ORGANISATION",
+    "(title, email, business role). See scripts/exec-registry.example.json.",
+    "Keep them apart. Someone can be one and not the other: an executive who",
+    "does not use HEADING OS, or an assistant who uses it and is not an",
+    "executive. Merging the two forces one row to carry two independent",
+    "lifecycles, and the copied fact goes stale. Join them with",
+    "scripts.utils.workspace.load_fleet(), which labels which file each fact",
+    "came from.",
+    "",
+    "SINGLE WRITER: admin/provision/registry.py. Edit by hand only to change a",
+    "status."
+  ],
+
+  "version": 1,
+
+  "_schema": {
+    "slug": "kebab-case identifier. The join key with exec-registry.json, and the suffix of their data repo.",
+    "name": "Display name.",
+    "role": "Short role token used by the engine (exec, cso, cfo, coo, ...).",
+    "github_user": "Their GitHub username. They are added as a collaborator on their own data repo.",
+    "data_repo": "Name of their private data overlay repo, by convention heading-os-data-{slug}.",
+    "status": "See the vocabulary below. ONLY 'active' counts as fleet membership for aggregation and sync."
+  },
+
+  "_status_vocabulary": {
+    "provisioning": "Setup is in flight. Nothing is guaranteed to exist yet.",
+    "provisioned": "Setup finished end to end, but the person has not started using it. Their repo holds only the setup commits.",
+    "active": "In use. This is the only status that makes them part of the fleet: aggregation, sync and fleet health all filter on it.",
+    "offboarded": "They have left. Access removed, repo archived.",
+    "revoked": "Access pulled in an emergency, ahead of a full offboard."
+  },
+
+  "executives": [
+    {
+      "slug": "jane-doe",
+      "name": "Jane Doe",
+      "role": "cso",
+      "github_user": "janedoe",
+      "data_repo": "heading-os-data-jane-doe",
+      "status": "active"
+    },
+    {
+      "slug": "sam-rivera",
+      "name": "Sam Rivera",
+      "role": "exec",
+      "github_user": "samrivera",
+      "data_repo": "heading-os-data-sam-rivera",
+      "status": "provisioned"
+    }
+  ]
+}

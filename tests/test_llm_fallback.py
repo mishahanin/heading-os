@@ -144,16 +144,16 @@ def test_chain_exhausted_raises_runtime_error_with_attempt_summary():
     def always_fail_loader(*a, **kw):
         return lambda *a2, **k2: (_ for _ in ()).throw(RuntimeError("vendor down"))
 
-    with patch.object(F, "_load_consult_fn", side_effect=always_fail_loader):
-        with pytest.raises(RuntimeError) as exc_info:
-            F.call_anthropic_with_fallback(
-                client=client,
-                model="claude-haiku-4-5",
-                max_tokens=100,
-                system="x",
-                messages=[{"role": "user", "content": "y"}],
-                skill_name="test",
-            )
+    with patch.object(F, "_load_consult_fn", side_effect=always_fail_loader), \
+            pytest.raises(RuntimeError) as exc_info:
+        F.call_anthropic_with_fallback(
+            client=client,
+            model="claude-haiku-4-5",
+            max_tokens=100,
+            system="x",
+            messages=[{"role": "user", "content": "y"}],
+            skill_name="test",
+        )
     msg = str(exc_info.value)
     assert "exhausted" in msg
     assert "gemini" in msg
@@ -260,3 +260,104 @@ def test_invoke_vendor_supports_kimi(monkeypatch):
 def test_invoke_vendor_rejects_unknown():
     with pytest.raises(ValueError, match="unknown fallback vendor"):
         F._invoke_vendor("mistral", "x", "p", 100, 0.5)
+
+
+# ============================================================
+# A declared-sensitive session stops the cascade
+# ============================================================
+
+def test_a_declared_sensitive_session_refuses_to_cascade(monkeypatch):
+    """Found by the 2026-08-23 audit: the cascade had no sensitivity check.
+
+    The prompts this module carries are daemon prompts - sentinel and
+    email-intelligence are named Track A targets in its own docstring - so a
+    cascade ships email bodies and calendar subjects to Gemini, Grok or Kimi.
+    Sending them there is a configured, deliberate arrangement and stays; what
+    was missing is the one case where the operator has already said otherwise.
+
+    `sensitivity_is_declared()`, not `is_sensitive()`. The latter is fail-closed
+    and answers True when the variable was never set, which is every machine by
+    default - gating on it would silently kill the whole failover chain in
+    production. A DECLARATION is different: a person typed it, and it knows
+    something no denylist does.
+    """
+    monkeypatch.setenv("SENSITIVE_MODE", "on")
+    client = _MockClient(raise_exc=InternalServerError("503 Service Unavailable"))
+
+    # The message must NOT contain the word this test asserts on. It did, on the
+    # first draft, and `_invoke_vendor` folds a vendor failure into the
+    # chain-exhausted message - so the substring check passed on the stub's own
+    # words while the cascade ran both vendors. A guard that greps for a word it
+    # also supplies proves nothing.
+    def _must_not_run(*a, **k):
+        raise AssertionError("a vendor was reached")
+
+    with patch.object(F, "_load_consult_fn", _must_not_run), pytest.raises(RuntimeError) as err:
+        F.call_anthropic_with_fallback(
+            client=client,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            system="You are helpful.",
+            messages=[{"role": "user", "content": "Hi"}],
+            skill_name="test",
+        )
+    message = str(err.value)
+    assert "SENSITIVE_MODE" in message
+    assert "exhausted" not in message, "the chain must not have been walked at all"
+    assert "InternalServerError" in message, "the primary failure must survive the refusal"
+
+
+def test_an_undeclared_session_still_cascades(monkeypatch):
+    """The default must not change. SENSITIVE_MODE is unset on every daemon host,
+    and a failover that dies by default is an outage this module exists to
+    prevent."""
+    monkeypatch.delenv("SENSITIVE_MODE", raising=False)
+    client = _MockClient(raise_exc=InternalServerError("503 Service Unavailable"))
+    with patch.object(F, "_load_consult_fn") as mock_loader:
+        mock_loader.return_value = (
+            lambda prompt, model, temperature, max_tokens: "GEMINI: ok"
+        )
+        result = F.call_anthropic_with_fallback(
+            client=client,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            system="You are helpful.",
+            messages=[{"role": "user", "content": "Hi"}],
+            skill_name="test",
+        )
+    assert result.vendor == "gemini"
+
+
+def test_a_cleared_session_still_cascades(monkeypatch):
+    """`SENSITIVE_MODE=off` is a declaration that the payload is fine."""
+    monkeypatch.setenv("SENSITIVE_MODE", "off")
+    client = _MockClient(raise_exc=InternalServerError("503 Service Unavailable"))
+    with patch.object(F, "_load_consult_fn") as mock_loader:
+        mock_loader.return_value = (
+            lambda prompt, model, temperature, max_tokens: "GEMINI: ok"
+        )
+        result = F.call_anthropic_with_fallback(
+            client=client,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            system="You are helpful.",
+            messages=[{"role": "user", "content": "Hi"}],
+            skill_name="test",
+        )
+    assert result.vendor == "gemini"
+
+
+def test_a_declared_sensitive_session_does_not_block_the_primary(monkeypatch):
+    """Anthropic is the sanctioned vendor. Only the cascade is gated."""
+    monkeypatch.setenv("SENSITIVE_MODE", "on")
+    client = _MockClient()
+    result = F.call_anthropic_with_fallback(
+        client=client,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        system="You are helpful.",
+        messages=[{"role": "user", "content": "Hi"}],
+        skill_name="test",
+    )
+    assert result.vendor == "anthropic"
+

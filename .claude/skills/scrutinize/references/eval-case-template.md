@@ -60,21 +60,24 @@ At least one check field must be present. A case with no checks is invalid.
 
 A `/scrutinize` finding qualifies for eval-case promotion when ALL of these hold:
 
-1. **Target is a skill.** The finding's location is inside `.claude/skills/{name}/`. Findings against rules, scripts, or other workspace files do NOT promote to eval cases.
-2. **Skill has an `evals/cases/` directory.** If absent, do not offer promotion. (Optionally, Phase 4.5 may suggest creating the directory; do not auto-create.)
-3. **The finding describes a behaviour, not a typo.** Promote regressions of voice, structure, mode coverage, required content. Do NOT promote: hidden-char contamination (already caught by sanitizer), frontmatter typos (already caught by validator), line-length (already caught by linters).
+1. **Target is a skill, a script, or a rule.** The finding's location is inside `.claude/skills/{name}/`, `scripts/`, or `.claude/rules/`. Each promotes to a different artefact in a different place - see "Target-type artefact shapes (R10)" below for the three shapes. Findings on anything else (docs, config, generated output) do NOT promote.
+2. **The artefact location exists, or the CEO scaffolds it.** For a skill, that is an `evals/cases/` directory; for a script, `tests/regression/scrutinize/`; for a rule, `.claude/rules/_regression/`. If absent, offer the auto-scaffold block ("Auto-scaffold workflow (R5)" below) - never auto-create.
+3. **The finding describes a behaviour, not a typo.** Promote regressions of voice, structure, mode coverage, required content, and script or rule logic. Do NOT promote: hidden-char contamination (already caught by sanitizer), frontmatter typos (already caught by validator), line-length (already caught by linters).
 4. **The finding was approved-and-applied in Phase 4.** Rejected and deferred findings do not promote.
 5. **Severity is BLOCKER, HIGH, or MEDIUM.** LOW and NIT are not worth the eval-suite weight.
 
-If a finding qualifies, Phase 4.5 proposes a draft case (filled-in JSON) and asks the CEO to approve, skip, or revise the draft. Auto-write is forbidden - the CEO must explicitly approve each promotion.
+If a finding qualifies, Phase 4.5 proposes a draft artefact (filled in) and asks the CEO to approve, skip, or revise the draft. Auto-write is forbidden - the CEO must explicitly approve each promotion.
+
+Rules 1 and 2 were skill-only until R10 (2026-05-27) added the script and rule target types. The two statements coexisted in this file until 2026-08-23, so Phase 4.5 was reading a coin flip; R10 is the live design and the wording above is now the single gate.
 
 ## Eligibility quick reference
 
 | Signal | Eligible? |
 |---|---|
-| Finding on `/crm` SKILL.md describing missing mode in description | Yes - regression candidate |
-| Finding on `.claude/rules/voice.md` describing missing terminology | No - rules don't have eval cases |
-| Finding on `scripts/dashboard.py` describing logic bug | No - covered by integration tests |
+| Finding on `/crm` SKILL.md describing missing mode in description | Yes - skill artefact, `evals/cases/` |
+| Finding on `.claude/rules/voice.md` describing missing terminology | Yes - rule artefact, `_regression/*.yaml` |
+| Finding on `scripts/dashboard.py` describing logic bug | Yes - script artefact, `tests/regression/scrutinize/` |
+| Finding on `docs/ARCHITECTURE.md` describing a stale section | No - not one of the three target types |
 | LOW finding on a skill about a small typo | No - severity floor |
 | Hidden-character contamination found by sanitizer | No - sanitizer is the regression test |
 | Skill silently drops a documented capability | Yes - canonical regression candidate |
@@ -245,7 +248,7 @@ A separate workspace check (`scripts/rule-regression-runner.py`, to be built whe
 
 ### Eligibility unchanged
 
-The 5 eligibility rules (target is appropriate type, dir exists or will be scaffolded, finding is behaviour not typo, finding applied, severity >= MEDIUM) apply uniformly across skill / script / rule targets. The artefact shape differs; the gate does not.
+The 5 eligibility rules stated once above apply uniformly across skill / script / rule targets. The artefact shape differs; the gate does not. Do not restate the gate here - a second copy is how this file came to carry two contradicting versions of rule 1.
 
 ## OUTCOME cases (R13, 2026-06-06)
 

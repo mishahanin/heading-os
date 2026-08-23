@@ -178,8 +178,9 @@ Run the sanitizer and report the result:
 python scripts/sanitize-text.py <report_path> --scan
 ```
 
-State: "Word count: X. Hidden characters: clean." If the scan found and removed
-characters, say so explicitly.
+Carry the confirmation line from `.claude/rules/hidden-chars.md`, with both
+numbers copied from `sanitize-text.py --scan` — including when the scan was
+not clean.
 
 ## Phase 5 -- Persist (gated)
 

@@ -535,6 +535,71 @@ def load_css() -> str:
     return CSS_PATH.read_text(encoding="utf-8")
 
 
+_SUBTITLE_LIMIT = 200
+
+_METADATA_LINE = re.compile(
+    r"^\**\s*(last (updated|verified)|consumed by|status|version|owner|"
+    r"classification|audience)\s*[:\*]", re.I)
+
+
+def _clean_subtitle(raw: str) -> str:
+    """A page subtitle fit for `<meta name="description">`.
+
+    Two defects it replaces, measured across the site on 2026-08-23 (7 of the
+    generated pages): a blind `[:200]` cut mid-word or mid-clause, and a strip
+    that removed only `*_\\`` so link syntax, brackets and image markup reached
+    the attribute verbatim.
+
+    Markdown is unwrapped rather than deleted -- `[docs](x.md)` becomes `docs`,
+    not nothing -- and the cut lands on the last sentence end inside the limit,
+    falling back to the last word boundary with an ellipsis when the first
+    sentence is itself longer than the limit.
+    """
+    s = raw.strip()
+    s = re.sub(r"^\s*(?:>\s*)+", "", s)                     # blockquote marker
+    s = re.sub(r"^\s*(?:[-*+]|\d+\.)\s+", "", s)            # list bullet
+    s = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", s)        # images -> alt text
+    s = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", s)         # links  -> label
+    s = re.sub(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]", r"\1", s)  # wiki-links
+    s = re.sub(r"[*_`]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+
+    if len(s) <= _SUBTITLE_LIMIT:
+        return s
+    window = s[:_SUBTITLE_LIMIT]
+    cut = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if cut > 60:
+        return window[:cut + 1]
+    space = window.rfind(" ")
+    return (window[:space] if space > 60 else window).rstrip(" ,;:-") + "…"
+
+
+def _join_paragraph(lines: list[str], start: int) -> str:
+    """The whole lead paragraph, unwrapped, starting at `lines[start]`.
+
+    Markdown prose here is hard-wrapped at ~80 columns, and reading one
+    physical line published a sentence that stops mid-clause. Measured across
+    `docs/*.md` on 2026-08-23: 14 of the generated pages carried a subtitle cut
+    at the wrap point -- "reads as designed or", "so you can try the engine's",
+    "That means the" -- in the visible standfirst under the H1, in the
+    `<meta name="description">` that search engines quote, and in every
+    `docs/assets/search-index.json` record built from those pages.
+
+    The paragraph ends at a blank line or at the first structural line (a
+    heading, a rule, a table row, a list bullet, a blockquote), so a lead
+    paragraph immediately followed by a list does not swallow the list.
+    """
+    out: list[str] = []
+    for k in range(start, len(lines)):
+        s = lines[k].strip()
+        if not s:
+            break
+        if k > start and s.startswith(("#", "---", "|", ">", "- ", "* ", "+ ")):
+            break
+        out.append(s)
+    return " ".join(out)
+
+
 def extract_title(md_text: str, fallback: str) -> tuple[str, str]:
     """Return (display_title, subtitle) extracted from MD, or fallbacks."""
     lines = md_text.splitlines()
@@ -546,14 +611,30 @@ def extract_title(md_text: str, fallback: str) -> tuple[str, str]:
             continue
         if s.startswith("# "):
             title = s[2:].strip()
-            # Look for first non-empty line after the H1 as subtitle
-            for j in range(i + 1, min(i + 10, len(lines))):
+            # The first PROSE paragraph after the H1 is the subtitle.
+            #
+            # A metadata block ("Last Updated:", "Consumed by:") is not prose,
+            # and skipping only its first LINE is not enough: those blocks wrap,
+            # so the next line is a continuation and reads worse than the
+            # original. ARCHITECTURE published "Last Updated: 2026-08-20.
+            # Consumed by: readers of the docs site, and" as its search snippet,
+            # then ".claude/rules/console-first.md. That rule keeps the ..." once
+            # only the first line was skipped. Skip the whole block, to the blank
+            # line that ends it.
+            skipping_metadata = False
+            for j in range(i + 1, min(i + 20, len(lines))):
                 candidate = lines[j].strip()
-                if not candidate or candidate.startswith(("#", "---")):
+                if not candidate:
+                    skipping_metadata = False
                     continue
-                subtitle = candidate.split("\n")[0][:200]
-                # Strip markdown formatting for the subtitle
-                subtitle = re.sub(r"[*_`]", "", subtitle)
+                if candidate.startswith(("#", "---")):
+                    continue
+                if _METADATA_LINE.match(candidate):
+                    skipping_metadata = True
+                    continue
+                if skipping_metadata:
+                    continue
+                subtitle = _clean_subtitle(_join_paragraph(lines, j))
                 break
             break
     return title, subtitle
@@ -608,9 +689,34 @@ def _restore_mermaid(html: str, blocks: list[str]) -> str:
     return html
 
 
+_LOCAL_MD_HREF = re.compile(r'(href=")(?!https?://|mailto:|#)([^"]+?\.md)((?:#[^"]*)?")')
+
+
+def _point_md_links_at_the_rendered_page(html: str, site_dir: Path) -> str:
+    """Rewrite `X.md` links to `X.html` when the rendered sibling exists.
+
+    A markdown source links to its neighbours as `.md`, which is right in the
+    repository and wrong on the published site: a browser gets raw markdown, or
+    a 404. Measured 2026-08-23: 14 such links across the generated pages, two of
+    them climbing out of `docs/` to `../.devcontainer/README.md`, a file the site
+    does not publish at all.
+
+    A link whose rendered sibling does NOT exist is left alone and reported by
+    the caller, because silently pointing it at a second missing page would just
+    move the 404.
+    """
+    def _sub(m):
+        target = site_dir / m.group(2)
+        if target.with_suffix(".html").is_file():
+            return f"{m.group(1)}{m.group(2)[:-3]}.html{m.group(3)}"
+        return m.group(0)
+
+    return _LOCAL_MD_HREF.sub(_sub, html)
+
+
 def md_to_html(md_text: str) -> str:
     md = markdown.Markdown(extensions=MD_EXTENSIONS, extension_configs=MD_EXT_CONFIGS)
-    return md.convert(md_text)
+    return _point_md_links_at_the_rendered_page(md.convert(md_text), SITE_DIR)
 
 
 def regenerate(md_path: Path, quiet: bool = False) -> bool:

@@ -1,0 +1,132 @@
+"""No hook may crash on a payload that is valid JSON and not an object.
+
+Every hook here reads its payload as `json.load(sys.stdin)` and then calls
+`.get` on the result. `[]`, `"x"`, `3` and `null` are all valid JSON. None of
+them has `.get`, so each raises an uncaught `AttributeError` and the hook dies
+with a traceback.
+
+`.claude/hooks/checkpoint-inject.py` found and fixed this on 2026-08-20, with
+the measurement in its own comment. The fix stopped there. The 2026-08-23 audit
+found three more by reading; sweeping every stdin hook against all four shapes
+found TEN:
+
+    bridge-hook, checkpoint-offer, checkpoint-save, memory-reconcile,
+    post-write-sanitize, prompt-guard, session-start, sync-docs, turn-check,
+    unattended-resume
+
+`checkpoint-save` was the worst of them. It runs after the session's context has
+been discarded, which its own docstring calls "the one loss nobody can undo", and
+it exited 1 having written no archive, no quarantine, no pointer and no
+systemMessage.
+
+That is why this is a SWEEP and not ten individual tests. The defect is not any
+one hook; it is that a hook can be added without anyone remembering the shape.
+A new hook that reads stdin is picked up here automatically and fails until it
+is guarded.
+
+What "survives" means here is narrow and deliberate: no traceback. A hook may
+still exit non-zero, and several correctly do, because a missing `session_id`
+is a real refusal. The line is between deciding and crashing.
+"""
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+HOOKS = ROOT / ".claude" / "hooks"
+
+# Valid JSON, no `.get`. `null` is included because `json.load` returns None for
+# it, and `None.get` fails the same way with a different exception type.
+MALFORMED = ['[]', '"x"', '3', 'null', '[{"tool_name": "Bash"}]']
+
+# Any read of stdin, not just the inline `json.load(sys.stdin)` shape.
+# checkpoint-inject.py does `raw = sys.stdin.read()` on one line and parses on
+# the next, so the narrower pattern missed the ONE hook that had already fixed
+# this defect — a detector blind to the reference implementation would be blind
+# to the next hook written the same way.
+_READS_STDIN = re.compile(r"sys\.stdin\b")
+
+
+def _stdin_hooks() -> list[Path]:
+    return sorted(p for p in HOOKS.glob("*.py")
+                  if _READS_STDIN.search(p.read_text(encoding="utf-8")))
+
+
+def _argv_for(hook: Path) -> list[str]:
+    """bridge-hook dispatches on argv[1]; without one it prints usage and never
+    reaches the payload, which would make this sweep pass on nothing."""
+    if hook.name == "bridge-hook.py":
+        return ["session-start"]
+    return []
+
+
+@pytest.mark.parametrize("hook", _stdin_hooks(), ids=lambda p: p.name)
+@pytest.mark.parametrize("payload", MALFORMED)
+def test_a_non_object_payload_does_not_crash_the_hook(hook, payload):
+    proc = subprocess.run(
+        [sys.executable, str(hook), *_argv_for(hook)],
+        input=payload, capture_output=True, text=True, timeout=120,
+    )
+    assert "Traceback" not in proc.stderr, (
+        f"{hook.name} crashed on the payload {payload}:\n{proc.stderr[-1500:]}"
+    )
+
+
+@pytest.mark.parametrize("hook", _stdin_hooks(), ids=lambda p: p.name)
+def test_an_empty_payload_does_not_crash_the_hook(hook):
+    """The neighbouring shape: nothing on stdin at all."""
+    proc = subprocess.run(
+        [sys.executable, str(hook), *_argv_for(hook)],
+        input="", capture_output=True, text=True, timeout=120,
+    )
+    assert "Traceback" not in proc.stderr, (
+        f"{hook.name} crashed on an empty payload:\n{proc.stderr[-1500:]}"
+    )
+
+
+def test_the_sweep_actually_found_the_hooks():
+    """A regex that matches nothing turns this whole file green on zero work."""
+    found = _stdin_hooks()
+    assert len(found) >= 12, f"only found {[p.name for p in found]}"
+    names = {p.name for p in found}
+    # The four the audit named, plus the one that had already been fixed and is
+    # the reference for the rest.
+    for expected in ("checkpoint-save.py", "session-start.py",
+                     "post-write-sanitize.py", "bridge-hook.py",
+                     "checkpoint-inject.py"):
+        assert expected in names or not (HOOKS / expected).exists(), (
+            f"{expected} reads stdin but the detector missed it"
+        )
+
+
+def test_checkpoint_save_still_writes_its_handoff_on_a_bad_payload():
+    """Not crashing is not enough for this one. Its entire reason to exist is
+    that the handoff reaches disk; degrading to silence would satisfy the sweep
+    above while losing exactly what the file protects."""
+    proc = subprocess.run(
+        [sys.executable, str(HOOKS / "checkpoint-save.py")],
+        input="[]", capture_output=True, text=True, timeout=120,
+    )
+    assert "Traceback" not in proc.stderr
+    assert "systemMessage" in proc.stdout, (
+        "checkpoint-save produced no systemMessage on a malformed payload, so "
+        f"the operator has no sign the handoff was saved: {proc.stdout!r}"
+    )
+    # Clean up the probe's archive so a test run leaves no handoff behind.
+    import json as _json
+    try:
+        message = _json.loads(proc.stdout).get("systemMessage", "")
+    except ValueError:
+        return
+    match = re.search(r"(outputs/operations/handoff-archive/\S+\.md)", message)
+    if not match:
+        return
+    from scripts.utils.workspace import get_data_root
+    written = Path(get_data_root()) / match.group(1)
+    if written.is_file():
+        written.unlink()

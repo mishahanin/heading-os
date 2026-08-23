@@ -37,8 +37,8 @@ from scripts.bridge_daemon._atomic import atomic_write_text
 from scripts.utils import dead_letter, tool_risk, tracing
 from scripts.utils.timeparse import parse_iso
 
-QUEUE_FILE = "outputs/operations/action-queue/queue.json"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
-DISPOSITION_LOG = "outputs/operations/action-queue/disposition-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller; data-root wiring is Plan 3)
+QUEUE_FILE = "outputs/operations/action-queue/queue.json"  # leak-guard: ok (relative suffix rooted by caller)
+DISPOSITION_LOG = "outputs/operations/action-queue/disposition-log.jsonl"  # leak-guard: ok (relative suffix rooted by caller)
 
 COOLDOWN_DAYS = 14            # dismissed contact not re-proposed within this window
 PRUNE_TERMINAL_DAYS = 90     # drop sent/dismissed cards older than this (bound growth)

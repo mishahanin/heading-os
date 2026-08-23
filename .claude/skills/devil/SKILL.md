@@ -4,7 +4,7 @@ description: >
   Force N contrarian critique points against a target position. Each point
   carries a severity tag (BLOCKER / HIGH / MEDIUM / LOW) and a committed
   paragraph attacking from a distinct angle. Target is either inline
-  (`/devil 5: <claim>`) or walked back to the latest substantive
+  (`/devil 5: claim text`) or walked back to the latest substantive
   decision/claim in conversation. Manual sycophancy-breaker. Cheap
   alternative to /council (external) and /scrutinize (multi-phase).
   Single-shot per invocation. Default N=5, valid range 1-10. Honesty

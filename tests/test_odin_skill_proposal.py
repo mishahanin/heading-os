@@ -17,6 +17,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
+from scripts.utils import workspace  # noqa: E402
 from scripts.utils.odin_skill_proposal import build_proposal  # noqa: E402
 
 ELIGIBLE = """---
@@ -112,12 +113,34 @@ description: a test skill
 
 @pytest.fixture(autouse=True)
 def _point_data_root_at_tmp(tmp_path, monkeypatch):
-    """The refactor reads principles via get_knowledge_dir() and writes artifacts
-    via get_outputs_dir(), both resolving under get_data_root(). Point that seam
-    at tmp_path so they resolve under the fixtures _ws() builds. is_ceo_workspace()
-    is already True (the real workspace root is ceo-master), so get_data_root() ==
-    HEADING_OS_DATA -> get_knowledge_dir()/get_outputs_dir() land under tmp_path."""
+    """Point the data-root seam at tmp_path so `_ws()`'s fixtures are what is read.
+
+    `get_knowledge_dir()` and `get_outputs_dir()` branch on `is_ceo_workspace()`,
+    but both arms honour `HEADING_OS_DATA` first — the CEO arm through
+    `get_data_root()`, the exec arm through `get_exec_data_root()` — so one env
+    override covers the suite whatever this machine's identity says.
+
+    The old comment claimed otherwise: "is_ceo_workspace() is already True (the
+    real workspace root is ceo-master)". Wrong twice. The check reads the `type`
+    field of the machine-local `.workspace-identity.json`, not the directory
+    name, and the directory has been `.heading-os` since the 2026-06-15 cutover.
+    The 2026-08-23 audit read that comment and reported the suite as passing by
+    luck; measuring it (the test below) showed the seam is sound and only the
+    comment was stale. Both arms are pinned by that test so the claim above
+    cannot rot the same way.
+    """
     monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+
+
+def test_the_data_root_override_holds_under_either_workspace_identity(tmp_path, monkeypatch):
+    """The property the autouse fixture rests on, asserted rather than assumed."""
+    monkeypatch.setenv("HEADING_OS_DATA", str(tmp_path))
+    for kind in ("ceo-master", "exec-workspace"):
+        monkeypatch.setattr(
+            workspace, "get_workspace_identity",
+            lambda kind=kind: {"role": "admin", "slug": "t", "type": kind})
+        assert workspace.get_knowledge_dir() == tmp_path / "knowledge", kind
+        assert workspace.get_outputs_dir() == tmp_path / "outputs", kind
 
 
 def _ws(tmp_path: Path, principle_slug: str, principle_text: str,

@@ -64,6 +64,15 @@ def git_head(path: Path) -> tuple[str, bool]:
         )
     except (OSError, subprocess.SubprocessError):
         return "unknown", True
+    # Check the EXIT CODES, not just stdout. `except OSError` alone only covers a
+    # missing git binary. When git ran and refused -- not a repository, a broken
+    # .git, a repo with no commit yet -- stdout was empty or, for `rev-parse
+    # HEAD` on an empty repo, the literal string "HEAD"; `bool("".strip())` then
+    # read as CLEAN and the function returned a state it could not establish as
+    # comparable. That is the exact opposite of the fail-toward-dirty promise
+    # three lines above.
+    if head.returncode != 0 or dirty.returncode != 0:
+        return "unknown", True
     return head.stdout.strip() or "unknown", bool(dirty.stdout.strip())
 
 

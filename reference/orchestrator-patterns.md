@@ -120,7 +120,15 @@ Agent 2 (Sonnet) prompt: "Run /viraid fetch and analyze phases ONLY. Fetch VIRAI
 
 Agent 3 (Haiku) prompt: "Calendar scout. Read today plus the next 3 days from the 31C Exchange calendar (ceo@31c.io, configured timezone). Return an inline summary: event title, start time (local), duration, attendees, location/Zoom. Flag any conflicts and any external counterparts that are in pipeline or CRM. Do NOT create, modify, or respond to any event."
 
-Agent 4 (Haiku) prompt: "Sentinel-queue scout. Read the Sentinel daemon's unprocessed urgent queue (logs and state under outputs/operations/sentinel/ or the configured Sentinel state path). Return an inline summary of items the daemon flagged as urgent but that have not yet been triaged. Do NOT modify Sentinel state, do NOT acknowledge or dismiss items."
+Agent 4 (Haiku) prompt: "Sentinel-queue scout. Read the Sentinel daemon's unprocessed urgent queue from `.sentinel/state.json` and `.sentinel/sentinel.log`, under the engine workspace root. Return an inline summary of items the daemon flagged as urgent but that have not yet been triaged. If `.sentinel/` is absent the daemon has never run here: say so, and do not report an empty queue as a clear queue. Do NOT modify Sentinel state, do NOT acknowledge or dismiss items."
+
+The path was `outputs/operations/sentinel/` until 2026-08-23, which
+`scripts/sentinel.py:89` has never used: `RUNTIME_DIR = WORKSPACE_ROOT / ".sentinel"`.
+No such directory exists in either repository, so the scout read nothing, found nothing,
+and Morning Comms reported an empty urgent queue however full it was. Silent
+under-reporting, in a pattern whose own header says never to paraphrase a constraint from
+memory. `tests/test_orchestrator_paths_exist_in_code.py` now derives the path from the
+daemon.
 
 WAIT for all four to complete.
 
@@ -317,7 +325,7 @@ DEGRADATION: If OSINT finds minimal data, /deal-strategy still runs with competi
 
 **Mechanism:** in-process `ThreadPoolExecutor(max_workers=8)`, one worker per check, aggregated by `run_all()`. A check that errors or times out is reported inline and never aborts the others.
 
-**Checks (11, defined in the `CHECKS` registry).** `scripts/prime-health-parallel.py` is the source of truth; this list mirrors it and can lag it.
+**Checks (12, defined in the `CHECKS` registry).** `scripts/prime-health-parallel.py` is the source of truth. This list mirrors it, and saying it "can lag" is not a control: on 2026-08-23 it had lagged, at 11 against the registry's 12, while the `/prime` docs page said seven. `tests/test_prime_check_registry_matches_its_docs.py` now derives the count and the key list from the registry and fails here and on that page, so the drift is caught instead of disclaimed.
 
 - `crm_health` — CRM health. `scripts/crm-health.py` (read-only): contact count, overdue-per-cadence, type-mismatch warnings.
 - `knowledge_health` — knowledge-base health. Walks `knowledge/` (+ `knowledge/odin-brain/`): note counts, oldest unedited note, orphans.
@@ -330,12 +338,21 @@ DEGRADATION: If OSINT finds minimal data, /deal-strategy still runs with competi
 - `ops_radar` — Ops-radar detector (ceo-only; renders nothing when all clear).
 - `reminders_due` — durable reminders due/upcoming (renders nothing when empty).
 - `dream_shadow` — dream-shadow nightly worklist (reads the latest report only, never runs the scan itself; renders nothing when empty).
+- `updates` — component updates. Reports available updates; reads only.
 
 **Safety floor (each check):**
 
-- All checks are read-only.
+- Ten of the twelve are read-only, and any check added here must be.
 - Do NOT write to any workspace file.
 - Do NOT modify state.json or any registry.
+- **Two are not read-only, and the floor above never covered them.** `fireside_health`
+  and `sync_exchange_health` shell out to `scripts/fireside-pulse.py` and
+  `scripts/sync-exchange-pulse.py`, whose stated job is liveness check PLUS auto-start:
+  finding the daemon down, each spawns a detached one that outlives the shell. That is a
+  process and a PID file, not a workspace file, which is how it slipped under a floor
+  written as "all checks are read-only" and left there through 2026-08-23. The exception
+  is deliberate and stays; what changes is that it is now written down where the floor is
+  read.
 
 AGGREGATION: `run_all()` collects the results into /prime's normal context-load output. /prime then proceeds with its session-start sequence.
 
@@ -356,24 +373,27 @@ DEGRADATION: A check that errors or times out is reported inline (`status: error
 **Trigger:** `/push-updates` invocation. See `.claude/rules/skill-router.md` § Compound Workflow Triggers.
 
 **Announcement:**
-> Running Push & Backup. Corporate publish runs sequentially first (Sonnet). After approval and successful publish, ceo-main git push (Haiku) and CRM aggregate (Haiku) run in parallel.
+> Running Push & Backup. Corporate publish runs sequentially first (Sonnet). After approval and successful publish, the engine + data push (Haiku) and CRM aggregate (Haiku) run in parallel.
 
 **Roles and models:**
 
 - Corporate publish (sequential) — Sonnet
-- ceo-main git push tail — Haiku
+- Engine + data push tail — Haiku
 - CRM aggregate tail — Haiku
 
 **Safety floor (each agent):**
 
 - Each tail agent writes to ONE specific path; no overlap.
-- ceo-main push tail writes only to the `origin/main` remote of ceo-main.
+- The push tail writes only to the `origin/main` remote of the engine clone and
+  of the data overlay, through `scripts/push-all.py`. It does NOT write to
+  `ceo-main`: that legacy single workspace was retired on the 2026-06-15
+  cutover to the two-part topology, and this line named it until 2026-08-23.
 - CRM aggregate tail writes only to `../31c-crm-central/`.
 - Tail agents do NOT touch the corporate repo, BUILD.json, or executive workspaces.
 
 **Approval:** one hard gate before corporate publish.
 
-**Write phase:** corporate publish first (serial, includes BUILD.json bump + corporate `git push`); then ceo-main push + CRM aggregate launch as a parallel wave.
+**Write phase:** corporate publish first (serial, includes BUILD.json bump + corporate `git push`); then the engine + data push and the CRM aggregate launch as a parallel wave.
 
 **Agents dispatched:** 2 in the parallel tail wave. Global concurrency cap of 5 per Principle 5 — well under the cap.
 
@@ -393,13 +413,13 @@ Run scripts/publish-corporate.py (or the equivalent). Commit + push to the corpo
 
 PARALLEL TAIL PHASE (2 background agents, both Haiku, both write-isolated):
 
-Agent 1 (Haiku) prompt: "ceo-main git push tail. Stage any CEO-only changes in ceo-main, commit with the matching push-updates commit message, and push to the ceo-main `origin/main` remote. Confirm the push succeeded. Do NOT touch the corporate repo, BUILD.json, or any executive workspace. Do NOT touch ../31c-crm-central/."
+Agent 1 (Haiku) prompt: "Engine + data push tail. Run `python scripts/push-all.py` to commit and push BOTH repos — the engine clone and the data overlay — to their own `origin/main`. That script is the only sanctioned push path: it runs the pre-push secret scan and verifies each branch is level with its remote. Report its exit code and headline verbatim; exit 3 means at least one repo was skipped for a named reason. Do NOT touch the corporate repo, BUILD.json, or any executive workspace. Do NOT touch ../31c-crm-central/."
 
-Agent 2 (Haiku) prompt: "CRM aggregate tail. Run scripts/aggregate-crm.py to refresh ../31c-crm-central/ from the per-exec CRM repos. Commit and push the result to the 31c-crm-central remote if there are changes. Do NOT touch ceo-main or the corporate repo or any executive workspace."
+Agent 2 (Haiku) prompt: "CRM aggregate tail. Run scripts/aggregate-crm.py to refresh ../31c-crm-central/ from the per-exec CRM repos. Commit and push the result to the 31c-crm-central remote if there are changes. Do NOT touch the engine clone, the data overlay, the corporate repo, or any executive workspace."
 
 WAIT for both to complete.
 
-SYNTHESIS PHASE: Report the three results inline: corporate publish status, ceo-main push status, CRM aggregate status. Note any per-exec sync acceleration (manual /sync) that may be needed.
+SYNTHESIS PHASE: Report the three results inline: corporate publish status, engine + data push status, CRM aggregate status. Note any per-exec sync acceleration (manual /sync) that may be needed.
 
 WRITE PHASE: All writes occur within the agents; nothing further is written by the orchestrator after the tail completes.
 

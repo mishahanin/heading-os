@@ -201,8 +201,8 @@ def main() -> int:
     try:
         import jsonschema
     except ImportError:
-        # Still fail open, because the pre-commit hook, canary-smoke, and the
-        # migration verifier all read the exit code and a hard failure here
+        # Still fail open, because the pre-commit hook and the migration
+        # verifier both read the exit code and a hard failure here
         # blocks every commit until the dependency lands. But say so on EVERY
         # path, including --quiet and --json.
         #

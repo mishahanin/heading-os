@@ -9,9 +9,9 @@ import time
 from pathlib import Path
 
 SCAN_DIRS = {
-    "linkedin": "outputs/content/linkedin",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    "osint": "outputs/intel/osint",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
-    "negotiation": "outputs/negotiations",  # leak-guard: ok (in-flight scan suffix rooted by caller; data-root wiring is Plan 3)
+    "linkedin": "outputs/content/linkedin",  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    "osint": "outputs/intel/osint",  # leak-guard: ok (in-flight scan suffix rooted by caller)
+    "negotiation": "outputs/negotiations",  # leak-guard: ok (in-flight scan suffix rooted by caller)
 }
 
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)

@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
-"""Fleet health dashboard for the 31C executive workspace ecosystem.
+"""Fleet health dashboard for the executive workspace ecosystem.
 
-Reads heartbeat files from crm-central, calculates sync status for each
-executive, and displays a consolidated fleet health dashboard.
+For each active executive it pulls their data overlay, reads the timestamp of
+the last commit in it, counts their CRM contacts, and prints one row per person.
+
+What "Last Commit" does and does not establish: it is the newest commit in
+their overlay, so it proves they (or a tool of theirs) wrote something and
+pushed it. It is NOT a sync handshake and NOT proof their daemons are running.
+`.claude/rules/scope-claims.md` is why the column carries the narrower name.
+
+Until 2026-08-23 the column was called "Last Sync" and was read from
+`<exec repo>/.heartbeat.json`. Nothing has ever written that file, and
+`scripts/provision-exec.py` gitignores the name in every exec workspace, so it
+could not have travelled even if something had. Every row on the live fleet
+therefore read `DEAD / never / unknown`. Regression cover:
+`tests/test_admin_health_reports_a_signal_that_exists.py`.
 
 Usage:
     python admin-health.py [--json]
@@ -17,17 +29,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.utils.workspace import (
-    get_workspace_root, validate_admin, get_exec_slug, load_exec_registry,
+    get_workspace_root, validate_admin, get_exec_slug, load_fleet,
     get_corporate_repo_path, load_admin_config,
     load_github_org, get_per_exec_repo_path, get_all_active_exec_slugs,
+    get_per_exec_contacts_dir,
 )
 from scripts.utils.colors import GREEN, YELLOW, RED, CYAN, BOLD, RESET
 
 GITHUB_ORG = load_github_org()
 
-# Thresholds in seconds
-OK_THRESHOLD = 2 * 3600        # 2 hours
-STALE_THRESHOLD = 24 * 3600    # 24 hours
+# Thresholds in seconds, sized for a HUMAN commit cadence. The old values (2h /
+# 24h) were written for a per-minute heartbeat; against commits they painted an
+# executive who worked yesterday as STALE and one who took a week off as DEAD.
+OK_THRESHOLD = 7 * 86400        # committed within the week
+STALE_THRESHOLD = 30 * 86400    # quiet for a month
 
 
 def run_cmd(cmd: list, cwd: str = None, check: bool = True) -> subprocess.CompletedProcess:
@@ -35,12 +50,27 @@ def run_cmd(cmd: list, cwd: str = None, check: bool = True) -> subprocess.Comple
     return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True)
 
 
+def repo_name_for(slug: str) -> str:
+    """The GitHub repo name for an exec's data overlay, from the fleet roster.
+
+    Falls back to the naming convention when the roster row omits `data_repo`,
+    which is what a hand-added row usually does. The previous hardcoded
+    `31c-crm-{slug}` named the retired aggregation model, so the clone branch
+    could only ever 404.
+    """
+    for row in load_fleet():
+        if row.get("slug") == slug and row.get("data_repo"):
+            return row["data_repo"]
+    return f"heading-os-data-{slug}"
+
+
 def ensure_per_exec_repos() -> list:
-    """Pull latest for each active exec's per-exec CRM repo. Returns list of (slug, repo_path)."""
+    """Pull latest for each active exec's data overlay. Returns [(slug, path)]."""
     pairs = []
     try:
         slugs = get_all_active_exec_slugs()
-    except Exception:
+    except (OSError, ValueError) as e:
+        print(f"{YELLOW}[warn] Could not read the fleet roster: {e}{RESET}")
         slugs = []
     for slug in slugs:
         repo_path = get_per_exec_repo_path(slug)
@@ -48,23 +78,42 @@ def ensure_per_exec_repos() -> list:
             run_cmd(["git", "pull"], cwd=str(repo_path), check=False)
             pairs.append((slug, repo_path))
         else:
+            repo = repo_name_for(slug)
             try:
-                run_cmd(["gh", "repo", "clone", f"{GITHUB_ORG}/31c-crm-{slug}", str(repo_path)])
+                run_cmd(["gh", "repo", "clone", f"{GITHUB_ORG}/{repo}", str(repo_path)])
                 pairs.append((slug, repo_path))
             except (subprocess.CalledProcessError, FileNotFoundError):
-                print(f"{YELLOW}[warn] Could not clone 31c-crm-{slug}{RESET}")
+                print(f"{YELLOW}[warn] Could not clone {GITHUB_ORG}/{repo}{RESET}")
     return pairs
 
 
-def collect_heartbeats(exec_repos: list) -> list:
-    """Read .heartbeat.json from each per-exec CRM repo root."""
-    heartbeats = []
+def read_last_commit(repo_path: Path) -> str | None:
+    """ISO-8601 committer date of HEAD, or None if there is nothing to read.
 
-    for slug, repo_path in exec_repos:
-        heartbeat_file = repo_path / ".heartbeat.json"
-        contacts_dir = repo_path / "contacts"
+    None covers all three ways this legitimately has no answer: the path is not
+    a git repo, the repo has no commits yet, or git is not installed. A freshly
+    provisioned overlay hits the second case, and that is a real state to show,
+    not an error to raise.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "log", "-1", "--format=%cI"],
+            capture_output=True, text=True, check=False,
+        )
+    except (OSError, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
-        # Count contact files
+
+def collect_exec_state(exec_repos: list) -> list:
+    """One record per exec: last commit in their overlay plus their contact count."""
+    records = []
+
+    for slug, _repo_path in exec_repos:
+        contacts_dir = get_per_exec_contacts_dir(slug)
+
         contact_count = 0
         if contacts_dir.exists():
             contact_count = sum(
@@ -72,46 +121,29 @@ def collect_heartbeats(exec_repos: list) -> list:
                 if f.is_file() and f.suffix == ".md" and f.name != "README.md"
             )
 
-        if heartbeat_file.exists():
-            try:
-                data = json.loads(heartbeat_file.read_text(encoding="utf-8"))
-                data["slug"] = slug
-                data["contact_count"] = contact_count
-                heartbeats.append(data)
-            except (json.JSONDecodeError, OSError):
-                heartbeats.append({
-                    "slug": slug,
-                    "last_sync": None,
-                    "contact_count": contact_count,
-                    "platform": "unknown",
-                    "error": "corrupt heartbeat",
-                })
-        else:
-            heartbeats.append({
-                "slug": slug,
-                "last_sync": None,
-                "contact_count": contact_count,
-                "platform": "unknown",
-                "error": "no heartbeat",
-            })
+        records.append({
+            "slug": slug,
+            "last_commit": read_last_commit(repo_path),
+            "contact_count": contact_count,
+        })
 
-    return heartbeats
+    return records
 
 
-def calculate_status(heartbeat: dict) -> tuple:
+def calculate_status(record: dict) -> tuple:
     """Calculate status (OK/STALE/DEAD) and human-readable time delta.
 
     Returns (status_str, colored_status, time_ago_str).
     """
-    last_sync = heartbeat.get("timestamp")
+    last_commit = record.get("last_commit")
 
-    if not last_sync:
+    if not last_commit:
         return "DEAD", f"{RED}DEAD{RESET}", "never"
 
     try:
-        if isinstance(last_sync, str):
+        if isinstance(last_commit, str):
             # Handle ISO format with or without timezone
-            sync_time = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
+            sync_time = datetime.fromisoformat(last_commit.replace("Z", "+00:00"))
             if sync_time.tzinfo is None:
                 sync_time = sync_time.replace(tzinfo=timezone.utc)
         else:
@@ -142,33 +174,39 @@ def calculate_status(heartbeat: dict) -> tuple:
         return "DEAD", f"{RED}DEAD{RESET}", time_ago
 
 
-def enrich_with_registry(heartbeats: list) -> list:
-    """Add name and title from exec registry."""
-    registry = load_exec_registry()
-    registry_map = {}
-    for e in registry.get("executives", []):
-        registry_map[e.get("slug", "")] = e
+def enrich_with_registry(records: list) -> list:
+    """Add name, title, platform and provisioning status from the fleet join.
 
-    for hb in heartbeats:
-        slug = hb.get("slug", "")
-        if slug in registry_map:
-            reg = registry_map[slug]
-            hb["name"] = reg.get("name", slug)
-            hb["title"] = reg.get("title", "")
-            hb["registry_status"] = reg.get("status", "unknown")
+    `load_fleet()` rather than either registry alone: `title` and `platform`
+    live only in the org chart, `provisioning_status` only in the roster, and
+    reading one file gave a blank for whatever the other owned. Platform used
+    to come from the heartbeat, which never arrived, so it read `unknown` for
+    everyone.
+    """
+    fleet = {row["slug"]: row for row in load_fleet()}
+
+    for rec in records:
+        slug = rec.get("slug", "")
+        row = fleet.get(slug)
+        if row:
+            rec["name"] = row.get("name") or slug
+            rec["title"] = row.get("title") or ""
+            rec["platform"] = row.get("platform") or "unknown"
+            rec["registry_status"] = row.get("provisioning_status") or "unknown"
         else:
-            hb["name"] = slug
-            hb["title"] = ""
-            hb["registry_status"] = "unregistered"
+            rec["name"] = slug
+            rec["title"] = ""
+            rec["platform"] = "unknown"
+            rec["registry_status"] = "unregistered"
 
-    return heartbeats
+    return records
 
 
 def find_shared_contacts(exec_repos: list) -> int:
     """Count contacts that appear in multiple exec per-exec repos."""
     contact_owners: dict = {}
-    for slug, repo_path in exec_repos:
-        contacts_dir = repo_path / "contacts"
+    for slug, _repo_path in exec_repos:
+        contacts_dir = get_per_exec_contacts_dir(slug)
         if not contacts_dir.exists():
             continue
         for f in contacts_dir.iterdir():
@@ -178,20 +216,21 @@ def find_shared_contacts(exec_repos: list) -> int:
     return sum(1 for owners in contact_owners.values() if len(owners) > 1)
 
 
-def print_dashboard(heartbeats: list, shared_contacts: int) -> None:
+def print_dashboard(records: list, shared_contacts: int) -> None:
     """Print the fleet health dashboard."""
     print(f"\n{BOLD}{CYAN}31C Fleet Health Dashboard{RESET}")
     print(f"{'=' * 78}")
 
-    # Table header
-    header = f"| {'Exec':<22}| {'Status':<8}| {'Last Sync':<18}| {'Contacts':<10}| {'Platform':<10}|"
+    # "Last Commit", not "Last Sync": the newest commit in their overlay is what
+    # this reads, and that is a weaker claim than a completed sync.
+    header = f"| {'Exec':<22}| {'Status':<8}| {'Last Commit':<18}| {'Contacts':<10}| {'Platform':<10}|"
     separator = f"|{'-' * 23}|{'-' * 9}|{'-' * 19}|{'-' * 11}|{'-' * 11}|"
     print(header)
     print(separator)
 
     counts = {"OK": 0, "STALE": 0, "DEAD": 0}
 
-    for hb in heartbeats:
+    for hb in records:
         slug = hb.get("slug", "unknown")
         status_raw, status_colored, time_ago = calculate_status(hb)
         counts[status_raw] = counts.get(status_raw, 0) + 1
@@ -209,7 +248,7 @@ def print_dashboard(heartbeats: list, shared_contacts: int) -> None:
     print(separator)
 
     # Summary
-    total_contacts = sum(hb.get("contact_count", 0) for hb in heartbeats)
+    total_contacts = sum(hb.get("contact_count", 0) for hb in records)
     ok_colored = f"{GREEN}{counts['OK']}{RESET}"
     stale_colored = f"{YELLOW}{counts['STALE']}{RESET}"
     dead_colored = f"{RED}{counts['DEAD']}{RESET}"
@@ -221,26 +260,26 @@ def print_dashboard(heartbeats: list, shared_contacts: int) -> None:
     print(f"  Active executives: {counts['OK'] + counts['STALE']}")
 
 
-def output_json(heartbeats: list, shared_contacts: int) -> None:
+def output_json(records: list, shared_contacts: int) -> None:
     """Output machine-readable JSON."""
     results = []
     counts = {"OK": 0, "STALE": 0, "DEAD": 0}
 
-    for hb in heartbeats:
+    for hb in records:
         status_raw, _, time_ago = calculate_status(hb)
         counts[status_raw] = counts.get(status_raw, 0) + 1
         results.append({
             "slug": hb.get("slug"),
             "name": hb.get("name", hb.get("slug")),
             "status": status_raw,
-            "last_sync": hb.get("last_sync"),
+            "last_commit": hb.get("last_commit"),
             "time_ago": time_ago,
             "contact_count": hb.get("contact_count", 0),
             "platform": hb.get("platform", "unknown"),
             "registry_status": hb.get("registry_status", "unknown"),
         })
 
-    total_contacts = sum(hb.get("contact_count", 0) for hb in heartbeats)
+    total_contacts = sum(hb.get("contact_count", 0) for hb in records)
     output = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "executives": results,
@@ -271,25 +310,26 @@ def main():
     exec_repos = ensure_per_exec_repos()
 
     # Collect data
-    heartbeats = collect_heartbeats(exec_repos)
-    heartbeats = enrich_with_registry(heartbeats)
+    records = collect_exec_state(exec_repos)
+    records = enrich_with_registry(records)
     shared_contacts = find_shared_contacts(exec_repos)
 
-    if not heartbeats:
+    if not records:
         if args.json:
             print(json.dumps({"timestamp": datetime.now(timezone.utc).isoformat(),
                               "executives": [], "summary": {"OK": 0, "STALE": 0, "DEAD": 0},
                               "aggregate": {"total_contacts": 0, "shared_contacts": 0, "active_count": 0}}, indent=2))
         else:
-            print(f"\n{YELLOW}No executive heartbeats found in crm-central.{RESET}")
-            print(f"Ensure crm-central/contacts/*/. heartbeat.json files exist.")
+            print(f"\n{YELLOW}No active executives to report on.{RESET}")
+            print("Every row comes from an exec whose roster status is 'active' in")
+            print("<data-root>/admin/executives.json. Check that file first.")
         sys.exit(0)
 
     # Output
     if args.json:
-        output_json(heartbeats, shared_contacts)
+        output_json(records, shared_contacts)
     else:
-        print_dashboard(heartbeats, shared_contacts)
+        print_dashboard(records, shared_contacts)
 
 
 if __name__ == "__main__":

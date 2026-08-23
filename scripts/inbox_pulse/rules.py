@@ -175,6 +175,20 @@ class CheapClassifier:
 
         body_preview = body_preview[:_BODY_PREVIEW_CHARS] if body_preview else ""
 
+        # Resolved before step 0, because step 1 below claims sender overrides
+        # take ABSOLUTE precedence and until 2026-08-23 that was false: step 0
+        # returned first, so an internal colleague on `always_critical` was
+        # silently demoted to LOW whenever they wrote to the operator directly.
+        # That is the one case the allowlist exists for -- the operator saying
+        # "always show me this person" -- and it did not work for anyone inside
+        # the Tribe, with the breakdown blaming `internal_nonlead_to_normal`.
+        #
+        # Only the two SHORT-CIRCUITING verdicts skip the recipient block.
+        # `always_important` never claimed precedence ("acts as a weight"), so
+        # the 2026-05-29 directive still governs it.
+        sender_match = self.rules.match_sender(sender_email)
+        overridden = sender_match in ("always_critical", "always_normal")
+
         # 0. Recipient-aware rule (CEO directive 2026-05-29, extended from bbdfde5).
         # Applies ONLY when sender is internal (sender's domain in rules.internal_domains).
         # External senders bypass this entire block -- they use the 7-signal classifier.
@@ -186,7 +200,7 @@ class CheapClassifier:
         #
         # Degrades gracefully (falls through) when my_email is unset, no recipient lists
         # are provided, internal_domains is empty, or sender domain is not internal.
-        if self.my_email and (recipients_to or recipients_cc):
+        if not overridden and self.my_email and (recipients_to or recipients_cc):
             sender_domain = sender_email.split("@")[-1].lower() if "@" in sender_email else ""
             internal_domains_lower = [d.lower() for d in self.rules.internal_domains]
             is_internal = bool(sender_domain and sender_domain in internal_domains_lower)
@@ -219,8 +233,8 @@ class CheapClassifier:
             "time_sensitivity": 0,
         }
 
-        # 1. Sender overrides take absolute precedence
-        sender_match = self.rules.match_sender(sender_email)
+        # 1. Sender overrides take absolute precedence (resolved above step 0,
+        #    which is what makes the word "absolute" true).
         breakdown["sender_override"] = sender_match
         if sender_match == "always_critical":
             return {"tier_guess": "HIGH_LIKELY", "weight": 99, "reason_breakdown": breakdown}

@@ -10,6 +10,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.chronicle import (  # noqa: E402
@@ -121,6 +123,71 @@ def test_lexical_score_overlap_fraction():
     assert _lexical_score("nothing here", "unrelated text") == 0.0
 
 
+# --- the gist a personal entry recalls with -------------------------------
+#
+# Found by the 2026-08-23 audit. `_load_personal_entries` took the gist as the
+# second-to-last blank-line-separated block, which was true when an entry was
+# title, gist, transcript pointer, and nothing else. `render_entry` then grew
+# three optional sections after the gist - "How this was reached", "Considered
+# and dropped", "Left open" - and the arithmetic silently started returning the
+# last bullet of the last section instead.
+#
+# It bites on the most sensitive record class there is: personal recall is the
+# air-gapped, opt-in path, and it would have embedded and displayed a reasoning
+# fragment as if it were the summary, with no error anywhere. No entry on disk
+# carried those sections yet when this was found, so nothing had gone wrong -
+# the next personal session with a decision in it would have been the first.
+
+
+def _personal_entry(monkeypatch, tmp_path, summary):
+    """Render one personal entry through the real renderer and read it back."""
+    import scripts.chronicle as ch
+
+    monkeypatch.setattr(ch, "chronicle_root", lambda: tmp_path / "chronicle")
+    directory = tmp_path / "chronicle" / "personal"
+    directory.mkdir(parents=True)
+    body = ch.render_entry("abc-123", "2026-08-23", str(tmp_path / "abc-123.jsonl"), summary)
+    (directory / "session-2026-08-23-abc-123.md").write_text(body, encoding="utf-8")
+    entries = ch._load_personal_entries()
+    assert len(entries) == 1
+    return entries[0]
+
+
+_GIST = "Обсуждали ипотеку в Novobanco и ставку по кредиту."
+
+
+def test_personal_gist_survives_the_reasoning_sections(monkeypatch, tmp_path):
+    entry = _personal_entry(monkeypatch, tmp_path, {
+        "personal": True,
+        "gist": _GIST,
+        "topics": ["ипотека"],
+        "reasoning": "Ставка сравнивалась с двумя другими предложениями.",
+        "considered": ["фиксированная ставка на 5 лет", "перенос в другой банк"],
+        "open": ["ждём ответа по документам"],
+    })
+    assert entry["gist"] == _GIST, (
+        "the recall gist is a reasoning fragment, not the summary"
+    )
+
+
+def test_personal_gist_still_right_without_the_reasoning_sections(monkeypatch, tmp_path):
+    """The shape that already worked must keep working."""
+    entry = _personal_entry(monkeypatch, tmp_path, {
+        "personal": True, "gist": _GIST, "topics": ["ипотека"],
+    })
+    assert entry["gist"] == _GIST
+
+
+def test_personal_gist_drops_the_privacy_banner(monkeypatch, tmp_path):
+    """`> Личное ...` is a banner for a human reader, never part of the gist."""
+    entry = _personal_entry(monkeypatch, tmp_path, {
+        "personal": True, "gist": _GIST, "topics": ["ипотека"],
+        "reasoning": "Проверили условия.",
+    })
+    assert "Личное" not in entry["gist"]
+    assert "Full transcript" not in entry["text"]
+
+
 # --- air-gap invariant: personal chronicle is NEVER indexable --------------
 
 def test_personal_chronicle_is_air_gapped_from_the_index():
@@ -133,13 +200,18 @@ def test_personal_chronicle_is_air_gapped_from_the_index():
 
 # --- ollama host override: generation moves, embeddings do not ------------
 
-def _reload_chronicle(monkeypatch, *, reachable=True, **env):
+def _reload_chronicle(monkeypatch, *, reachable=True, machine=None, **env):
     """Re-import chronicle with a patched environment.
 
-    The GENERATION endpoint is a module-level constant resolved at import time,
-    so the only way to observe an override is a reload under the wanted
-    environment. `reachable` stands in for the probe, so no test touches the
-    network.
+    The reload is what clears the `lru_cache` on `chronicle.ollama_url()`, which
+    resolves the GENERATION endpoint on first use (it was a module constant
+    until 2026-08-23). `reachable` stands in for the probe, so no test touches
+    the network.
+
+    `machine` stands in for `config/ollama-hosts.yaml`, and defaults to EMPTY -
+    the machine this suite runs on has a real one, and a test that silently read
+    it would pass here and fail on every other machine. Pass
+    `machine={"generate": [...]}` to exercise a pinned machine.
 
     The EMBEDDING endpoint is no longer a constant here - see `_embed_target`
     below and the comment above `_FRONT_RE` in `scripts/chronicle.py`.
@@ -149,7 +221,11 @@ def _reload_chronicle(monkeypatch, *, reachable=True, **env):
     import scripts.chronicle as mod
     from scripts.utils import ollama_host
 
+    pins = machine or {}
     monkeypatch.setattr(ollama_host, "probe", lambda host, **kw: reachable)
+    monkeypatch.setattr(
+        ollama_host, "machine_hosts", lambda role, **kw: list(pins.get(role, []))
+    )
     for key in ("HEADING_OS_OLLAMA_HOST", "HEADING_OS_OLLAMA_EMBED_HOST"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
@@ -185,7 +261,7 @@ def _embed_target(monkeypatch, tmp_path, *, config=None, reachable=True, **env):
 
 def test_ollama_endpoints_default_to_the_local_daemon(monkeypatch, tmp_path):
     mod = _reload_chronicle(monkeypatch)
-    assert mod.OLLAMA_URL == "http://localhost:11434/api/generate"
+    assert mod.ollama_url() == "http://localhost:11434/api/generate"
     host, _model = _embed_target(monkeypatch, tmp_path)
     assert host == "http://localhost:11434"
 
@@ -212,7 +288,7 @@ def test_personal_recall_asks_the_shared_target_for_its_embedder(monkeypatch):
 
 def test_generation_host_is_overridable(monkeypatch):
     mod = _reload_chronicle(monkeypatch, HEADING_OS_OLLAMA_HOST="http://172.30.48.1:11436")
-    assert mod.OLLAMA_URL == "http://172.30.48.1:11436/api/generate"
+    assert mod.ollama_url() == "http://172.30.48.1:11436/api/generate"
 
 
 def test_generation_override_does_not_move_embeddings(monkeypatch, tmp_path):
@@ -234,7 +310,7 @@ def test_embedding_host_has_its_own_override(monkeypatch, tmp_path):
         HEADING_OS_OLLAMA_EMBED_HOST="http://10.0.0.5:11434/")
     assert host == "http://10.0.0.5:11434"      # trailing slash trimmed
     mod = _reload_chronicle(monkeypatch, HEADING_OS_OLLAMA_EMBED_HOST="http://10.0.0.5:11434/")
-    assert mod.OLLAMA_URL == "http://localhost:11434/api/generate"
+    assert mod.ollama_url() == "http://localhost:11434/api/generate"
 
 
 def test_the_config_outranks_the_embed_variable(monkeypatch, tmp_path):
@@ -255,17 +331,28 @@ def test_the_config_outranks_the_embed_variable(monkeypatch, tmp_path):
     assert model == "from-config"
 
 
-def test_unreachable_override_degrades_to_the_local_daemon(monkeypatch):
-    # The nightly run must still happen when the GPU-side host is down, which
-    # on this laptop means whenever Windows rebooted and the tray did not start.
+def test_an_unreachable_generation_host_refuses(monkeypatch):
+    """This asserted the OPPOSITE until 2026-08-23, and the reason it flipped is
+    the premise, not the principle.
+
+    It read: "the nightly run must still happen when the GPU-side host is down".
+    That was true while a second ollama existed inside WSL holding the same
+    `gemma3:4b`. The operator removed it that day - every model now lives on the
+    Windows side - so "degrade to the local daemon" degrades to a port with
+    nothing behind it. What used to be a slower summary is now a connection
+    error two layers deeper, and a named refusal is the honest form of it.
+    """
+    from scripts.utils.ollama_host import OllamaHostUnavailable
+
     mod = _reload_chronicle(
         monkeypatch, reachable=False, HEADING_OS_OLLAMA_HOST="http://172.30.48.1:11436"
     )
-    assert mod.OLLAMA_URL == "http://localhost:11434/api/generate"
+    with pytest.raises(OllamaHostUnavailable, match="11436"):
+        mod.ollama_url()
 
 
 def test_reload_leaves_the_module_on_defaults(monkeypatch):
     # Guard for the other tests in this file: a stale override would leak into
     # every later import of scripts.chronicle in the same session.
     mod = _reload_chronicle(monkeypatch)
-    assert mod.OLLAMA_URL.startswith("http://localhost:11434")
+    assert mod.ollama_url().startswith("http://localhost:11434")

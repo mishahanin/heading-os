@@ -84,3 +84,25 @@ def test_docs_superpowers_regression(tmp_path):
     # The exact 2026-06-22 leak: top-level 'docs' is not a data-dir name, yet
     # docs/superpowers/ routes private. Detector must flag it.
     assert find_data_artifacts(["docs/superpowers/specs/x.md"]) == ["docs/superpowers/specs/x.md"]
+
+
+def test_a_non_ascii_filename_is_still_flagged(tmp_path):
+    """Found by the 2026-08-23 audit, reproduced before it was fixed.
+
+    `git ls-files` C-quotes any path with a non-ASCII byte:
+    `crm/contacts/иван.md` comes back as `"crm/contacts/\\320\\270..."`. The
+    leading quote breaks the `crm/contacts/` prefix, the routing lookup falls
+    through to the `engine` default, and the file the wall exists to stop is
+    cleared by it. This workspace is bilingual RU/EN, so that is not a theoretical
+    filename.
+
+    `-z` is the fix: NUL-terminated output is never quoted and never escaped.
+    """
+    repo = _init_repo(tmp_path)
+    _write(repo, "crm/contacts/иван.md", "name: Иван\n")
+    _git(repo, "add", "-A")
+
+    carried = repo_carried_paths(repo)
+    assert "crm/contacts/иван.md" in carried, carried
+    assert not any(p.startswith('"') for p in carried), "paths must arrive unquoted"
+    assert scan_engine_repo(repo) == ["crm/contacts/иван.md"]

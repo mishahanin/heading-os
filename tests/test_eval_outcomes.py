@@ -131,9 +131,25 @@ def test_loader_ignores_cases_and_staged(mod, tmp_path):
 # ---- no model call ----------------------------------------------------------
 
 def test_no_model_import():
+    """Parse the imports; do not grep for one spelling of them.
+
+    The substring check saw `import anthropic` and missed `from anthropic import
+    Anthropic` -- the idiomatic form -- so the stated isolation boundary ("loads
+    ONLY evals/outcomes/..., no model call") could be broken by a one-line edit
+    this test could not see. An AST walk sees every form, including a dotted
+    submodule and an aliased import.
+    """
+    import ast
+    banned = {"anthropic", "langfuse", "openai", "google", "replicate"}
     src = (ROOT / "scripts" / "eval-outcomes.py").read_text(encoding="utf-8")
-    assert "import anthropic" not in src
-    assert "import langfuse" not in src
+    found = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Import):
+            found |= {a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module.split(".")[0])
+    offending = sorted(found & banned)
+    assert not offending, f"eval-outcomes.py imports a model client: {offending}"
 
 
 # ---- benchmark sidecar ------------------------------------------------------

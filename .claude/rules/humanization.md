@@ -83,7 +83,11 @@ This rule ADDS to, does not replace: `reference/misha-voice.md` (Misha's core vo
 
 Every prose deliverable presented to Misha carries the confirmation line:
 
-> Word count: X. Hidden characters: clean. Humanisation audit: clean / N findings (one-line summary of fixes if any).
+> Word count: X. Hidden characters: <what the scan found>. Humanisation audit: clean / N findings (one-line summary of fixes if any).
+>
+> The first two fields come from `scripts/sanitize-text.py --scan` and are
+> owned by `.claude/rules/hidden-chars.md`; copy its output, never the word
+> "clean".
 
 The audit is `python scripts/humanization-check.py <file>`. Run it, report the result, fix findings before delivering.
 

@@ -261,6 +261,15 @@ def C3(root: Path, note: dict) -> tuple[bool, str]:
     the same contract passes — the implementation is present — so a clause that
     reads the checked-out files certifies every slice forever and proves
     nothing.
+
+    RED means tests that RAN and failed, read from the junit report — not a
+    non-zero exit code. Until 2026-08-23 this discarded the report
+    (`code, _xml = _pytest(...)`) and accepted any non-zero exit as proof, so
+    pytest's exit 5 (collected nothing) and exit 2 (collection error) both
+    certified the freeze. A contract that did not exist at its own approval sha,
+    or that failed to import there, passed C3 saying it "was red" — the exact
+    collected-is-not-run trap the module documents for C4, which C4 already
+    refuses. The two clauses disagreed about what a measurement is.
     """
     slug, contract, sha = note["slug"], note["contract"], note["approval_sha"]
     with tempfile.TemporaryDirectory() as scratch:
@@ -270,17 +279,23 @@ def C3(root: Path, note: dict) -> tuple[bool, str]:
             return False, (f"{slug}: the approval {sha} could not be checked out: "
                            f"{added.stderr.strip()}")
         try:
-            code, _xml = _pytest(tree, contract)
+            code, xml_text = _pytest(tree, contract)
+            ran, red = _ran(xml_text, contract)
         except CheckError as exc:
             return False, (f"{slug}: the contract {contract} could not be run at "
                            f"the approval {sha}: {exc}")
         finally:
             _drop_worktree(root, tree)
-    if code == 0:
+    if ran == 0:
+        return False, (f"{slug}: the contract {contract} ran no tests at its "
+                       f"approval {sha} (pytest exited {code}); collected is not "
+                       "run, and a contract that runs nothing was never red")
+    if not red:
         return False, (f"{slug}: the contract {contract} was already GREEN at its "
-                       f"approval {sha}, so freezing it defined nothing")
+                       f"approval {sha} over {ran} test(s) that ran, so freezing "
+                       "it defined nothing")
     return True, (f"{slug}: the contract {contract} was red at its approval {sha} "
-                  f"(pytest exited {code})")
+                  f"(pytest exited {code}, over {ran} test(s) that ran)")
 
 
 @_reports

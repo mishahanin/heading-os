@@ -90,7 +90,7 @@ repository, and nothing can write (demo mode refuses writes by design).
 
 This is a demo, not a full workspace. For a real deployment, continue with 4.1 onward
 (WSL2 or a Unix shell, the toolchain, authentication, and your own private data repo).
-The container details are in [`.devcontainer/README.md`](../.devcontainer/README.md).
+The container details are in [`.devcontainer/README.md`](https://github.com/mishahanin/heading-os/blob/main/.devcontainer/README.md).
 
 ### 4.1 Windows only — WSL2 + Ubuntu
 

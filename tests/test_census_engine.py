@@ -455,3 +455,42 @@ def test_traversal_stderr_reaches_the_caller_bounded_and_labelled():
     assert "\n" not in out
     assert census._diagnostic("") == "no stderr."
     assert census._diagnostic(None) == "no stderr."
+
+
+# ============================================================
+# git_head must fail toward dirty, as its own docstring promises
+# ============================================================
+def test_git_head_reports_dirty_when_the_path_is_not_a_repo(tmp_path):
+    """The 2026-08-23 defect: the failure path only covered OSError, i.e. a
+    missing git binary. When git RAN and refused -- not a repository, a broken
+    .git, no HEAD yet -- both commands exited non-zero with empty stdout, and
+    `bool("".strip())` read as CLEAN. The function returned ("unknown", False):
+    a state it could not establish, reported as comparable.
+    """
+    from scripts.utils.census_state import git_head
+    sha, dirty = git_head(tmp_path)
+    assert sha == "unknown"
+    assert dirty is True, "an unreadable repository must never report clean"
+
+
+def test_git_head_reports_dirty_on_a_repo_with_no_commits(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    from scripts.utils.census_state import git_head
+    sha, dirty = git_head(tmp_path)
+    assert sha == "unknown"
+    assert dirty is True
+
+
+def test_git_head_reads_a_real_repo(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(tmp_path), "config", k, v], check=True)
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "c"], check=True)
+    from scripts.utils.census_state import git_head
+    sha, dirty = git_head(tmp_path)
+    assert len(sha) == 40 and sha != "unknown"
+    assert dirty is False

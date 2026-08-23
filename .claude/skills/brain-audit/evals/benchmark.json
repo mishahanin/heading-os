@@ -91,6 +91,8 @@
         },
         "elapsed_seconds": 3.55
       }
-    ]
-  }
+    ],
+    "source": "seeded-from-first-run"
+  },
+  "baseline_is_self_seed": true
 }

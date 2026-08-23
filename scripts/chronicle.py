@@ -34,6 +34,7 @@ import sys
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -44,7 +45,10 @@ from scripts.calibrate import (  # noqa: E402
     parse_jsonl,
 )
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW  # noqa: E402
-from scripts.utils.ollama_host import resolve_ollama_host  # noqa: E402
+from scripts.utils.ollama_host import (  # noqa: E402
+    OllamaHostUnavailable,
+    generation_host,
+)
 from scripts.utils.paths import load_env  # noqa: E402
 from scripts.utils.workspace import get_data_root, get_default_tz  # noqa: E402
 
@@ -52,17 +56,28 @@ from scripts.utils.workspace import get_data_root, get_default_tz  # noqa: E402
 # Configuration
 # ============================================================
 
-# Where generation runs. Unset means the local daemon. HEADING_OS_OLLAMA_HOST
-# takes a literal URL or `auto:<port>`, which follows the current WSL gateway -
-# on the CEO laptop `auto:11436` reaches a Windows-side instance that serves the
-# same models off the iGPU and ingests long prompts ~3.5x faster (measured
-# 2026-08-18, see
-# outputs/operations/workspace/2026-08-18_benchmark_ollama-wsl-cpu-vs-windows-igpu.md).
-# An unreachable preference degrades to the local daemon rather than failing the
-# nightly run.
-OLLAMA_HOST = resolve_ollama_host(env_var="HEADING_OS_OLLAMA_HOST")
-OLLAMA_URL = f"{OLLAMA_HOST}/api/generate"
 MODEL = "gemma3:4b"
+
+
+@lru_cache(maxsize=1)
+def ollama_url() -> str:
+    """The /api/generate endpoint this run summarizes against.
+
+    Where that is comes from `generation_host()`: the machine file
+    `config/ollama-hosts.yaml` under `generate:`, overridden by
+    `HEADING_OS_OLLAMA_HOST`, falling back to the local daemon when neither
+    answers. On this laptop that reaches the Windows-side ollama and its iGPU,
+    which prefills at 198.7 tok/s against 74.6 on the WSL CPU daemon (measured
+    2026-08-22). The whole 120,000-character budget below is sized for the fast
+    number.
+
+    It was a module-level constant until 2026-08-23, computed at import from an
+    environment variable nobody had set - so every chronicle build summarized on
+    the CPU and no code said otherwise. A constant also probed a host on import,
+    which `chronicle stats` has no use for. Resolved on first use instead, and
+    cached, so one build probes once.
+    """
+    return f"{generation_host()}/api/generate"
 
 # Prefill is the bottleneck, and this is how much conversation the model is
 # allowed to read before it summarizes.
@@ -516,8 +531,21 @@ def summarize(body: str, timeout: int = 300) -> dict | None:
         # dropped rather than thinned.
         "options": {"temperature": 0.2, "num_predict": 900, "num_ctx": NUM_CTX},
     }
-    req = urllib.request.Request(  # noqa: S310 - hardcoded localhost ollama URL
-        OLLAMA_URL, data=json.dumps(payload).encode(),
+    try:
+        endpoint = ollama_url()
+    except OllamaHostUnavailable as exc:
+        # The host is a pin (2026-08-23) and there is no local daemon behind it
+        # any more. Stop the whole run instead of returning None per session:
+        # None means "this session had nothing to summarize", and a build that
+        # quietly recorded that for every session would be indistinguishable
+        # from a real day of empty sessions.
+        raise SystemExit(
+            f"{RED}chronicle: {exc}.{RESET}\n"
+            f"{RED}Start Ollama on the Windows side, then run this again.{RESET}"
+        ) from exc
+
+    req = urllib.request.Request(  # noqa: S310 - ollama endpoint, scheme checked in ollama_host
+        endpoint, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
     try:
@@ -777,8 +805,8 @@ def cmd_query(args: argparse.Namespace) -> int:
 # reported, because the fallback IS the documented behaviour. Reading the config
 # is what closes it.
 #
-# Still separate from OLLAMA_HOST above, and for the reason that separation was
-# written for: chronicle SUMMARIZES on a schedule and can wait for a remote host,
+# Still separate from `ollama_url()` above, and for the reason that separation
+# was written for: chronicle SUMMARIZES on a schedule and can wait for a host,
 # while embedding answers a CEO who is standing there. Different risk, different
 # preference, and moving one must not silently move the other. That argument was
 # never about which file the embedding preference is read from.
@@ -786,6 +814,32 @@ def cmd_query(args: argparse.Namespace) -> int:
 # Resolved per call, never at import: an `auto:` preference probes a host, and
 # `chronicle build` and `chronicle stats` never embed at all.
 _FRONT_RE = __import__("re").compile(r"^(\w[\w-]*):\s*(.*)$")
+
+
+def _personal_gist(body: str) -> str:
+    """The summary paragraph of a rendered personal entry.
+
+    Structural, not positional. This used to be
+    `body.strip().split("\\n\\n")[-2]`, which was correct while an entry was
+    exactly title, gist and transcript pointer. `render_entry` later grew three
+    optional sections AFTER the gist - "How this was reached", "Considered and
+    dropped", "Left open" - and `[-2]` silently became the last bullet of
+    whichever section came last. Personal recall would then embed and display a
+    reasoning fragment as the summary, on the one record class that is
+    air-gapped and opt-in, with no error anywhere.
+
+    So: walk the blocks in order and return the first one that is not the `# `
+    title, not the `> Личное` banner, not a `## ` section heading, and not the
+    transcript pointer. Adding a fourth section cannot move it again.
+    """
+    for block in body.strip().split("\n\n"):
+        block = block.strip()
+        if not block or block.startswith(("#", ">")):
+            continue
+        if block.startswith(("Full transcript:", "Archived transcript:")):
+            continue
+        return block
+    return body.strip()
 
 
 def _load_personal_entries() -> list[dict]:
@@ -804,8 +858,7 @@ def _load_personal_entries() -> list[dict]:
                 if m:
                     meta[m.group(1)] = m.group(2).strip()
             body = parts[2]
-        gist = body.strip().split("\n\n")[-2].strip() if "Full transcript" in body else body.strip()
-        gist = gist.replace("> Личное - historical record, not a current fact.", "").strip()
+        gist = _personal_gist(body)
         topics = meta.get("topics", "").strip("[]")
         text = f"{meta.get('title', '')} {topics} {gist}".strip()
         entries.append({

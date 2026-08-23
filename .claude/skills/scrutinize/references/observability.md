@@ -115,14 +115,19 @@ The skill does NOT call Langfuse directly. The pattern follows the workspace sta
 2. Phase boundaries are marked with explicit `@observe(name="scrutinize-phase-N")` decorators on any helper Python invoked from within the skill.
 3. The skill itself (markdown-driven) cannot emit Langfuse spans directly. It relies on the wrapped Python tooling to do so. Spans not covered by Python tooling are reported as structured fields in the saved Phase 5 report, where the dashboard's report-parser picks them up.
 
-## Vault and disabled modes
+## Sensitive and disabled modes
 
-When `_secure/.active-project` exists OR `LANGFUSE_ENABLED=false`:
+When `SENSITIVE_MODE` is declared OR `LANGFUSE_ENABLED=false`:
 
 - All `@observe` decorators degrade to no-op (already handled by `scripts/utils/observability.py`)
 - The saved report still includes the "Observability" footer, with `trace_id: _disabled_` and a one-line reason
 
-This protects the air-gap discipline required for vault sessions while keeping the artefact format consistent.
+This keeps a sensitive session off third-party telemetry while keeping the
+artefact format consistent.
+
+The condition used to read `_secure/.active-project exists`. That vault was
+removed in Plan 5, so the branch could never fire — while the top of this very
+file already said `SENSITIVE_MODE` had replaced it. Corrected 2026-08-23.
 
 ## Dashboard surfacing
 

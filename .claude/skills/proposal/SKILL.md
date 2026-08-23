@@ -151,7 +151,8 @@ Outputs:
 
 ## Phase 5: Report
 
-Full absolute paths. "Word count: X. Hidden characters: clean."
+Full absolute paths, plus the confirmation line from `.claude/rules/hidden-chars.md`
+(both numbers copied from `sanitize-text.py --scan`).
 
 ## Reference Numbering
 

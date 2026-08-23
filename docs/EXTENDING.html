@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Extending the engine</title>
-<meta name="description" content="How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates">
+<meta name="description" content="How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates before declaring it done. This is the developer how-to.">
 <link rel="icon" type="image/webp" href="assets/logo.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,7 +77,7 @@
 </aside>
 <main class="content">
   <h1>Extending the engine</h1>
-  <p class="page-meta">How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates</p>
+  <p class="page-meta">How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates before declaring it done. This is the developer how-to.</p>
   <!-- version: 2.0.1 | last-updated: 2026-08-22 -->
 
 <p>How to build on HEADING OS: add a skill, a rule, or a script, and clear the gates
@@ -332,11 +332,6 @@ fails <code>tests/test_turn_check.py</code>.</p>
 </tbody>
 </table>
 <hr />
-<p><em>HEADING OS · Extending the engine · maintained by Misha Hanin.</em> See also:</p>
-<ul>
-<li><a href="ARCHITECTURE.html">Architecture</a>: how the pieces compose.</li>
-<li><a href="SECURITY-MODEL.html">Security model</a>: the controls your code inherits.</li>
-</ul>
 <h2 id="9-trigger-regression-tests">9. Trigger regression tests</h2>
 <p>Moved here from <code>.claude/rules/skill-router.md</code> on 2026-08-20 — it is authoring
 guidance, never routing, and that rule loads on every session.</p>
@@ -356,6 +351,7 @@ not a hard block yet, per audit #63-2.</p>
 <p>69 routing-sensitive skills carry <code>triggers.json</code> today, and they hold 710 cases between
 them. Both figures were counted on 2026-08-03; the prior figure of 24 was stale. When you
 add or re-scope a skill, update its <code>triggers.json</code> and re-run the harness.</p>
+<hr />
 <h2 id="10-archived-skills">10. Archived skills</h2>
 <p><code>.claude/skills/archive/{date-slug}/SKILL.md</code> is the workspace convention for retired
 skills. The parent <code>archive/</code> directory has no SKILL.md of its own and is intentionally
@@ -364,6 +360,12 @@ skills. Archived skills do not appear in the skill router registry. They are nev
 invoked unless you retrieve one explicitly, with <code>git mv</code> back into
 <code>.claude/skills/{name}/</code>. Do NOT create a stub SKILL.md inside <code>archive/</code> itself; that
 would shadow the convention and risk false routing.</p>
+<hr />
+<p><em>HEADING OS · Extending the engine · maintained by Misha Hanin.</em> See also:</p>
+<ul>
+<li><a href="ARCHITECTURE.html">Architecture</a>: how the pieces compose.</li>
+<li><a href="SECURITY-MODEL.html">Security model</a>: the controls your code inherits.</li>
+</ul>
   <footer class="foot">
     <p>HEADING OS — operations engine for an AI executive assistant. Licensed Apache-2.0. © 2026 Misha Hanin. · <a href="index.html">Docs home</a> · <a href="https://github.com/mishahanin/heading-os">GitHub</a></p>
   </footer>

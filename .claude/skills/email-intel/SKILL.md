@@ -168,7 +168,9 @@ python scripts/email-sweep.py approve <ids> --date YYYY-MM-DD
 python scripts/email-sweep.py edit <id> --note "<change>" --date YYYY-MM-DD
 python scripts/email-sweep.py skip <ids> --date YYYY-MM-DD
 ```
-A `[send-gated]` action sends only after its number is approved. Silence is never approval.
+A `[send-gated]` action sends only after its number is approved, or after the
+explicit `all send`. Silence is never approval, and neither is a bare `all` —
+that carries the same carve-out as `ok`. One vague word must never fire mail.
 
 ### Phase 4 -- Execute Approved Actions
 

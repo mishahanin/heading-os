@@ -257,11 +257,6 @@ fails `tests/test_turn_check.py`.
 
 ---
 
-*HEADING OS · Extending the engine · maintained by Misha Hanin.* See also:
-
-- [Architecture](ARCHITECTURE.html): how the pieces compose.
-- [Security model](SECURITY-MODEL.html): the controls your code inherits.
-
 ## 9. Trigger regression tests
 
 Moved here from `.claude/rules/skill-router.md` on 2026-08-20 — it is authoring
@@ -287,6 +282,8 @@ not a hard block yet, per audit #63-2.
 them. Both figures were counted on 2026-08-03; the prior figure of 24 was stale. When you
 add or re-scope a skill, update its `triggers.json` and re-run the harness.
 
+---
+
 ## 10. Archived skills
 
 `.claude/skills/archive/{date-slug}/SKILL.md` is the workspace convention for retired
@@ -296,3 +293,10 @@ skills. Archived skills do not appear in the skill router registry. They are nev
 invoked unless you retrieve one explicitly, with `git mv` back into
 `.claude/skills/{name}/`. Do NOT create a stub SKILL.md inside `archive/` itself; that
 would shadow the convention and risk false routing.
+
+---
+
+*HEADING OS · Extending the engine · maintained by Misha Hanin.* See also:
+
+- [Architecture](ARCHITECTURE.html): how the pieces compose.
+- [Security model](SECURITY-MODEL.html): the controls your code inherits.

@@ -1,0 +1,84 @@
+{
+  "_README": [
+    "EXAMPLE ONLY. The real file lives in YOUR DATA OVERLAY, never in the engine",
+    "repo: <data-root>/config/exec-registry.json (normally",
+    "../.heading-os-data/config/). It is classified `private` in",
+    "config/routing-map.yaml and must stay that way: it carries real names,",
+    "titles and work email addresses.",
+    "",
+    "WHAT IT IS: your ORGANISATION'S CHART. It answers exactly one question:",
+    "who is an executive in the business. Hand-maintained; no tool writes it.",
+    "",
+    "You only need this file if you track an executive team. A single-operator",
+    "install can skip it; the loader returns an empty chart and that is fine.",
+    "",
+    "ITS SIBLING: <data-root>/admin/executives.json is a DIFFERENT file",
+    "answering a DIFFERENT question: who is provisioned as a HEADING OS user.",
+    "See scripts/executives.example.json.",
+    "",
+    "DO NOT put install facts here. Whether someone uses HEADING OS, what their",
+    "data repo is called, how far their provisioning got: all of that lives in",
+    "the roster. A copy kept here goes stale and then lies. That is not",
+    "hypothetical: this file once carried an `aios: removed` flag meaning 'not a",
+    "HEADING OS user', and by the time anyone read it again the two people it",
+    "named had been active users for two months.",
+    "",
+    "Stable IDENTIFIERS may appear in both files. `name` and `github_user` do",
+    "not drift, and an executive with no roster row still needs a handle. Only",
+    "LIFECYCLE facts are kept apart.",
+    "",
+    "Join the two with scripts.utils.workspace.load_fleet(), which returns one",
+    "record per person with explicit is_business_exec / is_heading_os_user flags",
+    "and renames the two same-named `status` fields apart."
+  ],
+
+  "version": "2.0",
+  "updated": "2026-01-01",
+
+  "_schema": {
+    "slug": "kebab-case identifier. The join key with admin/executives.json.",
+    "name": "Full name.",
+    "title": "Job title as the business uses it.",
+    "email": "Work email address.",
+    "role": "Short business-role token (admin, cso, cfo, coo, exec, ...). `admin` marks the operator and is excluded from fleet aggregation.",
+    "platform": "windows | darwin | linux. Which OS they work on.",
+    "status": "EMPLOYMENT status: active | departed. Not provisioning status.",
+    "provisioned": "Date they joined the workspace ecosystem, YYYY-MM-DD. Historical record only.",
+    "github_user": "Optional. Stable identifier, safe to duplicate from the roster."
+  },
+
+  "executives": [
+    {
+      "slug": "alex-operator",
+      "name": "Alex Operator",
+      "title": "Founder & CEO",
+      "email": "alex@example.com",
+      "role": "admin",
+      "status": "active",
+      "provisioned": "2026-01-01",
+      "platform": "linux"
+    },
+    {
+      "slug": "jane-doe",
+      "name": "Jane Doe",
+      "title": "Chief Strategy Officer",
+      "email": "jane.doe@example.com",
+      "role": "cso",
+      "status": "active",
+      "provisioned": "2026-01-15",
+      "platform": "darwin",
+      "github_user": "janedoe"
+    },
+    {
+      "slug": "chris-noinstall",
+      "name": "Chris NoInstall",
+      "title": "Chief Operating Officer",
+      "email": "chris@example.com",
+      "role": "coo",
+      "status": "active",
+      "provisioned": "2026-02-01",
+      "platform": "windows",
+      "_note": "A real executive who does not use HEADING OS. No row in admin/executives.json, and that absence IS the record. Do not add a flag here saying so."
+    }
+  ]
+}

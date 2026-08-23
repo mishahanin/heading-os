@@ -74,7 +74,7 @@ the section, it does not replace it.
 | 4 — Weekly Content Production | router § Compound Workflow Triggers | `/linkedin-series` planning first (Opus, sequential), then 6 — 3 `draft-writer` + 3 Haiku image-prompt — batched in two waves under the cap of 5 | 2 HARD STOPs: Gate 1 on the plan, Gate 2 on the posts before any publish or image generation. | `## Pattern 4` |
 | 5 — Full Deal Intelligence | router § Compound Workflow Triggers | 5 parallel: `/osint` (Opus), `/competitor-intel` (Sonnet), `/deep-think` (Opus), `crm-reader`, `datastore-validator`; then `/deal-strategy` synthesis | None — research package only. No CRM writes, no external actions. | `## Pattern 5` |
 | 6 — Session Boot | explicit `/prime` only; no natural-language trigger | NONE. Not a dispatch pattern: `scripts/prime-health-parallel.py` runs its `CHECKS` registry in-process (`ThreadPoolExecutor`), read-only. Principle 5's cap does not apply. | None — read-only, no write phase. | `## Pattern 6` |
-| 7 — Push & Backup | `/push-updates` invocation | corporate publish (Sonnet, sequential) first; then 2 Haiku tails in parallel — ceo-main push, CRM aggregate | 1 HARD STOP before corporate publish. | `## Pattern 7` |
+| 7 — Push & Backup | `/push-updates` invocation | corporate publish (Sonnet, sequential) first; then 2 Haiku tails in parallel — engine + data push, CRM aggregate | 1 HARD STOP before corporate publish. | `## Pattern 7` |
 
 ## Orchestrator Principles
 

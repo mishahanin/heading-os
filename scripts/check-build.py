@@ -6,9 +6,15 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.utils.workspace import (  # noqa: E402
+    get_per_exec_repo_path,
+    load_fleet,
+)
+
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
 CORPORATE_BUILD = WORKSPACE_ROOT / "heading-os-corporate" / "BUILD.json"
-EXEC_REGISTRY = Path(__file__).resolve().parent.parent / "config" / "exec-registry.json"
 
 
 def load_json(path: Path) -> dict | None:
@@ -47,6 +53,13 @@ def main():
         print(f"  Expected at: {CORPORATE_BUILD}")
         sys.exit(1)
 
+    # Indexed directly until 2026-08-23, so a BUILD.json missing either key
+    # raised a KeyError traceback instead of naming the malformed file.
+    if "build" not in corp or "version" not in corp:
+        print(f"ERROR: {CORPORATE_BUILD} is missing 'build' and/or 'version'")
+        print(f"  Found keys: {sorted(corp)}")
+        sys.exit(1)
+
     corp_build = corp["build"]
     corp_version = corp["version"]
     corp_ts = corp.get("timestamp", "")
@@ -59,27 +72,24 @@ def main():
         print(f"  {corp_summary}")
     print()
 
-    # Load exec registry
-    registry = load_json(EXEC_REGISTRY)
-    if not registry:
-        print("  WARN: Cannot read exec-registry.json - showing corporate build only")
-        sys.exit(0)
-
-    execs = [e for e in registry.get("executives", []) if e.get("workspace_repo")]
+    # Who has an install to compare. Until 2026-08-23 this filtered the ORG
+    # CHART on `workspace_repo`, a field holding the retired `31c-workspace-`
+    # name; those repos do not exist, so the table listed people whose build
+    # could never be read. Membership now comes from the fleet roster, which is
+    # what "has a HEADING OS install" actually means.
+    execs = [r for r in load_fleet() if r["is_heading_os_user"] and r["data_repo"]]
 
     if not execs:
         print("  No exec workspaces registered.")
         sys.exit(0)
 
-    # Check each exec
-    max_name = max(len(e["name"]) for e in execs)
+    max_name = max(len(e["name"] or e["slug"]) for e in execs)
     print(f"  {'Executive':<{max_name}}   Build   Status")
     print(f"  {'-' * max_name}   -----   ------")
 
     for ex in execs:
-        name = ex["name"]
-        repo = ex["workspace_repo"]
-        exec_build_path = WORKSPACE_ROOT / repo / "corporate" / "BUILD.json"
+        name = ex["name"] or ex["slug"]
+        exec_build_path = get_per_exec_repo_path(ex["slug"]) / "corporate" / "BUILD.json"
         exec_data = load_json(exec_build_path)
 
         if not exec_data:

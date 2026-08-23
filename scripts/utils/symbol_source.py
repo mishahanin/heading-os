@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Iterator
 
 from scripts.utils.air_gap import is_denied
+from scripts.utils.sqlite_uri import read_only_uri
 
 # Imports, variables and constants are excluded: a vector for `import json`
 # retrieves nothing and dilutes every neighbour it sits beside.
@@ -81,7 +82,7 @@ def iter_symbols(
     if not graph_db.exists():
         raise ValueError(f"CodeGraph index not found: {graph_db}")
 
-    conn = sqlite3.connect(f"file:{graph_db}?mode=ro", uri=True)
+    conn = sqlite3.connect(read_only_uri(graph_db), uri=True)
     try:
         # `json_each` rather than a generated `IN (?,?,?)` list: the placeholder
         # count is the only thing an f-string was building here, and building ANY

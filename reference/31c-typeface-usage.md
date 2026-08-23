@@ -1,4 +1,4 @@
-<!-- version: 1.0.0 | last-updated: 2026-04-28 -->
+<!-- version: 1.0.0 | last-updated: 2026-04-05 -->
 
 # 31C TypeFace Usage Guide
 

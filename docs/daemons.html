@@ -135,7 +135,7 @@ python scripts/sync-exchange.py [--calendar|--emails] [--days N] [--email-count 
 systemctl --user status sentinel.service
 journalctl --user -u sentinel.service -f
 # Chat surface: /sentinel</code></pre>
-  <p><strong>Config / state.</strong> Config from <code>scripts/sentinel_config.yaml</code> (ship <code>scripts/sentinel_config.example.yaml</code> as the template); log at <code>.sentinel/sentinel.log</code>. The alert channel and any chat IDs are instance config — keep them in <code>.env</code> / local YAML, never in the engine.</p>
+  <p><strong>Config / state.</strong> Your live config is <code>&lt;data-root&gt;/config/sentinel_config.yaml</code> — in your PRIVATE DATA OVERLAY, never in this engine repo. The engine ships only the template, <code>scripts/sentinel_config.example.yaml</code>; copy it across, do not edit it in place. Log at <code>.sentinel/sentinel.log</code>. This page named <code>scripts/sentinel_config.yaml</code> until 2026-08-23, which put an instance config holding chat IDs and monitored contacts inside the shareable engine tree, and Sentinel then ignored it: <code>scripts/sentinel.py</code> resolves the path through <code>get_data_config_dir()</code>. The alert channel and any chat IDs are instance config — keep them in <code>.env</code> or the overlay YAML, never in the engine.</p>
 
   <h2>4. Fireside-bot — Telegram team bot</h2>
   <p><strong>Purpose.</strong> A single in-process scheduler running team "fireside" jobs (poll/heartbeat, speaker DMs, weekly preview, day-of reminders, briefs, reports, health-check, topic collection).</p>

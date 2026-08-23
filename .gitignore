@@ -77,6 +77,13 @@ slash/
 # never be committed.
 config/operator.yaml
 
+# Which ollama serves THIS machine (embed + generate host pins). Every address
+# in it is a fact about one computer -- `auto:11434` resolves to that machine's
+# default gateway -- so committing it would point every other clone at nothing.
+# The engine ships config/ollama-hosts.example.yaml (tracked), and an absent
+# live file is a valid setup: both jobs then use the local daemon.
+config/ollama-hosts.yaml
+
 # Multi-user HEADING OS ecosystem
 .workspace-identity.json
 # ...but test fixtures ship their own identity files on purpose -- the broad rule

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import cold_sweep_core
 from scripts.bridge_daemon.sources.action_queue import append_cards
-from scripts.utils.colors import GRAY, GREEN, RESET
+from scripts.utils.colors import GRAY, GREEN, RED, RESET
 from scripts.utils.workspace import get_data_root, get_workspace_root
 
 
@@ -35,7 +35,15 @@ def main() -> int:
     args = ap.parse_args()
 
     engine_root = get_workspace_root()  # locates scripts/crm-health.py
-    cards = cold_sweep_core.run(engine_root)
+    try:
+        cards = cold_sweep_core.run(engine_root)
+    except RuntimeError as exc:
+        # The docstring above has promised exit 1 on error since this file was
+        # written, and nothing delivered it: a health-scorer that answered with
+        # prose ended the run in a JSONDecodeError traceback instead.
+        print(f"{RED}cold-sweep could not read CRM health:{RESET} {exc}",
+              file=sys.stderr)
+        return 1
     if not cards:
         print(f"{GRAY}no overdue contacts to route{RESET}")
         return 0

@@ -43,7 +43,13 @@ from scripts.utils.workspace import get_outputs_dir  # noqa: E402
 
 COUNCIL_DIR = get_outputs_dir() / "operations" / "council"
 VERDICTS_PATH = COUNCIL_DIR / "_verdicts.jsonl"
-VALID_CHOICES = {"claude", "gemini", "grok", "kimi", "mix", "reject"}
+# Ordered, so the tally below reads the same way every time AND is derived from
+# the same set argparse validates against. A second hand-written tuple lived in
+# `render_tally`; a seventh choice added here would have been accepted on the
+# command line, written to the ledger, counted in the total, and then left out
+# of the per-choice breakdown, so the parts would quietly stop summing to the
+# whole.
+VALID_CHOICES = ("claude", "gemini", "grok", "kimi", "mix", "reject")
 
 
 def latest_verdicts(path: Path) -> dict[str, dict]:
@@ -83,9 +89,11 @@ def render_tally(verdicts: dict[str, dict]) -> str:
     """Short summary line printed after every record."""
     if not verdicts:
         return "tally: 0 recorded"
-    counts = Counter(v["choice"] for v in verdicts.values())
-    parts = [f"{k}={counts.get(k, 0)}" for k in ("claude", "gemini", "grok", "kimi", "mix", "reject")]
-    return f"tally: {len(verdicts)} recorded - " + ", ".join(parts)
+    counts = Counter(v.get("choice") for v in verdicts.values())
+    parts = [f"{k}={counts.get(k, 0)}" for k in VALID_CHOICES]
+    named = sum(counts.get(k, 0) for k in VALID_CHOICES)
+    tail = f", other={len(verdicts) - named}" if named != len(verdicts) else ""
+    return f"tally: {len(verdicts)} recorded - " + ", ".join(parts) + tail
 
 
 def main(argv: list[str] | None = None) -> int:

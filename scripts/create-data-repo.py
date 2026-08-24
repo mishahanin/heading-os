@@ -121,10 +121,25 @@ def _gh_authenticated() -> bool:
 
 
 def scaffold(target: Path, dry_run: bool) -> int:
-    """Create the empty data tree via init-data.py (single source of the layout)."""
+    """Create the empty data tree via init-data.py (single source of the layout).
+
+    A target that already carries the schema stamp is one WE scaffolded, so the
+    run resumes instead of refusing. `init-data.py` rejects any non-empty
+    directory, which made step 1 fatal on every re-run and left this a one-shot
+    script: a `gh repo create` that failed on a taken name or the wrong org
+    ended the bootstrap with a scaffolded tree, a git repo and no remote, and a
+    second attempt died on "exists and is not empty" before reaching the two
+    branches written to handle exactly that state ("Idempotent: skip init if
+    already a repo", "If origin already exists ... skip creation"). Those
+    branches were unreachable. The stamp is the discriminator: without it, a
+    non-empty target is somebody else's directory and is still refused.
+    """
     init_data = Path(__file__).resolve().parent / "init-data.py"
     if dry_run:
         print(f"{YELLOW}[dry-run]{RESET} would scaffold data tree at {target}")
+        return 0
+    if (target / ".schema-version").exists():
+        print(f"{GRAY}data tree already scaffolded at {target}; resuming{RESET}")
         return 0
     proc = run([sys.executable, str(init_data), "--path", str(target)],
                cwd=get_workspace_root(), check=False)
@@ -136,13 +151,22 @@ def scaffold(target: Path, dry_run: bool) -> int:
 
 
 def write_repo_files(target: Path, dry_run: bool) -> None:
-    """Drop the .gitignore and README that make this a self-describing repo."""
+    """Drop the .gitignore and README that make this a self-describing repo.
+
+    Never overwrites. Now that `scaffold` resumes an interrupted bootstrap, this
+    runs a second time on a tree the operator may have edited, and a .gitignore
+    they widened is not something to silently replace with the default.
+    """
     if dry_run:
         print(f"{YELLOW}[dry-run]{RESET} would write .gitignore and README.md")
         return
-    (target / ".gitignore").write_text(DATA_GITIGNORE, encoding="utf-8")
-    (target / "README.md").write_text(DATA_README, encoding="utf-8")
-    print(f"{GREEN}wrote{RESET} .gitignore and README.md")
+    for name, body in ((".gitignore", DATA_GITIGNORE), ("README.md", DATA_README)):
+        path = target / name
+        if path.exists():
+            print(f"{GRAY}kept existing{RESET} {name}")
+            continue
+        path.write_text(body, encoding="utf-8")
+        print(f"{GREEN}wrote{RESET} {name}")
 
 
 def git_init_commit(target: Path, dry_run: bool) -> int:

@@ -71,21 +71,46 @@ def _state_path() -> Path:
 def _load_last_signature() -> list[str]:
     try:
         with open(_state_path(), encoding="utf-8") as f:
-            return list(json.load(f).get("signature", []))
+            state = json.load(f)
     except FileNotFoundError:
         return []
     except (json.JSONDecodeError, OSError) as e:
         _log(f"could not read nudge state ({e}); treating as no prior nudge")
         return []
+    # `json.load` answers with any JSON value. The `.get` used to sit on the
+    # line above, inside a handler that catches neither the AttributeError a
+    # bare `null` or array gives nor the TypeError a non-iterable "signature"
+    # gives - so a state file of the wrong shape crashed the oneshot unit the
+    # module docstring says is never left failed.
+    if not isinstance(state, dict) or not isinstance(state.get("signature"), list):
+        _log("nudge state is not a signature record; treating as no prior nudge")
+        return []
+    return [str(item) for item in state["signature"]]
 
 
-def _save_signature(signature: list[str]) -> None:
+def _save_signature(signature: list[str]) -> bool:
+    """Persist the dedup key. Logs and returns False rather than raising.
+
+    The module docstring promises a transient failure is "logged and SWALLOWED
+    (exit 0) so the oneshot systemd unit is never left `failed`", and this
+    function was the one path that could break it: an unwritable or full
+    outputs directory raised OSError straight out of `main`, past the only
+    handler in the file, and `Type=oneshot` with no SuccessExitStatus turns a
+    non-zero exit into a failed unit. The failure is also harmless to swallow -
+    a lost signature makes the next run re-announce a finding it already sent,
+    which is the direction this system is supposed to fail in.
+    """
     path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"signature": signature}, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"signature": signature}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except OSError as e:
+        _log(f"could not save nudge state ({e}); the next run may repeat this nudge")
+        return False
+    return True
 
 
 def main() -> int:

@@ -304,8 +304,19 @@ def main():
         print(f"  Fix: create crm/address-book/{{slug}}.md for each missing entity.", file=sys.stderr)
 
     if not contacts:
-        print(f"{YELLOW}No contact files found in {CONTACTS_DIR}{RESET}")
-        print(f"Add contacts with: /crm add [name] [company] [type]")
+        # An empty CRM is still an answer, and under --json the answer is `[]`.
+        # This path used to print the two lines below on STDOUT whatever the
+        # flags said, so `--json` returned prose and every stdout consumer broke
+        # on a workspace with no contacts yet: cold_sweep_core died on a raw
+        # JSONDecodeError, and crm_next and ops_signals each grew a private
+        # handler for a producer nobody fixed. Two comments in this same
+        # function already said stdout must stay clean for JSON consumers.
+        if args.json:
+            print("[]")
+        else:
+            print(f"{YELLOW}No contact files found in {CONTACTS_DIR}{RESET}")
+        print("Add contacts with: /crm add [name] [company] [type]",
+              file=sys.stderr)
         sys.exit(0)
 
     if args.json:

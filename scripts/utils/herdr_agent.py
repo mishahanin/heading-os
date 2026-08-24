@@ -97,34 +97,45 @@ def _run(args: list[str], timeout: int) -> dict:
             f"{HERDR_BIN} {' '.join(args)} exited {proc.returncode}: {first}"
         )
     try:
-        return json.loads(proc.stdout)
+        payload = json.loads(proc.stdout)
     except ValueError as exc:
         raise HerdrUnavailable(
             f"{HERDR_BIN} {' '.join(args)} returned unparseable output"
         ) from exc
+    # `json.loads` answers with any JSON value, so this annotation was a wish.
+    # `agents()` guarded the `agent list` call for exactly that reason on
+    # 2026-08-19, and the other three call sites kept returning whatever came
+    # back: `submit_compact`, `set_label` and `clear_label` are annotated `dict`
+    # and handed straight to `payload.get(...)` in `scripts/compact-now.py`.
+    # A HERDR release that answers a prompt with a bare array would have raised
+    # AttributeError there, past every HerdrUnavailable handler. One guard at
+    # the seam covers all four.
+    if not isinstance(payload, dict):
+        raise HerdrUnavailable(
+            f"{HERDR_BIN} {' '.join(args)} returned "
+            f"{type(payload).__name__}, not an object"
+        )
+    return payload
 
 
 def agents() -> list[dict]:
     """Every agent HERDR currently hosts, as raw records.
 
     Every shape this does not expect leaves as HerdrUnavailable, which is the
-    one exception the callers handle. `_run` already converts UNPARSEABLE output;
-    the gap this closes is output that parses into the wrong shape - a bare list
-    where an object belongs, say, which a future HERDR release can introduce
-    without warning. That used to leave `payload.get` raising AttributeError
-    straight through `_herdr_status` and out of the Stop hook, so a third-party
-    format change cost the session its whole checkpoint system: no offer, no
-    save, no countdown, exit 1, no output.
+    one exception the callers handle. `_run` already converts UNPARSEABLE output
+    and, since 2026-08-24, output that parses to something other than an object;
+    the gap this closes is the layer below that - a `result` or an `agents` entry
+    of the wrong type, which a future HERDR release can introduce without
+    warning. That used to leave `payload.get` raising AttributeError straight
+    through `_herdr_status` and out of the Stop hook, so a third-party format
+    change cost the session its whole checkpoint system: no offer, no save, no
+    countdown, exit 1, no output.
 
     A malformed ENTRY raises rather than being skipped. Dropping it would answer
     "HERDR does not host this session" when the truth is "the lookup could not be
     trusted", and `resolve_pane` exists to keep those two apart.
     """
     payload = _run(["agent", "list"], LIST_TIMEOUT)
-    if not isinstance(payload, dict):
-        raise HerdrUnavailable(
-            f"agent list returned {type(payload).__name__}, not an object"
-        )
     result = payload.get("result")
     if result is None:
         result = {}

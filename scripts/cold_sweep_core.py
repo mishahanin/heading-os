@@ -119,14 +119,37 @@ def build_cards(rows: list[dict], *, now: datetime, cooldown_days: int = 14) -> 
 
 
 def _fetch_rows(workspace_root: Path) -> list[dict]:
-    """Run ``crm-health.py --json`` and return the contact list."""
+    """Run ``crm-health.py --json`` and return the contact list.
+
+    Raises RuntimeError, naming the producer, when the health scorer cannot be
+    run or does not answer with a JSON list. The bare ``json.loads`` here used
+    to end a manual run in a raw JSONDecodeError traceback, which says nothing
+    about which of the two scripts is at fault. `crm_next.py` and
+    `utils/ops_signals.py` both grew their own guard for the same producer;
+    this is the third, and it refuses out loud rather than degrading to zero,
+    because an empty card list reads to the caller as "no one is overdue".
+    """
     cmd = [sys.executable, str(workspace_root / "scripts" / "crm-health.py"), "--json"]
-    out = subprocess.run(
-        cmd, cwd=str(workspace_root), capture_output=True, text=True,
-        timeout=180, check=True,
-    )
-    data = json.loads(out.stdout)
-    return data if isinstance(data, list) else []
+    try:
+        out = subprocess.run(
+            cmd, cwd=str(workspace_root), capture_output=True, text=True,
+            timeout=180, check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"crm-health.py --json could not be run: {exc}") from exc
+    try:
+        data = json.loads(out.stdout)
+    except json.JSONDecodeError as exc:
+        head = out.stdout.strip().partition("\n")[0][:120] or "(empty)"
+        raise RuntimeError(
+            "crm-health.py --json exited 0 but its output is not JSON: "
+            f"{head}"
+        ) from exc
+    if not isinstance(data, list):
+        raise RuntimeError(
+            f"crm-health.py --json returned {type(data).__name__}, expected a list"
+        )
+    return data
 
 
 def run(workspace_root, *, now: datetime | None = None, cooldown_days: int = 14) -> list[dict]:

@@ -150,7 +150,12 @@ def main(argv: list[str] | None = None) -> int:
         return show()
     if args.check:
         return check(args.quiet, args.json)
-    if args.get:
+    # `is not None`, not truthiness: argparse tells "not supplied" (None) apart
+    # from "supplied empty" (""), and this dispatch used to collapse the two.
+    # `--get ""` - what a shell writes when its provider variable is unset -
+    # fell past every branch to `apply_sets(args.set)` with `args.set` None and
+    # died on `for pair in None`, instead of the exit 2 this file documents.
+    if args.get is not None:
         if args.get not in FALLBACKS:
             print(f"{RED}Error:{RESET} unknown provider '{args.get}'. "
                   f"Known: {', '.join(PROVIDERS)}.", file=sys.stderr)

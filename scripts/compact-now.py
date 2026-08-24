@@ -50,6 +50,23 @@ def _resolve_session(explicit: str | None, project: Path) -> str | None:
     return CP.newest_session_id(project)
 
 
+def _agent_status(payload: dict) -> str | None:
+    """HERDR's `agent_status` for the pane, or None when it did not say.
+
+    The submission has already happened by the time this is read, so a shape
+    HERDR did not use to send is a missing status line, never a failed compact.
+    The chain this replaces was `(payload.get("result") or {}).get("agent")`,
+    which guards a MISSING key and lets a present-but-wrong one through: `or {}`
+    keeps a non-empty list, and the `.get` after it raises AttributeError past
+    every HerdrUnavailable handler in this file. `herdr_agent.agents()` closed
+    the same hole for the `agent list` call on 2026-08-19.
+    """
+    result = payload.get("result")
+    agent = result.get("agent") if isinstance(result, dict) else None
+    status = agent.get("agent_status") if isinstance(agent, dict) else None
+    return status if isinstance(status, str) else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Submit /compact to this session's own terminal via HERDR."
@@ -107,7 +124,7 @@ def main() -> int:
         print(f"{RED}Submission failed:{RESET} {exc}", file=sys.stderr)
         return 1
 
-    status = ((payload.get("result") or {}).get("agent") or {}).get("agent_status")
+    status = _agent_status(payload)
     print(f"{GREEN}Submitted {COMPACT_COMMAND} to {pane}.{RESET}")
     if status == "working":
         print(

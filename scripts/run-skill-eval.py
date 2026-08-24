@@ -45,6 +45,7 @@ import json
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -337,7 +338,11 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
             "elapsed_seconds": round(elapsed, 2),
         })
 
-    if write_benchmark and not dry_run and case_results:
+    # A --case run grades ONE case. Writing the sidecar from it replaced
+    # `last_run` with a partial record wearing a whole run's shape, and nothing
+    # in the file said the other cases were never run. The sidecar's contract is
+    # "the last full run", so a filtered run leaves it alone.
+    if write_benchmark and not dry_run and case_results and not case_filter:
         benchmark_path = skill_dir / "evals" / "benchmark.json"
         existing = {}
         if benchmark_path.exists():
@@ -354,7 +359,12 @@ def run_one_skill(skill_name: str, case_filter: str | None, model_override: str 
                       file=sys.stderr)
                 existing = {}
         existing["last_run"] = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            # A SERIALIZED timestamp, so UTC with an offset
+            # (dtz-datetime-convention). `time.strftime` wrote naive local time
+            # and carries no tzinfo for ruff's DTZ ruleset to catch, so the one
+            # stamp that makes two runs comparable was the one stamp that did
+            # not say which clock it came from.
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "model": model,
             "passed_total": passed_total,
             "check_total": check_total,
@@ -434,6 +444,17 @@ def main() -> int:
               f"{len(skills)} skill(s) could not be measured{RESET}", file=sys.stderr)
         return 3
     if OUTCOME_NOT_FOUND in outcomes:
+        return 2
+    # A --case typo matches nothing, every skill is skipped, and zero checks
+    # then took the branch below and exited 0 - so a targeted regression run
+    # that measured NOTHING reported green, which is the one thing a targeted
+    # run must never do. Judged over the whole run: under --all a named case
+    # lives in exactly one skill, so "skipped here" is the ordinary state of
+    # every other skill and only "ran nowhere" is the error.
+    if args.case and overall_total == 0:
+        scope = "any skill" if args.all else repr(skills[0])
+        print(f"{RED}--case {args.case!r} matched no case in {scope}{RESET}",
+              file=sys.stderr)
         return 2
     if overall_total == 0:
         print(f"{YELLOW}No checks run{RESET}")

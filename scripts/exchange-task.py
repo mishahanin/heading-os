@@ -32,7 +32,7 @@ from scripts.utils.venv_guard import ensure_venv  # noqa: E402
 
 ensure_venv()
 from scripts.utils.colors import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from scripts.utils.workspace import get_default_tz, get_default_tz_name, get_workspace_root, load_env
+from scripts.utils.workspace import get_default_tz_name, get_workspace_root, load_env
 
 # ============================================================
 # Dependency check
@@ -123,7 +123,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--remind-at",
         metavar="YYYY-MM-DD HH:MM",
-        help="Reminder date and time (local timezone). Defaults to 09:00 on due date.",
+        help="Reminder date and time, read in the mailbox timezone "
+             "(EXCHANGE_TIMEZONE in .env). Defaults to 09:00 on the due date.",
     )
     p.add_argument(
         "--status",
@@ -153,8 +154,22 @@ def parse_date(s: str) -> date:
 
 
 def parse_remind_at(s: str, tz: EWSTimeZone) -> EWSDateTime:
+    """Read a wall-clock reminder and stamp it in the EXCHANGE timezone.
+
+    The `.replace(tzinfo=get_default_tz())` that used to sit here was a no-op:
+    the return value is rebuilt from the naive Y/M/D/H/M fields with `tz`, so
+    the workspace tz was attached and then discarded without converting
+    anything. Harmless while EXCHANGE_TIMEZONE and HEADING_OS_TZ agree, and a
+    silent hour shift the moment they do not - while `--remind-at --help` said
+    "local timezone", which was then the wrong clock.
+
+    The Exchange tz is the right one and always was: the default reminder path
+    (09:00 on the due date) already stamps in `tz`, and Outlook shows the
+    reminder in the mailbox's timezone. Only the dead line and the help string
+    disagreed.
+    """
     try:
-        dt = datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=get_default_tz())
+        dt = datetime.strptime(s, "%Y-%m-%d %H:%M")  # noqa: DTZ007 - tz applied below
     except ValueError:
         print(f"{RED}[ERROR]{RESET} Invalid --remind-at '{s}'. Use 'YYYY-MM-DD HH:MM' format.")
         sys.exit(1)
@@ -221,10 +236,14 @@ def list_tasks(account: Account, args: argparse.Namespace) -> None:
         status_color = YELLOW if t.status != "Completed" else GRAY
         print(f"  {status_color}{t.status:<20}{RESET} {BOLD}{t.subject}{RESET}")
         print(f"  {GRAY}due {due_str}{reminder_str}{RESET}")
-        if t.body:
-            first_line = str(t.body).strip().splitlines()[0][:100] if t.body else ""
-            if first_line:
-                print(f"  {GRAY}{first_line}{RESET}")
+        # `[0]` on the split, not on the stripped text. A body of "\n" or " "
+        # is TRUTHY and strips to "", whose splitlines() is [] - so one task
+        # whose notes field holds only whitespace raised IndexError in the
+        # middle of the listing, and the operator got a half-printed list plus
+        # a traceback with no way to tell where the list stopped.
+        lines = str(t.body).strip().splitlines() if t.body else []
+        if lines:
+            print(f"  {GRAY}{lines[0][:100]}{RESET}")
         print()
 
 # ============================================================

@@ -71,18 +71,45 @@ _FRONTMATTER_RE = re.compile(r"\A(---\r?\n.*?\r?\n---\r?\n)(.*)\Z", re.DOTALL)
 
 # Reference scanners for the completeness gate.
 #
-# WHAT THESE SEE, and what they do not. A literal `scripts/foo/bar.py`, a
-# `.claude/hooks/x.py`, and a `python -m scripts.foo.bar`. They do NOT see an
-# extensionless `scripts/tool`, a `bash scripts/tool.sh`, or a path built at
-# runtime from pieces — those can be broken in an installed bundle while this
-# build still passes, and the gate's report says "no missing targets", not "no
-# broken references". Widening further means guessing at arbitrary shell text,
-# which trades a known blind spot for false failures on every build.
+# WHAT THESE SEE, and what they do not. In SKILL.md, a hook, or a command: a
+# literal `scripts/foo/bar.py`, a `.claude/hooks/x.py`, and a `python -m
+# scripts.foo.bar`. In the skill's other bundled Markdown, only an INVOKED
+# `python|bash scripts/x.py` (see `_INVOKE_REF_RE` for why that one is narrower).
+#
+# They do NOT see an extensionless `scripts/tool`, a `bash scripts/tool.sh`, a
+# path built at runtime from pieces, or a bare non-invoked path inside a
+# reference file — those can be broken in an installed bundle while this build
+# still passes, and the gate's report says "no missing targets", not "no broken
+# references". Widening further means guessing at arbitrary shell text, which
+# trades a known blind spot for false failures on every build.
 _SCRIPT_REF_RE = re.compile(r"scripts/([\w./-]+\.py)")
 _HOOK_REF_RE = re.compile(r"\.claude/hooks/([\w./-]+\.py)")
 # `python -m scripts.utils.x`. Added 2026-08-24: the dotted form reaches the
 # same file as a path reference and the gate could not see it at all.
 _DOTTED_REF_RE = re.compile(r"-m\s+scripts\.([\w.]+)")
+
+# The scanner for the skill's OTHER prose - `references/`, `tests.md` - which
+# ships in the bundle beside SKILL.md and which neither the gate nor the
+# rewriter used to open. Measured on the current manifest before the fix:
+# heading-content shipped `linkedin-post/evals/README.md` telling the consumer
+# to run `python scripts/run-skill-eval.py`, a script in no bundle at all, and
+# the gate printed "no missing targets" over it.
+#
+# Deliberately NARROWER than `_SCRIPT_REF_RE`. In a reference file a bare
+# `scripts/models/user.py` is illustration - `create-plan/references/
+# plan-template.md` carries two such lines under "**Files affected:**" - and
+# failing the build on example prose is the false-failure cost this file's own
+# scanner comment warns about. An invocation prefix is the discriminator: it
+# marks a command the reader is being told to type.
+_INVOKE_REF_RE = re.compile(r"\b(?:python3?|bash)\s+scripts/([\w./-]+\.py)")
+
+# Directory names never copied into a bundle. `evals/` is the skill's own
+# regression corpus (case JSON plus a benchmark file) and the harness that reads
+# it is a workspace dev script, so shipping it hands the consumer a README for a
+# tool the bundle does not carry.
+_SKILL_EXCLUDE_DIRS = ("evals",)
+_SKILL_IGNORE = shutil.ignore_patterns(
+    "__pycache__", "*.pyc", "*.pyo", *_SKILL_EXCLUDE_DIRS)
 
 
 def load_manifest(root: Path) -> dict:
@@ -91,14 +118,27 @@ def load_manifest(root: Path) -> dict:
         return yaml.safe_load(f)["bundles"]
 
 
-def _copytree(src: Path, dst: Path) -> None:
+def _copytree(src: Path, dst: Path, ignore=None) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     # Never ship compiled-bytecode cruft in a bundle (stale, bloated, non-source).
     shutil.copytree(
         src,
         dst,
         dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        ignore=ignore or shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
+
+
+def bundled_skill_prose(skill_dir: Path) -> list[Path]:
+    """Markdown a bundled skill ships BESIDES its SKILL.md.
+
+    One definition for the gate and the rewriter both, so the set of files the
+    gate reads can never drift from the set the bundle actually carries.
+    """
+    return sorted(
+        p for p in skill_dir.rglob("*.md")
+        if p.name != "SKILL.md"
+        and not any(part in _SKILL_EXCLUDE_DIRS for part in p.relative_to(skill_dir).parts)
     )
 
 
@@ -125,10 +165,14 @@ def completeness_gate(spec: dict, root: Path) -> list[str]:
     missing: list[str] = []
 
     sources: list[Path] = []
+    prose: list[Path] = []
     for skill in spec.get("skills", []):
-        sm = root / ".claude" / "skills" / skill / "SKILL.md"
+        skill_dir = root / ".claude" / "skills" / skill
+        sm = skill_dir / "SKILL.md"
         if sm.exists():
             sources.append(sm)
+        if skill_dir.is_dir():
+            prose.extend(bundled_skill_prose(skill_dir))
     for hook in spec.get("hooks", []):
         hp = root / ".claude" / "hooks" / hook
         if hp.exists():
@@ -167,6 +211,12 @@ def completeness_gate(spec: dict, root: Path) -> list[str]:
         for ref in _HOOK_REF_RE.findall(text):
             if Path(ref).name not in bundled_hooks:
                 missing.append(f"{src.relative_to(root)} -> .claude/hooks/{ref}")
+
+    for src in prose:
+        for ref in set(_INVOKE_REF_RE.findall(src.read_text(encoding="utf-8"))):
+            if f"scripts/{ref}" in bundled_scripts:
+                continue
+            missing.append(f"{src.relative_to(root)} -> scripts/{ref}")
     return missing
 
 
@@ -296,12 +346,17 @@ def build_bundle(name: str, spec: dict, out_root: Path, root: Path) -> None:
         src = root / ".claude" / "skills" / skill
         if not src.is_dir():
             raise SystemExit(f"[{name}] skill not found: {skill}")
-        _copytree(src, bundle / "skills" / skill)
-    for skill_md in (bundle / "skills").rglob("SKILL.md"):
-        text = skill_md.read_text(encoding="utf-8")
+        _copytree(src, bundle / "skills" / skill, ignore=_SKILL_IGNORE)
+    # Every Markdown the skill ships, not only SKILL.md. A `references/` page is
+    # read by the same consumer in the same cache, and `docparse/references/
+    # integration.md` carried four `python scripts/docparse.py ...` command
+    # lines that the rewriter never opened - so the bundled script was there and
+    # the documented way to run it still did not resolve.
+    for md in (bundle / "skills").rglob("*.md"):
+        text = md.read_text(encoding="utf-8")
         new, n = rewrite_script_paths(text)
         if n:
-            skill_md.write_text(new, encoding="utf-8")
+            md.write_text(new, encoding="utf-8")
             rewrites += n
 
     # Slash commands, with the same script-path rewrite the skills get.
@@ -402,8 +457,12 @@ def main(argv=None) -> int:
             return 2
         names = [args.bundle]
     else:
-        # --all builds only bundles that declare skills or hooks (skip placeholders).
-        names = [n for n, s in manifest.items() if s.get("skills") or s.get("hooks")]
+        # --all builds every bundle that declares content (skip placeholders).
+        # `commands` is in the test because it became a first-class field on
+        # 2026-08-21 and this filter was not updated with it: a commands-only
+        # bundle was silently never built, and `--all` said nothing about it.
+        names = [n for n, s in manifest.items()
+                 if s.get("skills") or s.get("hooks") or s.get("commands")]
 
     out_root.mkdir(parents=True, exist_ok=True)
     for name in names:

@@ -157,6 +157,7 @@ def run(question: str, depth: int = DEFAULT_DEPTH, critical: bool = False,
 
     # Phase 1 — acquire (Perplexity fan-out). Each angle -> one search.
     next_source_id = 1
+    lost = []
     for angle in result["angles"]:
         try:
             content, citations = pplx_research(
@@ -164,6 +165,7 @@ def run(question: str, depth: int = DEFAULT_DEPTH, critical: bool = False,
                 recency=recency)
         except RuntimeError as e:
             print(f"{YELLOW}Perplexity failed for angle '{angle}': {e}{RESET}", file=sys.stderr)
+            lost.append(angle)
             continue
         sids = []
         for url in citations:
@@ -177,6 +179,19 @@ def run(question: str, depth: int = DEFAULT_DEPTH, critical: bool = False,
                          "degraded_reason": "no corpus: all Perplexity calls failed"})
         print(f"{RED}No corpus acquired — aborting.{RESET}", file=sys.stderr)
         sys.exit(3)
+
+    # A PARTIAL acquisition is degraded too, and only a total one used to say so.
+    # Three angles lost out of four left `degraded` false, and the skill then
+    # writes "not degraded" in the report header, emits one section per angle
+    # from `angles[]` for angles that have no corpus behind them, and decides the
+    # adversarial audit governor on `len(sources) > 12` — a count the losses just
+    # reduced. The run that most needed the audit is the one that silently
+    # skipped it.
+    if lost:
+        result["degraded"] = True
+        note = (f"acquisition: {len(lost)} of {len(result['angles'])} angle(s) "
+                f"returned no corpus ({'; '.join(lost)})")
+        result["degraded_reason"] = (result["degraded_reason"] + "; " + note).strip("; ")
 
     # Phase 2 — reason + verify (Kimi). Retry once on transient failure (cloud
     # latency on a large reasoning prompt is the common cause) with a longer

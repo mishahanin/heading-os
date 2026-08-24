@@ -34,19 +34,41 @@ _POINTER_MAX_BYTES = 1024
 
 
 def is_pointer(path: Path) -> bool:
-    """True when `path` holds an unresolved LFS pointer instead of its content."""
-    try:
-        if path.stat().st_size > _POINTER_MAX_BYTES:
-            return False
-        with path.open("rb") as fh:
-            return fh.read(len(_POINTER_MAGIC)) == _POINTER_MAGIC
-    except OSError as exc:
-        print(f"warning: cannot read {path}: {exc}", file=sys.stderr)
+    """True when `path` holds an unresolved LFS pointer instead of its content.
+
+    Raises OSError for a file it cannot read. It used to catch that itself,
+    print a warning to stderr and answer False, after which `main` printed
+    "no pointer files under tests/" and exited 0. A file that was never opened
+    is not evidence of anything, and this guard exists because "a green run
+    would prove nothing" - so it must not be the thing printing a green line
+    over a check it did not finish (`.claude/rules/scope-claims.md`).
+    """
+    if path.stat().st_size > _POINTER_MAX_BYTES:
         return False
+    with path.open("rb") as fh:
+        return fh.read(len(_POINTER_MAGIC)) == _POINTER_MAGIC
 
 
-def find_pointers(base: Path) -> list[Path]:
-    return sorted(p for p in base.rglob("*") if p.is_file() and is_pointer(p))
+def scan(base: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """(pointer files, files that could not be read) under `base`."""
+    pointers: list[Path] = []
+    unreadable: list[tuple[Path, str]] = []
+    for path in sorted(base.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            if is_pointer(path):
+                pointers.append(path)
+        except OSError as exc:
+            unreadable.append((path, str(exc)))
+    return pointers, unreadable
+
+
+def _rel(path: Path) -> str:
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def main() -> int:
@@ -54,18 +76,27 @@ def main() -> int:
         print(f"nothing to check: {SCANNED} does not exist", file=sys.stderr)
         return 0
 
-    pointers = find_pointers(SCANNED)
-    if not pointers:
+    pointers, unreadable = scan(SCANNED)
+    if not pointers and not unreadable:
         print("LFS fixtures resolved: no pointer files under tests/.")
         return 0
 
-    print(
-        f"{len(pointers)} unresolved Git LFS pointer(s) under tests/. Any test reading "
-        f"these skips or measures the pointer, so a green run would prove nothing:",
-        file=sys.stderr,
-    )
-    for p in pointers:
-        print(f"  {p.relative_to(ROOT).as_posix()}", file=sys.stderr)
+    if pointers:
+        print(
+            f"{len(pointers)} unresolved Git LFS pointer(s) under tests/. Any test reading "
+            f"these skips or measures the pointer, so a green run would prove nothing:",
+            file=sys.stderr,
+        )
+        for p in pointers:
+            print(f"  {_rel(p)}", file=sys.stderr)
+    if unreadable:
+        print(
+            f"{len(unreadable)} file(s) under tests/ could not be read, so their "
+            f"LFS state is UNKNOWN and this check is not complete:",
+            file=sys.stderr,
+        )
+        for p, why in unreadable:
+            print(f"  {_rel(p)}: {why}", file=sys.stderr)
     print(
         "\nFix locally: `git lfs install && git lfs pull`. "
         "Fix in CI: `lfs: true` on the actions/checkout step.",

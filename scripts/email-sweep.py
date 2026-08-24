@@ -84,9 +84,21 @@ TYPE_TIERS = {
 # status transitions the state machine allows (target <- {valid froms}).
 # No edge returns to `proposed` once an action has moved: to un-approve a
 # mistakenly-approved action, `skip` it (the intended decline escape hatch).
+#
+# `failed` used to be a DEAD END, and that broke the promise in this file's own
+# docstring. It is not in TERMINAL, so `pending` keeps listing it as work that
+# is left; and no target accepted it as a source, so nothing could move it. A
+# send that failed could be neither retried nor abandoned, and the resume set
+# never emptied again. The escape hatch existed and did not reach the one state
+# an operator actually needs to escape.
+#
+# So two edges: `failed -> approved` is the retry, and `failed -> skipped` is
+# giving up on it. Neither weakens the outbound gate. This file records
+# decisions; the code-enforced send gate is `scripts/utils/tool_risk.py` on the
+# Action Queue, and `approve` here IS a human typing the approval.
 _ALLOWED_FROM = {
-    "approved":  {"proposed", "approved"},
-    "skipped":   {"proposed", "skipped", "approved"},
+    "approved":  {"proposed", "approved", "failed"},
+    "skipped":   {"proposed", "skipped", "approved", "failed"},
     "executing": {"approved", "executing"},
     "done":      {"approved", "executing", "done"},
     "failed":    {"approved", "executing", "failed"},
@@ -268,6 +280,14 @@ def _render(data: dict) -> None:
     print(f"{BOLD}RECOMMENDED ACTIONS{RESET} -- sweep {data.get('date', '?')} "
           f"{GRAY}({len(actions)} action(s)){RESET}")
     for a in actions:
+        # `list` is the first command run against a sweep, and the one an
+        # operator reaches for when something looks wrong. A malformed entry
+        # used to meet `a['id']` as a KeyError, so the ONE command that could
+        # show which entry is broken was the command that could not run.
+        if not isinstance(a, dict) or not isinstance(a.get("id"), int):
+            print(f"  {RED}[?] malformed entry (needs an object with an integer "
+                  f"id): {str(a)[:80]}{RESET}")
+            continue
         st = a.get("status", "proposed")
         scol = {
             "proposed": CYAN, "approved": GREEN, "executing": YELLOW,
@@ -306,7 +326,11 @@ def cmd_pending(root: Path, args) -> int:
     if data is None:
         print(f"{GRAY}no sweep for {date}{RESET}")
         return 0
-    pending = [a for a in data["actions"] if a.get("status") not in TERMINAL]
+    # A malformed entry is PENDING, not skipped over: it is unresolved work by
+    # definition, and dropping it would let the resume set read as empty while
+    # the file still holds something nobody has dealt with.
+    pending = [a for a in data["actions"]
+               if not isinstance(a, dict) or a.get("status") not in TERMINAL]
     if args.json:
         print(json.dumps(pending, indent=2, ensure_ascii=False))
         return 0
@@ -315,6 +339,9 @@ def cmd_pending(root: Path, args) -> int:
         return 0
     print(f"{BOLD}{len(pending)} pending{RESET} in sweep {date}:")
     for a in pending:
+        if not isinstance(a, dict) or not isinstance(a.get("id"), int):
+            print(f"  {RED} ?. [malformed] {str(a)[:80]}{RESET}")
+            continue
         print(f"  {a['id']:>2}. [{a.get('status')}] {a.get('title')}  [{_tag(a)}]")
     return 0
 
@@ -325,17 +352,38 @@ def _mutate_ids(root: Path, date: str, ids: list[int], target_status: str,
     if data is None:
         print(f"{RED}no sweep file for {date} -- run propose first{RESET}", file=sys.stderr)
         return 2
+    # Shape-guarded, the way `cmd_propose` already is. `_load` validates that
+    # `actions` is a LIST and nothing about its members, so a hand-edited entry
+    # with no `id`, or one that is not an object at all, met `a["id"]` here as a
+    # KeyError or a TypeError - a traceback out of the command an operator runs
+    # to approve a send, where this file has a clean exit code for everything
+    # else. `cmd_propose` grew this check and the mutate path never did.
+    malformed = [a for a in data["actions"]
+                 if not isinstance(a, dict) or not isinstance(a.get("id"), int)]
+    if malformed:
+        print(f"{RED}sweep {date} has {len(malformed)} malformed action entr(ies) "
+              f"(each needs an object with an integer id). Repair the file "
+              f"before mutating it.{RESET}", file=sys.stderr)
+        return 1
     by_id = {a["id"]: a for a in data["actions"]}
     changed = 0
     for i in ids:
         a = by_id.get(i)
+        # Both refusals say NOTHING WAS APPLIED, because nothing was: `_save`
+        # sits after the loop, so a mid-batch refusal discards the earlier
+        # mutations too. That is the right behaviour and it was invisible -
+        # `approve 1 2 3` refusing on #2 left an operator with no way to know
+        # whether #1 had gone through, and re-running the whole batch is only
+        # safe if it did not.
         if a is None:
-            print(f"{RED}no action #{i} in sweep {date}{RESET}", file=sys.stderr)
+            print(f"{RED}no action #{i} in sweep {date}{RESET} "
+                  f"{GRAY}(nothing was changed){RESET}", file=sys.stderr)
             return 1
         cur = a.get("status", "proposed")
         allowed = _ALLOWED_FROM.get(target_status, set())
         if cur not in allowed:
-            print(f"{RED}action #{i}: cannot move {cur} -> {target_status}{RESET}", file=sys.stderr)
+            print(f"{RED}action #{i}: cannot move {cur} -> {target_status}{RESET} "
+                  f"{GRAY}(nothing was changed){RESET}", file=sys.stderr)
             return 1
         a["status"] = target_status
         if note is not None:

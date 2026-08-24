@@ -169,8 +169,20 @@ def main() -> int:
         rows = [r for r in results if r["set"] == s]
         hit = [r for r in rows if r["rank"]]
         out[s] = {"n": len(rows), "hits": len(hit),
-                  "rate": (len(hit) / len(rows)) if rows else 0.0,
+                  "rate": (len(hit) / len(rows)) if rows else None,
                   "mean_rank": (sum(r["rank"] for r in hit) / len(hit)) if hit else None}
+
+    # An empty Set A used to score `0/0 = 0%  FAIL (bar 80%)`. Nothing was
+    # measured, and the report named a measured index failure - so a renamed
+    # heading or a reformatted table in the frozen file sent the operator
+    # hunting an index regression that was a parse problem. The `cases` guard
+    # above cannot see it: Set B rows keep the list non-empty on their own.
+    if out["A"]["n"] == 0:
+        sys.stderr.write(f"{RED}Set A parsed 0 rows from {set_path}{RESET}\n")
+        sys.stderr.write(f"{YELLOW}Set A is the bar. Nothing was measured, so there is no "
+                         f"rate to report - check the '## Set A' heading and the table "
+                         f"format, not the index.{RESET}\n")
+        return 2
 
     if args.json:
         print(json.dumps({"phase": args.phase, "layer": layer, "top_k": args.top_k,
@@ -191,7 +203,10 @@ def main() -> int:
         if bar is not None:
             verdict = f"  {GREEN}PASS{RESET}" if d["rate"] >= bar else f"  {RED}FAIL{RESET} (bar {bar:.0%})"
         mr = f", mean rank {d['mean_rank']:.1f}" if d["mean_rank"] else ""
-        print(f"{BOLD}{label}{RESET}\n  {d['hits']}/{d['n']} = {d['rate']:.0%}{mr}{verdict}")
+        # Set B can legitimately be empty (Set A is the one guarded above).
+        # `0/0 = 0%` would read as a measured miss rate; it is no measurement.
+        rate = f"{d['rate']:.0%}" if d["rate"] is not None else f"{YELLOW}not measured (0 rows){RESET}"
+        print(f"{BOLD}{label}{RESET}\n  {d['hits']}/{d['n']} = {rate}{mr}{verdict}")
         for r in [x for x in results if x["set"] == s]:
             mark = f"{GREEN}{r['rank']}{RESET}" if r["rank"] else f"{RED}miss{RESET}"
             print(f"    {mark:>14}  {GRAY}{r['target'][-40:]}{RESET}  {r['q'][:52]}")

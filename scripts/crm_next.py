@@ -55,6 +55,48 @@ def _overdue_days(value) -> int:
         return 0
 
 
+def _days_since(contact: dict) -> int | None:
+    """Days since the last exchange, READ from the record, not rebuilt from it.
+
+    `crm-health.py --json` already carries `days_since`. The draft used to
+    reconstruct it as `days_overdue + (cadence or 14)`, and the `or 14` is where
+    a number appeared out of nowhere: a contact with no cadence has
+    `days_overdue: 0`, so a record saying 40 days of silence produced a draft
+    saying "it's been 14 days since our last exchange" - a figure no data
+    supported, in text addressed to a real person.
+
+    None means the record does not say. The caller drops the clause rather than
+    guess, per `.claude/rules/voss.md` on precise numbers and
+    `.claude/rules/scope-claims.md` on stating only what the method established.
+    """
+    direct = _overdue_days_or_none(contact.get("days_since"))
+    if direct is not None and direct >= 0:
+        return direct
+    # Fall back to the reconstruction, but only when cadence is a real positive
+    # number - which is the one case where `days_overdue + cadence` is exactly
+    # what `crm-health` computed `days_since` to be.
+    cadence = _overdue_days_or_none(contact.get("cadence"))
+    overdue = _overdue_days_or_none(contact.get("days_overdue"))
+    if cadence is None or overdue is None or cadence <= 0 or overdue < 0:
+        return None
+    return cadence + overdue
+
+
+def _overdue_days_or_none(value) -> int | None:
+    """`value` as an int, or None when it is not a number at all.
+
+    Distinct from `_overdue_days`, which answers 0 for an unusable value because
+    a sort key needs SOME number. A sentence stating a figure needs the opposite:
+    the absence has to survive so the sentence can be dropped.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def rank_candidates(contacts: list, top_n: int = 3, today=None) -> list:
     """Rank RED contacts by (stage_tier, -days_overdue). Filters frozen contacts and non-REDs."""
     if today is None:
@@ -161,10 +203,7 @@ def render_draft(contact: dict, last_excerpt: str) -> str:
     name and title. A sign-off here would double with that block.
     """
     name = contact.get("name", "there")
-    days_overdue = _overdue_days(contact.get("days_overdue", 0))
-    cadence = _overdue_days(contact.get("cadence", 14)) or 14
-    # Total elapsed since last contact = cadence threshold + overdue beyond it
-    days_since = days_overdue + cadence
+    days_since = _days_since(contact)
     subject = "Quick check-in"
 
     # `name.split()[0] if name else ...` treats "   " as truthy, and
@@ -173,10 +212,14 @@ def render_draft(contact: dict, last_excerpt: str) -> str:
     parts = str(name or "").split()
     first_name = parts[0] if parts else "there"
 
+    opening = ("Wanted to check back in."
+               if days_since is None else
+               f"Wanted to check back in - it's been {days_since} days "
+               "since our last exchange.")
     body_lines = [
         f"Hey {first_name},",
         "",
-        f"Wanted to check back in - it's been {days_since} days since our last exchange.",
+        opening,
         "",
     ]
     # Only include the "most recent thread" block if we have real context

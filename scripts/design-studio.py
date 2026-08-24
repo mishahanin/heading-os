@@ -64,13 +64,22 @@ def timestamp() -> str:
 
 
 def scratch_name(prefix: str, suffix: str) -> str:
-    """A temp filename no concurrent run of this script can collide with.
+    """A filename no concurrent run of this script can collide with.
 
     `f"render-{timestamp()}.html"` has one-second resolution and lives in a
-    SHARED tmp dir, so two renders started in the same second wrote the same
-    path: one process could screenshot the other's HTML, or delete it out from
-    under it. The PID and a counter make the name unique per process and per
-    call without giving up the human-readable timestamp.
+    SHARED dir, so two renders started in the same second wrote the same path:
+    one process could screenshot the other's HTML, or delete it out from under
+    it. The PID and a counter make the name unique per process and per call
+    without giving up the human-readable timestamp.
+
+    It covers the DEFAULT OUTPUT names too, and for a while it did not. The
+    collision was diagnosed here, fixed for the throwaway HTML, and left on the
+    artifact the operator keeps: `outputs/design/render-{timestamp()}.png` is
+    the same one-second name in the same shared directory, and
+    `save_source_html` writes its `.html` twin beside it. The orchestrator
+    dispatches design agents in parallel by design (skill-orchestrator Pattern
+    4), so the losing render is a deliverable overwritten with no error. A
+    caller that passes `-o` still gets exactly the path it asked for.
     """
     global _SCRATCH_SEQ
     _SCRATCH_SEQ += 1
@@ -160,7 +169,13 @@ def render_screenshot(html: str, width: int, height: int, scale: int, output_pat
     tmp_path = get_tmp_dir() / scratch_name("render", ".html")
     try:
         tmp_path.write_text(html, encoding="utf-8")
-        file_url = f"file:///{tmp_path.as_posix()}"
+        # `as_uri()`, which this file already uses for the @font-face rewrite.
+        # `f"file:///{path.as_posix()}"` glued three slashes onto an already
+        # absolute POSIX path AND percent-escaped nothing, so a data root holding
+        # a space or a non-ASCII character produced a URL the browser could not
+        # load. The symptom is a blank PNG, not an error: `page.goto` returns and
+        # the screenshot is taken of whatever failed to render.
+        file_url = tmp_path.as_uri()
 
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -184,7 +199,7 @@ def render_pdf(html: str, output_path: Path) -> Path:
     tmp_path = get_tmp_dir() / scratch_name("pdf", ".html")
     try:
         tmp_path.write_text(html, encoding="utf-8")
-        file_url = f"file:///{tmp_path.as_posix()}"
+        file_url = tmp_path.as_uri()  # see render_screenshot for why
 
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -229,7 +244,7 @@ def cmd_render(args):
     if args.output:
         output_path = Path(args.output).resolve()
     else:
-        output_path = get_output_dir() / f"render-{timestamp()}.png"
+        output_path = get_output_dir() / scratch_name("render", ".png")
 
     print(f"{CYAN}[INFO] Rendering {width}x{height} @{scale}x ...{RESET}")
 
@@ -306,7 +321,7 @@ def cmd_pdf(args):
     if args.output:
         output_path = Path(args.output).resolve()
     else:
-        output_path = get_output_dir() / f"render-{timestamp()}.pdf"
+        output_path = get_output_dir() / scratch_name("render", ".pdf")
 
     print(f"{CYAN}[INFO] Generating PDF ...{RESET}")
 

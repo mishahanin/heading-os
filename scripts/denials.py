@@ -78,22 +78,39 @@ def main() -> int:
     args = parser.parse_args()
 
     records = read_denials()
+    # Counted, not dropped in silence. `(_epoch(...) or 0) >= cutoff` folded a
+    # record whose `ts` cannot be read into "older than the window", so a
+    # corrupt timestamp quietly reduced the count of an instrument whose whole
+    # question is whether a guard caught anything. This file already insists
+    # forty lines below that the per-mechanism totals add up to the printed
+    # record count; an unexplained subtraction here breaks the same promise one
+    # step earlier.
+    undated = 0
     if args.days is not None:
         cutoff = time.time() - args.days * 86400
-        records = [r for r in records
-                   if (_epoch(r.get("ts")) or 0) >= cutoff]
+        kept = []
+        for record in records:
+            stamp = _epoch(record.get("ts"))
+            if stamp is None:
+                undated += 1
+            elif stamp >= cutoff:
+                kept.append(record)
+        records = kept
     counts = summarize(records)
 
     if args.as_json:
         json.dump({"total": len(records), "by_mechanism": counts,
                    "log": str(denial_log_path()),
-                   "window_days": args.days}, sys.stdout, indent=2)
+                   "window_days": args.days,
+                   "undated_excluded": undated}, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
 
     window = f" in the last {args.days:g} days" if args.days is not None else ""
+    dropped = (f"\n{YELLOW}{undated} record(s) carry an unreadable timestamp and "
+               f"could not be placed in the window.{RESET}") if undated else ""
     if not records:
-        print(f"{GREEN}0 refusals recorded{window}.{RESET}")
+        print(f"{GREEN}0 refusals recorded{window}.{RESET}{dropped}")
         print(f"{GRAY}Log: {denial_log_path()}{RESET}")
         return 0
 
@@ -107,7 +124,7 @@ def main() -> int:
         print()
 
     print(f"{BOLD}{len(records)} record(s){window}{RESET} "
-          f"{GRAY}(one per refused path){RESET}")
+          f"{GRAY}(one per refused path){RESET}{dropped}")
     # Summed, not overwritten: two mechanism names that render to the same safe
     # string must not silently collapse into one, or the per-mechanism totals
     # would stop adding up to the record count printed one line above.

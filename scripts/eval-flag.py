@@ -205,15 +205,26 @@ def cmd_list(as_json: bool) -> int:
     for staged in SKILLS_DIR.glob("*/evals/outcomes/_staged"):
         skill = staged.parent.parent.parent.name
         for f in sorted(staged.glob("*.json")):
+            # An unreadable draft used to fall back to `{}` and then list with
+            # an empty description - indistinguishable from an untitled draft
+            # the operator simply had not filled in. The one file that needs
+            # attention looked like the ones that do not.
+            unreadable = ""
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                d = {}
+            except (json.JSONDecodeError, OSError) as e:
+                d, unreadable = {}, f"UNREADABLE ({type(e).__name__}: {e})"
+            if isinstance(d, dict):
+                desc = d.get("description", "")
+            else:
+                d, unreadable = {}, f"UNREADABLE (not a JSON object: {type(d).__name__})"
+                desc = ""
             drafts.append({
                 "skill": skill,
                 "path": str(f.relative_to(ROOT)) if f.is_relative_to(ROOT) else str(f),
                 "id": d.get("id", f.stem),
-                "description": d.get("description", ""),
+                "description": unreadable or desc,
+                "unreadable": bool(unreadable),
                 "trace_id": d.get("trace_id", "-"),
             })
     if as_json:
@@ -225,7 +236,8 @@ def cmd_list(as_json: bool) -> int:
     print(f"{BOLD}{len(drafts)} staged eval draft(s){RESET}")
     for d in drafts:
         print(f"  {CYAN}{d['skill']}{RESET}  {d['id']}  {GRAY}trace={d['trace_id']}{RESET}")
-        print(f"      {d['description']}")
+        colour = RED if d["unreadable"] else ""
+        print(f"      {colour}{d['description']}{RESET if colour else ''}")
         print(f"      {GRAY}{d['path']}{RESET}")
     return 0
 
@@ -305,12 +317,21 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args()
 
-    if args.list:
-        return cmd_list(args.json)
-    if args.id:
-        return cmd_from_card(args.id, args.skill, args.type, args.json)
-    if args.skill and args.note:
-        return cmd_offline(args.skill, args.note, args.input_file, args.type, args.json)
+    # `_valid_skill` raises ValueError on a path fragment, and nothing caught
+    # it: `--skill ../evil` printed a raw traceback. The sibling tool over the
+    # same validator (eval-outcomes.py) already answers a bad --skill with the
+    # message and exit 1, and one refusal that reads as a crash teaches the
+    # operator to distrust both.
+    try:
+        if args.list:
+            return cmd_list(args.json)
+        if args.id:
+            return cmd_from_card(args.id, args.skill, args.type, args.json)
+        if args.skill and args.note:
+            return cmd_offline(args.skill, args.note, args.input_file, args.type, args.json)
+    except ValueError as e:
+        print(f"{RED}{e}{RESET}", file=sys.stderr)
+        return 1
 
     print(f"{RED}usage error{RESET}: give a card <id>, or --skill NAME --note \"...\", "
           f"or --list", file=sys.stderr)

@@ -41,7 +41,28 @@ REPO_SLUG = "mishahanin/heading-os-marketplace"
 
 
 def _run(cmd, cwd=None, check=True):
-    return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True)
+    """Run a command, and on a checked failure PRINT what it said before raising.
+
+    `capture_output=True` with `check=True` hands the operator
+    "Command [...] returned non-zero exit status 3." and drops the child's own
+    diagnostic on the floor. The build step is where that costs most: when the
+    plugin completeness gate refuses a bundle it prints the exact unbundled
+    references to stderr, and this publisher swallowed every one of them, so the
+    person publishing saw a bare traceback and could not tell WHICH reference
+    was missing without re-running the builder by hand.
+
+    The exception TYPE is unchanged, so any caller that already handles
+    CalledProcessError keeps working; only the silence is removed.
+    """
+    proc = subprocess.run(cmd, cwd=cwd, check=False, capture_output=True, text=True)
+    if check and proc.returncode != 0:
+        print(f"{RED}{cmd[0]} ... exited {proc.returncode}{RESET}", file=sys.stderr)
+        for label, stream in (("stdout", proc.stdout), ("stderr", proc.stderr)):
+            if stream and stream.strip():
+                print(f"{GRAY}--- {label} ---{RESET}\n{stream.rstrip()}", file=sys.stderr)
+        raise subprocess.CalledProcessError(proc.returncode, cmd,
+                                            proc.stdout, proc.stderr)
+    return proc
 
 
 def build_marketplace(engine_root: Path, out: Path) -> dict:

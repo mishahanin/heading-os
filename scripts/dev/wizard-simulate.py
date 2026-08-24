@@ -62,9 +62,31 @@ def main(argv=None):
         print(f"ERROR: answers file not found: {args.answers}", file=sys.stderr)
         return 2
     try:
-        canned = yaml.safe_load(args.answers.read_text(encoding="utf-8")) or {}
+        canned = yaml.safe_load(args.answers.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         print(f"ERROR: could not read {args.answers}: {exc}", file=sys.stderr)
+        return 2
+    # `or {}` guarded a MISSING file body and let a present-but-wrong one
+    # through: a canned file that is a top-level list is non-empty, survives the
+    # `or`, and dies on `.get` with an AttributeError two lines later. Same for
+    # the two collections below - a `skipped:` that is a bare string iterates
+    # per CHARACTER and fires one `--skip <letter>` subprocess for each.
+    if canned is None:
+        canned = {}
+    if not isinstance(canned, dict):
+        print(f"ERROR: {args.answers} is a {type(canned).__name__}, not a mapping "
+              f"with `answers:` / `skipped:` keys.", file=sys.stderr)
+        return 2
+
+    answers = canned.get("answers") or {}
+    if not isinstance(answers, dict):
+        print(f"ERROR: `answers:` is a {type(answers).__name__}, not a mapping "
+              f"of question id to value.", file=sys.stderr)
+        return 2
+    skipped = canned.get("skipped") or []
+    if not isinstance(skipped, list):
+        print(f"ERROR: `skipped:` is a {type(skipped).__name__}, not a list of "
+              f"question ids.", file=sys.stderr)
         return 2
     # Resolve apply-wizard-answers.py relative to this harness's location.
     # If the harness is ever moved out of scripts/dev/, fail fast with a clear error.
@@ -75,7 +97,7 @@ def main(argv=None):
               file=sys.stderr)
         return 2
 
-    for qid, value in (canned.get("answers") or {}).items():
+    for qid, value in answers.items():
         if isinstance(value, dict):
             payload = value
         else:
@@ -91,7 +113,7 @@ def main(argv=None):
             return result.returncode
         print(f"OK  {qid}: {result.stdout.strip()}")
 
-    for qid in (canned.get("skipped") or []):
+    for qid in skipped:
         result = subprocess.run(
             [sys.executable, str(apply_script), "--skip", qid, "--force-ceo-master"],
             cwd=args.workspace, capture_output=True, text=True,
@@ -101,10 +123,18 @@ def main(argv=None):
             return result.returncode
         print(f"SKIP {qid}")
 
+    # Checked, like every other call above it. This one alone ignored its exit
+    # code and discarded stderr, so a failed `--status` printed the empty line
+    # `STATUS: ` and the harness RETURNED 0 - a replay tool declaring success
+    # over the one command that was supposed to confirm it.
     status = subprocess.run(
         [sys.executable, str(apply_script), "--status", "--force-ceo-master"],
         cwd=args.workspace, capture_output=True, text=True,
     )
+    if status.returncode != 0:
+        print(f"FAILED on --status (exit {status.returncode}): "
+              f"{status.stderr.strip() or '(no stderr)'}", file=sys.stderr)
+        return status.returncode
     print(f"STATUS: {status.stdout}")
     return 0
 

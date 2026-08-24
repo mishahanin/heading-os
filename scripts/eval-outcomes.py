@@ -42,7 +42,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -323,20 +323,19 @@ def run_one_case(case: dict, render: bool) -> tuple[list[dict], bool]:
 
 
 def run_skill(skill: str, case_filter: str | None, render: bool,
-              write_benchmark: bool) -> tuple[int, int, bool]:
-    """Run all outcome cases for one skill. Returns (passed, total, setup_error)."""
+              write_benchmark: bool) -> tuple[int, int, bool, int]:
+    """Run all outcome cases for one skill.
+
+    Returns (passed, total, setup_error, matched) - `matched` being how many
+    cases survived `case_filter`, which only `main` can judge. Under `--all` a
+    named case lives in exactly ONE skill, so "no match here" is the ordinary
+    state of every other skill and not an error; the whole-run verdict is.
+    """
     skill_dir = SKILLS_DIR / skill
     cases = load_outcome_cases(skill_dir)
     setup_error = False
     if case_filter:
         cases = [c for c in cases if c.get("id") == case_filter]
-        # A --case typo used to reduce the list to zero, and zero checks took
-        # the `overall_total == 0` branch and exited 0. A targeted regression
-        # run that matched nothing must never report green.
-        if not cases:
-            print(f"{RED}--case {case_filter!r} matched no outcome case in "
-                  f"{skill}{RESET}", file=sys.stderr)
-            setup_error = True
 
     print(f"\n{BOLD}{CYAN}{skill}{RESET}  ({len(cases)} outcome case(s))")
     skill_passed = skill_total = 0
@@ -360,10 +359,18 @@ def run_skill(skill: str, case_filter: str | None, render: bool,
             "failures": [r for r in results if not r["passed"]],
         })
 
-    if write_benchmark and cases:
+    # A --case run grades ONE case. Writing the sidecar from it replaced
+    # `last_run` with a partial record wearing a whole run's shape: email-intel
+    # went from 9/9 over three cases to 2/2 over one, with nothing in the file
+    # saying two cases were never run. The sidecar's contract is "the last full
+    # run", so a filtered run leaves it alone and says why.
+    if write_benchmark and cases and not case_filter:
         _write_benchmark(skill_dir, skill_passed, skill_total, bench_cases)
+    elif write_benchmark and cases and case_filter:
+        print(f"  {GRAY}benchmark-outcomes.json not written: --case grades one "
+              f"case, and the sidecar records a full run{RESET}")
 
-    return skill_passed, skill_total, setup_error
+    return skill_passed, skill_total, setup_error, len(cases)
 
 
 def _write_benchmark(skill_dir: Path, passed: int, total: int, cases: list[dict]) -> None:
@@ -378,7 +385,11 @@ def _write_benchmark(skill_dir: Path, passed: int, total: int, cases: list[dict]
         except (json.JSONDecodeError, OSError):
             existing = {}
     last_run = {
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        # A SERIALIZED timestamp, so UTC with an offset (dtz-datetime-convention).
+        # `time.strftime` wrote naive local time and carries no tzinfo for ruff's
+        # DTZ ruleset to catch, so the one stamp that makes two runs comparable
+        # was the one stamp that did not say which clock it came from.
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "model": "(outcome - no model call)",
         "passed_total": passed,
         "check_total": total,
@@ -447,14 +458,28 @@ def main() -> int:
     any_setup_error = False
     per_skill: dict[str, dict] = {}
 
+    matched_anywhere = 0
     for skill in skills:
-        passed, total, setup_error = run_skill(
+        passed, total, setup_error, matched = run_skill(
             skill, args.case, args.render, write_benchmark=not args.no_write
         )
         overall_passed += passed
         overall_total += total
+        matched_anywhere += matched
         any_setup_error = any_setup_error or setup_error
         per_skill[skill] = {"passed": passed, "total": total, "setup_error": setup_error}
+
+    # A --case typo reduces every list to zero, and zero checks would take the
+    # `overall_total == 0` branch and exit 0; a targeted regression run that
+    # matched nothing must never report green. Judged over the WHOLE run, not
+    # per skill: `--all --case <real-id>` used to run the case, pass it, and
+    # still exit 2 because the five skills that do not carry it each raised a
+    # setup error of their own.
+    if args.case and matched_anywhere == 0:
+        scope = "any skill" if args.all else repr(skills[0])
+        print(f"{RED}--case {args.case!r} matched no outcome case in {scope}{RESET}",
+              file=sys.stderr)
+        any_setup_error = True
 
     if args.json:
         print(json.dumps({

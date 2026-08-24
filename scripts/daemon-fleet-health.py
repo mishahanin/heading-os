@@ -120,6 +120,21 @@ def _read_heartbeat(workspace: Path, kind: str = "local") -> dict:
             "status": "error",
             "detail": f"parse failed: {e}",
         }
+    # A heartbeat that parses to something other than an object is still a
+    # heartbeat this function must DESCRIBE, not die on. `data["workspace"] = `
+    # below raised TypeError on a bare `null`, `[]`, a string or a number, past
+    # a handler that catches only OSError and JSONDecodeError, from a function
+    # whose docstring promises a synthetic 'error' record. These files are
+    # written by OTHER machines - exec workspaces and the CRM mirrors an exec's
+    # push-all.py pushes - so a version skew or a torn write is somebody else's
+    # event, and one of them took down the whole fleet report: the tool whose
+    # only job is to say which daemons are down.
+    if not isinstance(data, dict):
+        return {
+            "workspace": str(workspace),
+            "status": "error",
+            "detail": f"heartbeat is {type(data).__name__}, not an object",
+        }
     data["workspace"] = str(workspace)
     # Phase 1.162: surface mirror kind so the grid can show 'mirror' tag.
     data["kind"] = kind

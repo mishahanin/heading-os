@@ -74,7 +74,16 @@ def _fetch_card(root: Path, prefix: str) -> dict:
         print(f"{RED}the daemon answered 200 with a body that is not JSON "
               f"({e}).{RESET}", file=sys.stderr)
         sys.exit(1)
-    items = data.get("items", [])
+    # Shape-checked. The ValueError handler above covers a body that is not JSON
+    # at all; a body that IS valid JSON of the wrong shape (a bare array, a
+    # `null`, an error object) reached `.get` as an AttributeError, past every
+    # handler here and out through a docstring that promises three exit codes.
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        print(f"{RED}the daemon answered 200 with JSON that is not an action-queue "
+              f"payload{RESET} (got {type(data).__name__} with no `items` list).",
+              file=sys.stderr)
+        sys.exit(1)
+    items = [c for c in data["items"] if isinstance(c, dict)]
     exact = [c for c in items if c.get("id") == prefix]
     matches = exact or [c for c in items if str(c.get("id", "")).startswith(prefix)]
     if not matches:
@@ -133,6 +142,17 @@ def main() -> int:
         root = get_workspace_root()
         card = _fetch_card(root, args.id)
         card_id = card.get("id")
+        # Named here, not left to the catch-all below. A card that carries no
+        # draft (a `note`, an `alert`, a `pipeline_update`) resolves by id just
+        # like an email one, and then fell out at "model unavailable, missing
+        # API key, or empty draft body" - three causes, none of them the real
+        # one, sending the operator to check an API key over a card that was
+        # never a draft.
+        if not card.get("draft_body"):
+            print(f"{YELLOW}card {str(card_id)[:8]} carries no draft body{RESET} "
+                  f"(action_type={card.get('action_type', '?')}). There is nothing "
+                  f"to critique.", file=sys.stderr)
+            return 1
         subject = card.get("subject")
         body = card.get("draft_body")
         recipient = card.get("to")  # recipient lives in the card's `to` field

@@ -81,18 +81,29 @@ def is_sensitive_key(key: str) -> bool:
 
 
 def _mask_every_string(value, path: str, masked_keys: list):
-    """Mask every non-empty string anywhere inside `value`.
+    """Mask every non-empty string or number anywhere inside `value`.
 
     Called once a KEY has been judged sensitive. Everything under that key is
     secret by association: `{"apiKeys": ["sk-a", "sk-b"]}` and
     `{"token": {"value": "ghp_..."}}` are the ordinary ways an extension stores
     more than one credential.
+
+    Numbers are masked too. Only strings were, so `{"apiKey": 8675309}` went
+    into the zip in cleartext while the console reported "0 keys masked" - the
+    same defect the paragraph above describes, one JSON type over. A bool stays:
+    `{"authEnabled": true}` is a flag, not a credential, and masking it would
+    bury the real findings in noise.
     """
     if isinstance(value, str):
         if value:
             masked_keys.append(path)
             return "***MASKED***"
         return value
+    if isinstance(value, bool):
+        return value          # before the int check - bool IS an int in Python
+    if isinstance(value, (int, float)):
+        masked_keys.append(path)
+        return "***MASKED***"
     if isinstance(value, dict):
         return {k: _mask_every_string(v, f"{path}.{k}", masked_keys) for k, v in value.items()}
     if isinstance(value, list):
@@ -212,7 +223,7 @@ def _drop_trailing_commas(text: str) -> str:
     return "".join(out)
 
 
-def build_readme(date_str: str, masked_count: int) -> str:
+def build_readme(date_str: str, masked_count: int, settings_state: str = "shipped") -> str:
     mask_note = ""
     if masked_count:
         mask_note = (
@@ -220,6 +231,22 @@ def build_readme(date_str: str, masked_count: int) -> str:
             f"auto-masked to `***MASKED***`. Set your own values via the "
             f"relevant extension's UI or command palette after import - do "
             f"not hand-edit settings.json for credentials.\n"
+        )
+    # The three install blocks below all begin by copying settings.json, and
+    # the README said so even when the file had been EXCLUDED from the zip for
+    # being unparseable. The recipient then ran a copy of a file that was not
+    # there, and nothing in the bundle said the config they came for is missing.
+    if settings_state == "excluded":
+        mask_note += (
+            "\n**settings.json is NOT in this bundle.** It would not parse as "
+            "JSON, so the masker could not read it and it was excluded rather "
+            "than shipped unmasked. Skip the settings.json line in the "
+            "instructions below; the snippets and extensions still apply.\n"
+        )
+    elif settings_state == "absent":
+        mask_note += (
+            "\n**settings.json is NOT in this bundle.** The sender's Antigravity "
+            "profile had none. Skip the settings.json line below.\n"
         )
     return f"""# Antigravity Config Bundle
 
@@ -297,6 +324,7 @@ def main():
     settings_src = user_data / "settings.json"
     snippets_src = user_data / "snippets"
     masked_keys = []
+    settings_state = "absent"   # absent | shipped | excluded
 
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
         if settings_src.exists():
@@ -323,11 +351,14 @@ def main():
                 if args.no_mask:
                     out_text = raw  # the operator asked for the raw file explicitly
             if out_text is not None:
+                settings_state = "shipped"
                 zf.writestr("settings.json", out_text)
                 size = len(out_text.encode("utf-8"))
                 print(f"  {GREEN}[ok]{RESET} settings.json ({size} bytes, {len(masked_keys)} keys masked)")
                 for k in masked_keys:
                     print(f"         - masked: {k}")
+            else:
+                settings_state = "excluded"
         else:
             print(f"  {YELLOW}[skip]{RESET} no settings.json at {settings_src}")
 
@@ -367,17 +398,26 @@ def main():
         else:
             print(f"  {YELLOW}[warn]{RESET} Antigravity CLI not found - extensions.txt skipped")
 
-        zf.writestr("README.md", build_readme(date_str, len(masked_keys)))
+        zf.writestr("README.md", build_readme(date_str, len(masked_keys), settings_state))
         print(f"  {GREEN}[ok]{RESET} README.md (install instructions)")
 
     size_mb = out_zip.stat().st_size / (1024 * 1024)
     print()
     print(f"{BOLD}{GREEN}Export complete:{RESET} {out_zip}")
     print(f"  Size: {size_mb:.2f} MB")
-    if masked_keys:
+    # Printed whenever settings.json shipped, NOT only when something was
+    # masked. It was gated on `if masked_keys:`, which suppressed the caution
+    # in exactly the run that most needs it: zero masked keys means the scan
+    # matched no key NAME, and the whole point of the paragraph is that a
+    # credential under an innocent name is invisible to a name-based scan. A
+    # clean-looking run was the one run that got no warning.
+    if settings_state == "shipped":
         print()
         print(f"{YELLOW}Review before sending:{RESET}")
-        print(f"  The auto-masker replaced values for keys whose names contained one of:")
+        if masked_keys:
+            print(f"  The auto-masker replaced values for keys whose names contained one of:")
+        else:
+            print(f"  {BOLD}Nothing was masked.{RESET} The scan matches KEY NAMES only, against:")
         print(f"  {', '.join(SENSITIVE_KEY_PATTERNS)}.")
         print(f"  Extract the zip and eyeball settings.json for anything else that looks")
         print(f"  like a credential (long hex strings, tokens starting with sk-/ghp_/xoxb-,")

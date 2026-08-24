@@ -158,8 +158,22 @@ def list_entries(*, workspace_root: Path | None = None) -> list[Path]:
 
 
 def load(path: Path) -> dict:
-    """Load and parse a single dead-letter entry."""
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    """Load and parse a single dead-letter entry.
+
+    Raises ValueError when the file is not an object. The annotation said dict
+    and the body returned whatever `json.loads` gave it, so a truncated or
+    hand-edited artifact holding `[]` or `null` reached `entry.get(...)` in
+    `scripts/dead-letter.py` as an AttributeError, past handlers that catch only
+    OSError and JSONDecodeError. `json.JSONDecodeError` is itself a ValueError,
+    so a caller that widens its except clause to ValueError keeps catching both.
+    """
+    entry = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(entry, dict):
+        raise ValueError(
+            f"dead-letter entry {Path(path).name} is "
+            f"{type(entry).__name__}, not an object"
+        )
+    return entry
 
 
 def purge(older_than_days: int = 90, *, workspace_root: Path | None = None) -> int:

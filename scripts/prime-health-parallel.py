@@ -474,10 +474,30 @@ def run_dream_shadow(workspace_root: Path) -> dict[str, Any]:
     # read when they want it. Merge candidates DO need a nudge — each one is a
     # decision waiting on them.
     merge_section = re.search(r"## Merge Candidates.*?\n\n(.*?)(?:\n---|\Z)", text, re.DOTALL)
-    merge_n = 0
-    if merge_section:
-        merge_n = len(re.findall(r"^- .+<->.+$", merge_section.group(1), re.MULTILINE))
+    body = merge_section.group(1) if merge_section else ""
 
+    # A scan that COULD NOT RUN is not a scan that found nothing. When the
+    # embedder is unavailable, dream-shadow writes one `- UNAVAILABLE: ...`
+    # bullet instead of pair lines; it carries no `<->`, so the count below read
+    # 0 and this check returned `status: ok` with empty output and
+    # `omit_if_empty`. The embedder could be down every night and session boot
+    # would never say a word. Surfaced by its marker, not by a count.
+    #
+    # What makes this render is `omit_if_empty: False` plus a non-empty output,
+    # NOT the status string: `render_text` only consults the status to decide
+    # whether to append stderr. So adding "warn" to NON_FAILURE_STATUSES later
+    # cannot silently re-hide this line.
+    unavailable = re.search(r"^- UNAVAILABLE: *(.*)$", body, re.MULTILINE)
+    if unavailable:
+        return {
+            "status": "warn",
+            "output": (f"Dream-shadow: merge scan did not run "
+                       f"({unavailable.group(1).strip() or 'no reason recorded'}) — "
+                       f"consolidation is not being detected."),
+            "omit_if_empty": False,
+        }
+
+    merge_n = len(re.findall(r"^- .+<->.+$", body, re.MULTILINE))
     if merge_n == 0:
         return {"status": "ok", "output": "", "omit_if_empty": True}
     return {

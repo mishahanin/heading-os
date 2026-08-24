@@ -60,8 +60,35 @@ WATCHED = (
 )
 
 
+class Unreadable(Exception):
+    """The state file exists and did not parse into an object.
+
+    NOT the same statement as "the state is empty", and the difference is the
+    whole value of this log. `CP.read_json` swallows a corrupt read and returns
+    `{}` - correct for a hook that must not stop a turn, wrong for an instrument
+    whose output is a sequence of transitions. One torn read (the state file is
+    rewritten by another process while this one reads it) turned every watched
+    key into `[<value>, null]`, and the next poll turned all of them back. Two
+    fabricated events per torn read, in the log that exists to say what happened
+    around a compaction and in what order.
+    """
+
+
+def _read_state(state_path: Path) -> dict:
+    """The state, or `Unreadable`. An absent file is genuinely empty."""
+    if not state_path.exists():
+        return {}
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise Unreadable(f"state is {type(data).__name__}, not an object")
+    return data
+
+
 def _snapshot(state_path: Path, archive_dir: Path, slug: str) -> dict:
-    state = CP.read_json(state_path)
+    try:
+        state = _read_state(state_path)
+    except ValueError as exc:      # json.JSONDecodeError is a ValueError
+        raise Unreadable(str(exc)) from exc
     snap = {k: state.get(k) for k in WATCHED}
     snap["_compact_history_len"] = len(state.get("compact_history") or [])
     snap["_compact_history_last"] = (state.get("compact_history") or [None])[-1]
@@ -88,22 +115,39 @@ def main() -> int:
     log.parent.mkdir(parents=True, exist_ok=True)
 
     deadline = time.monotonic() + args.minutes * 60
-    previous = _snapshot(state_path, archive_dir, slug)
+    # `None` until the first snapshot that actually parsed. Seeding `previous`
+    # with a failed read would make the first good poll look like every key
+    # moving at once.
+    try:
+        previous = _snapshot(state_path, archive_dir, slug)
+        start_note = None
+    except (OSError, Unreadable) as exc:
+        previous, start_note = None, str(exc)
+
     with log.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({
-            "at": CP.utc_now().isoformat(), "event": "watch_start",
-            "session": args.session, "state": previous,
-        }) + "\n")
-        fh.flush()
+
+        def _emit(record: dict) -> None:
+            fh.write(json.dumps({"at": CP.utc_now().isoformat(), **record}) + "\n")
+            fh.flush()
+
+        _emit({"event": "watch_start", "session": args.session,
+               "state": previous, "unreadable": start_note})
 
         while time.monotonic() < deadline:
             time.sleep(args.poll)
             try:
                 current = _snapshot(state_path, archive_dir, slug)
+            except Unreadable as exc:
+                # Recorded as what it is, and `previous` is left ALONE: a read
+                # that did not happen is not a transition.
+                _emit({"event": "read_unparsed", "error": str(exc)})
+                continue
             except OSError as exc:
-                fh.write(json.dumps({"at": CP.utc_now().isoformat(),
-                                     "event": "read_error", "error": str(exc)}) + "\n")
-                fh.flush()
+                _emit({"event": "read_error", "error": str(exc)})
+                continue
+            if previous is None:
+                _emit({"event": "first_read", "state": current})
+                previous = current
                 continue
             changed = {k: [previous.get(k), v] for k, v in current.items()
                        if previous.get(k) != v}
@@ -115,13 +159,10 @@ def main() -> int:
             if set(changed) <= {"used_percentage"}:
                 previous = current
                 continue
-            fh.write(json.dumps({"at": CP.utc_now().isoformat(),
-                                 "event": "change", "changed": changed}) + "\n")
-            fh.flush()
+            _emit({"event": "change", "changed": changed})
             previous = current
 
-        fh.write(json.dumps({"at": CP.utc_now().isoformat(),
-                             "event": "watch_end", "state": previous}) + "\n")
+        _emit({"event": "watch_end", "state": previous})
     return 0
 
 

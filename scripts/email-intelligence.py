@@ -186,7 +186,7 @@ class StateManager:
             try:
                 loaded = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
-                    return loaded
+                    return self._with_schema(loaded)
                 raise ValueError(f"state is a {type(loaded).__name__}, not an object")
             except (json.JSONDecodeError, OSError, ValueError) as e:
                 # A corrupt state file used to `pass` into a FRESH state, and
@@ -206,6 +206,27 @@ class StateManager:
             "learned_ignore_senders": [],
             "stats": {"total_runs": 0, "total_conversations": 0, "total_filtered": 0},
         }
+
+    @staticmethod
+    def _with_schema(loaded: dict) -> dict:
+        """Fill in any collection key the loaded state is missing.
+
+        The quarantine above catches "corrupt". A file that is VALID JSON and a
+        VALID object and simply has no `processed_message_ids` - truncated by
+        hand, written by an older version, or a `{}` someone dropped in - sails
+        past it and meets `self.data["processed_message_ids"]` in `is_processed`
+        as a KeyError on the first message of the run. `merge_state` beside this
+        class already reads every one of these with `.get(...) or []`; the class
+        did not, and only the pure function had been hardened.
+
+        A missing key is filled, never a present one: an existing value of the
+        wrong type stays visible rather than being silently replaced, which is
+        the same reasoning as the quarantine.
+        """
+        for key, empty in (("processed_message_ids", []), ("conversations", {}),
+                           ("learned_ignore_senders", []), ("stats", {})):
+            loaded.setdefault(key, empty)
+        return loaded
 
     def _quarantine(self, reason: Exception) -> None:
         """Move an unusable state file aside instead of overwriting it."""
@@ -276,10 +297,26 @@ def commit_state(state: "StateManager", payload: dict) -> None:
 
     Does not save; the caller owns the write.
     """
-    for message_id in payload.get("message_ids", []):
-        state.mark_processed(message_id)
-    for conv in payload.get("conversations", []):
-        state.mark_conversation(conv["id"], conv.get("topic", ""))
+    # Typed, not just iterated. `message_ids` arrives from a FILE in the
+    # deferred path (`--commit-state run.json`), and a string is iterable: a
+    # hand-edited `"message_ids": "abc"` marked `a`, `b` and `c` processed and
+    # wrote that into the dedupe set. It never raises and it never shows up,
+    # because the only symptom of a poisoned dedupe set is mail that is silently
+    # not re-analysed. Same for `conversations`, where `conv["id"]` was a
+    # KeyError on any entry that lacked one.
+    ids = payload.get("message_ids") or []
+    if not isinstance(ids, list):
+        raise ValueError(f"message_ids is a {type(ids).__name__}, not a list")
+    for message_id in ids:
+        if isinstance(message_id, str) and message_id:
+            state.mark_processed(message_id)
+
+    convs = payload.get("conversations") or []
+    if not isinstance(convs, list):
+        raise ValueError(f"conversations is a {type(convs).__name__}, not a list")
+    for conv in convs:
+        if isinstance(conv, dict) and conv.get("id"):
+            state.mark_conversation(conv["id"], conv.get("topic", ""))
 
     state.data["last_run"] = datetime.now(timezone.utc).isoformat()
     # The status is the RUN's, not a constant. A run that lost a folder to a
@@ -306,7 +343,15 @@ def commit_state_from_file(path: Path, state: "StateManager | None" = None) -> d
     output produced without the block rather than committing a partial run.
     """
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} is a {type(data).__name__}, not a run object")
     payload = data.get("state_commit")
+    if payload and not isinstance(payload, dict):
+        # `.get` on a list is an AttributeError, past the handler in `main`
+        # that catches ValueError / OSError / JSONDecodeError and prints a
+        # clean "Commit failed".
+        raise ValueError(
+            f"{path}: state_commit is a {type(payload).__name__}, not an object")
     if not payload:
         raise ValueError(
             f"{path} carries no state_commit block - it was not produced by "
@@ -351,10 +396,24 @@ def _load_ignore_patterns() -> list[str]:
 
 
 def _matches_ignore(email_addr: str, patterns: list[str]) -> bool:
-    """Check if an email address matches any wildcard ignore pattern."""
+    """Check if an email address matches any wildcard ignore pattern.
+
+    A pattern whose wildcards leave NOTHING to match is refused, loudly. `*`
+    and `**` both reduced to `"" in addr`, which is true of every address, so
+    one stray asterisk in `sentinel_config.yaml` silently filtered the ENTIRE
+    mailbox as noise: the digest came back empty, `noise_filtered` counted every
+    message, and nothing anywhere said the filter was matching everything.
+    Measured 2026-08-24 against three unrelated addresses; all three were
+    ignored. A mail triage tool losing the whole inbox must not do it quietly.
+    """
     addr = email_addr.lower()
     for pat in patterns:
         pat = pat.lower()
+        if pat.strip("*") == "" and pat:
+            print(f"{YELLOW}ignoring the ignore-pattern {pat!r}: it matches every "
+                  f"address, which would filter the whole mailbox as noise. "
+                  f"Fix it in sentinel_config.yaml.{RESET}", file=sys.stderr)
+            continue
         if pat.startswith("*") and pat.endswith("*"):
             if pat[1:-1] in addr:
                 return True
@@ -938,7 +997,13 @@ def build_output(conversations: list[dict], analyses: list[dict], run_info: dict
     them unprocessed and resurface them on every subsequent run.
     """
     output_convs = []
-    for conv, analysis in zip(conversations, analyses):
+    # `strict=True`, matching the zip in `analyze_conversations`. Without it a
+    # short `analyses` list silently DROPPED the trailing conversations from the
+    # digest: the run reported "N conversations processed" and the reader saw
+    # fewer, with nothing to say which were missing. The two lists are built one
+    # per conversation by construction, so a mismatch is a bug upstream and this
+    # is where it should stop.
+    for conv, analysis in zip(conversations, analyses, strict=True):
         # Strip full body from raw_emails for output (keep preview only)
         clean_emails = []
         for em in conv["raw_emails"]:
@@ -1107,8 +1172,15 @@ def run_unread_mode(verbose: bool = False) -> None:
     This is the bridge dashboard's feed. The output is exactly the
     conversations unread in Exchange right now - read or delete a
     message in Outlook and it leaves this set on the next run. Analysis
-    is cache-aware: a conversation already analyzed (same message_count)
-    reuses its prior analysis, so cost scales with new/changed mail only.
+    is cache-aware: a conversation whose SET OF MESSAGE IDS is unchanged
+    (`_cache_key`) reuses its prior analysis, so cost scales with new or
+    changed mail only.
+
+    This paragraph named the message COUNT as the cache key, and so did the
+    comment at the cache lookup below. `_cache_key` was changed to the id set
+    precisely because a count is not an identity, and its own docstring says so
+    - but both call-site comments kept describing the defect as if it were the
+    design. A reader trusting them would have "restored" the bug.
     """
     fetch_path = STATE_FILE.parent / "_latest-fetch.json"
     state = StateManager()  # read-only here - used only for learned-ignore senders
@@ -1154,8 +1226,9 @@ def run_unread_mode(verbose: bool = False) -> None:
     for conv in convs:
         enrich_conversation(conv, crm_map, pipeline_text, viraid)
 
-    # Cache-aware analysis: reuse a prior analysis when the conversation
-    # is unchanged (same message_count); analyze only new/changed ones.
+    # Cache-aware analysis: reuse a prior analysis when the conversation carries
+    # the same SET OF MESSAGE IDS (`_cache_key`); analyze only new or changed
+    # ones. Not the message count - see `_cache_key` for why that was wrong.
     prior_by_id: dict = {}
     if fetch_path.exists():
         try:

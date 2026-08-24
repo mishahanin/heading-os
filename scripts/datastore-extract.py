@@ -146,9 +146,41 @@ def extract_pptx(filepath):
     return "\n".join(lines)
 
 
+EXTRACTABLE_SUFFIXES = (".xlsx", ".pptx")
+
+
 def get_companion_path(filepath):
     """Get the -extract.md companion path for a binary file."""
     return filepath.with_name(filepath.stem + "-extract.md")
+
+
+def _ambiguous_stems(paths) -> set:
+    """(parent, stem) pairs claimed by more than one extractable file."""
+    by_stem: dict = {}
+    for path in paths:
+        by_stem.setdefault((path.parent, path.stem), set()).add(path.suffix.lower())
+    return {key for key, suffixes in by_stem.items() if len(suffixes) > 1}
+
+
+def _companion_for(filepath, ambiguous: set):
+    """The companion path, with the source suffix added only when it must be.
+
+    `<stem>-extract.md` is derived from the STEM, so `pitch.pptx` and
+    `pitch.xlsx` in one folder claim the same companion. The deck was extracted
+    first (it sorts first), and then the workbook was told "Skip pitch.xlsx
+    (companion already exists)" - a companion that describes the deck. The
+    workbook was never extracted and nothing said so. Under `--force` it was
+    worse: both ran, the second overwrote the first, and the run reported two
+    files extracted with one file of output.
+
+    Only a colliding pair is renamed. Every companion on disk today belongs to a
+    file with no same-stem sibling, so none of them moves.
+    """
+    base = get_companion_path(filepath)
+    if (filepath.parent, filepath.stem) not in ambiguous:
+        return base
+    suffix = filepath.suffix.lstrip(".").lower()
+    return base.with_name(f"{filepath.stem}-{suffix}-extract.md")
 
 
 def scan_and_extract(target_dir=None, force=False):
@@ -160,16 +192,26 @@ def scan_and_extract(target_dir=None, force=False):
         return []
 
     # Find XLSX and PPTX files
-    binary_files = list(scan_dir.rglob("*.xlsx")) + list(scan_dir.rglob("*.pptx"))
+    binary_files = [p for suffix in EXTRACTABLE_SUFFIXES
+                    for p in scan_dir.rglob(f"*{suffix}")]
 
     if not binary_files:
         print(f"{YELLOW}No XLSX or PPTX files found in {scan_dir}{RESET}")
         return []
 
+    ambiguous = _ambiguous_stems(binary_files)
+    if ambiguous:
+        # Named, because a renamed companion is a surprise the operator should
+        # hear about once rather than discover later.
+        print(f"{YELLOW}{len(ambiguous)} stem(s) are claimed by both a .pptx and "
+              f"an .xlsx; those companions carry the source suffix:{RESET}")
+        for parent, stem in sorted(ambiguous):
+            print(f"  {YELLOW}{parent.name}/{stem}{RESET}")
+
     extracted = []
     failures: list[tuple[Path, str]] = []
     for filepath in sorted(binary_files):
-        companion = get_companion_path(filepath)
+        companion = _companion_for(filepath, ambiguous)
 
         if companion.exists() and not force:
             print(f"  {GREEN}Skip{RESET}  {filepath.name} (companion already exists)")

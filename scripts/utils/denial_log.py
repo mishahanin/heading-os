@@ -117,8 +117,15 @@ def log_denial(*, mechanism: str, action: str, path=None, reason: str = "") -> b
 
 
 def read_denials(path: Path = None) -> list:
-    """Every readable record. A corrupt line is skipped, not fatal: a truncated
-    write must not cost the rest of the history."""
+    """Every readable record, as dicts. A corrupt line is skipped, not fatal: a
+    truncated write must not cost the rest of the history.
+
+    "Corrupt" covers a line that PARSES and is not a record. `json.loads`
+    answers with any JSON value, so a hand-edited `[]`, `null` or bare string
+    used to be appended and returned as though it were a record; the next
+    `record.get(...)` in `summarize` or in `scripts/denials.py` then raised
+    AttributeError and cost the whole history, which is the exact outcome the
+    line above promises never happens."""
     try:
         text = Path(path or denial_log_path()).read_text(encoding="utf-8")
     except OSError:
@@ -128,9 +135,11 @@ def read_denials(path: Path = None) -> list:
         if not line.strip():
             continue
         try:
-            out.append(json.loads(line))
+            record = json.loads(line)
         except ValueError:
             continue
+        if isinstance(record, dict):
+            out.append(record)
     return out
 
 

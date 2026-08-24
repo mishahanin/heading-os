@@ -47,7 +47,11 @@ def _age_str(entry: dict, path: Path) -> str:
                 dt = dt.replace(tzinfo=timezone.utc)
         else:
             dt = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-    except (ValueError, OSError):
+    # TypeError too. `recorded_at` is written by whatever failed, so it can be a
+    # number or a list, and `fromisoformat` raises TypeError on those, not
+    # ValueError. One such entry ended `list` MID-TABLE, hiding every entry
+    # after it - in the queue whose job is to show what could not be sent.
+    except (ValueError, TypeError, OSError):
         return "?"
     secs = (datetime.now(timezone.utc) - dt).total_seconds()
     if secs < 3600:
@@ -64,7 +68,7 @@ def _resolve(prefix: str) -> Path:
     for p in entries:
         try:
             tid = dead_letter.load(p).get("trace_id", "")
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             tid = ""
         if p.stem == prefix or tid == prefix or p.stem.startswith(prefix) or str(tid).startswith(prefix):
             matches.append(p)
@@ -87,7 +91,7 @@ def cmd_list(args) -> int:
     for p in entries:
         try:
             e = dead_letter.load(p)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             print(f"  {GRAY}{p.name} (unreadable){RESET}")
             continue
         cls = e.get("classification", "?")
@@ -98,9 +102,26 @@ def cmd_list(args) -> int:
     return 0
 
 
+def _load_or_refuse(path: Path) -> dict:
+    """The entry, or exit 1 with a plain line naming the file.
+
+    `list` already prints "(unreadable)" for an artifact it cannot parse, so the
+    operator's next move is `show` or `retry` on exactly that id. Both called
+    `load` with no handler at all and ended in a traceback, which is neither of
+    the two exit codes this file documents. `_resolve` matches on the FILENAME
+    stem, so it finds an unreadable entry without ever parsing it.
+    """
+    try:
+        return dead_letter.load(path)
+    except (OSError, ValueError) as exc:
+        print(f"{RED}cannot read dead-letter entry {path.name}:{RESET} {exc}",
+              file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_show(args) -> int:
     path = _resolve(args.id)
-    print(json.dumps(dead_letter.load(path), indent=2, ensure_ascii=False))
+    print(json.dumps(_load_or_refuse(path), indent=2, ensure_ascii=False))
     return 0
 
 
@@ -125,8 +146,13 @@ def _why(entry: dict) -> str:
 
 def cmd_retry(args) -> int:
     path = _resolve(args.id)
-    entry = dead_letter.load(path)
-    payload = entry.get("payload") or {}
+    entry = _load_or_refuse(path)
+    payload = entry.get("payload")
+    # `or {}` kept a present-but-wrong value: a payload that is a list or a
+    # string is non-empty, so `payload.get("to")` raised AttributeError in the
+    # one command that exists to recover a failed send.
+    if not isinstance(payload, dict):
+        payload = {}
     if entry.get("kind") != "email_send":
         print(f"{RED}retry only supports email_send entries (got '{entry.get('kind')}'){RESET}",
               file=sys.stderr)

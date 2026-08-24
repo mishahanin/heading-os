@@ -52,15 +52,24 @@ MODELS = {
     "banana": {"id": "google/nano-banana-2", "type": "generate", "cost": 0.04, "description": "General purpose, text rendering", "family": "banana"},
     "banana-pro": {"id": "google/nano-banana-pro", "type": "generate", "cost": 0.134, "description": "Multi-image compositing (14 refs)", "family": "banana"},
     # Editing
-    "kontext": {"id": "black-forest-labs/flux-kontext-pro", "type": "edit", "cost": 0.0, "description": "Natural language image editing", "family": "edit"},
-    "fill": {"id": "black-forest-labs/flux-fill-pro", "type": "edit", "cost": 0.0, "description": "Inpainting and outpainting", "family": "edit"},
-    "depth": {"id": "black-forest-labs/flux-depth-pro", "type": "edit", "cost": 0.0, "description": "Structure-preserving edits", "family": "edit"},
-    "canny": {"id": "black-forest-labs/flux-canny-pro", "type": "edit", "cost": 0.0, "description": "Edge-guided generation", "family": "edit"},
+    "kontext": {"id": "black-forest-labs/flux-kontext-pro", "type": "edit", "cost": None, "description": "Natural language image editing", "family": "edit"},
+    "fill": {"id": "black-forest-labs/flux-fill-pro", "type": "edit", "cost": None, "description": "Inpainting and outpainting", "family": "edit"},
+    "depth": {"id": "black-forest-labs/flux-depth-pro", "type": "edit", "cost": None, "description": "Structure-preserving edits", "family": "edit"},
+    "canny": {"id": "black-forest-labs/flux-canny-pro", "type": "edit", "cost": None, "description": "Edge-guided generation", "family": "edit"},
     # Post-processing
-    "crisp-upscale": {"id": "recraft-ai/recraft-crisp-upscale", "type": "upscale", "cost": 0.0, "description": "Sharp print-quality upscaling", "family": "postprocess"},
-    "esrgan": {"id": "nightmareai/real-esrgan", "type": "upscale", "cost": 0.0, "description": "Fast bulk upscaling", "family": "postprocess"},
-    "eraser": {"id": "bria/eraser", "type": "remove-bg", "cost": 0.0, "description": "Background and object removal", "family": "postprocess"},
+    "crisp-upscale": {"id": "recraft-ai/recraft-crisp-upscale", "type": "upscale", "cost": None, "description": "Sharp print-quality upscaling", "family": "postprocess"},
+    "esrgan": {"id": "nightmareai/real-esrgan", "type": "upscale", "cost": None, "description": "Fast bulk upscaling", "family": "postprocess"},
+    "eraser": {"id": "bria/eraser", "type": "remove-bg", "cost": None, "description": "Background and object removal", "family": "postprocess"},
 }
+# `cost: None` means the per-run price was never recorded for that model, and it
+# is NOT the same statement as free. Every one of these carried `0.0`, and the
+# nine generation models beside them carry a real figure — the split falls
+# exactly on edit/post-processing, which is what an unfilled field looks like,
+# not a measured zero. The tool then multiplied it out and printed
+# "Estimated: $0.000" over four paid Replicate models, and `cmd_remove_bg` did
+# not even read the registry: it had the literal `$0.000` in its format string.
+# A price the operator is charged is the last figure a tool should invent.
+# Fill one in from the model's Replicate page and it starts being reported.
 
 REPLICATE_API = "https://api.replicate.com/v1"
 POLL_INTERVAL = 2
@@ -85,6 +94,26 @@ def error(msg: str) -> None:
 
 def cost(msg: str) -> None:
     print(f"{YELLOW}[COST]{RESET} {msg}")
+
+
+def _report_cost(alias: str, model: dict, count: int) -> None:
+    """Print the run's estimated cost, or say the price is not on file.
+
+    Silence is not an option here (the operator needs to know a paid call just
+    ran), and neither is `$0.000` (it reads as free). Naming the gap is.
+    """
+    unit = model.get("cost")
+    if unit is None:
+        cost(f"Not estimated: no per-run price recorded for '{alias}' "
+             f"({count} image(s)). Replicate still charges for this model.")
+        return
+    cost(f"Estimated: ${unit * count:.3f} ({count} image(s) x ${unit:.3f})")
+
+
+def _cost_cell(model: dict) -> str:
+    """The Cost column for `models`. '?' where no price was ever recorded."""
+    unit = model.get("cost")
+    return "?" if unit is None else f"${unit:.3f}"
 
 
 def _default_output_dir() -> Path:
@@ -182,16 +211,23 @@ def _create_prediction(token: str, model_id: str, input_params: dict) -> dict:
     status = prediction.get("status")
     info(f"Prediction {pred_id} - status: {status}")
 
-    elapsed = 0
+    # Measured, not counted. `elapsed += POLL_INTERVAL` summed the SLEEPS and
+    # nothing else, so every poll request's own duration was invisible to it —
+    # and the first POST above carries `Prefer: wait`, which Replicate holds open
+    # for up to a minute before the loop starts. "Timed out after 120s" could
+    # print four minutes in, and each "Status: ... (Ns)" line under-reported the
+    # wait by however long the API took to answer.
+    started = time.monotonic()
     while status not in ("succeeded", "failed", "canceled"):
         time.sleep(POLL_INTERVAL)
-        elapsed += POLL_INTERVAL
+        elapsed = time.monotonic() - started
         if elapsed > POLL_TIMEOUT:
-            error(f"Timed out after {POLL_TIMEOUT}s waiting for prediction {pred_id}.")
+            error(f"Timed out after {elapsed:.0f}s (budget {POLL_TIMEOUT}s) "
+                  f"waiting for prediction {pred_id}.")
             sys.exit(1)
         prediction = _api_request("GET", f"/predictions/{pred_id}", token)
         status = prediction.get("status")
-        info(f"Status: {status} ({elapsed}s)")
+        info(f"Status: {status} ({time.monotonic() - started:.0f}s)")
 
     if status != "succeeded":
         err_msg = prediction.get("error", "Unknown error")
@@ -301,9 +337,7 @@ def cmd_generate(args) -> None:
         sys.exit(1)
 
     saved = _save_outputs(urls, output_path, multi=(count > 1), is_svg=is_svg)
-    unit_cost = model["cost"]
-    total = unit_cost * len(saved)
-    cost(f"Estimated: ${total:.3f} ({len(saved)} image(s) x ${unit_cost:.3f})")
+    _report_cost(alias, model, len(saved))
 
 
 # ============================================================
@@ -345,9 +379,7 @@ def cmd_edit(args) -> None:
         sys.exit(1)
 
     saved = _save_outputs(urls, output_path, multi=False, is_svg=False)
-    unit_cost = model["cost"]
-    total = unit_cost * len(saved)
-    cost(f"Estimated: ${total:.3f} ({len(saved)} image(s))")
+    _report_cost(alias, model, len(saved))
 
 
 # ============================================================
@@ -390,9 +422,7 @@ def cmd_upscale(args) -> None:
         sys.exit(1)
 
     saved = _save_outputs(urls, output_path, multi=False, is_svg=False)
-    unit_cost = model["cost"]
-    total = unit_cost * len(saved)
-    cost(f"Estimated: ${total:.3f} ({len(saved)} image(s))")
+    _report_cost(alias, model, len(saved))
 
 
 # ============================================================
@@ -428,7 +458,7 @@ def cmd_remove_bg(args) -> None:
         sys.exit(1)
 
     saved = _save_outputs(urls, output_path, multi=False, is_svg=False)
-    cost(f"Estimated: $0.000 ({len(saved)} image(s))")
+    _report_cost("eraser", model, len(saved))
 
 
 # ============================================================
@@ -443,7 +473,7 @@ def cmd_models(args) -> None:
     for alias, m in MODELS.items():
         if type_filter and m["type"] != type_filter:
             continue
-        entries.append((alias, m["type"], f"${m['cost']:.3f}", m["description"]))
+        entries.append((alias, m["type"], _cost_cell(m), m["description"]))
 
     if not entries:
         info("No models match the filter.")

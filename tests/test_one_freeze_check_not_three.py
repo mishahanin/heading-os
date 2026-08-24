@@ -323,9 +323,17 @@ def test_the_greeting_still_uses_the_first_name(name, expect):
 
 
 def test_a_non_numeric_cadence_does_not_crash():
+    """Same intent as before: unusable numbers must not raise.
+
+    This used to assert "14 days" was in the draft, which pinned the very
+    fabrication removed on 2026-08-24: 14 is the fallback constant, and no field
+    on the record said 14 anything. The no-crash guarantee is unchanged; the
+    sentence that stated a number nobody recorded is gone.
+    """
     out = nxt.render_draft({"name": "X", "days_overdue": None, "cadence": None},
                            "(no prior)")
-    assert "14 days" in out
+    assert "Hey X," in out
+    assert "days since our last exchange" not in out
 
 
 # ---------------------------------------------------------------------------

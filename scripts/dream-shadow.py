@@ -39,6 +39,13 @@ from scripts.utils.workspace import get_auto_memory_dir, get_default_tz, get_out
 
 DORMANT_DAYS = STALE_DAYS  # 45; a file younger than this has not had its chance
 
+# The literal that lets a reader of the REPORT tell "the scan found nothing"
+# from "the scan never ran". `scripts/prime-health-parallel.py` matches the same
+# text with its own regex - it runs at session boot and importing a kebab-case
+# module for one string is not worth the cost there - so the two are held in
+# agreement by a test, not by a shared import.
+MERGE_UNAVAILABLE_MARKER = "UNAVAILABLE:"
+
 
 def _memory_meta(path: Path) -> tuple[str, int, str]:
     """(mem_type, access_count, last_accessed) from a memory file's frontmatter.
@@ -196,7 +203,14 @@ def render_report(result: dict, generated_iso: str) -> str:
     lines.append("## Merge Candidates (near-duplicate, salience-ranked)")
     lines.append("")
     if not merge["ok"]:
-        lines.append(f"- {merge['note']}")
+        # `UNAVAILABLE:`, not a bare note. The note line renders as an ordinary
+        # bullet, which is what a human skims past and what the /prime health
+        # check (`run_dream_shadow`, matching `^- .+<->.+$`) counts as ZERO
+        # candidates - so it returned `status: ok` with no output and the
+        # embedder could be down every night for a month without one word at
+        # session boot. A scan that could not run is not a scan that found
+        # nothing, and the report is the only place that difference survives.
+        lines.append(f"- {MERGE_UNAVAILABLE_MARKER} {merge['note']}")
     elif merge["pairs"]:
         for p in merge["pairs"]:
             lines.append(
@@ -257,7 +271,14 @@ def main() -> int:
         report_path = write_report(report_text, now)
 
     dormant_n = len(result["dormant"])
-    merge_n = len(result["merge"]["pairs"]) if result["merge"]["ok"] else 0
+    merge_ok = result["merge"]["ok"]
+    merge_n = len(result["merge"]["pairs"]) if merge_ok else 0
+    # "0 merge candidate(s)" was printed for a scan that never ran, and `--quiet`
+    # prints ONLY this line - so the one mode a health check would use was the
+    # one that could not tell the two apart. The `clean` line forty lines below
+    # already guards against exactly this; the summary above it did not.
+    merge_part = (f"{merge_n} merge candidate(s)" if merge_ok
+                  else "merge scan UNAVAILABLE")
 
     if args.json:
         out = dict(result)
@@ -265,7 +286,7 @@ def main() -> int:
         out["generated"] = generated_iso
         print(json.dumps(out, indent=2, default=str))
     else:
-        summary = f"{BOLD}dream-shadow:{RESET} {dormant_n} dormant, {merge_n} merge candidate(s)"
+        summary = f"{BOLD}dream-shadow:{RESET} {dormant_n} dormant, {merge_part}"
         if report_path:
             summary += f" {GRAY}- report: {report_path}{RESET}"
         print(summary)

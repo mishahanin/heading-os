@@ -47,9 +47,29 @@ def default_file() -> Path:
     return get_workspace_root() / "reference" / "elicitation-methods.csv"
 
 
+REQUIRED_FIELDS = ("category", "method_name", "description")
+
+
 def load(file: Path) -> list[dict]:
+    """Rows from the catalog CSV. Raises ValueError when it is not the catalog.
+
+    `setdefault` below fills a MISSING column with "", which is right for the
+    optional `num` / `output_pattern` and catastrophic for the rest: any CSV at
+    all was accepted and served as a catalog of nameless methods. Measured on a
+    two-row `name,email` file, `categories` reported one category - the empty
+    string - with 2 methods in it, and `list` printed two rows of nothing at
+    exit 0. `--file` makes that reachable by a typo'd path to a real CSV.
+    """
     with open(file, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        header = reader.fieldnames or []
+        missing = [k for k in REQUIRED_FIELDS if k not in header]
+        if missing:
+            raise ValueError(
+                f"{file} is not the elicitation catalog: no {', '.join(missing)} "
+                f"column(s). Header was: {', '.join(header) or '(empty file)'}"
+            )
+        rows = list(reader)
     for r in rows:
         for k in FIELDS:
             r.setdefault(k, "")
@@ -72,7 +92,23 @@ def filter_cats(rows: list[dict], cats: list[str] | None) -> list[dict]:
 
 
 def find(rows: list[dict], names: list[str]) -> tuple[list[dict], list[str]]:
-    by_name = {r["method_name"].lower(): r for r in rows}
+    """(found rows, unmatched names). A duplicate name is reported, not resolved.
+
+    The dict comprehension keeps the LAST row for a repeated `method_name`, so
+    `show "X"` would hand back one of two different methods with no signal that
+    a choice was made. The catalog is hand-maintained (53 rows, no duplicates
+    today), which is exactly the kind of file where a second row named the same
+    thing arrives without anyone noticing.
+    """
+    by_name: dict[str, dict] = {}
+    for r in rows:
+        key = r["method_name"].lower()
+        if key and key in by_name:
+            print(f"warning: two catalog rows are named {r['method_name']!r} "
+                  f"(rows {by_name[key].get('num') or '?'} and "
+                  f"{r.get('num') or '?'}); `show` returns the later one.",
+                  file=sys.stderr)
+        by_name[key] = r
     found, missing = [], []
     for n in names:
         r = by_name.get(n.strip().lower())
@@ -133,7 +169,11 @@ def main(argv: list[str] | None = None) -> int:
     if not file.is_file():
         print(f"error: technique file not found: {file}", file=sys.stderr)
         return 2
-    rows = load(file)
+    try:
+        rows = load(file)
+    except (OSError, ValueError, csv.Error) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     if args.cmd == "categories":
         print(fmt_categories(categories(rows), args.json))
@@ -145,7 +185,18 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        print(fmt_list(filter_cats(rows, args.category), args.json))
+        # A category that matches nothing is named, not answered with silence.
+        # `list --category framming` printed an empty string and exited 0, which
+        # reads as "that category is empty" - while `random --category framming`
+        # said "# no methods match" and exited 1 for the same typo. One tool,
+        # two answers to the same mistake.
+        selected = filter_cats(rows, args.category)
+        if args.category and not selected:
+            known = ", ".join(c for c, _ in categories(rows))
+            print(f"error: no methods in category/categories "
+                  f"{', '.join(args.category)}. Known: {known}", file=sys.stderr)
+            return 1
+        print(fmt_list(selected, args.json))
     elif args.cmd == "show":
         found, missing = find(rows, args.names)
         for m in missing:
